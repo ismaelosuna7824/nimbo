@@ -11,7 +11,9 @@
     "sidecar": "bun scripts/build-sidecar.ts",
     "tauri": "tauri",
     "tauri:dev": "bun run sidecar && tauri dev",
-    "tauri:build": "bun run sidecar && tauri build"
+    "tauri:build": "bun run sidecar && tauri build",
+    "test:e2e": "playwright test --project=app",
+    "test:e2e:docker": "E2E_DOCKER=1 playwright test --project=docker"
   },
   "dependencies": {
     "@codemirror/commands": "^6.11.1",
@@ -45,6 +47,7 @@
     "zustand": "^5.0.15"
   },
   "devDependencies": {
+    "@playwright/test": "^1.64.1",
     "@tailwindcss/vite": "^4.3.3",
     "@tauri-apps/cli": "^2.12.3",
     "@types/node": "^26.6.5",

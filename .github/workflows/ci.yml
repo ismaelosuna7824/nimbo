@@ -69,6 +69,36 @@ jobs:
         working-directory: apps/desktop/src-tauri
         run: cargo clippy --locked --all-targets -- -D warnings
 
+  e2e:
+    name: E2E (Playwright)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: apps/desktop
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: backend/go.mod
+          cache-dependency-path: backend/go.sum
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: ${{ env.BUN_VERSION }}
+      - run: bun install --frozen-lockfile
+      - run: bunx playwright install --with-deps chromium
+      - run: bun run test:e2e
+        env:
+          CI: "true"
+      - uses: actions/upload-artifact@v7
+        if: failure()
+        with:
+          name: playwright-report
+          path: |
+            apps/desktop/playwright-report/
+            apps/desktop/test-results/
+          retention-days: 7
+
   landing:
     name: Landing (astro check + build)
     runs-on: ubuntu-latest
