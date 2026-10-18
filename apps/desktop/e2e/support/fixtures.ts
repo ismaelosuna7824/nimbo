@@ -55,13 +55,15 @@ export class App {
     await this.page.addInitScript(() => localStorage.setItem("nimbo.onboarded", "1"))
     const setup = this.page.waitForResponse((r) => r.request().method() === "GET" && new URL(r.url()).pathname === "/api/v1/setup")
     await this.page.goto("/")
-    await expect(this.page.getByRole("heading", { name: "Nimbo", level: 1 })).toBeVisible()
+    // The app opens the setup checklist (a modal that hides the rest of the page from assistive tech) as soon
+    // as GET /setup reports something missing, e.g. on CI where the sandbox images aren't pulled. Settle it first.
     const status = (await (await setup).json()) as SetupStatus
     if (!status.ready) {
       const wizard = this.page.getByRole("dialog", { name: "Set up Nimbo" })
       await wizard.getByRole("button", { name: "I'll do this later" }).click()
       await expect(wizard).toBeHidden()
     }
+    await expect(this.page.getByRole("heading", { name: "Nimbo", level: 1 })).toBeVisible()
   }
 
   workflowCard(name: string) {
