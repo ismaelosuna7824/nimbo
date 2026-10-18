@@ -1,0 +1,245 @@
+/* Landing tokens, fonts and Tailwind base, plus the demos' utility classes. */
+@import "../../../apps/landing/src/styles/global.css";
+@source "../../../apps/landing/src/components";
+
+html,
+body {
+  margin: 0;
+  overflow: hidden;
+  background: var(--color-bg);
+}
+
+.pr-stage {
+  position: fixed;
+  inset: 0;
+  overflow: hidden;
+  color: var(--color-fg);
+  font-family: var(--font-sans);
+}
+
+/* Background: faint dot grid + a slowly drifting violet/cyan glow. */
+.pr-bg {
+  position: absolute;
+  inset: 0;
+}
+.pr-bg-grid {
+  position: absolute;
+  inset: 0;
+  background-image: radial-gradient(rgb(255 255 255 / 0.07) 1px, transparent 1.4px);
+  background-size: 22px 22px;
+  mask-image: radial-gradient(ellipse 80% 70% at 50% 45%, #000 30%, transparent 100%);
+}
+.pr-bg-glow {
+  position: absolute;
+  inset: -20%;
+  background:
+    radial-gradient(42% 34% at 30% 22%, rgb(139 92 246 / 0.26), transparent 70%),
+    radial-gradient(36% 30% at 78% 80%, rgb(34 211 238 / 0.12), transparent 70%);
+}
+
+.pr-scene {
+  position: absolute;
+  inset: 0;
+  visibility: hidden;
+}
+
+.pr-accent,
+.pr-title em {
+  font-style: normal;
+  background: linear-gradient(92deg, #c4b5fd, var(--color-primary-soft) 40%, var(--color-cyan));
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
+
+/* ---- Hook and CTA cards ------------------------------------------------- */
+.pr-card {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 0 40px;
+  text-align: center;
+}
+.pr-brand {
+  filter: drop-shadow(0 18px 40px rgb(139 92 246 / 0.45));
+}
+.pr-wordmark {
+  margin: 14px 0 0;
+  color: var(--color-primary-soft);
+  font-family: var(--font-mono);
+  font-size: 15px;
+  font-weight: 600;
+  letter-spacing: 0.32em;
+  text-transform: uppercase;
+}
+.pr-headline {
+  display: flex;
+  flex-direction: column;
+  margin: 18px 0 0;
+  font-size: 40px;
+  font-weight: 700;
+  line-height: 1.12;
+  letter-spacing: -0.025em;
+  text-wrap: balance;
+}
+.pr-cta-title {
+  margin: 18px 0 0;
+  font-size: 48px;
+  font-weight: 700;
+  letter-spacing: -0.03em;
+}
+.pr-cta-badges {
+  margin: 10px 0 0;
+  color: var(--color-fg);
+  font-size: 21px;
+  font-weight: 500;
+}
+.pr-cta-links {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  margin: 28px 0 0;
+  padding: 0;
+  list-style: none;
+}
+.pr-cta-links li {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 20px;
+  border: 1px solid rgb(167 139 250 / 0.35);
+  border-radius: 14px;
+  background: rgb(20 20 22 / 0.85);
+  color: var(--color-fg);
+  font-family: var(--font-mono);
+  font-size: 19px;
+  font-weight: 500;
+  box-shadow: 0 10px 30px -12px rgb(139 92 246 / 0.5);
+}
+.pr-cta-links svg {
+  flex: none;
+  color: var(--color-primary-soft);
+}
+.pr-cta-foot {
+  margin: 22px 0 0;
+  color: var(--color-muted);
+  font-size: 15px;
+}
+
+/* ---- Demo scenes ---------------------------------------------------------- */
+.pr-demo-scene {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  padding: 34px 18px 20px;
+}
+.pr-cap {
+  flex: none;
+  text-align: center;
+}
+.pr-kicker {
+  margin: 0;
+  color: var(--color-primary-soft);
+  font-family: var(--font-mono);
+  font-size: 14px;
+  font-weight: 600;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+}
+.pr-title {
+  margin: 8px 0 0;
+  font-size: 34px;
+  font-weight: 700;
+  line-height: 1.12;
+  letter-spacing: -0.025em;
+  text-wrap: balance;
+}
+.pr-sub {
+  margin: 8px 0 0;
+  color: #d4d4d8;
+  font-size: 18px;
+  line-height: 1.35;
+  text-wrap: balance;
+}
+.pr-sub b {
+  color: var(--color-green);
+  font-weight: 600;
+}
+.pr-sub code {
+  color: var(--color-amber);
+  font-family: var(--font-mono);
+  font-size: 0.92em;
+}
+.pr-shot {
+  position: relative;
+  display: flex;
+  flex: 1;
+  min-height: 0;
+  align-items: center;
+  justify-content: center;
+}
+.pr-shot-demo {
+  flex: none;
+  width: 540px;
+  transform-origin: center;
+}
+.pr-shot.pr-cropped {
+  align-items: flex-start;
+  overflow: hidden;
+  border-radius: 14px;
+  mask-image: linear-gradient(to bottom, #000 calc(100% - 56px), transparent);
+}
+
+/* 16:9 — caption column on the left, demo on the right. */
+[data-format="1920x1080"] .pr-demo-scene {
+  display: grid;
+  grid-template-columns: 320px 560px;
+  justify-content: center;
+  align-items: center;
+  gap: 40px;
+  padding: 30px 44px;
+}
+[data-format="1920x1080"] .pr-cap {
+  text-align: left;
+}
+[data-format="1920x1080"] .pr-kicker {
+  font-size: 14px;
+}
+[data-format="1920x1080"] .pr-title {
+  margin-top: 12px;
+  font-size: 40px;
+}
+[data-format="1920x1080"] .pr-sub {
+  margin-top: 14px;
+  font-size: 19px;
+}
+[data-format="1920x1080"] .pr-shot {
+  height: 100%;
+}
+[data-format="1920x1080"] .pr-shot-demo {
+  width: 560px;
+}
+[data-format="1920x1080"] .pr-headline {
+  font-size: 46px;
+}
+
+/* 1:1 — same demo scale as 4:5 (540 px demo = 94% of the width); compact caption to leave the height to the demo. */
+[data-format="1080x1080"] .pr-demo-scene {
+  padding: 22px 18px 14px;
+  gap: 10px;
+}
+[data-format="1080x1080"] .pr-kicker {
+  font-size: 12px;
+}
+[data-format="1080x1080"] .pr-title {
+  margin-top: 4px;
+  font-size: 29px;
+}
+[data-format="1080x1080"] .pr-sub {
+  margin-top: 4px;
+  font-size: 15.5px;
+}
+[data-format="1080x1080"] .pr-headline {
+  font-size: 36px;
+}

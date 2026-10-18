@@ -1,0 +1,105 @@
+---
+/**
+ * Promo video render page. Every frame is a function of the virtual clock:
+ * open /?format=1080x1350 (or 1920x1080, 1080x1080) and call
+ * window.__seek(ms); scripts/render.ts captures it frame by frame.
+ */
+import "../render/promo.css";
+import Icon from "../../../apps/landing/src/components/Icon.astro";
+import AgentMCP from "../../../apps/landing/src/components/demos/AgentMCP.astro";
+import EndpointsTry from "../../../apps/landing/src/components/demos/EndpointsTry.astro";
+import HeroCanvas from "../../../apps/landing/src/components/demos/HeroCanvas.astro";
+import LoadTestLive from "../../../apps/landing/src/components/demos/LoadTestLive.astro";
+import LocalCloud from "../../../apps/landing/src/components/demos/LocalCloud.astro";
+import Mascot from "../../../apps/landing/src/components/demos/Mascot.astro";
+import TerraformBothWays from "../../../apps/landing/src/components/demos/TerraformBothWays.astro";
+import clockSource from "../render/virtual-clock.js?raw";
+import { SCENES, type DemoKey } from "../render/scenes";
+
+const DEMOS: Record<DemoKey, typeof HeroCanvas> = {
+  hero: HeroCanvas,
+  sandbox: LocalCloud,
+  endpoints: EndpointsTry,
+  loadtest: LoadTestLive,
+  mcp: AgentMCP,
+  terraform: TerraformBothWays,
+};
+---
+
+<!doctype html>
+<html lang="en" data-format="1080x1350">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Nimbo promo</title>
+    <script is:inline set:html={clockSource} />
+    <script is:inline>
+      document.documentElement.dataset.format = new URLSearchParams(location.search).get("format") ?? "1080x1350";
+    </script>
+  </head>
+  <body>
+    <main class="pr-stage">
+      <div class="pr-bg" aria-hidden="true">
+        <div class="pr-bg-grid"></div>
+        <div class="pr-bg-glow"></div>
+      </div>
+
+      <section class="pr-scene pr-card" data-scene="hook">
+        <div class="pr-brand" data-in="-300" data-pop>
+          <Mascot size={112} tile class="pr-brand-mark" />
+        </div>
+        <p class="pr-wordmark" data-in="0">Nimbo</p>
+        <h1 class="pr-headline">
+          <span data-in="150">Design, deploy and</span>
+          <span data-in="300">load-test cloud infrastructure</span>
+          <span data-in="550" class="pr-accent">— on your laptop</span>
+        </h1>
+      </section>
+
+      {
+        SCENES.map((s) => {
+          const Demo = DEMOS[s.demo];
+          return (
+            <section class="pr-scene pr-demo-scene" data-scene={s.id}>
+              <header class="pr-cap">
+                <p class="pr-kicker">{s.kicker}</p>
+                <h2 class="pr-title" set:html={s.title} />
+                <p class="pr-sub" set:html={s.sub} />
+              </header>
+              <div class="pr-shot">
+                <Demo lang="en" class="pr-shot-demo" />
+              </div>
+            </section>
+          );
+        })
+      }
+
+      <section class="pr-scene pr-card" data-scene="cta">
+        <div class="pr-brand" data-in="0" data-pop>
+          <Mascot size={96} tile class="pr-brand-mark" />
+        </div>
+        <p class="pr-cta-title" data-in="150">Try <span class="pr-accent">Nimbo</span></p>
+        <p class="pr-cta-badges" data-in="320">Free · macOS · Windows · Linux</p>
+        <ul class="pr-cta-links">
+          <li data-in="520">
+            <Icon name="github" size={22} />
+            <span>github.com/ismaelosuna7824/nimbo</span>
+          </li>
+          <li data-in="680">
+            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <circle cx="12" cy="12" r="10"></circle>
+              <path d="M2 12h20"></path>
+              <path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"></path>
+            </svg>
+            <span>nimbo-hc.web.app</span>
+          </li>
+        </ul>
+        <p class="pr-cta-foot" data-in="900">Open source · MIT</p>
+      </section>
+    </main>
+
+    <script>
+      import "../render/sequencer";
+    </script>
+  </body>
+</html>

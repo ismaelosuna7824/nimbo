@@ -1,0 +1,28 @@
+{
+  "name": "nimbo-marketing",
+  "type": "module",
+  "version": "0.0.1",
+  "private": true,
+  "engines": {
+    "bun": ">=1.4"
+  },
+  "scripts": {
+    "dev": "bunx --bun astro dev",
+    "build": "bunx --bun astro build",
+    "check": "bunx --bun astro check",
+    "render": "bun run build && bun scripts/render.ts"
+  },
+  "dependencies": {
+    "@fontsource-variable/geist": "^5.3.0",
+    "@fontsource-variable/geist-mono": "^5.3.0",
+    "@tailwindcss/vite": "^4.3.3",
+    "astro": "^7.4.0",
+    "tailwindcss": "^4.3.3"
+  },
+  "devDependencies": {
+    "@astrojs/check": "^0.9.10",
+    "@types/bun": "latest",
+    "puppeteer-core": "^25.14.0",
+    "typescript": "^6"
+  }
+}
