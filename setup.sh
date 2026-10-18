@@ -732,6 +732,10 @@ build_app() {
 	local marker dir b
 	cd "$DESKTOP"
 	marker="$(mktemp "${TMPDIR:-/tmp}/nimbo-setup.XXXXXX")"
+	# Xcode's strip on macOS 27 corrupts proc-macro dylibs ("mis-aligned
+	# LINKEDIT string pool"), so clean release builds fail to load them.
+	# Keep Cargo from stripping unless the caller chose otherwise.
+	if [[ "$OS" == macos ]]; then export CARGO_PROFILE_RELEASE_STRIP="${CARGO_PROFILE_RELEASE_STRIP:-none}"; fi
 	run bun run tauri build
 	dir="$(bundle_dir)"
 	BUNDLES=()
