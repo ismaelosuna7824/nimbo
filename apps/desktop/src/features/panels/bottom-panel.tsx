@@ -11,7 +11,7 @@ import { useWorkflowStore, type BottomTab } from "@/state/workflow-store"
 import { DeployTab } from "./deploy/deploy-tab"
 import { useDeployToast } from "./endpoints/deploy-toast"
 import { ProblemsTab } from "./problems/problems-tab"
-import { TerraformTab } from "./terraform/terraform-tab"
+import { FilesTab } from "./terraform/files-tab"
 import { VariablesTab } from "./variables/variables-tab"
 
 // Heavier tabs (code highlighting, charts) load in their own chunks after the first paint.
@@ -24,7 +24,7 @@ const TAB_FALLBACK = (
 )
 
 const TABS: { id: BottomTab; label: string; icon: typeof Code2 }[] = [
-  { id: "terraform", label: "Terraform", icon: Code2 },
+  { id: "terraform", label: "Code", icon: Code2 },
   { id: "variables", label: "Variables & Environments", icon: SlidersHorizontal },
   { id: "deploy", label: "Deploy", icon: Rocket },
   { id: "endpoints", label: "Endpoints", icon: Plug },
@@ -33,7 +33,7 @@ const TABS: { id: BottomTab; label: string; icon: typeof Code2 }[] = [
 ]
 
 /**
- * Bottom dock with the Terraform, variables, deploy, endpoints, load test and
+ * Bottom dock with the code (file viewer), variables, deploy, endpoints, load test and
  * problems tabs. The tab strip is always rendered; the content only while open.
  * Ctrl/Cmd+J toggles it.
  */
@@ -128,7 +128,7 @@ export function BottomPanel() {
 const TabBody = memo(function TabBody({ tab }: { tab: BottomTab }) {
   switch (tab) {
     case "terraform":
-      return <TerraformTab />
+      return <FilesTab />
     case "variables":
       return <VariablesTab />
     case "deploy":

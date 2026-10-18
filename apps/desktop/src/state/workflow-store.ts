@@ -78,6 +78,22 @@ let pendingLogs: Record<string, LogLine[]> = {}
 let logTimer: number | undefined
 const LOG_FLUSH_MS = 50
 
+/** Asked before the user switches away from or closes the open workflow; resolves false to stay. */
+let leaveGuard: (() => Promise<boolean>) | null = null
+
+/** Registers the guard for unsaved work outside the workflow itself (e.g. file edits); returns the unregister function. */
+export function setLeaveGuard(fn: () => Promise<boolean>): () => void {
+  leaveGuard = fn
+  return () => {
+    if (leaveGuard === fn) leaveGuard = null
+  }
+}
+
+/** Runs the leave guard; true when there is nothing to lose or the user agreed to discard it. */
+export function confirmLeave(): Promise<boolean> {
+  return leaveGuard ? leaveGuard() : Promise.resolve(true)
+}
+
 function resetPendingLogs() {
   clearTimeout(logTimer)
   logTimer = undefined
@@ -102,6 +118,8 @@ export const useWorkflowStore = create<WorkflowStoreState>((set, get) => ({
   loadSamples: {},
 
   async open(id) {
+    const openId = get().workflow?.id
+    if (openId && openId !== id && !(await confirmLeave())) return
     const seq = ++openSeq
     await get().flush()
     const wf = await api.getWorkflow(id)

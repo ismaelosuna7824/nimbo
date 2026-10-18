@@ -402,11 +402,12 @@ func parseDiags(hd hcl.Diagnostics) []model.Diagnostic {
 		if d.Severity == hcl.DiagWarning {
 			sev = model.SeverityWarning
 		}
-		detail := d.Detail
+		diag := model.Diagnostic{Severity: sev, Code: "parse_error", Message: d.Summary, Detail: d.Detail}
 		if d.Subject != nil {
-			detail = fmt.Sprintf("%s:%d: %s", d.Subject.Filename, d.Subject.Start.Line, d.Detail)
+			diag.Detail = fmt.Sprintf("%s:%d: %s", d.Subject.Filename, d.Subject.Start.Line, d.Detail)
+			diag.File, diag.Line = d.Subject.Filename, d.Subject.Start.Line
 		}
-		out = append(out, model.Diagnostic{Severity: sev, Code: "parse_error", Message: d.Summary, Detail: detail})
+		out = append(out, diag)
 	}
 	return out
 }

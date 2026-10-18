@@ -297,6 +297,10 @@ type Diagnostic struct {
 	Detail    string   `json:"detail,omitempty"`
 	NodeID    string   `json:"nodeId,omitempty"`
 	Attribute string   `json:"attribute,omitempty"`
+	// File and Line locate code diagnostics (Terraform syntax errors) in
+	// the file that was imported; Line is 1-based.
+	File string `json:"file,omitempty"`
+	Line int    `json:"line,omitempty"`
 }
 
 // ---------------------------------------------------------------------------
@@ -1056,4 +1060,39 @@ type ModuleView struct {
 	Local    bool      `json:"local"`
 	Workflow *Workflow `json:"workflow,omitempty"`
 	Message  string    `json:"message,omitempty"`
+}
+
+// FileKind groups the files of a workflow's export.
+type FileKind string
+
+const (
+	FileTerraform FileKind = "terraform" // root *.tf
+	FileTfvars    FileKind = "tfvars"    // environment values
+	FileEnv       FileKind = "env"       // *.env.example
+	FileModule    FileKind = "module"    // local modules (modules/**)
+	FileAsset     FileKind = "asset"     // everything else: Lambda sources, templates, the lock file
+)
+
+// WorkflowFile is one file an export writes (GET /workflows/{id}/files).
+// Generated files are rendered from the workflow; the others are assets
+// stored with it. Editable generated files change through
+// PUT /workflows/{id}/terraform, editable assets through
+// PUT /workflows/{id}/files/content. Language names the syntax: "hcl",
+// "json", "javascript", "typescript", "python", "go", "yaml", "markdown",
+// "shell" or "text".
+type WorkflowFile struct {
+	Path      string   `json:"path"` // slash-separated, relative to the export root
+	Size      int64    `json:"size"`
+	Kind      FileKind `json:"kind"`
+	Generated bool     `json:"generated"`
+	Editable  bool     `json:"editable"`
+	Binary    bool     `json:"binary"`
+	Language  string   `json:"language"`
+}
+
+// WorkflowFileContent is a text file with its content
+// (GET /workflows/{id}/files/content).
+type WorkflowFileContent struct {
+	WorkflowFile
+	Content string `json:"content"`
 }

@@ -34,6 +34,8 @@ import type {
   WorkflowNode,
   TryRequest,
   TryResult,
+  WorkflowFile,
+  WorkflowFileContent,
   WorkflowSummary,
 } from "./types"
 
@@ -149,6 +151,17 @@ export const api = {
   /** Read-only view of a module call; `path` drills into nested calls ("module.a.module.b"). */
   moduleView: (id: string, nodeId: string, path?: string) =>
     request<ModuleView>("GET", `/workflows/${id}/modules/${encodeURIComponent(nodeId)}${qs({ path })}`),
+  /** Everything an export (with environments) writes: generated Terraform and the workflow's assets. */
+  files: (id: string) => request<{ files: WorkflowFile[] }>("GET", `/workflows/${id}/files`),
+  /** A text file; binary files fail with ApiError 415 (code "binary"), files over 2 MiB with 413 ("too_large"). */
+  fileContent: (id: string, path: string) =>
+    request<WorkflowFileContent>("GET", `/workflows/${id}/files/content${qs({ path })}`),
+  /** Overwrites an editable text asset; generated *.tf go through putTerraform. */
+  putFileContent: (id: string, path: string, content: string) =>
+    request<{ file: WorkflowFile; workflow: Workflow }>("PUT", `/workflows/${id}/files/content${qs({ path })}`, {
+      content,
+    }),
+  fileRawUrl: (id: string, path: string) => `${baseUrl}/api/v1/workflows/${id}/files/raw${qs({ path })}`,
 
   // sandbox & runs
   sandbox: (id: string) => request<SandboxStatus>("GET", `/workflows/${id}/sandbox`),

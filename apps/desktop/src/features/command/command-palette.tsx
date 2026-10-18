@@ -55,7 +55,7 @@ import { openSetupChecklist } from "../onboarding/store"
 import { useSettingsView } from "../settings/store"
 
 const PANELS: { tab: BottomTab; label: string; icon: React.ReactNode }[] = [
-  { tab: "terraform", label: "Terraform code", icon: <FileCodeIcon /> },
+  { tab: "terraform", label: "Code — Terraform & workflow files", icon: <FileCodeIcon /> },
   { tab: "variables", label: "Variables & environments", icon: <VariableIcon /> },
   { tab: "deploy", label: "Deploy log", icon: <CloudUploadIcon /> },
   { tab: "endpoints", label: "Endpoints — URLs & snippets", icon: <PlugIcon /> },

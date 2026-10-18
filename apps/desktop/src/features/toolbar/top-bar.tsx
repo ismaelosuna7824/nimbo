@@ -38,6 +38,7 @@ import type { UserMode } from "@/state/workflow-store"
 import { useWorkflowStore } from "@/state/workflow-store"
 import { cn } from "@/lib/utils"
 import { formatRelative } from "../panels/lib/format"
+import { closeFocusedFileTab } from "../panels/terraform/close-file-tab"
 import { MOD_KEY, runAction, useRunBusy } from "./actions"
 import { SandboxChip } from "./sandbox-chip"
 import { useUiStore } from "./ui-store"
@@ -179,17 +180,21 @@ export function TopBar() {
   const setConfirmDestroy = useUiStore((s) => s.setConfirmDestroy)
   const busy = useRunBusy()
 
-  // ⌘W / Ctrl+W closes the workflow. On macOS the native menu owns ⌘W and emits close-workflow instead.
+  // ⌘W / Ctrl+W closes the focused file tab of the Code panel, else the workflow. On macOS the native menu owns ⌘W
+  // and emits close-workflow instead.
   useEffect(() => {
+    const close = () => {
+      if (!closeFocusedFileTab()) void closeWorkflow()
+    }
     const onKey = (e: KeyboardEvent) => {
       if (e.key.toLowerCase() === "w" && (e.metaKey || e.ctrlKey) && !e.shiftKey && !e.altKey) {
         e.preventDefault()
-        void closeWorkflow()
+        close()
       }
     }
     window.addEventListener("keydown", onKey)
     if (!isTauri()) return () => window.removeEventListener("keydown", onKey)
-    const unlisten = listen("close-workflow", () => void closeWorkflow())
+    const unlisten = listen("close-workflow", close)
     return () => {
       window.removeEventListener("keydown", onKey)
       void unlisten.then((off) => off())

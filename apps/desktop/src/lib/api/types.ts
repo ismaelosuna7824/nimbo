@@ -103,6 +103,9 @@ export interface Diagnostic {
   detail?: string
   nodeId?: string
   attribute?: string
+  /** Code diagnostics (Terraform syntax errors): the file and 1-based line they point at. */
+  file?: string
+  line?: number
 }
 
 export interface Workflow {
@@ -819,4 +822,36 @@ export interface ModuleView {
   workflow?: Workflow
   /** Registry/remote modules or unreadable sources: why there is no diagram. */
   message?: string
+}
+
+export type WorkflowFileKind = "terraform" | "tfvars" | "env" | "module" | "asset"
+export type FileLanguage =
+  | "hcl"
+  | "json"
+  | "javascript"
+  | "typescript"
+  | "python"
+  | "go"
+  | "yaml"
+  | "markdown"
+  | "shell"
+  | "text"
+
+/**
+ * One file an export writes (GET /workflows/{id}/files). Generated files are rendered from the workflow;
+ * editable generated *.tf change through PUT /terraform, editable assets through PUT /files/content.
+ */
+export interface WorkflowFile {
+  /** Slash-separated, relative to the export root. */
+  path: string
+  size: number
+  kind: WorkflowFileKind
+  generated: boolean
+  editable: boolean
+  binary: boolean
+  language: FileLanguage
+}
+
+export interface WorkflowFileContent extends WorkflowFile {
+  content: string
 }

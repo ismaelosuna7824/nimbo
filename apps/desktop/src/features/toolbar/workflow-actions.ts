@@ -3,7 +3,7 @@ import { errorMessage } from "@/components/errors"
 import { api } from "@/lib/api/client"
 import type { WorkflowIcon } from "@/lib/api/types"
 import { queryClient } from "@/lib/query-client"
-import { useWorkflowStore } from "@/state/workflow-store"
+import { confirmLeave, useWorkflowStore } from "@/state/workflow-store"
 import { openWorkflow } from "./actions"
 
 /** Workflow lifecycle actions shared by the switcher, home and command palette. */
@@ -14,7 +14,7 @@ const isOpen = (id: string) => useWorkflowStore.getState().workflow?.id === id
 /** Saves pending edits and goes back home. */
 export async function closeWorkflow() {
   const store = useWorkflowStore.getState()
-  if (!store.workflow) return
+  if (!store.workflow || !(await confirmLeave())) return
   await store.flush()
   if (useWorkflowStore.getState().saveError) {
     toast.error("Couldn't save your last changes", { description: "Retry from the save status next to the name, then close." })

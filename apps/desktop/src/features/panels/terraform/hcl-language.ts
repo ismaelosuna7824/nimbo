@@ -1,5 +1,4 @@
-import { HighlightStyle, StreamLanguage, type StreamParser, type StringStream } from "@codemirror/language"
-import { tags as t } from "@lezer/highlight"
+import { StreamLanguage, type StreamParser, type StringStream } from "@codemirror/language"
 
 /** One open string context: a quoted string or a heredoc body. */
 type Frame = { kind: "string" } | { kind: "heredoc"; tag: string; indented: boolean } | { kind: "interp"; depth: number }
@@ -170,31 +169,3 @@ const hclParser: StreamParser<HclState> = {
 }
 
 export const hclLanguage = StreamLanguage.define(hclParser)
-
-export const hclHighlightLight = HighlightStyle.define([
-  { tag: t.comment, color: "#6a737d", fontStyle: "italic" },
-  { tag: t.keyword, color: "#a626a4", fontWeight: "600" },
-  { tag: t.typeName, color: "#a626a4" },
-  { tag: t.string, color: "#2f7d32" },
-  { tag: t.processingInstruction, color: "#c2410c", fontWeight: "600" },
-  { tag: t.number, color: "#b45309" },
-  { tag: t.atom, color: "#0e7490" },
-  { tag: t.propertyName, color: "#1d4ed8" },
-  { tag: t.function(t.variableName), color: "#7c3aed" },
-  { tag: t.special(t.variableName), color: "#be123c" },
-  { tag: t.operator, color: "#525252" },
-])
-
-export const hclHighlightDark = HighlightStyle.define([
-  { tag: t.comment, color: "#7f848e", fontStyle: "italic" },
-  { tag: t.keyword, color: "#c678dd", fontWeight: "600" },
-  { tag: t.typeName, color: "#c678dd" },
-  { tag: t.string, color: "#98c379" },
-  { tag: t.processingInstruction, color: "#f59e0b", fontWeight: "600" },
-  { tag: t.number, color: "#d19a66" },
-  { tag: t.atom, color: "#56b6c2" },
-  { tag: t.propertyName, color: "#61afef" },
-  { tag: t.function(t.variableName), color: "#c4a7ff" },
-  { tag: t.special(t.variableName), color: "#e06c75" },
-  { tag: t.operator, color: "#a3a3a3" },
-])
