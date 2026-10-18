@@ -10,6 +10,7 @@ import { FeatureDialogs } from "@/features/panels"
 import { SettingsHost } from "@/features/settings/settings-view"
 import { useSettingsView } from "@/features/settings/store"
 import { DestroyDialog } from "@/features/toolbar/top-bar"
+import { UpdateNotifier } from "@/features/updates/update-notifier"
 import { useWorkflowStore } from "@/state/workflow-store"
 
 const ConnectionsView = lazy(() =>
@@ -75,6 +76,7 @@ export default function App() {
       <CommandPalette />
       <DestroyDialog />
       <OnboardingHost />
+      <UpdateNotifier />
     </>
   )
 }

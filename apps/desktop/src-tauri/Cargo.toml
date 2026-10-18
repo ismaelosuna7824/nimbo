@@ -27,3 +27,5 @@ tauri-plugin-shell = "2.5.0"
 tauri-plugin-dialog = "2.8.3"
 tauri-plugin-fs = "2.7.1"
 tokio = { version = "1.53.3", features = ["sync", "time"] }
+tauri-plugin-updater = "2.14.0"
+tauri-plugin-process = "2.4.0"

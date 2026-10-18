@@ -35,6 +35,14 @@ async fn engine_url(state: tauri::State<'_, Engine>) -> Result<String, String> {
     .map_err(|_| format!("the nimbo engine did not start within {}s", READY_TIMEOUT.as_secs()))?
 }
 
+/// Whether this install can replace itself with the updater: macOS and Windows
+/// always; on Linux only the AppImage (APPIMAGE is set by its runtime). `.deb`
+/// and `.rpm` installs are owned by the package manager.
+#[tauri::command]
+fn updater_supported() -> bool {
+  cfg!(not(target_os = "linux")) || std::env::var_os("APPIMAGE").is_some()
+}
+
 fn spawn_engine(app: &tauri::AppHandle, tx: watch::Sender<Option<Result<String, String>>>) -> Option<CommandChild> {
   let spawned = app
     .shell()
@@ -169,7 +177,9 @@ pub fn run() {
     .plugin(tauri_plugin_shell::init())
     .plugin(tauri_plugin_dialog::init())
     .plugin(tauri_plugin_fs::init())
-    .invoke_handler(tauri::generate_handler![engine_url])
+    .plugin(tauri_plugin_updater::Builder::new().build())
+    .plugin(tauri_plugin_process::init())
+    .invoke_handler(tauri::generate_handler![engine_url, updater_supported])
     .on_menu_event(|app, event| {
       if event.id() == CLOSE_WORKFLOW {
         let _ = app.emit("close-workflow", ());

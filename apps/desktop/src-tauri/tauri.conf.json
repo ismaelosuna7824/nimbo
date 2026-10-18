@@ -30,6 +30,13 @@
   "plugins": {
     "shell": {
       "open": "^((mailto:\\w+)|(tel:\\w+)|(https?://\\w+)).+$|^/.+/\\.nimbo/?$|^[A-Za-z]:\\\\.+\\\\\\.nimbo\\\\?$"
+    },
+    "updater": {
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDIzQTA2NzdFNTk2QTJCNjgKUldSb0sycFpmbWVnSTE5V1lwMnUxeXdFSkF5WUJJUGVkdm5oSGFkajNEb0M1QmlpcjBIOGgrV0EK",
+      "endpoints": ["https://github.com/ismaelosuna7824/nimbo/releases/latest/download/latest.json"],
+      "windows": {
+        "installMode": "passive"
+      }
     }
   },
   "bundle": {

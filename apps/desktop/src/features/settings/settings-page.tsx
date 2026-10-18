@@ -1,8 +1,9 @@
 import { useEffect } from "react"
-import { ArrowLeft, BotIcon, BoxesIcon, DatabaseIcon, ListChecksIcon, SlidersHorizontalIcon } from "lucide-react"
+import { ArrowLeft, BotIcon, BoxesIcon, DatabaseIcon, InfoIcon, ListChecksIcon, SlidersHorizontalIcon } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Separator } from "@/components/ui/separator"
 import { openSetupChecklist } from "@/features/onboarding/store"
+import { AboutSection } from "@/features/updates/about-section"
 import { cn } from "@/lib/utils"
 import { useWorkflowStore } from "@/state/workflow-store"
 import { AgentsSection } from "./agents-section"
@@ -16,6 +17,7 @@ const SECTIONS: { id: SettingsSection; label: string; icon: typeof BotIcon }[] =
   { id: "sandbox", label: "Sandbox & emulators", icon: BoxesIcon },
   { id: "agents", label: "AI agents (MCP)", icon: BotIcon },
   { id: "data", label: "Data", icon: DatabaseIcon },
+  { id: "about", label: "About", icon: InfoIcon },
 ]
 
 /** The full-page Settings view; loaded on first open by SettingsHost. */
@@ -75,6 +77,7 @@ export function SettingsView() {
             {section === "sandbox" && <SandboxSection />}
             {section === "agents" && <AgentsSection />}
             {section === "data" && <DataSection />}
+            {section === "about" && <AboutSection />}
           </div>
         </main>
       </div>
