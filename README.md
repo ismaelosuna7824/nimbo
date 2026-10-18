@@ -47,7 +47,23 @@ account. AI agents can do the same through the built-in MCP server.
 Architecture, contracts and verified Floci facts:
 [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
-## Quick start
+## Install
+
+Download the app from the
+[latest release](https://github.com/ismaelosuna7824/nimbo/releases/latest):
+
+| OS | File | First launch |
+|---|---|---|
+| macOS 12+ (Apple Silicon/Intel) | `Nimbo-macOS-universal.dmg` | Drag to Applications, open it, then **System Settings → Privacy & Security → Open Anyway** (or `xattr -dr com.apple.quarantine /Applications/Nimbo.app`) |
+| Windows 10/11 x64 | `Nimbo-Windows-x64-setup.exe` or `.msi` | SmartScreen: **More info → Run anyway** |
+| Linux x86_64 / arm64 | `.AppImage`, `.deb`, `.rpm` | `chmod +x Nimbo-*.AppImage` (needs libfuse2), `sudo apt install ./Nimbo-*.deb` or `sudo dnf install ./Nimbo-*.rpm` |
+
+The builds aren't signed with a paid certificate, hence the one-time
+confirmation. Step-by-step instructions, checksums and troubleshooting:
+[docs/INSTALL.md](docs/INSTALL.md). Running sandboxes needs Docker (see
+below).
+
+## Build from source
 
 One command checks your computer, installs what's missing (asking first),
 and builds the app:
@@ -120,6 +136,13 @@ cd apps/desktop
 bun run build                                  # tsc + vite
 bun run tauri:build                            # desktop bundle
 ```
+
+CI (`.github/workflows/ci.yml`) runs these checks on every push and pull
+request. Releases: pushing a `vX.Y.Z` tag runs
+`.github/workflows/release.yml`, which builds the macOS universal, Windows
+x64 and Linux x86_64/arm64 installers, smoke-tests them and publishes the
+GitHub release with `SHA256SUMS.txt`. Run it manually (*Actions → Release →
+Run workflow*, `dry_run` on) to build the same artifacts without publishing.
 
 ## Layout
 
