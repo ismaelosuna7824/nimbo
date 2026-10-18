@@ -1,0 +1,92 @@
+[
+  {
+    "id": "aws-serverless-api",
+    "name": "Serverless REST API",
+    "description": "HTTP API (API Gateway v2) in front of a Node.js Lambda that creates, lists and reads items in a DynamoDB table through the AWS SDK.",
+    "cloud": "aws",
+    "difficulty": "beginner",
+    "tags": ["api", "lambda", "dynamodb", "serverless"],
+    "icon": { "glyph": "bolt", "color": "amber" }
+  },
+  {
+    "id": "aws-queue-worker",
+    "name": "Queue worker",
+    "description": "SQS queue with a dead-letter queue and a Lambda consumer that processes messages in batches and reports partial failures.",
+    "cloud": "aws",
+    "difficulty": "beginner",
+    "tags": ["sqs", "lambda", "async", "dlq"],
+    "icon": { "glyph": "envelope", "color": "lime" }
+  },
+  {
+    "id": "aws-event-fanout",
+    "name": "Event fan-out",
+    "description": "SNS topic that fans every message out to two SQS queues (billing and shipping) with least-privilege queue policies.",
+    "cloud": "aws",
+    "difficulty": "beginner",
+    "tags": ["sns", "sqs", "pubsub", "events"],
+    "icon": { "glyph": "broadcast", "color": "pink" }
+  },
+  {
+    "id": "aws-static-site",
+    "name": "Static website",
+    "description": "S3 bucket configured for static website hosting with a public-read policy, an index page and an error page.",
+    "cloud": "aws",
+    "difficulty": "beginner",
+    "tags": ["s3", "website", "static"],
+    "icon": { "glyph": "globe", "color": "cyan" }
+  },
+  {
+    "id": "aws-scheduled-job",
+    "name": "Scheduled job",
+    "description": "EventBridge Scheduler invoking a Lambda function on a rate expression through a dedicated scheduler role.",
+    "cloud": "aws",
+    "difficulty": "beginner",
+    "tags": ["scheduler", "cron", "lambda"],
+    "icon": { "glyph": "clock", "color": "violet" }
+  },
+  {
+    "id": "aws-vpc-basics",
+    "name": "VPC basics",
+    "description": "VPC with two public subnets in different availability zones, an internet gateway, a public route table and a web security group.",
+    "cloud": "aws",
+    "difficulty": "intermediate",
+    "tags": ["vpc", "networking", "subnets", "security-group"],
+    "icon": { "glyph": "network", "color": "blue" }
+  },
+  {
+    "id": "aws-step-functions",
+    "name": "Step Functions workflow",
+    "description": "Step Functions state machine that invokes a Lambda task, waits, and branches on the result.",
+    "cloud": "aws",
+    "difficulty": "intermediate",
+    "tags": ["step-functions", "lambda", "orchestration"],
+    "icon": { "glyph": "flow", "color": "red" }
+  },
+  {
+    "id": "gcp-pubsub-storage",
+    "name": "Pub/Sub and Cloud Storage",
+    "description": "Pub/Sub topic with a pull subscription and dead-letter topic, plus a Cloud Storage bucket for message archives.",
+    "cloud": "gcp",
+    "difficulty": "beginner",
+    "tags": ["pubsub", "storage", "messaging"],
+    "icon": { "glyph": "cloud", "color": "blue" }
+  },
+  {
+    "id": "azure-storage-queue",
+    "name": "Storage account with queue",
+    "description": "Resource group with a storage account, a private blob container and a storage queue.",
+    "cloud": "azure",
+    "difficulty": "beginner",
+    "tags": ["storage", "queue", "blob"],
+    "icon": { "glyph": "database", "color": "cyan" }
+  },
+  {
+    "id": "oci-object-storage",
+    "name": "Object Storage bucket",
+    "description": "OCI Object Storage bucket in a compartment, with the namespace looked up automatically.",
+    "cloud": "oci",
+    "difficulty": "beginner",
+    "tags": ["object-storage", "bucket"],
+    "icon": { "glyph": "bucket", "color": "red" }
+  }
+]

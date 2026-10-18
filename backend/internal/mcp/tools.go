@@ -1,0 +1,1299 @@
+package mcp
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"net/http"
+	"net/url"
+	"sort"
+	"strconv"
+	"strings"
+	"time"
+
+	"github.com/ismaelosuna7824/nimbo/backend/internal/model"
+)
+
+// Tool groups as shown in the catalog.
+const (
+	groupWorkflows   = "Workflows"
+	groupCatalog     = "Catalog"
+	groupEditing     = "Editing"
+	groupTerraform   = "Terraform code"
+	groupRuns        = "Sandbox and runs"
+	groupLoadTests   = "Load tests"
+	groupConnections = "Connections"
+)
+
+// workflowArg is the input of tools that only need a workflow.
+type workflowArg struct {
+	Workflow string `json:"workflow,omitempty" jsonschema:"workflow ID or exact name; omit or pass \"current\" for the workflow open in the Nimbo app"`
+}
+
+func registerTools(r *registry, t *tools) {
+	r.group = groupWorkflows
+	addTool(r, "list_workflows", "List workflows", "List workflows (ID, name, node count, clouds), most recently updated first. Archived workflows are hidden unless include_archived=true.", t.listWorkflows)
+	addTool(r, "get_open_workflow", "Get open workflow", "Get the workflow currently open in the Nimbo desktop app (compact view, like get_workflow), or a message when none is open. Every workflow argument also accepts \"current\" (or can be omitted) to mean this workflow.", t.getOpenWorkflow)
+	addTool(r, "list_templates", "List templates", "List starter templates that can seed create_workflow (e.g. aws-queue-worker, aws-serverless-api).", t.listTemplates)
+	addTool(r, "create_workflow", "Create workflow", "Create a workflow, optionally from a template ID (see list_templates). Returns the compact workflow; use its id in every other tool.", t.createWorkflow)
+	addTool(r, "get_workflow", "Get workflow", "Get a compact view of a workflow: nodes (address, type, attributes as HCL expressions, nested blocks), derived edges (source.attr -> target.attribute), variables, outputs, locals, providers, environments (secret values redacted) and diagnostics. Call this before editing.", t.getWorkflow)
+	addTool(r, "archive_workflow", "Archive workflow", "Archive (close) a workflow: its sandbox is stopped keeping state, it is hidden from list_workflows and runs/load tests are refused until unarchive_workflow.", t.archiveWorkflow)
+	addTool(r, "unarchive_workflow", "Unarchive workflow", "Restore an archived workflow so it can be edited, deployed and load-tested again.", t.unarchiveWorkflow)
+
+	r.group = groupCatalog
+	addTool(r, "search_resources", "Search resources", "Search the Terraform resource catalog (aws, azure, gcp, oci). Returns resource types with category and whether the local Floci emulator supports them. Prefer floci_supported=true types so the workflow can be deployed and load-tested locally.", t.searchResources)
+	addTool(r, "describe_resource", "Describe resource", "Describe a Terraform resource or data source type: required and optional attributes with types, nested blocks, exported (computed) attributes usable in references, and Floci emulator support.", t.describeResource)
+
+	r.group = groupEditing
+	addTool(r, "add_node", "Add node", "Add a resource, data source or module node. Curated starters prefill required attributes and may add helper nodes (e.g. a Lambda adds its IAM role and archive). Optional attributes are HCL expressions keyed by attribute path, e.g. {\"bucket\": \"\\\"my-bucket\\\"\", \"tags\": \"{ env = var.env }\", \"versioning.enabled\": \"true\"}. Strings must be quoted HCL strings.", t.addNode)
+	addTool(r, "update_node", "Update node", "Edit a node: set attributes (attribute path -> HCL expression; nested block paths like \"versioning.enabled\" or \"rule[0].id\" create blocks as needed), unset attributes or blocks, and/or rename it (references elsewhere are rewritten). Returns the node and current diagnostics.", t.updateNode)
+	addTool(r, "remove_node", "Remove node", "Remove a node. References to it in other nodes become diagnostics that should be fixed.", t.removeNode)
+	addTool(r, "list_connection_options", "List connection options", "List the ways two nodes can be connected (recipes). Source is the upstream node being referenced (e.g. a queue), target the node that will reference it (e.g. a Lambda). Curated recipes also add helper resources such as event source mappings, permissions or IAM policies.", t.listConnectionOptions)
+	addTool(r, "connect", "Connect nodes", "Connect two nodes with a recipe ID from list_connection_options. Returns nodes that were added or changed and diagnostics.", t.connect)
+	addTool(r, "set_variable", "Set variable", "Create or update an input variable. type and default are HCL expressions (e.g. type \"list(string)\", default \"[\\\"a\\\"]\").", t.setVariable)
+	addTool(r, "remove_variable", "Remove variable", "Remove an input variable.", t.removeVariable)
+	addTool(r, "set_output", "Set output", "Create or update an output; value is an HCL expression such as \"aws_sqs_queue.jobs.url\".", t.setOutput)
+	addTool(r, "remove_output", "Remove output", "Remove an output.", t.removeOutput)
+	addTool(r, "set_environment", "Set environment", "Create or update an environment: variable values (HCL expressions), process environment variables for Terraform runs, which env vars are secret, and optionally make it the active environment used by runs.", t.setEnvironment)
+
+	r.group = groupTerraform
+	addTool(r, "get_terraform", "Get Terraform code", "Render the workflow as Terraform files (versions.tf, providers.tf, variables.tf, main.tf, outputs.tf).", t.getTerraform)
+	addTool(r, "apply_terraform_code", "Apply Terraform code", "Edit the workflow by writing Terraform code. files maps file name -> full content and is merged over the current files from get_terraform; an empty string deletes that file. The code is re-imported; node IDs, positions and environments are kept by address. Use for complex blocks that are awkward with update_node.", t.applyTerraformCode)
+	addTool(r, "scan_terraform_folder", "Scan Terraform folder", "Scan a local folder (e.g. a repository) for Terraform projects without importing: every directory with *.tf files, with resource/data/module counts, providers, clouds, tfvars files, backend and parse diagnostics. Directories used only as local modules are not separate projects. Pass the chosen paths to import_terraform as projects.", t.scanTerraformFolder)
+	addTool(r, "import_terraform", "Import Terraform", "Import existing Terraform as new workflows, from a local directory or from files (relative path -> content). Local modules (source = \"./modules/x\") are kept as assets and can be opened in the app. By default only the root folder is imported; pass projects (paths from scan_terraform_folder, \".\" = root) to import several projects, one workflow each.", t.importTerraform)
+	addTool(r, "export_terraform", "Export Terraform", "Write the workflow's Terraform (plus assets such as Lambda sources) to a local directory. With environments=true also writes environments/<name>.tfvars and .env.example files.", t.exportTerraform)
+
+	r.group = groupRuns
+	addTool(r, "sandbox_status", "Sandbox status", "Show the workflow's local Floci sandbox: state, emulator URLs and running services.", t.sandboxStatus)
+	addTool(r, "sandbox_start", "Start sandbox", "Start the workflow's local Floci sandbox (Docker) for the clouds it uses. Runs start it automatically.", t.sandboxAction("start"))
+	addTool(r, "sandbox_stop", "Stop sandbox", "Stop the workflow's sandbox containers (state is kept).", t.sandboxAction("stop"))
+	addTool(r, "sandbox_reset", "Reset sandbox", "Wipe the sandbox's emulator state and Terraform state (everything deployed is gone).", t.sandboxAction("reset"))
+	addTool(r, "validate", "Validate", "Run `terraform validate` in the sandbox and wait for the result (status, last log lines).", t.runAction(model.ActionValidate))
+	addTool(r, "plan", "Plan", "Run `terraform plan` against the sandbox and wait for the result (planned add/change/destroy counts, last log lines).", t.runAction(model.ActionPlan))
+	addTool(r, "deploy", "Deploy", "Run `terraform apply` against the local sandbox and wait. On success returns the deployed resources (ids, ARNs, URLs) and outputs.", t.runAction(model.ActionApply))
+	addTool(r, "destroy", "Destroy", "Run `terraform destroy` against the sandbox and wait for the result.", t.runAction(model.ActionDestroy))
+	addTool(r, "get_run", "Get run", "Get a Terraform run's status and last log lines (use after a run tool returned while still running).", t.getRun)
+	addTool(r, "get_deployed_state", "Get deployed state", "Show what is deployed in the sandbox: resources with key values (id, arn, name, url) and outputs. Pass address to get every value of matching resources.", t.getDeployedState)
+	addTool(r, "get_endpoints", "Get endpoints", "Explain how to use what is deployed: sandbox address and env settings, then per resource a plain summary, host URLs (API routes, function URLs), identifiers (queue URL, ARN, bucket, table…), a ready-to-run snippet and the try_endpoint actions. Deploy first.", t.getEndpoints)
+	addTool(r, "try_endpoint", "Try endpoint", "Call a deployed resource in the local sandbox: send an HTTP request to an API route, invoke a function, send/peek queue messages, publish to a topic, list/put/get bucket files, scan/put table items, … (actions from get_endpoints). Sandbox only; returns status, latency and the response body.", t.tryEndpoint)
+
+	r.group = groupLoadTests
+	addTool(r, "list_load_targets", "List load targets", "List load-test targets suggested from the deployed workflow (HTTP endpoints, SQS queues, S3 buckets, DynamoDB tables, Lambda functions, ...). Deploy first.", t.listLoadTargets)
+	addTool(r, "run_load_test", "Run load test", "Run a load test against a target (index from list_load_targets or a full target object) with a preset (smoke, load, stress, spike, soak) or custom stages, and optional pass/fail thresholds. Waits for the result by default and returns throughput, latency percentiles, error rate, stability, breaking point and threshold results. A target object may use a saved connection (connectionId from list_connections; required for sql/redis/mongo targets) or a non-local URL: such targets are outside the sandbox and need confirm_external=true."+externalWarning, t.runLoadTest)
+	addTool(r, "get_load_test", "Get load test", "Get a load test run's status, summary and threshold results.", t.getLoadTest)
+
+	r.group = groupConnections
+	addTool(r, "list_connections", "List connections", "List saved connections (the global Connections library of already-deployed services: HTTP APIs, PostgreSQL, MySQL, Redis, MongoDB, AWS accounts via profile). Secrets are never returned; secretsSet names the stored ones.", t.listConnections)
+	addTool(r, "get_connection", "Get connection", "Get one saved connection by ID or name (secrets never returned; secretsSet names the stored ones).", t.getConnection)
+	addTool(r, "create_connection", "Create connection", "Save a connection to an already-deployed service so it can be load-tested without a workflow. kind http needs base_url; postgres/mysql/redis/mongodb need uri or host; aws uses profile (shared config/SSO; empty = default chain) and region. Secrets (password, uri, auth token/password) are stored locally (0600) and never returned. Saving sends no traffic; only ask the user for secrets they choose to provide.", t.createConnection)
+	addTool(r, "update_connection", "Update connection", "Update a saved connection: only the given fields change; blank or omitted secrets keep the stored values; clear_secrets removes stored secrets.", t.updateConnection)
+	addTool(r, "delete_connection", "Delete connection", "Delete a saved connection and its load test history.", t.deleteConnection)
+	addTool(r, "test_connection", "Test connection", "Check that a connection is reachable (one lightweight request: HTTP GET of the base URL, a database ping/version query, or AWS STS GetCallerIdentity). Pass connection for a saved one, fields for an unsaved draft, or both to try edits (blank secrets come from the saved one). This contacts the real service: confirm with the user first if it is not local.", t.testConnection)
+	addTool(r, "list_connection_targets", "List connection targets", "List load-test targets suggested for a saved connection (HTTP endpoints, SQL/Redis/Mongo read probes, AWS resources found in the account). Listing AWS resources makes read-only API calls to the real account; confirm with the user first.", t.listConnectionTargets)
+	addTool(r, "run_connection_load_test", "Run connection load test", "Run a load test against a saved connection (no workflow needed): target is an index from list_connection_targets or a target object; preset (smoke, load, stress, spike, soak) or custom stages; optional thresholds. confirm_external must be true. Waits for the result by default."+externalWarning, t.runConnectionLoadTest)
+}
+
+type tools struct{ c *client }
+
+// ---------------------------------------------------------------------------
+// Workflows
+
+type listWorkflowsIn struct {
+	IncludeArchived bool `json:"include_archived,omitempty" jsonschema:"also list archived (closed) workflows"`
+}
+
+// workflowItem is a summary flagged when it is open in the desktop app.
+type workflowItem struct {
+	model.WorkflowSummary
+	Open bool `json:"open,omitempty"`
+}
+
+func (t *tools) listWorkflows(ctx context.Context, in listWorkflowsIn) (any, error) {
+	var list []model.WorkflowSummary
+	if err := t.c.get(ctx, "/workflows", &list); err != nil {
+		return nil, err
+	}
+	openID, err := t.c.openWorkflowID(ctx)
+	if err != nil {
+		return nil, err
+	}
+	out := []workflowItem{}
+	for _, s := range list {
+		if s.Archived && !in.IncludeArchived {
+			continue
+		}
+		out = append(out, workflowItem{WorkflowSummary: s, Open: s.ID == openID})
+	}
+	return out, nil
+}
+
+func (t *tools) getOpenWorkflow(ctx context.Context, _ struct{}) (any, error) {
+	wf, err := t.c.workflow(ctx, currentWorkflow)
+	if errors.Is(err, errNothingOpen) {
+		return "No workflow is open in the Nimbo app. Ask the user to open one, or use list_workflows / create_workflow.", nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return viewWorkflow(wf), nil
+}
+
+func (t *tools) archiveWorkflow(ctx context.Context, in workflowArg) (any, error) {
+	return t.setArchived(ctx, in.Workflow, "archive")
+}
+
+func (t *tools) unarchiveWorkflow(ctx context.Context, in workflowArg) (any, error) {
+	return t.setArchived(ctx, in.Workflow, "unarchive")
+}
+
+func (t *tools) setArchived(ctx context.Context, ref, action string) (any, error) {
+	wf, err := t.c.workflow(ctx, ref)
+	if err != nil {
+		return nil, err
+	}
+	var out model.Workflow
+	if err := t.c.do(ctx, http.MethodPost, "/workflows/"+pathEscape(wf.ID)+"/"+action, nil, &out); err != nil {
+		return nil, err
+	}
+	return map[string]any{"id": out.ID, "name": out.Name, "archived": out.Archived}, nil
+}
+
+func (t *tools) listTemplates(ctx context.Context, _ struct{}) (any, error) {
+	var list []model.Template
+	err := t.c.get(ctx, "/catalog/templates", &list)
+	return list, err
+}
+
+type createWorkflowIn struct {
+	Name        string `json:"name" jsonschema:"human readable workflow name"`
+	Description string `json:"description,omitempty"`
+	Template    string `json:"template,omitempty" jsonschema:"optional template ID from list_templates"`
+}
+
+func (t *tools) createWorkflow(ctx context.Context, in createWorkflowIn) (any, error) {
+	var wf model.Workflow
+	body := map[string]string{"name": in.Name, "description": in.Description, "templateId": in.Template}
+	if err := t.c.do(ctx, http.MethodPost, "/workflows", body, &wf); err != nil {
+		return nil, err
+	}
+	return viewWorkflow(&wf), nil
+}
+
+func (t *tools) getWorkflow(ctx context.Context, in workflowArg) (any, error) {
+	wf, err := t.c.workflow(ctx, in.Workflow)
+	if err != nil {
+		return nil, err
+	}
+	return viewWorkflow(wf), nil
+}
+
+// ---------------------------------------------------------------------------
+// Catalog
+
+type searchIn struct {
+	Query         string `json:"query" jsonschema:"free text, e.g. 'queue', 'object storage', 'aws_lambda'"`
+	Cloud         string `json:"cloud,omitempty" jsonschema:"aws, azure, gcp or oci"`
+	Kind          string `json:"kind,omitempty" jsonschema:"resource (default) or data"`
+	SupportedOnly bool   `json:"supported_only,omitempty" jsonschema:"only types the local Floci emulator supports"`
+	Limit         int    `json:"limit,omitempty" jsonschema:"max results (default 25)"`
+}
+
+func (t *tools) searchResources(ctx context.Context, in searchIn) (any, error) {
+	q := url.Values{"q": {in.Query}}
+	if in.Cloud != "" {
+		q.Set("cloud", in.Cloud)
+	}
+	if in.Kind != "" {
+		q.Set("kind", in.Kind)
+	}
+	if in.SupportedOnly {
+		q.Set("supported", "true")
+	}
+	limit := in.Limit
+	if limit <= 0 {
+		limit = 25
+	}
+	q.Set("limit", strconv.Itoa(limit))
+	var list []model.ResourceSummary
+	if err := t.c.get(ctx, "/catalog/resources?"+q.Encode(), &list); err != nil {
+		return nil, err
+	}
+	type item struct {
+		Type           string         `json:"type"`
+		Kind           model.NodeKind `json:"kind"`
+		Label          string         `json:"label"`
+		Category       string         `json:"category"`
+		FlociSupported bool           `json:"floci_supported"`
+	}
+	out := []item{}
+	for _, r := range list {
+		out = append(out, item{r.Type, r.Kind, r.Label, r.Category, r.FlociSupported})
+	}
+	return out, nil
+}
+
+type describeIn struct {
+	Type string `json:"type" jsonschema:"Terraform type, e.g. aws_sqs_queue"`
+	Kind string `json:"kind,omitempty" jsonschema:"resource (default) or data"`
+}
+
+func (t *tools) describeResource(ctx context.Context, in describeIn) (any, error) {
+	kind := in.Kind
+	if kind == "" {
+		kind = string(model.KindResource)
+	}
+	var s model.ResourceSchema
+	if err := t.c.get(ctx, "/catalog/resources/"+pathEscape(kind)+"/"+pathEscape(in.Type), &s); err != nil {
+		return nil, err
+	}
+	return viewSchema(&s), nil
+}
+
+// ---------------------------------------------------------------------------
+// Nodes and connections
+
+// findNode resolves ref as a node ID, an address (aws_s3_bucket.b,
+// data.x.y, module.m) or a unique local name.
+func findNode(wf *model.Workflow, ref string) (*model.Node, error) {
+	var byName []*model.Node
+	for i := range wf.Nodes {
+		n := &wf.Nodes[i]
+		if n.ID == ref || address(n) == ref {
+			return n, nil
+		}
+		if n.Name == ref {
+			byName = append(byName, n)
+		}
+	}
+	if len(byName) == 1 {
+		return byName[0], nil
+	}
+	var addrs []string
+	for i := range wf.Nodes {
+		addrs = append(addrs, address(&wf.Nodes[i]))
+	}
+	return nil, fmt.Errorf("node %q not found in workflow %s; nodes: %s", ref, wf.ID, strings.Join(addrs, ", "))
+}
+
+type nodeResult struct {
+	Node        nodeView   `json:"node"`
+	Added       []nodeView `json:"added_nodes,omitempty"`
+	Diagnostics []diagView `json:"diagnostics"`
+}
+
+func nodeDiagnostics(wf *model.Workflow) []diagView { return viewDiagnostics(wf, wf.Diagnostics) }
+
+type addNodeIn struct {
+	Workflow   string            `json:"workflow,omitempty" jsonschema:"workflow ID or name; omit or \"current\" for the workflow open in the Nimbo app"`
+	Type       string            `json:"type" jsonschema:"Terraform type, e.g. aws_sqs_queue (use search_resources); 'module' for a module call"`
+	Name       string            `json:"name,omitempty" jsonschema:"Terraform local name (snake_case); derived from the type when empty"`
+	Kind       string            `json:"kind,omitempty" jsonschema:"resource (default), data or module"`
+	Attributes map[string]string `json:"attributes,omitempty" jsonschema:"attribute path -> HCL expression"`
+	X          *float64          `json:"x,omitempty" jsonschema:"proposed canvas x (default 0); the daemon moves new nodes to the nearest free spot"`
+	Y          *float64          `json:"y,omitempty" jsonschema:"proposed canvas y (default 0)"`
+}
+
+func (t *tools) addNode(ctx context.Context, in addNodeIn) (any, error) {
+	wf, err := t.c.workflow(ctx, in.Workflow)
+	if err != nil {
+		return nil, err
+	}
+	before := map[string]bool{}
+	for _, n := range wf.Nodes {
+		before[n.ID] = true
+	}
+	var pos model.Position
+	if in.X != nil {
+		pos.X = *in.X
+	}
+	if in.Y != nil {
+		pos.Y = *in.Y
+	}
+	kind := in.Kind
+	if kind == "" {
+		kind = string(model.KindResource)
+	}
+	var res struct {
+		Workflow model.Workflow `json:"workflow"`
+		NodeID   string         `json:"nodeId"`
+	}
+	body := map[string]any{"kind": kind, "type": in.Type, "name": in.Name, "position": pos}
+	if err := t.c.do(ctx, http.MethodPost, "/workflows/"+pathEscape(wf.ID)+"/nodes", body, &res); err != nil {
+		return nil, err
+	}
+	out := &res.Workflow
+	if len(in.Attributes) > 0 {
+		node, err := findNode(out, res.NodeID)
+		if err != nil {
+			return nil, err
+		}
+		if out, err = t.patchBody(ctx, out, node, in.Attributes, nil, ""); err != nil {
+			return nil, fmt.Errorf("node %s was added but setting attributes failed: %w", address(node), err)
+		}
+	}
+	node, err := findNode(out, res.NodeID)
+	if err != nil {
+		return nil, err
+	}
+	result := nodeResult{Node: viewNode(node), Diagnostics: nodeDiagnostics(out)}
+	for i := range out.Nodes {
+		if n := &out.Nodes[i]; !before[n.ID] && n.ID != res.NodeID {
+			result.Added = append(result.Added, viewNode(n))
+		}
+	}
+	return result, nil
+}
+
+// patchBody applies set/unset/rename to node and saves it through
+// PATCH /workflows/{id}/nodes/{nodeId}.
+func (t *tools) patchBody(ctx context.Context, wf *model.Workflow, node *model.Node, set map[string]string, unset []string, rename string) (*model.Workflow, error) {
+	patch := map[string]any{}
+	if len(set) > 0 || len(unset) > 0 {
+		body := node.Body
+		paths := make([]string, 0, len(set))
+		for p := range set {
+			paths = append(paths, p)
+		}
+		sort.Strings(paths)
+		for _, p := range paths {
+			if err := setAttr(&body, p, set[p]); err != nil {
+				return nil, err
+			}
+		}
+		for _, p := range unset {
+			if err := unsetAttr(&body, p); err != nil {
+				return nil, err
+			}
+		}
+		patch["body"] = body
+	}
+	if rename != "" {
+		patch["name"] = rename
+	}
+	if len(patch) == 0 {
+		return wf, nil
+	}
+	var out model.Workflow
+	if err := t.c.do(ctx, http.MethodPatch, "/workflows/"+pathEscape(wf.ID)+"/nodes/"+pathEscape(node.ID), patch, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
+type updateNodeIn struct {
+	Workflow string            `json:"workflow,omitempty" jsonschema:"workflow ID or name; omit or \"current\" for the workflow open in the Nimbo app"`
+	Node     string            `json:"node" jsonschema:"node address (aws_s3_bucket.b) or ID"`
+	Set      map[string]string `json:"set,omitempty" jsonschema:"attribute path -> HCL expression"`
+	Unset    []string          `json:"unset,omitempty" jsonschema:"attribute or block paths to remove"`
+	Rename   string            `json:"rename,omitempty" jsonschema:"new Terraform local name"`
+}
+
+func (t *tools) updateNode(ctx context.Context, in updateNodeIn) (any, error) {
+	wf, err := t.c.workflow(ctx, in.Workflow)
+	if err != nil {
+		return nil, err
+	}
+	node, err := findNode(wf, in.Node)
+	if err != nil {
+		return nil, err
+	}
+	id := node.ID
+	if len(in.Set) == 0 && len(in.Unset) == 0 && in.Rename == "" {
+		return nil, errors.New("nothing to do: pass set, unset or rename")
+	}
+	out, err := t.patchBody(ctx, wf, node, in.Set, in.Unset, in.Rename)
+	if err != nil {
+		return nil, err
+	}
+	if node, err = findNode(out, id); err != nil {
+		return nil, err
+	}
+	return nodeResult{Node: viewNode(node), Diagnostics: nodeDiagnostics(out)}, nil
+}
+
+type nodeRefIn struct {
+	Workflow string `json:"workflow,omitempty" jsonschema:"workflow ID or name; omit or \"current\" for the workflow open in the Nimbo app"`
+	Node     string `json:"node" jsonschema:"node address or ID"`
+}
+
+func (t *tools) removeNode(ctx context.Context, in nodeRefIn) (any, error) {
+	wf, err := t.c.workflow(ctx, in.Workflow)
+	if err != nil {
+		return nil, err
+	}
+	node, err := findNode(wf, in.Node)
+	if err != nil {
+		return nil, err
+	}
+	var out model.Workflow
+	if err := t.c.do(ctx, http.MethodDelete, "/workflows/"+pathEscape(wf.ID)+"/nodes/"+pathEscape(node.ID), nil, &out); err != nil {
+		return nil, err
+	}
+	return map[string]any{"removed": address(node), "diagnostics": nodeDiagnostics(&out)}, nil
+}
+
+type connectionIn struct {
+	Workflow string `json:"workflow,omitempty" jsonschema:"workflow ID or name; omit or \"current\" for the workflow open in the Nimbo app"`
+	Source   string `json:"source" jsonschema:"upstream node being referenced (address or ID)"`
+	Target   string `json:"target" jsonschema:"node that will hold the reference (address or ID)"`
+}
+
+func (t *tools) listConnectionOptions(ctx context.Context, in connectionIn) (any, error) {
+	wf, err := t.c.workflow(ctx, in.Workflow)
+	if err != nil {
+		return nil, err
+	}
+	src, err := findNode(wf, in.Source)
+	if err != nil {
+		return nil, err
+	}
+	dst, err := findNode(wf, in.Target)
+	if err != nil {
+		return nil, err
+	}
+	q := url.Values{"source": {src.ID}, "target": {dst.ID}}
+	var recipes []model.ConnectionRecipe
+	if err := t.c.get(ctx, "/workflows/"+pathEscape(wf.ID)+"/connections?"+q.Encode(), &recipes); err != nil {
+		return nil, err
+	}
+	if len(recipes) == 0 {
+		return fmt.Sprintf("No connection recipes from %s to %s. Try the reverse direction, or set a reference attribute with update_node.", address(src), address(dst)), nil
+	}
+	return recipes, nil
+}
+
+type connectIn struct {
+	connectionIn
+	Recipe string `json:"recipe" jsonschema:"recipe ID from list_connection_options"`
+}
+
+func (t *tools) connect(ctx context.Context, in connectIn) (any, error) {
+	wf, err := t.c.workflow(ctx, in.Workflow)
+	if err != nil {
+		return nil, err
+	}
+	src, err := findNode(wf, in.Source)
+	if err != nil {
+		return nil, err
+	}
+	dst, err := findNode(wf, in.Target)
+	if err != nil {
+		return nil, err
+	}
+	before := map[string]string{}
+	for _, n := range wf.Nodes {
+		data, _ := json.Marshal(n.Body)
+		before[n.ID] = string(data)
+	}
+	var out model.Workflow
+	body := map[string]string{"source": src.ID, "target": dst.ID, "recipeId": in.Recipe}
+	if err := t.c.do(ctx, http.MethodPost, "/workflows/"+pathEscape(wf.ID)+"/connections", body, &out); err != nil {
+		return nil, err
+	}
+	var added, changed []nodeView
+	for i := range out.Nodes {
+		n := &out.Nodes[i]
+		prev, ok := before[n.ID]
+		data, _ := json.Marshal(n.Body)
+		switch {
+		case !ok:
+			added = append(added, viewNode(n))
+		case prev != string(data):
+			changed = append(changed, viewNode(n))
+		}
+	}
+	return map[string]any{"added_nodes": added, "changed_nodes": changed, "edges": viewEdges(&out), "diagnostics": nodeDiagnostics(&out)}, nil
+}
+
+// ---------------------------------------------------------------------------
+// Variables, outputs, environments
+
+type setVariableIn struct {
+	Workflow    string `json:"workflow,omitempty" jsonschema:"workflow ID or name; omit or \"current\" for the workflow open in the Nimbo app"`
+	Name        string `json:"name"`
+	Type        string `json:"type,omitempty" jsonschema:"HCL type expression, e.g. string, number, list(string)"`
+	Default     string `json:"default,omitempty" jsonschema:"HCL expression, e.g. \"\\\"dev\\\"\" or \"3\""`
+	Description string `json:"description,omitempty"`
+	Sensitive   *bool  `json:"sensitive,omitempty"`
+}
+
+func literal(v any) model.Value {
+	data, _ := json.Marshal(v)
+	return model.Value{Literal: data}
+}
+
+func (t *tools) setVariable(ctx context.Context, in setVariableIn) (any, error) {
+	wf, err := t.c.workflow(ctx, in.Workflow)
+	if err != nil {
+		return nil, err
+	}
+	i := namedIndex(wf.Variables, in.Name)
+	if i < 0 {
+		wf.Variables = append(wf.Variables, model.NamedBlock{Name: in.Name, Body: model.Body{Attrs: []model.Attr{}, Blocks: []model.Block{}}})
+		i = len(wf.Variables) - 1
+	}
+	body := &wf.Variables[i].Body
+	if in.Type != "" {
+		setNamedAttr(body, "type", model.Value{Expr: in.Type})
+	}
+	if in.Default != "" {
+		setNamedAttr(body, "default", model.Value{Expr: in.Default})
+	}
+	if in.Description != "" {
+		setNamedAttr(body, "description", literal(in.Description))
+	}
+	if in.Sensitive != nil {
+		setNamedAttr(body, "sensitive", literal(*in.Sensitive))
+	}
+	return t.saveAndReport(ctx, wf, func(out *model.Workflow) any {
+		return namedViews(out.Variables)
+	})
+}
+
+type namedRefIn struct {
+	Workflow string `json:"workflow,omitempty" jsonschema:"workflow ID or name; omit or \"current\" for the workflow open in the Nimbo app"`
+	Name     string `json:"name"`
+}
+
+func (t *tools) removeVariable(ctx context.Context, in namedRefIn) (any, error) {
+	wf, err := t.c.workflow(ctx, in.Workflow)
+	if err != nil {
+		return nil, err
+	}
+	i := namedIndex(wf.Variables, in.Name)
+	if i < 0 {
+		return nil, fmt.Errorf("variable %q not found", in.Name)
+	}
+	wf.Variables = append(wf.Variables[:i], wf.Variables[i+1:]...)
+	return t.saveAndReport(ctx, wf, func(out *model.Workflow) any { return namedViews(out.Variables) })
+}
+
+type setOutputIn struct {
+	Workflow    string `json:"workflow,omitempty" jsonschema:"workflow ID or name; omit or \"current\" for the workflow open in the Nimbo app"`
+	Name        string `json:"name"`
+	Value       string `json:"value" jsonschema:"HCL expression, e.g. aws_sqs_queue.jobs.url"`
+	Description string `json:"description,omitempty"`
+	Sensitive   *bool  `json:"sensitive,omitempty"`
+}
+
+func (t *tools) setOutput(ctx context.Context, in setOutputIn) (any, error) {
+	wf, err := t.c.workflow(ctx, in.Workflow)
+	if err != nil {
+		return nil, err
+	}
+	i := namedIndex(wf.Outputs, in.Name)
+	if i < 0 {
+		wf.Outputs = append(wf.Outputs, model.NamedBlock{Name: in.Name, Body: model.Body{Attrs: []model.Attr{}, Blocks: []model.Block{}}})
+		i = len(wf.Outputs) - 1
+	}
+	body := &wf.Outputs[i].Body
+	setNamedAttr(body, "value", model.Value{Expr: in.Value})
+	if in.Description != "" {
+		setNamedAttr(body, "description", literal(in.Description))
+	}
+	if in.Sensitive != nil {
+		setNamedAttr(body, "sensitive", literal(*in.Sensitive))
+	}
+	return t.saveAndReport(ctx, wf, func(out *model.Workflow) any { return namedViews(out.Outputs) })
+}
+
+func (t *tools) removeOutput(ctx context.Context, in namedRefIn) (any, error) {
+	wf, err := t.c.workflow(ctx, in.Workflow)
+	if err != nil {
+		return nil, err
+	}
+	i := namedIndex(wf.Outputs, in.Name)
+	if i < 0 {
+		return nil, fmt.Errorf("output %q not found", in.Name)
+	}
+	wf.Outputs = append(wf.Outputs[:i], wf.Outputs[i+1:]...)
+	return t.saveAndReport(ctx, wf, func(out *model.Workflow) any { return namedViews(out.Outputs) })
+}
+
+type setEnvironmentIn struct {
+	Workflow   string            `json:"workflow,omitempty" jsonschema:"workflow ID or name; omit or \"current\" for the workflow open in the Nimbo app"`
+	Name       string            `json:"name" jsonschema:"environment name, e.g. dev"`
+	Values     map[string]string `json:"values,omitempty" jsonschema:"variable name -> HCL expression"`
+	EnvVars    map[string]string `json:"env_vars,omitempty" jsonschema:"process environment variables for Terraform runs"`
+	SecretKeys []string          `json:"secret_keys,omitempty" jsonschema:"env var keys whose values are secret (blank in exports, redacted in get_workflow)"`
+	Activate   bool              `json:"activate,omitempty" jsonschema:"make this the active environment used by runs"`
+}
+
+func (t *tools) setEnvironment(ctx context.Context, in setEnvironmentIn) (any, error) {
+	if strings.TrimSpace(in.Name) == "" {
+		return nil, errors.New("name is required")
+	}
+	wf, err := t.c.workflow(ctx, in.Workflow)
+	if err != nil {
+		return nil, err
+	}
+	var env *model.Environment
+	for i := range wf.Environments {
+		if wf.Environments[i].Name == in.Name {
+			env = &wf.Environments[i]
+		}
+	}
+	if env == nil {
+		wf.Environments = append(wf.Environments, model.Environment{Name: in.Name, Values: map[string]model.Value{}, EnvVars: []model.EnvVar{}})
+		env = &wf.Environments[len(wf.Environments)-1]
+	}
+	if env.Values == nil {
+		env.Values = map[string]model.Value{}
+	}
+	for k, v := range in.Values {
+		env.Values[k] = model.Value{Expr: v}
+	}
+	keys := make([]string, 0, len(in.EnvVars))
+	for k := range in.EnvVars {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	for _, k := range keys {
+		found := false
+		for i := range env.EnvVars {
+			if env.EnvVars[i].Key == k {
+				env.EnvVars[i].Value, found = in.EnvVars[k], true
+			}
+		}
+		if !found {
+			env.EnvVars = append(env.EnvVars, model.EnvVar{Key: k, Value: in.EnvVars[k]})
+		}
+	}
+	for _, k := range in.SecretKeys {
+		found := false
+		for i := range env.EnvVars {
+			if env.EnvVars[i].Key == k {
+				env.EnvVars[i].Secret, found = true, true
+			}
+		}
+		if !found {
+			return nil, fmt.Errorf("secret key %q is not an env var of environment %q", k, in.Name)
+		}
+	}
+	if in.Activate {
+		wf.ActiveEnvironment = in.Name
+	}
+	return t.saveAndReport(ctx, wf, func(out *model.Workflow) any { return viewEnvironments(out) })
+}
+
+func namedIndex(blocks []model.NamedBlock, name string) int {
+	for i, b := range blocks {
+		if b.Name == name {
+			return i
+		}
+	}
+	return -1
+}
+
+func (t *tools) saveAndReport(ctx context.Context, wf *model.Workflow, view func(*model.Workflow) any) (any, error) {
+	out, err := t.c.saveWorkflow(ctx, wf)
+	if err != nil {
+		return nil, err
+	}
+	return map[string]any{"result": view(out), "diagnostics": nodeDiagnostics(out)}, nil
+}
+
+// ---------------------------------------------------------------------------
+// Terraform code
+
+func formatFiles(files map[string]string) string {
+	names := make([]string, 0, len(files))
+	for n := range files {
+		names = append(names, n)
+	}
+	sort.Strings(names)
+	var b strings.Builder
+	for _, n := range names {
+		fmt.Fprintf(&b, "# ===== %s =====\n%s\n", n, strings.TrimRight(files[n], "\n"))
+	}
+	return b.String()
+}
+
+func (t *tools) terraformFiles(ctx context.Context, id string) (map[string]string, error) {
+	var res struct {
+		Files map[string]string `json:"files"`
+	}
+	err := t.c.get(ctx, "/workflows/"+pathEscape(id)+"/terraform", &res)
+	return res.Files, err
+}
+
+func (t *tools) getTerraform(ctx context.Context, in workflowArg) (any, error) {
+	wf, err := t.c.workflow(ctx, in.Workflow)
+	if err != nil {
+		return nil, err
+	}
+	files, err := t.terraformFiles(ctx, wf.ID)
+	if err != nil {
+		return nil, err
+	}
+	if len(files) == 0 {
+		return "The workflow is empty: no Terraform files.", nil
+	}
+	return formatFiles(files), nil
+}
+
+type applyCodeIn struct {
+	Workflow string            `json:"workflow,omitempty" jsonschema:"workflow ID or name; omit or \"current\" for the workflow open in the Nimbo app"`
+	Files    map[string]string `json:"files" jsonschema:"file name (e.g. main.tf) -> full new content; empty string deletes the file"`
+}
+
+func (t *tools) applyTerraformCode(ctx context.Context, in applyCodeIn) (any, error) {
+	if len(in.Files) == 0 {
+		return nil, errors.New("files is required")
+	}
+	wf, err := t.c.workflow(ctx, in.Workflow)
+	if err != nil {
+		return nil, err
+	}
+	files, err := t.terraformFiles(ctx, wf.ID)
+	if err != nil {
+		return nil, err
+	}
+	if files == nil {
+		files = map[string]string{}
+	}
+	for name, content := range in.Files {
+		if content == "" {
+			delete(files, name)
+		} else {
+			files[name] = content
+		}
+	}
+	var out model.Workflow
+	if err := t.c.do(ctx, http.MethodPut, "/workflows/"+pathEscape(wf.ID)+"/terraform", map[string]any{"files": files}, &out); err != nil {
+		return nil, err
+	}
+	return viewWorkflow(&out), nil
+}
+
+type scanIn struct {
+	Dir string `json:"dir" jsonschema:"absolute path of a local folder, e.g. a repository checkout"`
+}
+
+func (t *tools) scanTerraformFolder(ctx context.Context, in scanIn) (any, error) {
+	if strings.TrimSpace(in.Dir) == "" {
+		return nil, errors.New("dir is required")
+	}
+	var scan json.RawMessage
+	if err := t.c.do(ctx, http.MethodPost, "/import/scan", map[string]any{"dir": in.Dir}, &scan); err != nil {
+		return nil, err
+	}
+	return scan, nil
+}
+
+type importIn struct {
+	Dir      string            `json:"dir,omitempty" jsonschema:"absolute path of a local folder with Terraform code"`
+	Files    map[string]string `json:"files,omitempty" jsonschema:"relative path -> content (alternative to dir)"`
+	Projects []string          `json:"projects,omitempty" jsonschema:"project paths from scan_terraform_folder to import, one workflow each (\".\" = the root; default: the root only)"`
+	Name     string            `json:"name,omitempty" jsonschema:"workflow name when a single project is imported (defaults to the directory name)"`
+}
+
+// importedView summarizes one imported workflow.
+type importedView struct {
+	ID          string        `json:"id"`
+	Name        string        `json:"name"`
+	Nodes       int           `json:"nodes"`
+	Clouds      []model.Cloud `json:"clouds,omitempty"`
+	Diagnostics []diagView    `json:"diagnostics,omitempty"`
+}
+
+func (t *tools) importTerraform(ctx context.Context, in importIn) (any, error) {
+	if (in.Dir == "") == (len(in.Files) == 0) {
+		return nil, errors.New("pass exactly one of dir or files")
+	}
+	body := map[string]any{"name": in.Name}
+	if in.Dir != "" {
+		body["dir"] = in.Dir
+	} else {
+		body["files"] = in.Files
+	}
+	if len(in.Projects) > 0 {
+		body["projects"] = in.Projects
+	}
+	var res struct {
+		Workflows []model.Workflow `json:"workflows"`
+	}
+	if err := t.c.do(ctx, http.MethodPost, "/import", body, &res); err != nil {
+		return nil, err
+	}
+	out := make([]importedView, len(res.Workflows))
+	for i := range res.Workflows {
+		wf := &res.Workflows[i]
+		out[i] = importedView{ID: wf.ID, Name: wf.Name, Nodes: len(wf.Nodes), Clouds: wf.Clouds, Diagnostics: nodeDiagnostics(wf)}
+	}
+	return map[string]any{"workflows": out, "hint": "call get_workflow with an id for the full graph"}, nil
+}
+
+type exportIn struct {
+	Workflow     string `json:"workflow,omitempty" jsonschema:"workflow ID or name; omit or \"current\" for the workflow open in the Nimbo app"`
+	Dir          string `json:"dir" jsonschema:"absolute destination directory (created if missing; existing files with the same names are overwritten)"`
+	Environments bool   `json:"environments,omitempty" jsonschema:"also write environments/<name>.tfvars and .env.example"`
+}
+
+func (t *tools) exportTerraform(ctx context.Context, in exportIn) (any, error) {
+	wf, err := t.c.workflow(ctx, in.Workflow)
+	if err != nil {
+		return nil, err
+	}
+	var res struct {
+		Dir   string   `json:"dir"`
+		Files []string `json:"files"`
+	}
+	body := map[string]any{"dir": in.Dir, "environments": in.Environments}
+	if err := t.c.do(ctx, http.MethodPost, "/workflows/"+pathEscape(wf.ID)+"/export", body, &res); err != nil {
+		return nil, err
+	}
+	return res, nil
+}
+
+// ---------------------------------------------------------------------------
+// Sandbox and runs
+
+func (t *tools) sandboxStatus(ctx context.Context, in workflowArg) (any, error) {
+	wf, err := t.c.workflow(ctx, in.Workflow)
+	if err != nil {
+		return nil, err
+	}
+	var st model.SandboxStatus
+	err = t.c.get(ctx, "/workflows/"+pathEscape(wf.ID)+"/sandbox", &st)
+	return st, err
+}
+
+func (t *tools) sandboxAction(action string) func(context.Context, workflowArg) (any, error) {
+	return func(ctx context.Context, in workflowArg) (any, error) {
+		wf, err := t.c.workflow(ctx, in.Workflow)
+		if err != nil {
+			return nil, err
+		}
+		var st model.SandboxStatus
+		err = t.c.do(ctx, http.MethodPost, "/workflows/"+pathEscape(wf.ID)+"/sandbox/"+action, nil, &st)
+		return st, err
+	}
+}
+
+type runIn struct {
+	Workflow    string `json:"workflow,omitempty" jsonschema:"workflow ID or name; omit or \"current\" for the workflow open in the Nimbo app"`
+	Environment string `json:"environment,omitempty" jsonschema:"environment name; defaults to the active environment"`
+	WaitSeconds int    `json:"wait_seconds,omitempty" jsonschema:"max seconds to wait for completion (default 600); the run keeps going after that, poll with get_run"`
+}
+
+func terminalRun(s model.RunStatus) bool {
+	return s == model.RunSucceeded || s == model.RunFailed || s == model.RunCanceled
+}
+
+func (t *tools) runAction(action model.RunAction) func(context.Context, runIn) (any, error) {
+	return func(ctx context.Context, in runIn) (any, error) {
+		wf, err := t.c.workflow(ctx, in.Workflow)
+		if err != nil {
+			return nil, err
+		}
+		var run model.Run
+		body := map[string]any{"action": action, "environment": in.Environment}
+		if err := t.c.do(ctx, http.MethodPost, "/workflows/"+pathEscape(wf.ID)+"/runs", body, &run); err != nil {
+			return nil, err
+		}
+		wait := time.Duration(in.WaitSeconds) * time.Second
+		if wait <= 0 {
+			wait = 600 * time.Second
+		}
+		return t.waitRun(ctx, wf.ID, run.ID, wait)
+	}
+}
+
+func (t *tools) waitRun(ctx context.Context, wfID, runID string, wait time.Duration) (runView, error) {
+	deadline := time.Now().Add(wait)
+	var run model.Run
+	for {
+		if err := t.c.get(ctx, "/runs/"+pathEscape(runID), &run); err != nil {
+			return runView{}, err
+		}
+		if terminalRun(run.Status) || time.Now().After(deadline) {
+			break
+		}
+		select {
+		case <-ctx.Done():
+			return runView{}, ctx.Err()
+		case <-time.After(time.Second):
+		}
+	}
+	v := viewRun(&run)
+	if !terminalRun(run.Status) {
+		v.Hint = "still running; call get_run with this id"
+	}
+	if run.Status == model.RunSucceeded && run.Action == model.ActionApply {
+		var st model.DeployedState
+		if err := t.c.get(ctx, "/workflows/"+pathEscape(wfID)+"/state", &st); err == nil {
+			sv := viewState(&st, "", false)
+			v.Deployed = &sv
+		}
+	}
+	return v, nil
+}
+
+type runRefIn struct {
+	Run string `json:"run" jsonschema:"run ID"`
+}
+
+func (t *tools) getRun(ctx context.Context, in runRefIn) (any, error) {
+	var run model.Run
+	if err := t.c.get(ctx, "/runs/"+pathEscape(in.Run), &run); err != nil {
+		return nil, err
+	}
+	return viewRun(&run), nil
+}
+
+type stateIn struct {
+	Workflow string `json:"workflow,omitempty" jsonschema:"workflow ID or name; omit or \"current\" for the workflow open in the Nimbo app"`
+	Address  string `json:"address,omitempty" jsonschema:"resource address prefix; matching resources include every value"`
+}
+
+func (t *tools) getDeployedState(ctx context.Context, in stateIn) (any, error) {
+	wf, err := t.c.workflow(ctx, in.Workflow)
+	if err != nil {
+		return nil, err
+	}
+	var st model.DeployedState
+	if err := t.c.get(ctx, "/workflows/"+pathEscape(wf.ID)+"/state", &st); err != nil {
+		return nil, err
+	}
+	return viewState(&st, in.Address, in.Address != ""), nil
+}
+
+// endpointsView is the compact form of model.EndpointsInfo for agents.
+type endpointsView struct {
+	Sandbox   []sandboxAccessView  `json:"sandbox"`
+	Resources []resourceAccessView `json:"resources"`
+	Hint      string               `json:"hint,omitempty"`
+}
+
+type sandboxAccessView struct {
+	Cloud model.Cloud `json:"cloud"`
+	URL   string      `json:"url"`
+	Env   string      `json:"env"`
+}
+
+type resourceAccessView struct {
+	Node    string            `json:"node"` // pass to try_endpoint
+	Label   string            `json:"label"`
+	Kind    string            `json:"kind"`
+	Summary string            `json:"summary"`
+	URLs    []string          `json:"urls,omitempty"` // "METHOD URL"
+	Fields  map[string]string `json:"fields,omitempty"`
+	Snippet *model.Snippet    `json:"snippet,omitempty"`
+	Actions []string          `json:"actions,omitempty"` // "id (input)"
+	Warning string            `json:"warning,omitempty"`
+}
+
+func (t *tools) endpoints(ctx context.Context, wfID string) (*model.EndpointsInfo, error) {
+	var info model.EndpointsInfo
+	if err := t.c.get(ctx, "/workflows/"+pathEscape(wfID)+"/endpoints", &info); err != nil {
+		return nil, err
+	}
+	return &info, nil
+}
+
+func accessRef(r *model.ResourceAccess) string {
+	if r.NodeID != "" {
+		return r.NodeID
+	}
+	return r.Address
+}
+
+func (t *tools) getEndpoints(ctx context.Context, in workflowArg) (any, error) {
+	wf, err := t.c.workflow(ctx, in.Workflow)
+	if err != nil {
+		return nil, err
+	}
+	info, err := t.endpoints(ctx, wf.ID)
+	if err != nil {
+		return nil, err
+	}
+	out := endpointsView{Sandbox: []sandboxAccessView{}, Resources: []resourceAccessView{}}
+	for _, s := range info.Sandbox {
+		out.Sandbox = append(out.Sandbox, sandboxAccessView{Cloud: s.Cloud, URL: s.URL, Env: s.EnvSnippet})
+	}
+	refs := map[string]int{}
+	for i := range info.Resources {
+		refs[accessRef(&info.Resources[i])]++
+	}
+	for i := range info.Resources {
+		r := &info.Resources[i]
+		v := resourceAccessView{Node: accessRef(r), Label: r.Label, Kind: r.Kind, Summary: r.Summary, Warning: r.Warning}
+		if refs[v.Node] > 1 {
+			v.Node = r.Address // count/for_each instances share their node
+		}
+		for _, ep := range r.Endpoints {
+			v.URLs = append(v.URLs, ep.Method+" "+ep.URL)
+		}
+		if len(r.Fields) > 0 {
+			v.Fields = map[string]string{}
+			for _, f := range r.Fields {
+				v.Fields[f.Label] = f.Value
+			}
+		}
+		if len(r.Snippets) > 0 {
+			v.Snippet = &r.Snippets[0]
+		}
+		for _, a := range r.Actions {
+			v.Actions = append(v.Actions, a.ID+" ("+a.Input+")")
+		}
+		out.Resources = append(out.Resources, v)
+	}
+	switch {
+	case len(out.Resources) == 0:
+		out.Hint = "Nothing is deployed. Deploy the workflow first (deploy)."
+	case len(out.Sandbox) == 0:
+		out.Hint = "The sandbox is not running; URLs stay valid but answer only after sandbox_start."
+	default:
+		out.Hint = "Use try_endpoint with node and an action to call a resource; the URLs work from this machine with curl, Postman or any AWS SDK."
+	}
+	return out, nil
+}
+
+type tryEndpointIn struct {
+	Workflow string            `json:"workflow,omitempty" jsonschema:"workflow ID or name; omit or \"current\" for the workflow open in the Nimbo app"`
+	Node     string            `json:"node" jsonschema:"resource from get_endpoints: its node value, node ID, address or label"`
+	Action   string            `json:"action" jsonschema:"action ID from get_endpoints, e.g. request, invoke, send, receive, publish, list, put, get, scan, start"`
+	Input    string            `json:"input,omitempty" jsonschema:"action input: JSON for json actions, text for text actions, the request body for request; the action's default when omitted"`
+	Method   string            `json:"method,omitempty" jsonschema:"request action: HTTP method (default GET)"`
+	Path     string            `json:"path,omitempty" jsonschema:"request action: a path relative to the API/function URL (e.g. /items) or a full sandbox URL from get_endpoints"`
+	Headers  map[string]string `json:"headers,omitempty" jsonschema:"request action: extra HTTP headers"`
+}
+
+func (t *tools) tryEndpoint(ctx context.Context, in tryEndpointIn) (any, error) {
+	wf, err := t.c.workflow(ctx, in.Workflow)
+	if err != nil {
+		return nil, err
+	}
+	info, err := t.endpoints(ctx, wf.ID)
+	if err != nil {
+		return nil, err
+	}
+	ref := ""
+	for _, match := range []func(r *model.ResourceAccess) bool{
+		func(r *model.ResourceAccess) bool { return r.Address == in.Node },
+		func(r *model.ResourceAccess) bool { return r.NodeID == in.Node },
+		func(r *model.ResourceAccess) bool { return strings.EqualFold(r.Label, in.Node) },
+	} {
+		for i := range info.Resources {
+			if r := &info.Resources[i]; ref == "" && match(r) {
+				ref = r.Address
+			}
+		}
+	}
+	if ref == "" {
+		return nil, fmt.Errorf("no deployed resource %q; call get_endpoints for the node values", in.Node)
+	}
+	req := model.TryRequest{NodeID: ref, Action: in.Action, Input: in.Input, Method: in.Method, Path: in.Path, Headers: in.Headers}
+	var res model.TryResult
+	if err := t.c.do(ctx, http.MethodPost, "/workflows/"+pathEscape(wf.ID)+"/endpoints/try", req, &res); err != nil {
+		return nil, err
+	}
+	if len(res.Body) > 8000 {
+		res.Body = res.Body[:8000] + "\n… (truncated)"
+	}
+	res.Headers = nil
+	return res, nil
+}
+
+// ---------------------------------------------------------------------------
+// Load tests
+
+func (t *tools) loadTargets(ctx context.Context, wfID string) ([]model.LoadTarget, error) {
+	var targets []model.LoadTarget
+	err := t.c.get(ctx, "/workflows/"+pathEscape(wfID)+"/loadtests/targets", &targets)
+	return targets, err
+}
+
+func (t *tools) listLoadTargets(ctx context.Context, in workflowArg) (any, error) {
+	wf, err := t.c.workflow(ctx, in.Workflow)
+	if err != nil {
+		return nil, err
+	}
+	targets, err := t.loadTargets(ctx, wf.ID)
+	if err != nil {
+		return nil, err
+	}
+	if len(targets) == 0 {
+		return "No load targets. Deploy the workflow first (deploy), or pass a custom HTTP/AWS target object to run_load_test.", nil
+	}
+	type item struct {
+		Index int `json:"index"`
+		model.LoadTarget
+	}
+	out := make([]item, len(targets))
+	for i, tg := range targets {
+		out[i] = item{i, tg}
+	}
+	return out, nil
+}
+
+type loadTestIn struct {
+	Workflow        string            `json:"workflow,omitempty" jsonschema:"workflow ID or name; omit or \"current\" for the workflow open in the Nimbo app"`
+	Target          any               `json:"target" jsonschema:"index from list_load_targets, or a target object {kind: http|aws|sql|redis|mongo, label, connectionId?, http: {method, url, headers?, body?} | aws: {operation, resource, payload?, key?} | sql: {query, args?, mode} | redis: {command} | mongo: {database, collection?, operation, document?, update?}}; connectionId (see list_connections) targets a saved external service and sql/redis/mongo require it"`
+	Preset          string            `json:"preset,omitempty" jsonschema:"smoke (default), load, stress, spike or soak"`
+	Stages          []model.LoadStage `json:"stages,omitempty" jsonschema:"custom ramp stages overriding the preset; each ramps linearly to target over durationSec"`
+	Mode            string            `json:"mode,omitempty" jsonschema:"rps (target = requests/second) or concurrency (target = virtual users)"`
+	Thresholds      []model.Threshold `json:"thresholds,omitempty" jsonschema:"pass/fail criteria, e.g. {metric: p95_ms, op: <, value: 200}; metrics p50_ms p90_ms p95_ms p99_ms max_ms error_rate rps_min"`
+	ConfirmExternal bool              `json:"confirm_external,omitempty" jsonschema:"set true ONLY after the user explicitly approved sending this traffic to a service outside the local sandbox (a connection target or a non-local URL)"`
+	Wait            *bool             `json:"wait,omitempty" jsonschema:"wait for the result (default true)"`
+}
+
+func (t *tools) runLoadTest(ctx context.Context, in loadTestIn) (any, error) {
+	wf, err := t.c.workflow(ctx, in.Workflow)
+	if err != nil {
+		return nil, err
+	}
+	target, err := t.resolveTarget(ctx, in.Target, func(ctx context.Context) ([]model.LoadTarget, error) {
+		return t.loadTargets(ctx, wf.ID)
+	})
+	if err != nil {
+		return nil, err
+	}
+	spec, err := t.loadSpec(ctx, target, in.Preset, in.Stages, in.Mode, in.Thresholds)
+	if err != nil {
+		return nil, err
+	}
+	spec.ConfirmExternal = in.ConfirmExternal
+	return t.startLoadRun(ctx, "/workflows/"+pathEscape(wf.ID)+"/loadtests", spec, in.Wait)
+}
+
+// loadSpec builds a spec from a preset (default smoke), optionally replaced
+// by custom stages and mode.
+func (t *tools) loadSpec(ctx context.Context, target model.LoadTarget, preset string, stages []model.LoadStage, mode string, thresholds []model.Threshold) (model.LoadTestSpec, error) {
+	if preset == "" {
+		preset = "smoke"
+	}
+	var presets []model.LoadProfile
+	if err := t.c.get(ctx, "/catalog/load-presets", &presets); err != nil {
+		return model.LoadTestSpec{}, err
+	}
+	var profile *model.LoadProfile
+	var names []string
+	for i := range presets {
+		names = append(names, presets[i].Preset)
+		if presets[i].Preset == preset {
+			profile = &presets[i]
+		}
+	}
+	if profile == nil {
+		return model.LoadTestSpec{}, fmt.Errorf("unknown preset %q; available: %s", preset, strings.Join(names, ", "))
+	}
+	if len(stages) > 0 {
+		profile.Stages = stages
+		profile.Preset = "custom"
+		profile.Label = ""
+	}
+	if mode != "" {
+		profile.Mode = model.LoadMode(mode)
+	}
+	return model.LoadTestSpec{
+		Name:       fmt.Sprintf("%s · %s", target.Label, profile.Preset),
+		Target:     target,
+		Profile:    *profile,
+		Thresholds: thresholds,
+	}, nil
+}
+
+// startLoadRun POSTs spec to path and, unless wait is false, polls until
+// the run ends (or its planned duration plus two minutes elapses).
+func (t *tools) startLoadRun(ctx context.Context, path string, spec model.LoadTestSpec, wait *bool) (any, error) {
+	var run model.LoadTestRun
+	if err := t.c.do(ctx, http.MethodPost, path, spec, &run); err != nil {
+		var ae *apiError
+		if errors.As(err, &ae) && ae.Code == "confirmation_required" {
+			return nil, fmt.Errorf("%s. This target is outside the local sandbox: ask the user for explicit approval to send this traffic (write operations create real data), then retry with confirm_external=true", ae.Message)
+		}
+		return nil, err
+	}
+	if wait != nil && !*wait {
+		v := viewLoadRun(&run)
+		v.Hint = "started; call get_load_test with this id"
+		return v, nil
+	}
+	total := 0
+	for _, s := range spec.Profile.Stages {
+		total += s.DurationSec
+	}
+	deadline := time.Now().Add(time.Duration(total)*time.Second + 2*time.Minute)
+	for run.Status == model.LoadRunning && time.Now().Before(deadline) {
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-time.After(time.Second):
+		}
+		if err := t.c.get(ctx, "/loadtests/"+pathEscape(run.ID), &run); err != nil {
+			return nil, err
+		}
+	}
+	v := viewLoadRun(&run)
+	if run.Status == model.LoadRunning {
+		v.Hint = "still running; call get_load_test with this id"
+	}
+	return v, nil
+}
+
+// resolveTarget accepts an index into the suggested targets (fetched with
+// list only when needed) or a full target object.
+func (t *tools) resolveTarget(ctx context.Context, raw any, list func(context.Context) ([]model.LoadTarget, error)) (model.LoadTarget, error) {
+	var idx int
+	switch v := raw.(type) {
+	case float64:
+		idx = int(v)
+	case string:
+		n, err := strconv.Atoi(v)
+		if err != nil {
+			return model.LoadTarget{}, fmt.Errorf("target %q is neither an index nor a target object", v)
+		}
+		idx = n
+	case map[string]any:
+		data, _ := json.Marshal(v)
+		var tg model.LoadTarget
+		if err := json.Unmarshal(data, &tg); err != nil {
+			return model.LoadTarget{}, fmt.Errorf("invalid target object: %w", err)
+		}
+		ok := false
+		switch tg.Kind {
+		case model.TargetHTTP:
+			ok = tg.HTTP != nil
+		case model.TargetAWS:
+			ok = tg.AWS != nil
+		case model.TargetSQL:
+			ok = tg.SQL != nil
+		case model.TargetRedis:
+			ok = tg.Redis != nil
+		case model.TargetMongo:
+			ok = tg.Mongo != nil
+		}
+		if !ok {
+			return model.LoadTarget{}, errors.New("target object needs a kind (http, aws, sql, redis or mongo) and the object of the same name, e.g. {kind: http, http: {...}}")
+		}
+		if tg.Label == "" {
+			tg.Label = string(tg.Kind) + " target"
+		}
+		return tg, nil
+	default:
+		return model.LoadTarget{}, errors.New("target is required: an index from the list targets tool or a target object")
+	}
+	targets, err := list(ctx)
+	if err != nil {
+		return model.LoadTarget{}, err
+	}
+	if idx < 0 || idx >= len(targets) {
+		return model.LoadTarget{}, fmt.Errorf("target index %d out of range (%d targets; list them first)", idx, len(targets))
+	}
+	return targets[idx], nil
+}
+
+type loadRefIn struct {
+	Run string `json:"run" jsonschema:"load test run ID"`
+}
+
+func (t *tools) getLoadTest(ctx context.Context, in loadRefIn) (any, error) {
+	var run model.LoadTestRun
+	if err := t.c.get(ctx, "/loadtests/"+pathEscape(in.Run), &run); err != nil {
+		return nil, err
+	}
+	return viewLoadRun(&run), nil
+}
