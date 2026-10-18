@@ -8,10 +8,11 @@ import {
   useReactFlow,
 } from "@xyflow/react"
 import { useQuery } from "@tanstack/react-query"
-import { ChevronRightIcon, CloudDownloadIcon, PackageIcon, XIcon } from "lucide-react"
+import { ChevronRightIcon, CloudDownloadIcon, LockIcon, PackageIcon, XIcon } from "lucide-react"
 import { useTheme } from "next-themes"
 import { Fragment, useEffect, useMemo, useState } from "react"
 import { errorMessage } from "@/components/errors"
+import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Empty, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from "@/components/ui/empty"
 import { Kbd } from "@/components/ui/kbd"
@@ -74,20 +75,31 @@ export function ModuleOverlay() {
       className="absolute inset-0 z-20 flex flex-col bg-background"
     >
       <div className="flex h-11 shrink-0 items-center gap-2 border-b px-3">
-        <PackageIcon className="size-4 text-violet-500" />
-        <nav aria-label="Module path" className="flex min-w-0 items-center gap-1 text-sm">
-          <button type="button" className="truncate text-muted-foreground hover:text-foreground" onClick={close}>
+        <PackageIcon className="size-4 shrink-0 text-violet-500" />
+        <nav aria-label="Module path" className="flex min-w-0 flex-1 items-center gap-1 text-sm">
+          <button
+            type="button"
+            title={wf.name}
+            className="w-fit min-w-12 max-w-32 shrink truncate text-muted-foreground hover:text-foreground"
+            onClick={close}
+          >
             {wf.name}
           </button>
           {crumbs.map((c, i) => (
             <Fragment key={c + i}>
               <ChevronRightIcon className="size-3.5 shrink-0 text-muted-foreground" />
               {i === crumbs.length - 1 ? (
-                <span className="truncate font-mono text-xs font-medium">{c}</span>
+                <span
+                  title={view.data?.source ? `${c}\nsource = "${view.data.source}"` : c}
+                  className="min-w-0 truncate font-mono text-xs font-medium"
+                >
+                  {c}
+                </span>
               ) : (
                 <button
                   type="button"
-                  className="truncate font-mono text-xs text-muted-foreground hover:text-foreground"
+                  title={c}
+                  className="min-w-0 max-w-28 truncate font-mono text-xs text-muted-foreground hover:text-foreground"
                   onClick={() => setPath(path.slice(0, i))}
                 >
                   {c}
@@ -96,12 +108,10 @@ export function ModuleOverlay() {
             </Fragment>
           ))}
         </nav>
-        {view.data?.source && (
-          <span className="ml-2 hidden truncate font-mono text-[11px] text-muted-foreground md:inline">
-            source = &quot;{view.data.source}&quot;
-          </span>
-        )}
-        <span className="ml-auto rounded-full bg-muted px-2 py-0.5 text-[11px] text-muted-foreground">Read-only</span>
+        <Badge variant="outline" className="shrink-0 gap-1 whitespace-nowrap text-muted-foreground">
+          <LockIcon />
+          Read-only
+        </Badge>
         <Button variant="ghost" size="sm" onClick={close} aria-label="Close module view">
           <Kbd>Esc</Kbd>
           <XIcon />
