@@ -1,0 +1,29 @@
+[package]
+name = "nimbo-desktop"
+version = "0.1.0"
+description = "Nimbo — design, deploy and load-test cloud infrastructure locally"
+authors = ["Nimbo"]
+license = ""
+repository = ""
+edition = "2024"
+rust-version = "1.90"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[lib]
+name = "nimbo_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2.7.3", features = [] }
+
+[dependencies]
+serde_json = "1.0"
+serde = { version = "1.0", features = ["derive"] }
+log = "0.4"
+tauri = { version = "2.12.4", features = [] }
+tauri-plugin-log = "2"
+tauri-plugin-shell = "2.5.0"
+tauri-plugin-dialog = "2.8.3"
+tauri-plugin-fs = "2.7.1"
+tokio = { version = "1.53.3", features = ["sync", "time"] }
