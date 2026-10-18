@@ -32,7 +32,7 @@ defaults:
 jobs:
   meta:
     name: Version
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     outputs:
       version: ${{ steps.v.outputs.version }}
       nimbo_version: ${{ steps.v.outputs.nimbo_version }}
@@ -242,7 +242,7 @@ jobs:
   publish:
     name: Publish (release notes only on dry runs)
     needs: [meta, build]
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     permissions:
       contents: write
     env:
