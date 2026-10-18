@@ -1,5 +1,11 @@
 Design, deploy and load-test cloud infrastructure on your laptop. Full install guide: [docs/INSTALL.md](https://github.com/{{REPO}}/blob/{{TAG}}/docs/INSTALL.md).
 
+## What's changed
+
+{{CHANGELOG}}
+
+Already have Nimbo? It offers this update on its next start (or **Settings → About → Check for updates**). Linux `.deb`/`.rpm` installs: download the new package below.
+
 ## Download
 
 | OS | File |

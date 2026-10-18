@@ -1,13 +1,18 @@
 name: Release
 
-# Builds unsigned (macOS: ad-hoc signed) installers for macOS, Windows and Linux.
-# - push a tag vX.Y.Z      -> build, smoke-test and publish the GitHub release "Nimbo vX.Y.Z"
-# - workflow_dispatch      -> dry_run (default) builds and uploads the assets as workflow
-#                             artifacts only; dry_run=false on a v* tag publishes like a tag push.
+# Automatic releases from Conventional Commits (see docs/RELEASING.md):
+# - push to main      -> compute the next version since the last vX.Y.Z tag; when there are
+#                        releasable commits (feat, fix, perf, breaking), build every platform,
+#                        smoke-test, then tag the commit and publish "Nimbo vX.Y.Z" with the
+#                        installers, updater artifacts, latest.json and SHA256SUMS.txt.
+# - workflow_dispatch -> dry_run (default) builds everything with the would-be version and uploads
+#                        the assets as workflow artifacts only; dry_run=false on main acts like a push.
+# The tag is created by the publish job, after all builds succeed (tags pushed with GITHUB_TOKEN
+# don't trigger workflows, so everything happens in this one run).
 
 on:
   push:
-    tags: ["v*"]
+    branches: [main]
   workflow_dispatch:
     inputs:
       dry_run:
@@ -15,6 +20,7 @@ on:
         type: boolean
         default: true
 
+# One release run at a time; a newer push waits (and covers every commit since the last tag).
 concurrency:
   group: release-${{ github.ref }}
   cancel-in-progress: false
@@ -37,42 +43,54 @@ jobs:
       version: ${{ steps.v.outputs.version }}
       nimbo_version: ${{ steps.v.outputs.nimbo_version }}
       tag: ${{ steps.v.outputs.tag }}
+      build: ${{ steps.v.outputs.build }}
       publish: ${{ steps.v.outputs.publish }}
     steps:
       - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: ${{ env.BUN_VERSION }}
       - id: v
         env:
           DRY_RUN: ${{ github.event_name == 'workflow_dispatch' && inputs.dry_run }}
         run: |
-          if [[ "$GITHUB_REF" == refs/tags/v* && "$DRY_RUN" != "true" ]]; then
-            tag="$GITHUB_REF_NAME"
-            if [[ ! "$tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-              echo "::error::release tags must be vX.Y.Z (MSI needs a numeric version), got $tag"
-              exit 1
-            fi
-            version="${tag#v}"
-            nimbo_version="$tag"
-            publish=true
-          elif [[ "$DRY_RUN" == "true" ]]; then
-            version="$(jq -r .version apps/desktop/src-tauri/tauri.conf.json)"
-            tag="v$version"
-            nimbo_version="v$version-dryrun+${GITHUB_SHA::7}"
-            publish=false
-          else
-            echo "::error::publishing needs a v* tag; run the dry run from a branch or push a tag"
+          bun scripts/release/next-version.ts --repo "$GITHUB_REPOSITORY" --notes changelog.md | tee next.env
+          source next.env
+          if [[ "$DRY_RUN" == "true" ]]; then
+            build=true publish=false nimbo_version="$tag-dryrun+${GITHUB_SHA::7}"
+          elif [[ "$GITHUB_REF" != refs/heads/main ]]; then
+            echo "::error::releases are published from main only; use dry_run on other branches"
             exit 1
+          else
+            build="$release" publish="$release" nimbo_version="$tag"
           fi
           {
             echo "version=$version"
-            echo "nimbo_version=$nimbo_version"
             echo "tag=$tag"
+            echo "nimbo_version=$nimbo_version"
+            echo "build=$build"
             echo "publish=$publish"
           } >> "$GITHUB_OUTPUT"
-          echo "version=$version nimbo_version=$nimbo_version tag=$tag publish=$publish"
+          {
+            echo "### $tag — release: $release, publish: $publish (previous: ${previous_tag:-none})"
+            echo
+            cat changelog.md
+          } >> "$GITHUB_STEP_SUMMARY"
+          if [[ "$build" != "true" ]]; then
+            echo "No releasable commits since ${previous_tag:-the start} (only docs/ci/chore/test/…): nothing to release."
+          fi
+      - uses: actions/upload-artifact@v7
+        with:
+          name: changelog
+          path: changelog.md
 
   build:
     name: Build ${{ matrix.name }}
     needs: meta
+    if: needs.meta.outputs.build == 'true'
     runs-on: ${{ matrix.runner }}
     strategy:
       fail-fast: false
@@ -146,10 +164,16 @@ jobs:
       - name: Build app
         working-directory: apps/desktop
         env:
+          # Signs the updater artifacts (.app.tar.gz, NSIS .exe, AppImage) -> <file>.sig.
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
           # linuxdeploy (AppImage) runs as an AppImage itself and can't strip newer ELF sections.
           APPIMAGE_EXTRACT_AND_RUN: 1
           NO_STRIP: true
-        run: bunx tauri build --ci --target ${{ matrix.target }} --bundles ${{ matrix.bundles }}
+        # createUpdaterArtifacts is only on here, so local builds (setup.sh) need no signing key.
+        run: >-
+          bunx tauri build --ci --target ${{ matrix.target }} --bundles ${{ matrix.bundles }}
+          --config '{"bundle":{"createUpdaterArtifacts":true}}'
 
       - name: Smoke test (macOS)
         if: matrix.platform == 'macos'
@@ -219,14 +243,17 @@ jobs:
           case "${{ matrix.platform }}" in
             macos)
               one "$BUNDLE_DIR/dmg/*.dmg" "$PREFIX.dmg"
-              COPYFILE_DISABLE=1 tar -czf "release/$PREFIX.app.tar.gz" -C "$BUNDLE_DIR/macos" Nimbo.app
+              one "$BUNDLE_DIR/macos/*.app.tar.gz" "$PREFIX.app.tar.gz"
+              one "$BUNDLE_DIR/macos/*.app.tar.gz.sig" "$PREFIX.app.tar.gz.sig"
               ;;
             windows)
               one "$BUNDLE_DIR/nsis/*-setup.exe" "$PREFIX-setup.exe"
+              one "$BUNDLE_DIR/nsis/*-setup.exe.sig" "$PREFIX-setup.exe.sig"
               one "$BUNDLE_DIR/msi/*.msi" "$PREFIX.msi"
               ;;
             linux)
               one "$BUNDLE_DIR/appimage/*.AppImage" "$PREFIX.AppImage"
+              one "$BUNDLE_DIR/appimage/*.AppImage.sig" "$PREFIX.AppImage.sig"
               one "$BUNDLE_DIR/deb/*.deb" "$PREFIX.deb"
               one "$BUNDLE_DIR/rpm/*.rpm" "$PREFIX.rpm"
               ;;
@@ -240,20 +267,32 @@ jobs:
           compression-level: 0
 
   publish:
-    name: Publish (release notes only on dry runs)
+    name: Publish (artifacts only on dry runs)
     needs: [meta, build]
+    if: needs.meta.outputs.build == 'true'
     runs-on: ubuntu-24.04
     permissions:
       contents: write
     env:
       TAG: ${{ needs.meta.outputs.tag }}
+      VERSION: ${{ needs.meta.outputs.version }}
     steps:
       - uses: actions/checkout@v7
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: ${{ env.BUN_VERSION }}
       - uses: actions/download-artifact@v8
         with:
           pattern: nimbo-*
           merge-multiple: true
           path: release
+      - uses: actions/download-artifact@v8
+        with:
+          name: changelog
+      - name: Updater manifest (latest.json)
+        run: >-
+          bun scripts/release/updater-manifest.ts --dir release --version "$VERSION" --notes changelog.md
+          --base-url "https://github.com/$GITHUB_REPOSITORY/releases/download/$TAG"
       - name: Checksums
         working-directory: release
         run: |
@@ -268,6 +307,7 @@ jobs:
           for key, value in {
               "{{TAG}}": os.environ["TAG"],
               "{{REPO}}": os.environ["GITHUB_REPOSITORY"],
+              "{{CHANGELOG}}": pathlib.Path("changelog.md").read_text().strip(),
               "{{CHECKSUMS}}": pathlib.Path("release/SHA256SUMS.txt").read_text().strip(),
           }.items():
               notes = notes.replace(key, value)
@@ -280,13 +320,27 @@ jobs:
           path: |
             release-notes.md
             release/SHA256SUMS.txt
-      - name: Create GitHub release
+            release/latest.json
+      - name: Tag and publish the GitHub release
         if: needs.meta.outputs.publish == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
+          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            # Re-run of a published release: refresh assets and notes.
+            gh release upload "$TAG" release/* --repo "$GITHUB_REPOSITORY" --clobber
+            gh release edit "$TAG" --repo "$GITHUB_REPOSITORY" --title "Nimbo $TAG" --notes-file release-notes.md
+            exit 0
+          fi
+          tagged="$(git ls-remote --tags origin "refs/tags/$TAG" | cut -f1)"
+          if [[ -n "$tagged" && "$tagged" != "$GITHUB_SHA" ]]; then
+            echo "::error::$TAG already points at $tagged, not $GITHUB_SHA"
+            exit 1
+          fi
+          # Creates the tag at this commit when it doesn't exist yet.
           gh release create "$TAG" release/* \
             --repo "$GITHUB_REPOSITORY" \
-            --verify-tag \
+            --target "$GITHUB_SHA" \
             --title "Nimbo $TAG" \
-            --notes-file release-notes.md
+            --notes-file release-notes.md \
+            --latest
