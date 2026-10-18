@@ -187,9 +187,9 @@ jobs:
           if (-not (Test-Path $installed)) { throw "sidecar missing from $dir" }
           $iv = & $installed version
           if ($iv -ne $env:NIMBO_VERSION) { throw "installed sidecar version '$iv' != '$env:NIMBO_VERSION'" }
-          $app = Get-ChildItem "$dir/*.exe" | Where-Object { $_.Name -notin 'nimbo.exe', 'uninstall.exe' }
-          if (-not $app) { throw "app executable missing from $dir" }
-          Write-Host "installed app: $($app.Name)"
+          foreach ($exe in 'nimbo-desktop.exe', 'uninstall.exe') {
+            if (-not (Test-Path (Join-Path $dir $exe))) { throw "$exe missing from $dir" }
+          }
 
       - name: Smoke test (Linux AppImage, deb, rpm)
         if: matrix.platform == 'linux'
@@ -201,7 +201,7 @@ jobs:
           test "$("$work/squashfs-root/usr/bin/nimbo" version)" = "$NIMBO_VERSION"
           deb="$(ls "$BUNDLE_DIR"/deb/*.deb)"
           dpkg-deb -I "$deb"
-          dpkg-deb -c "$deb" | grep -E ' \./usr/bin/nimbo$'
+          dpkg-deb -c "$deb" | grep -E '[ /]usr/bin/nimbo$'
           rpm -qip "$BUNDLE_DIR"/rpm/*.rpm
           rpm -qlp "$BUNDLE_DIR"/rpm/*.rpm | grep -x /usr/bin/nimbo
 
@@ -240,7 +240,7 @@ jobs:
           compression-level: 0
 
   publish:
-    name: ${{ needs.meta.outputs.publish == 'true' && 'Publish release' || 'Release notes (dry run)' }}
+    name: Publish (release notes only on dry runs)
     needs: [meta, build]
     runs-on: ubuntu-latest
     permissions:

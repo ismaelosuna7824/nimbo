@@ -35,6 +35,11 @@
   "bundle": {
     "active": true,
     "targets": "all",
+    "category": "DeveloperTool",
+    "publisher": "Nimbo",
+    "homepage": "https://github.com/ismaelosuna7824/nimbo",
+    "shortDescription": "Design, deploy and load-test cloud infrastructure locally",
+    "longDescription": "Design cloud infrastructure by connecting nodes, export or import Terraform, deploy it into a private local sandbox and load-test it without touching a real cloud account.",
     "externalBin": ["binaries/nimbo"],
     "icon": [
       "icons/32x32.png",
