@@ -41,6 +41,7 @@ export const es: Strings = {
     downloadDesktop: "Consíguelo para tu computadora",
     github: "Ver en GitHub",
     meta: "Gratis · Corre en local · macOS, Windows, Linux",
+    installHelp: "Otras plataformas y ayuda para instalar",
   },
   how: {
     eyebrow: "Cómo funciona",

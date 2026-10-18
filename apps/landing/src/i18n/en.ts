@@ -39,6 +39,7 @@ export const en = {
     downloadDesktop: "Get it for your computer",
     github: "View on GitHub",
     meta: "Free · Runs locally · macOS, Windows, Linux",
+    installHelp: "Other platforms & installation help",
   },
   how: {
     eyebrow: "How it works",

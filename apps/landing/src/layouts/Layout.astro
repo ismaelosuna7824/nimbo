@@ -101,6 +101,7 @@ const ogImage = site ? abs("/og.png") : undefined;
 
     <script>
       import { disableTracking, track } from "../lib/analytics";
+      import { DOWNLOADS } from "../config";
 
       const lang = document.body.dataset.lang ?? "en";
       // No consent banner means no Firebase config: drop events instead of queueing.
@@ -123,6 +124,21 @@ const ogImage = site ? abs("/og.png") : undefined;
               ? "linux"
               : "unknown";
       document.documentElement.dataset.os = os;
+
+      // Point download CTAs at this OS's installer; unknown OS and mobile keep the releases page.
+      const downloadUrl =
+        os === "mac"
+          ? DOWNLOADS.mac
+          : os === "windows"
+            ? DOWNLOADS.windows
+            : os === "linux"
+              ? /aarch64|arm64/i.test(ua + platform)
+                ? DOWNLOADS.linuxArm
+                : DOWNLOADS.linux
+              : undefined;
+      if (downloadUrl) {
+        for (const a of document.querySelectorAll<HTMLAnchorElement>('a[data-cta="download"]')) a.href = downloadUrl;
+      }
 
       for (const el of document.querySelectorAll<HTMLElement>("[data-download-label]")) {
         const names = JSON.parse(el.dataset.osNames ?? "{}") as Record<string, string>;

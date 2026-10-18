@@ -1,7 +1,7 @@
 ---
 import Icon from "../Icon.astro";
 import DownloadButton from "../DownloadButton.astro";
-import { GITHUB_URL } from "../../config";
+import { DOCS, GITHUB_URL } from "../../config";
 import { t, type Lang } from "../../i18n";
 
 interface Props {
@@ -44,7 +44,16 @@ const clouds = [
           {s.hero.github}
         </a>
       </div>
-      <p class="mt-5 font-mono text-xs text-subtle sm:text-[0.8125rem]">{s.hero.meta}</p>
+      <p class="mt-5 font-mono text-xs text-subtle sm:text-[0.8125rem]">
+        {s.hero.meta} ·{" "}
+        <a
+          href={DOCS.install}
+          rel="noopener"
+          class="underline decoration-subtle/40 underline-offset-4 transition-colors hover:text-fg"
+          data-cta="install_help"
+          data-placement="hero">{s.hero.installHelp}</a
+        >
+      </p>
       <ul class="mt-8 flex flex-wrap gap-2" aria-label="AWS, Azure, Google Cloud, OCI">
         {
           clouds.map((c) => (
