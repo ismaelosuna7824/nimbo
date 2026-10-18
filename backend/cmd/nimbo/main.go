@@ -34,7 +34,8 @@ import (
 var version = "dev"
 
 const usage = `usage:
-  nimbo serve [--addr 127.0.0.1:7788] [--home DIR]   run the HTTP daemon
+  nimbo serve [--addr 127.0.0.1:7788] [--home DIR] [--exit-with-parent]
+                                                     run the HTTP daemon
   nimbo mcp [--home DIR]                             run the MCP stdio server
   nimbo doctor [--json] [--home DIR]                 check this machine's setup (exit 1 if not ready)
   nimbo version                                      print the version
@@ -244,7 +245,15 @@ func serveCmd(args []string) error {
 	fs := flag.NewFlagSet("serve", flag.ExitOnError)
 	addr := fs.String("addr", "127.0.0.1:7788", "listen address (loopback only; port 0 = any free port)")
 	homeFlag := fs.String("home", "", "data directory (default $NIMBO_HOME or ~/.nimbo)")
+	exitWithParent := fs.Bool("exit-with-parent", false, "shut down when stdin reaches EOF (the parent process exited)")
 	fs.Parse(args)
+	if *exitWithParent {
+		setParentDeathSignal()
+		// The parent also owns our stdout/stderr pipes. Once it is gone, a log
+		// write would raise SIGPIPE and kill us before the graceful shutdown;
+		// receiving SIGPIPE turns those writes into ignorable EPIPE errors.
+		signal.Notify(make(chan os.Signal, 1), syscall.SIGPIPE)
+	}
 	home, migrated, err := resolveHome(*homeFlag)
 	if err != nil {
 		return err
@@ -264,6 +273,11 @@ func serveCmd(args []string) error {
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
+	if *exitWithParent {
+		var cancel context.CancelFunc
+		ctx, cancel = withParentExit(ctx, os.Stdin)
+		defer cancel()
+	}
 	select {
 	case <-ctx.Done():
 		logger.Info("shutting down")

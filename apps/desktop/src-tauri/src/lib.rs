@@ -39,7 +39,7 @@ fn spawn_engine(app: &tauri::AppHandle, tx: watch::Sender<Option<Result<String, 
   let spawned = app
     .shell()
     .sidecar("nimbo")
-    .map(|cmd| cmd.args(["serve", "--addr", "127.0.0.1:0"]))
+    .map(|cmd| cmd.args(["serve", "--addr", "127.0.0.1:0", "--exit-with-parent"]))
     .and_then(|cmd| cmd.spawn());
   let (mut events, child) = match spawned {
     Ok(pair) => pair,

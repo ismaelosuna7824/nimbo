@@ -768,3 +768,6 @@ Daemon discovery: `nimbo serve --addr 127.0.0.1:0` writes
 `<home>/daemon.json` = `{"url": "http://127.0.0.1:PORT", "pid": N}` and prints
 `NIMBO_LISTENING http://127.0.0.1:PORT` on stdout (Tauri reads it). `nimbo mcp`
 reads `daemon.json`; if the daemon is not reachable it starts one in-process.
+The desktop app spawns the sidecar with `--exit-with-parent`: the daemon shuts
+down gracefully when its stdin (a pipe the app holds open) reaches EOF, so it
+does not outlive a killed app (on Linux it also sets `PR_SET_PDEATHSIG`).
