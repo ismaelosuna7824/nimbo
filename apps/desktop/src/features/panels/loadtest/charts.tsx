@@ -30,7 +30,7 @@ const xAxis = (
 const secondsLabel = (_: unknown, payload: readonly { payload?: { t?: number } }[]) =>
   payload[0]?.payload?.t !== undefined ? `t = ${Math.round(payload[0].payload.t)}s` : ""
 
-export function ChartCard({ title, hint, children }: { title: string; hint?: string; children: ReactNode }) {
+function ChartCard({ title, hint, children }: { title: string; hint?: string; children: ReactNode }) {
   return (
     <div className="flex min-h-0 min-w-0 flex-col rounded-lg border p-2">
       <div className="mb-1 flex items-center gap-1 text-[11px] font-medium text-muted-foreground">
@@ -103,5 +103,60 @@ export function LoadCharts({ samples, mode }: { samples: LoadSample[]; mode: Loa
         </ChartContainer>
       </ChartCard>
     </div>
+  )
+}
+
+/** One timeline point of two compared runs (A and B). */
+export interface CompareRow {
+  t: number
+  aP95?: number
+  bP95?: number
+  aRps?: number
+  bRps?: number
+}
+
+const p95Config: ChartConfig = {
+  aP95: { label: "A p95", theme: SERIES_COLORS.a },
+  bP95: { label: "B p95", theme: SERIES_COLORS.b },
+}
+const rpsConfig: ChartConfig = {
+  aRps: { label: "A req/s", theme: SERIES_COLORS.a },
+  bRps: { label: "B req/s", theme: SERIES_COLORS.b },
+}
+const compareAxisX = (
+  <XAxis dataKey="t" type="number" domain={["dataMin", "dataMax"]} tickLine={false} axisLine={false} minTickGap={24} tickFormatter={(t: number) => `${Math.round(t)}s`} />
+)
+
+/** p95 and throughput of two runs over time (the history comparison). */
+export function CompareCharts({ rows }: { rows: CompareRow[] }) {
+  return (
+    <>
+      <ChartCard title="p95 latency over time (ms)" hint={EXPLAIN.speed}>
+        <ChartContainer config={p95Config} className="aspect-auto h-44 w-full">
+          <LineChart data={rows} margin={{ left: 0, right: 8, top: 4 }}>
+            <CartesianGrid vertical={false} />
+            {compareAxisX}
+            <YAxis tickLine={false} axisLine={false} width={40} tickFormatter={compactTick} />
+            <ChartTooltip content={<ChartTooltipContent />} />
+            <ChartLegend content={<ChartLegendContent />} />
+            <Line dataKey="aP95" stroke="var(--color-aP95)" dot={false} connectNulls isAnimationActive={false} strokeWidth={2} />
+            <Line dataKey="bP95" stroke="var(--color-bP95)" dot={false} connectNulls isAnimationActive={false} strokeWidth={2} />
+          </LineChart>
+        </ChartContainer>
+      </ChartCard>
+      <ChartCard title="Throughput over time (req/s)" hint={EXPLAIN.rps}>
+        <ChartContainer config={rpsConfig} className="aspect-auto h-44 w-full">
+          <LineChart data={rows} margin={{ left: 0, right: 8, top: 4 }}>
+            <CartesianGrid vertical={false} />
+            {compareAxisX}
+            <YAxis tickLine={false} axisLine={false} width={40} tickFormatter={compactTick} />
+            <ChartTooltip content={<ChartTooltipContent />} />
+            <ChartLegend content={<ChartLegendContent />} />
+            <Line dataKey="aRps" stroke="var(--color-aRps)" dot={false} connectNulls isAnimationActive={false} strokeWidth={2} />
+            <Line dataKey="bRps" stroke="var(--color-bRps)" dot={false} connectNulls isAnimationActive={false} strokeWidth={2} />
+          </LineChart>
+        </ChartContainer>
+      </ChartCard>
+    </>
   )
 }

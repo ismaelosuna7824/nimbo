@@ -35,7 +35,7 @@ export function TrafficScope({ external }: { external: string | null }) {
 }
 
 export function LoadTestTab() {
-  const workflow = useWorkflowStore((s) => s.workflow)
+  const workflowId = useWorkflowStore((s) => s.workflow?.id)
   const loadTests = useWorkflowStore((s) => s.loadTests)
   const loadSamples = useWorkflowStore((s) => s.loadSamples)
   const pro = useWorkflowStore((s) => s.mode === "pro")
@@ -47,7 +47,7 @@ export function LoadTestTab() {
   const connections = useConnections()
   const source = useMemo(() => ({ runs: loadTests, samples: loadSamples }), [loadTests, loadSamples])
 
-  if (!workflow) return null
+  if (!workflowId) return null
 
   const shownRunId = runId ?? loadTests[0]?.id ?? null
   const shownRun = loadTests.find((r) => r.id === shownRunId)
@@ -60,7 +60,7 @@ export function LoadTestTab() {
       : (resolved.external?.where ?? null)
 
   const start = async (spec: LoadTestSpec) => {
-    const run = await api.startLoadTest(workflow.id, spec)
+    const run = await api.startLoadTest(workflowId, spec)
     const s = useWorkflowStore.getState()
     if (!s.loadTests.some((r) => r.id === run.id)) useWorkflowStore.setState({ loadTests: [run, ...s.loadTests] })
     return run

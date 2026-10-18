@@ -1,6 +1,7 @@
 import { useState } from "react"
 import { useQuery } from "@tanstack/react-query"
 import { CircleCheck, Eye, FileSearch, Rocket, ShieldCheck, Square, Trash2, TriangleAlert } from "lucide-react"
+import { useShallow } from "zustand/react/shallow"
 import { toast } from "sonner"
 import {
   AlertDialog,
@@ -52,7 +53,18 @@ export function PlanChips({ plan }: { plan: PlanSummary }) {
 }
 
 export function DeployTab() {
-  const workflow = useWorkflowStore((s) => s.workflow)
+  const workflow = useWorkflowStore(
+    useShallow(
+      (s) =>
+        s.workflow && {
+          id: s.workflow.id,
+          activeEnvironment: s.workflow.activeEnvironment,
+          environments: s.workflow.environments,
+          variables: s.workflow.variables,
+          diagnostics: s.workflow.diagnostics,
+        },
+    ),
+  )
   const runs = useWorkflowStore((s) => s.runs)
   const deployed = useWorkflowStore((s) => s.deployed)
   const showBottom = useWorkflowStore((s) => s.showBottom)

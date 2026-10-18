@@ -1,19 +1,27 @@
-import { useEffect } from "react"
+import { lazy, memo, Suspense, useEffect } from "react"
 import { ChevronDown, ChevronUp, Code2, Gauge, Plug, Rocket, SlidersHorizontal, TriangleAlert } from "lucide-react"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Kbd } from "@/components/ui/kbd"
+import { Spinner } from "@/components/ui/spinner"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip"
 import { cn } from "@/lib/utils"
 import { useWorkflowStore, type BottomTab } from "@/state/workflow-store"
 import { DeployTab } from "./deploy/deploy-tab"
 import { useDeployToast } from "./endpoints/deploy-toast"
-import { EndpointsTab } from "./endpoints/endpoints-tab"
-import { LoadTestTab } from "./loadtest/loadtest-tab"
 import { ProblemsTab } from "./problems/problems-tab"
 import { TerraformTab } from "./terraform/terraform-tab"
 import { VariablesTab } from "./variables/variables-tab"
+
+// Heavier tabs (code highlighting, charts) load in their own chunks after the first paint.
+const EndpointsTab = lazy(() => import("./endpoints/endpoints-tab").then((m) => ({ default: m.EndpointsTab })))
+const LoadTestTab = lazy(() => import("./loadtest/loadtest-tab").then((m) => ({ default: m.LoadTestTab })))
+const TAB_FALLBACK = (
+  <div className="flex h-full items-center justify-center">
+    <Spinner />
+  </div>
+)
 
 const TABS: { id: BottomTab; label: string; icon: typeof Code2 }[] = [
   { id: "terraform", label: "Terraform", icon: Code2 },
@@ -30,12 +38,12 @@ const TABS: { id: BottomTab; label: string; icon: typeof Code2 }[] = [
  * Ctrl/Cmd+J toggles it.
  */
 export function BottomPanel() {
-  const workflow = useWorkflowStore((s) => s.workflow)
+  const workflowId = useWorkflowStore((s) => s.workflow?.id)
+  const problems = useWorkflowStore((s) => s.workflow?.diagnostics) ?? []
   const tab = useWorkflowStore((s) => s.bottomTab)
   const open = useWorkflowStore((s) => s.bottomOpen)
   const showBottom = useWorkflowStore((s) => s.showBottom)
   const setBottomOpen = useWorkflowStore((s) => s.setBottomOpen)
-  const problems = workflow?.diagnostics ?? []
   const errorCount = problems.filter((d) => d.severity === "error").length
 
   useDeployToast()
@@ -51,7 +59,7 @@ export function BottomPanel() {
     return () => window.removeEventListener("keydown", onKey)
   }, [])
 
-  if (!workflow) return null
+  if (!workflowId) return null
 
   return (
     <Tabs
@@ -109,14 +117,15 @@ export function BottomPanel() {
           className={cn("min-h-0 flex-1 overflow-hidden data-[state=inactive]:hidden", !open && "hidden")}
         >
           {/* Keyed by workflow so edit buffers and wizard state never leak into another workflow. */}
-          <TabBody key={workflow.id} tab={id} />
+          <TabBody key={workflowId} tab={id} />
         </TabsContent>
       ))}
     </Tabs>
   )
 }
 
-function TabBody({ tab }: { tab: BottomTab }) {
+/** Memoized so switching tabs or collapsing the panel doesn't re-render every (always mounted) tab. */
+const TabBody = memo(function TabBody({ tab }: { tab: BottomTab }) {
   switch (tab) {
     case "terraform":
       return <TerraformTab />
@@ -125,10 +134,18 @@ function TabBody({ tab }: { tab: BottomTab }) {
     case "deploy":
       return <DeployTab />
     case "endpoints":
-      return <EndpointsTab />
+      return (
+        <Suspense fallback={TAB_FALLBACK}>
+          <EndpointsTab />
+        </Suspense>
+      )
     case "loadtest":
-      return <LoadTestTab />
+      return (
+        <Suspense fallback={TAB_FALLBACK}>
+          <LoadTestTab />
+        </Suspense>
+      )
     case "problems":
       return <ProblemsTab />
   }
-}
+})

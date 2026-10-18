@@ -133,7 +133,8 @@ async function exportPostman(workflowId: string, workflowName: string): Promise<
 }
 
 export function PostmanCard() {
-  const workflow = useWorkflowStore((s) => s.workflow)!
+  const workflowId = useWorkflowStore((s) => s.workflow!.id)
+  const workflowName = useWorkflowStore((s) => s.workflow!.name)
   const [busy, setBusy] = useState(false)
   return (
     <section className="flex flex-col gap-1.5 rounded-lg border p-2.5">
@@ -149,7 +150,7 @@ export function PostmanCard() {
         disabled={busy}
         onClick={() => {
           setBusy(true)
-          exportPostman(workflow.id, workflow.name)
+          exportPostman(workflowId, workflowName)
             .then((saved) => {
               if (saved) toast.success("Postman collection saved", { description: "In Postman: Import → pick the file." })
             })

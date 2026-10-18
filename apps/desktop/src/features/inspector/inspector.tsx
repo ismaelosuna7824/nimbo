@@ -11,7 +11,7 @@ import {
   TriangleAlertIcon,
   ZapIcon,
 } from "lucide-react"
-import { useMemo, useState } from "react"
+import { lazy, Suspense, useMemo, useState } from "react"
 import { toast } from "sonner"
 import { CloudBadge } from "@/components/cloud"
 import { cloudOfType, CLOUD_META } from "@/components/cloud-meta"
@@ -36,7 +36,6 @@ import { useWorkflowStore } from "@/state/workflow-store"
 import { canvasHandle } from "../canvas/actions"
 import { openModuleView } from "../canvas/module-view-store"
 import { nodeAddress, nodeLabel, useNodeSchemas, useSchema } from "../canvas/catalog"
-import { CompactResourceCard } from "../panels/endpoints/resource-card"
 import { useEndpoints } from "../panels/endpoints/use-endpoints"
 import { AttrField } from "./attr-field"
 import { BlockForm } from "./block-form"
@@ -44,6 +43,11 @@ import { getAttr, setAttr } from "./body"
 import { InspectorContext, type InspectorContextValue } from "./context"
 import { LiveValues } from "./live-values"
 import { FreeformAttrs, META_ATTRS, MetaArguments } from "./meta-arguments"
+
+// Snippet highlighting (CodeMirror parsers) loads only for deployed resources.
+const CompactResourceCard = lazy(() =>
+  import("../panels/endpoints/resource-card").then((m) => ({ default: m.CompactResourceCard })),
+)
 
 const NAME_RE = /^[a-zA-Z_][a-zA-Z0-9_-]*$/
 
@@ -61,29 +65,31 @@ const MODULE_VERSION: SchemaAttribute = {
 }
 
 export function Inspector() {
-  const wf = useWorkflowStore((s) => s.workflow)
+  const hasWorkflow = useWorkflowStore((s) => s.workflow !== null)
+  const nodes = useWorkflowStore((s) => s.workflow?.nodes)
+  const allDiagnostics = useWorkflowStore((s) => s.workflow?.diagnostics)
   const selectedNodeId = useWorkflowStore((s) => s.selectedNodeId)
   const mode = useWorkflowStore((s) => s.mode)
   const select = useWorkflowStore((s) => s.select)
-  const schemas = useNodeSchemas(wf?.nodes)
-  const node = wf?.nodes.find((n) => n.id === selectedNodeId)
+  const schemas = useNodeSchemas(nodes)
+  const node = nodes?.find((n) => n.id === selectedNodeId)
 
   const ctx = useMemo<InspectorContextValue | null>(
     () =>
-      wf && node
+      nodes && node
         ? {
             nodeId: node.id,
             mode,
-            nodes: wf.nodes,
+            nodes,
             schemas,
-            diagnostics: (wf.diagnostics ?? []).filter((d) => d.nodeId === node.id),
+            diagnostics: (allDiagnostics ?? []).filter((d) => d.nodeId === node.id),
             select,
           }
         : null,
-    [wf, node, mode, schemas, select],
+    [nodes, allDiagnostics, node, mode, schemas, select],
   )
 
-  if (!wf) return null
+  if (!hasWorkflow) return null
   if (!node || !ctx) return <WorkflowOverview />
   return (
     <InspectorContext.Provider value={ctx}>
@@ -93,14 +99,15 @@ export function Inspector() {
 }
 
 function NodeInspector({ node }: { node: WorkflowNode }) {
-  const wf = useWorkflowStore((s) => s.workflow)!
+  const allDiagnostics = useWorkflowStore((s) => s.workflow!.diagnostics)
+  const providers = useWorkflowStore((s) => s.workflow!.providers)
   const mode = useWorkflowStore((s) => s.mode)
   const update = useWorkflowStore((s) => s.update)
   const deployed = useWorkflowStore((s) => s.deployed)
   const schemaQuery = useSchema(node.kind, node.type)
   const schema = schemaQuery.data
   const [filter, setFilter] = useState("")
-  const diagnostics = (wf.diagnostics ?? []).filter((d) => d.nodeId === node.id)
+  const diagnostics = (allDiagnostics ?? []).filter((d) => d.nodeId === node.id)
   const live = (deployed?.resources ?? []).filter((r) => r.nodeId === node.id)
   const endpoints = useEndpoints()
   const usable = (endpoints.data?.resources ?? []).filter((r) => r.nodeId === node.id)
@@ -140,7 +147,9 @@ function NodeInspector({ node }: { node: WorkflowNode }) {
               {usable.map((r) => (
                 <div key={r.address} className="flex flex-col gap-1.5">
                   {usable.length > 1 && <span className="font-mono text-[11px] text-muted-foreground">{r.address}</span>}
-                  <CompactResourceCard resource={r} />
+                  <Suspense fallback={<Skeleton className="h-20 w-full" />}>
+                    <CompactResourceCard resource={r} />
+                  </Suspense>
                 </div>
               ))}
             </Section>
@@ -205,7 +214,7 @@ function NodeInspector({ node }: { node: WorkflowNode }) {
 
           {pro && (
             <Section title="Meta-arguments">
-              <MetaArguments node={node} providers={wf.providers ?? []} onChange={setBody} />
+              <MetaArguments node={node} providers={providers ?? []} onChange={setBody} />
             </Section>
           )}
         </div>

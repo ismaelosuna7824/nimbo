@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useState } from "react"
+import { lazy, Suspense, useCallback, useMemo, useState } from "react"
 import { keepPreviousData, useQuery } from "@tanstack/react-query"
 import { Check, Copy, Download, FileCode2, Pencil, RotateCcw, TriangleAlert, X } from "lucide-react"
 import { toast } from "sonner"
@@ -13,7 +13,9 @@ import { cn } from "@/lib/utils"
 import { useWorkflowStore } from "@/state/workflow-store"
 import { DiagnosticRow } from "../components/diagnostic-row"
 import { copyText } from "../lib/format"
-import { CodeEditor } from "./code-editor"
+
+// CodeMirror loads with the first file shown, not with the app.
+const CodeEditor = lazy(() => import("./code-editor").then((m) => ({ default: m.CodeEditor })))
 
 const NO_FILES: Record<string, string> = {}
 const FILE_ORDER = ["versions.tf", "providers.tf", "variables.tf", "main.tf", "outputs.tf"]
@@ -217,7 +219,15 @@ export function TerraformTab() {
             Could not generate Terraform: {query.error instanceof Error ? query.error.message : String(query.error)}
           </div>
         ) : current ? (
-          <CodeEditor key={current} value={files[current] ?? ""} readOnly={!editing} onChange={onChange} />
+          <Suspense
+            fallback={
+              <div className="flex h-full items-center justify-center">
+                <Spinner />
+              </div>
+            }
+          >
+            <CodeEditor key={current} value={files[current] ?? ""} readOnly={!editing} onChange={onChange} />
+          </Suspense>
         ) : query.isPending ? (
           <div className="flex h-full items-center justify-center">
             <Spinner />

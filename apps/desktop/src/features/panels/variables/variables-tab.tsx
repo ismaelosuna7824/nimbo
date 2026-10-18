@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react"
 import { cn } from "@/lib/utils"
+import { useShallow } from "zustand/react/shallow"
 import { useWorkflowStore } from "@/state/workflow-store"
 import { missingRequired } from "../lib/values"
 import { LocalsEditor, OutputsEditor, VariablesEditor } from "./blocks-editors"
@@ -11,7 +12,18 @@ type Section = "variables" | "outputs" | "locals" | "environments"
 const SIDE_BY_SIDE_MIN_PX = 1100
 
 export function VariablesTab() {
-  const workflow = useWorkflowStore((s) => s.workflow)
+  const workflow = useWorkflowStore(
+    useShallow(
+      (s) =>
+        s.workflow && {
+          variables: s.workflow.variables,
+          outputs: s.workflow.outputs,
+          locals: s.workflow.locals,
+          environments: s.workflow.environments,
+          activeEnvironment: s.workflow.activeEnvironment,
+        },
+    ),
+  )
   const [section, setSection] = useState<Section>("variables")
   const [wide, setWide] = useState(true)
   const root = useRef<HTMLDivElement>(null)

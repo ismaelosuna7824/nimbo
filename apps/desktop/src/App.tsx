@@ -1,8 +1,7 @@
-import { useEffect, useState } from "react"
+import { lazy, Suspense, useEffect, useState } from "react"
 import { EditorShell } from "@/components/editor-shell"
 import { Spinner } from "@/components/ui/spinner"
 import { CommandPalette } from "@/features/command/command-palette"
-import { ConnectionsView } from "@/features/connections/connections-view"
 import { useConnectionsStore } from "@/features/connections/store"
 import { Home } from "@/features/home/home"
 import { NewWorkflowDialog } from "@/features/home/new-workflow-dialog"
@@ -12,6 +11,10 @@ import { SettingsHost } from "@/features/settings/settings-view"
 import { useSettingsView } from "@/features/settings/store"
 import { DestroyDialog } from "@/features/toolbar/top-bar"
 import { useWorkflowStore } from "@/state/workflow-store"
+
+const ConnectionsView = lazy(() =>
+  import("@/features/connections/connections-view").then((m) => ({ default: m.ConnectionsView })),
+)
 
 const LAST_WORKFLOW_KEY = "nimbo.lastWorkflow"
 
@@ -61,7 +64,11 @@ export default function App() {
           <Home />
         )}
       </div>
-      {connectionsOpen && <ConnectionsView />}
+      {connectionsOpen && (
+        <Suspense fallback={<div className="fixed inset-0 z-40 bg-background" />}>
+          <ConnectionsView />
+        </Suspense>
+      )}
       <SettingsHost />
       <NewWorkflowDialog />
       <FeatureDialogs />

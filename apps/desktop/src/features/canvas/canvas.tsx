@@ -108,8 +108,78 @@ export function Canvas() {
   )
 }
 
+/** Shallow equality of two plain objects (React Flow node/edge data). */
+function sameFields(a: Record<string, unknown> | undefined, b: Record<string, unknown> | undefined) {
+  if (a === b) return true
+  if (!a || !b) return false
+  const keys = Object.keys(a)
+  return keys.length === Object.keys(b).length && keys.every((k) => Object.is(a[k], b[k]))
+}
+
+function sameFlowNode(a: ResourceFlowNode, b: ResourceFlowNode) {
+  return (
+    a.type === b.type &&
+    a.parentId === b.parentId &&
+    a.width === b.width &&
+    a.height === b.height &&
+    a.zIndex === b.zIndex &&
+    a.selected === b.selected &&
+    a.position.x === b.position.x &&
+    a.position.y === b.position.y &&
+    sameFields(a.data, b.data)
+  )
+}
+
+function sameFlowEdge(a: RefFlowEdge, b: RefFlowEdge) {
+  return a.source === b.source && a.target === b.target && sameFields(a.data, b.data)
+}
+
+/**
+ * Returns `items` with every item that `same` finds unchanged (by id) replaced
+ * by the object from the previous call (or the previous array itself when
+ * nothing changed), so React Flow only re-renders the cards and edges whose
+ * content changed.
+ */
+function useStableItems<T extends { id: string }>(items: T[], same: (a: T, b: T) => boolean): T[] {
+  // Holder kept across renders; only read and written while memoizing the next list.
+  const [cache] = useState(() => ({ byId: new Map<string, T>(), list: [] as T[] }))
+  return useMemo(() => {
+    const byId = new Map<string, T>()
+    let unchanged = items.length === cache.list.length
+    const list = items.map((item, i) => {
+      const old = cache.byId.get(item.id)
+      const kept = old && same(old, item) ? old : item
+      if (kept !== cache.list[i]) unchanged = false
+      byId.set(item.id, kept)
+      return kept
+    })
+    if (!unchanged) {
+      cache.byId = byId
+      cache.list = list
+    }
+    return cache.list
+  }, [items, same, cache])
+}
+
+const EDGE_MARKER = { type: MarkerType.ArrowClosed, width: 16, height: 16 }
+const SNAP_GRID: [number, number] = [16, 16]
+const FIT_VIEW_OPTIONS = { padding: 0.2, maxZoom: 1.1 }
+const PRO_OPTIONS = { hideAttribution: true }
+const MINIMAP_STYLE = { width: 168, height: 112 }
+
+function minimapColor(n: ResourceFlowNode) {
+  const cloud = n.data.schema?.cloud ?? cloudOfType(n.data.node.type)
+  return cloud ? CLOUD_META[cloud].accent : "#a855f7"
+}
+
+function isValidConnection(c: Connection | RefFlowEdge) {
+  return c.source !== c.target
+}
+
 function CanvasInner() {
-  const wf = useWorkflowStore((s) => s.workflow)!
+  const wfNodes = useWorkflowStore((s) => s.workflow!.nodes)
+  const wfEdges = useWorkflowStore((s) => s.workflow!.edges)
+  const diagnostics = useWorkflowStore((s) => s.workflow!.diagnostics)
   const selectedNodeId = useWorkflowStore((s) => s.selectedNodeId)
   const deployed = useWorkflowStore((s) => s.deployed)
   const select = useWorkflowStore((s) => s.select)
@@ -119,31 +189,34 @@ function CanvasInner() {
   const { resolvedTheme } = useTheme()
   const flow = useReactFlow<ResourceFlowNode, RefFlowEdge>()
   const wrapper = useRef<HTMLDivElement>(null)
-  const schemas = useNodeSchemas(wf.nodes)
+  const schemas = useNodeSchemas(wfNodes)
   const [hoveredEdge, setHoveredEdge] = useState<string | null>(null)
   const [pending, setPending] = useState<PendingConnection | null>(null)
   const [pendingDelete, setPendingDelete] = useState<{ node: WorkflowNode; users: number } | null>(null)
   const endpoints = useEndpoints().data
 
-  const parents = useMemo(() => parentMap(wf.nodes), [wf.nodes])
-  const { rects, children } = useMemo(() => nodeRects(wf.nodes, parents), [wf.nodes, parents])
+  const parents = useMemo(() => parentMap(wfNodes), [wfNodes])
+  const { rects, children } = useMemo(() => nodeRects(wfNodes, parents), [wfNodes, parents])
+  const deployedIds = useMemo(
+    () => new Set((deployed?.resources ?? []).flatMap((r) => (r.nodeId ? [r.nodeId] : []))),
+    [deployed],
+  )
 
-  const derivedNodes = useMemo(() => {
-    const deployedIds = new Set((deployed?.resources ?? []).flatMap((r) => (r.nodeId ? [r.nodeId] : [])))
+  const builtNodes = useMemo(() => {
     // First usable resource per node: what the card's "plug" button opens.
     const endpointOf = new Map<string, string>()
     for (const r of endpoints?.resources ?? []) {
       if (r.nodeId && !endpointOf.has(r.nodeId) && isUsable(r)) endpointOf.set(r.nodeId, r.address)
     }
     const diag = new Map<string, { errors: number; warnings: number }>()
-    for (const d of wf.diagnostics ?? []) {
+    for (const d of diagnostics ?? []) {
       if (!d.nodeId) continue
       const c = diag.get(d.nodeId) ?? { errors: 0, warnings: 0 }
       if (d.severity === "error") c.errors++
       else if (d.severity === "warning") c.warnings++
       diag.set(d.nodeId, c)
     }
-    const ordered = [...wf.nodes].sort((a, b) => depthOf(a.id, parents) - depthOf(b.id, parents))
+    const ordered = [...wfNodes].sort((a, b) => depthOf(a.id, parents) - depthOf(b.id, parents))
     return ordered.map((n): ResourceFlowNode => {
       const r = rects.get(n.id)!
       const parentId = parents.get(n.id)
@@ -157,7 +230,7 @@ function CanvasInner() {
         parentId,
         width: r.w,
         height: r.h,
-        selected: n.id === selectedNodeId,
+        selected: false,
         zIndex: isGroup ? -1 : undefined,
         data: {
           node: n,
@@ -170,12 +243,16 @@ function CanvasInner() {
         },
       }
     })
-  }, [wf.nodes, wf.diagnostics, deployed, endpoints, parents, rects, children, schemas, selectedNodeId])
+  }, [wfNodes, diagnostics, deployedIds, endpoints, parents, rects, children, schemas])
+  const stableNodes = useStableItems(builtNodes, sameFlowNode)
+  const derivedNodes = useMemo(
+    () => (selectedNodeId ? stableNodes.map((n) => (n.id === selectedNodeId ? { ...n, selected: true } : n)) : stableNodes),
+    [stableNodes, selectedNodeId],
+  )
 
-  const derivedEdges = useMemo(() => {
-    const ids = new Set(wf.nodes.map((n) => n.id))
-    const deployedIds = new Set((deployed?.resources ?? []).flatMap((r) => (r.nodeId ? [r.nodeId] : [])))
-    return (wf.edges ?? [])
+  const builtEdges = useMemo(() => {
+    const ids = new Set(wfNodes.map((n) => n.id))
+    return (wfEdges ?? [])
       .filter((e) => ids.has(e.source) && ids.has(e.target))
       .map(
         (e): RefFlowEdge => ({
@@ -183,17 +260,25 @@ function CanvasInner() {
           source: e.source,
           target: e.target,
           type: "ref",
-          markerEnd: { type: MarkerType.ArrowClosed, width: 16, height: 16 },
+          markerEnd: EDGE_MARKER,
           data: {
             kind: e.kind,
             attribute: e.attribute,
             sourceAttr: e.sourceAttr,
-            hovered: e.id === hoveredEdge,
+            hovered: false,
             live: deployedIds.has(e.source) && deployedIds.has(e.target),
           },
         }),
       )
-  }, [wf.nodes, wf.edges, deployed, hoveredEdge])
+  }, [wfNodes, wfEdges, deployedIds])
+  const stableEdges = useStableItems(builtEdges, sameFlowEdge)
+  const derivedEdges = useMemo(
+    () =>
+      hoveredEdge
+        ? stableEdges.map((e) => (e.id === hoveredEdge ? { ...e, data: { ...e.data!, hovered: true } } : e))
+        : stableEdges,
+    [stableEdges, hoveredEdge],
+  )
 
   const [nodes, setNodes] = useSyncedState(derivedNodes)
   const [edges, setEdges] = useSyncedState(derivedEdges)
@@ -224,10 +309,14 @@ function CanvasInner() {
   )
 
   // Auto-layout nodes that were never placed (imports, templates).
-  const layoutKey = wf.nodes
-    .filter((n) => !n.positioned)
-    .map((n) => n.id)
-    .join(",")
+  const layoutKey = useMemo(
+    () =>
+      wfNodes
+        .filter((n) => !n.positioned)
+        .map((n) => n.id)
+        .join(","),
+    [wfNodes],
+  )
   const layoutRunning = useRef("")
   useEffect(() => {
     if (!layoutKey || layoutRunning.current === layoutKey) return
@@ -265,7 +354,7 @@ function CanvasInner() {
         const dy = Math.round(abs.y - before.y)
         if (dx === 0 && dy === 0) continue
         const shift = (id: string) => {
-          const n = wf.nodes.find((x) => x.id === id)
+          const n = wfNodes.find((x) => x.id === id)
           if (!n) return
           positions.set(id, { x: n.position.x + dx, y: n.position.y + dy })
           for (const c of children.get(id) ?? []) shift(c.id)
@@ -274,7 +363,7 @@ function CanvasInner() {
       }
       savePositions(positions)
     },
-    [flow, parents, rects, children, wf.nodes, savePositions],
+    [flow, parents, rects, children, wfNodes, savePositions],
   )
 
   const onDragOver = useCallback((e: React.DragEvent) => {
@@ -413,13 +502,15 @@ function CanvasInner() {
     return () => registerCanvas(null)
   }, [flow, tidy, requestDelete])
 
-  const minimapColor = useCallback(
-    (n: ResourceFlowNode) => {
-      const cloud = n.data.schema?.cloud ?? cloudOfType(n.data.node.type)
-      return cloud ? CLOUD_META[cloud].accent : "#a855f7"
-    },
+  const onNodeClick = useCallback((_: unknown, n: ResourceFlowNode) => select(n.id), [select])
+  const onNodeDoubleClick = useCallback(
+    (_: unknown, n: ResourceFlowNode) => n.data.node.kind === "module" && void openModuleView(n.id),
     [],
   )
+  const onPaneClick = useCallback(() => select(null), [select])
+  const onConnectEdge = useCallback((c: Connection) => void onConnect(c), [onConnect])
+  const onEdgeMouseEnter = useCallback((_: unknown, e: RefFlowEdge) => setHoveredEdge(e.id), [])
+  const onEdgeMouseLeave = useCallback(() => setHoveredEdge(null), [])
 
   return (
     <div ref={wrapper} className="relative h-full w-full" onDragOver={onDragOver} onDrop={onDrop}>
@@ -430,23 +521,23 @@ function CanvasInner() {
         edgeTypes={edgeTypes}
         onNodesChange={onNodesChange}
         onEdgesChange={onEdgesChange}
-        onNodeClick={(_, n) => select(n.id)}
-        onNodeDoubleClick={(_, n) => n.data.node.kind === "module" && void openModuleView(n.id)}
-        onPaneClick={() => select(null)}
+        onNodeClick={onNodeClick}
+        onNodeDoubleClick={onNodeDoubleClick}
+        onPaneClick={onPaneClick}
         onNodeDragStop={onNodeDragStop}
-        onConnect={(c) => void onConnect(c)}
-        isValidConnection={(c) => c.source !== c.target}
-        onEdgeMouseEnter={(_, e) => setHoveredEdge(e.id)}
-        onEdgeMouseLeave={() => setHoveredEdge(null)}
+        onConnect={onConnectEdge}
+        isValidConnection={isValidConnection}
+        onEdgeMouseEnter={onEdgeMouseEnter}
+        onEdgeMouseLeave={onEdgeMouseLeave}
         deleteKeyCode={null}
         colorMode={resolvedTheme === "light" ? "light" : "dark"}
         snapToGrid
-        snapGrid={[16, 16]}
+        snapGrid={SNAP_GRID}
         fitView
-        fitViewOptions={{ padding: 0.2, maxZoom: 1.1 }}
+        fitViewOptions={FIT_VIEW_OPTIONS}
         minZoom={0.15}
         maxZoom={2}
-        proOptions={{ hideAttribution: true }}
+        proOptions={PRO_OPTIONS}
         className="bg-background"
       >
         <Background variant={BackgroundVariant.Dots} gap={16} size={1.2} />
@@ -457,10 +548,10 @@ function CanvasInner() {
           nodeColor={minimapColor}
           nodeStrokeWidth={0}
           position="bottom-right"
-          style={{ width: 168, height: 112 }}
+          style={MINIMAP_STYLE}
           className="!rounded-lg !border"
         />
-        {wf.nodes.length > 0 && (
+        {wfNodes.length > 0 && (
           <Panel position="top-right">
             <Button variant="outline" size="sm" className="bg-background/80 backdrop-blur" onClick={() => void tidy()}>
               <WandSparklesIcon />
@@ -469,7 +560,7 @@ function CanvasInner() {
           </Panel>
         )}
       </ReactFlow>
-      {wf.nodes.length === 0 && (
+      {wfNodes.length === 0 && (
         <div className="pointer-events-none absolute inset-0 flex items-center justify-center">
           <Empty className="pointer-events-auto max-w-md border bg-background/90 backdrop-blur">
             <EmptyHeader>

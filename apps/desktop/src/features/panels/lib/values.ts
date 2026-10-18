@@ -72,7 +72,7 @@ export function uniqueName(base: string, taken: string[]): string {
 }
 
 /** Names of variables without a default that have no value in the environment. */
-export function missingRequired(wf: Workflow, envName: string | undefined): string[] {
+export function missingRequired(wf: Pick<Workflow, "environments" | "variables">, envName: string | undefined): string[] {
   const env = wf.environments.find((e) => e.name === envName)
   return wf.variables
     .filter((v) => getAttr(v.body, "default") === undefined)

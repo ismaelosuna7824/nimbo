@@ -112,11 +112,11 @@ export function DeployedResources() {
 }
 
 export function DeployedOutputs() {
-  const workflow = useWorkflowStore((s) => s.workflow)
+  const workflowOutputs = useWorkflowStore((s) => s.workflow?.outputs)
   const deployed = useWorkflowStore((s) => s.deployed)
   const outputs = Object.entries(deployed?.outputs ?? {})
   const sensitive = new Set(
-    (workflow?.outputs ?? [])
+    (workflowOutputs ?? [])
       .filter((o) => o.body.attrs.some((a) => a.name === "sensitive" && a.value.literal === true))
       .map((o) => o.name),
   )

@@ -27,6 +27,7 @@ import { Textarea } from "@/components/ui/textarea"
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip"
 import type { Environment, Workflow } from "@/lib/api/types"
 import { cn } from "@/lib/utils"
+import { useShallow } from "zustand/react/shallow"
 import { useWorkflowStore } from "@/state/workflow-store"
 import { CommitInput } from "../components/commit-input"
 import { ValueEditor } from "../components/value-editor"
@@ -45,8 +46,14 @@ function editEnv(name: string, mutate: (env: Environment, wf: Workflow) => void)
   })
 }
 
+/** What the environments editor reads, so canvas edits don't re-render it. */
+function pickEnvironmentFields(s: { workflow: Workflow | null }) {
+  const wf = s.workflow!
+  return { environments: wf.environments, activeEnvironment: wf.activeEnvironment, variables: wf.variables }
+}
+
 export function EnvironmentsEditor() {
-  const workflow = useWorkflowStore((s) => s.workflow)!
+  const workflow = useWorkflowStore(useShallow(pickEnvironmentFields))
   const [selected, setSelected] = useState<string | null>(null)
   const envs = workflow.environments
   const names = envs.map((e) => e.name)
@@ -126,7 +133,7 @@ export function EnvironmentsEditor() {
 }
 
 function EnvironmentDetail({ env, onRenamed }: { env: Environment; onRenamed: (name: string) => void }) {
-  const workflow = useWorkflowStore((s) => s.workflow)!
+  const workflow = useWorkflowStore(useShallow(pickEnvironmentFields))
   const pro = useWorkflowStore((s) => s.mode === "pro")
   const [confirmDelete, setConfirmDelete] = useState(false)
   const [paste, setPaste] = useState<"env" | "tfvars" | null>(null)

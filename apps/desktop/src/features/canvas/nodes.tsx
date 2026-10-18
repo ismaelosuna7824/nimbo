@@ -209,7 +209,7 @@ export const GroupNode = memo(function GroupNode({ data, selected, width, height
   )
 })
 
-export function RefEdge({
+export const RefEdge = memo(function RefEdge({
   id,
   sourceX,
   sourceY,
@@ -253,4 +253,4 @@ export function RefEdge({
       )}
     </>
   )
-}
+})

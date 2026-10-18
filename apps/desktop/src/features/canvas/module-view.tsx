@@ -33,7 +33,8 @@ export function ModuleOverlay() {
   const path = useModuleView((s) => s.path)
   const setPath = useModuleView((s) => s.setPath)
   const close = useModuleView((s) => s.close)
-  const wf = useWorkflowStore((s) => s.workflow)
+  // Only follows the workflow while the overlay is open.
+  const wf = useWorkflowStore((s) => (nodeId ? s.workflow : null))
   const node = wf?.nodes.find((n) => n.id === nodeId)
 
   // The module disappeared (deleted, workflow switched): nothing to show.

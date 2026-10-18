@@ -1,4 +1,4 @@
-import type { Workflow, WorkflowNode } from "@/lib/api/types"
+import type { WorkflowNode } from "@/lib/api/types"
 
 /** Terraform address of a node: "aws_s3_bucket.b", "data.x.y" or "module.m". */
 export function nodeAddress(n: WorkflowNode): string {
@@ -11,8 +11,8 @@ export function nodeDisplayName(n: WorkflowNode): string {
   return n.label || nodeAddress(n)
 }
 
-export function nodeLabelById(wf: Workflow | null): Record<string, string> {
+export function nodeLabelById(nodes: WorkflowNode[] | undefined): Record<string, string> {
   const out: Record<string, string> = {}
-  for (const n of wf?.nodes ?? []) out[n.id] = nodeDisplayName(n)
+  for (const n of nodes ?? []) out[n.id] = nodeDisplayName(n)
   return out
 }

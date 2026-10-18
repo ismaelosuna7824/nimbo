@@ -36,9 +36,9 @@ export function WorkflowTargetStep({
   resolved: WorkflowTarget
   pro: boolean
 }) {
-  const workflow = useWorkflowStore((s) => s.workflow)!
+  const nodes = useWorkflowStore((s) => s.workflow!.nodes)
   const emulatorUrl = useWorkflowStore((s) => s.sandbox?.emulators.find((e) => e.state === "running")?.url)
-  const labels = useMemo(() => nodeLabelById(workflow), [workflow])
+  const labels = useMemo(() => nodeLabelById(nodes), [nodes])
   const accessResources = useEndpoints().data?.resources
   const { suggested: targets, loading } = resolved
   const groups = useMemo(() => {

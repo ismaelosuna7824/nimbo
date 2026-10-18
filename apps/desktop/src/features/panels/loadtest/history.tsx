@@ -1,22 +1,25 @@
-import { useContext, useMemo } from "react"
+import { lazy, Suspense, useContext, useMemo, useRef, useState } from "react"
 import { useQueries } from "@tanstack/react-query"
+import { useVirtualizer } from "@tanstack/react-virtual"
 import { GitCompareArrows } from "lucide-react"
-import { CartesianGrid, Line, LineChart, XAxis, YAxis } from "recharts"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
-import { ChartContainer, ChartLegend, ChartLegendContent, ChartTooltip, ChartTooltipContent, type ChartConfig } from "@/components/ui/chart"
 import { Checkbox } from "@/components/ui/checkbox"
 import { Spinner } from "@/components/ui/spinner"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
+import { useScrollMargin } from "@/hooks/use-scroll-margin"
 import { api } from "@/lib/api/client"
 import type { LoadTestRun } from "@/lib/api/types"
 import { cn } from "@/lib/utils"
 import { LoadRunsContext } from "./runs-context"
 import { formatDuration, formatMs, formatNumber, formatPercent, formatRelative } from "../lib/format"
 import { DENSE_TABLE } from "../variables/blocks-editors"
-import { ChartCard } from "./charts"
-import { compactTick, computeKpis, EXPLAIN, runDurationSec, SERIES_COLORS, type Kpis } from "./metrics"
+import type { CompareRow } from "./charts"
+import { computeKpis, EXPLAIN, runDurationSec, type Kpis } from "./metrics"
 import { Verdict } from "./run-results"
+
+// recharts loads with the first comparison, not with the tab.
+const CompareCharts = lazy(() => import("./charts").then((m) => ({ default: m.CompareCharts })))
 
 interface HistoryProps {
   compare: string[]
@@ -26,6 +29,22 @@ interface HistoryProps {
 
 export function History({ compare, setCompare, onOpen }: HistoryProps) {
   const runs = useContext(LoadRunsContext).runs
+  const [scroller, setScroller] = useState<HTMLDivElement | null>(null)
+  const body = useRef<HTMLTableSectionElement>(null)
+  const scrollMargin = useScrollMargin(body, scroller)
+  // Long histories: only the rows in view are rendered, with spacer rows keeping the table's height.
+  // eslint-disable-next-line react/incompatible-library -- no React Compiler; the virtualizer re-renders this component itself
+  const virtualizer = useVirtualizer({
+    count: runs.length,
+    getScrollElement: () => scroller,
+    estimateSize: () => 33,
+    overscan: 10,
+    scrollMargin,
+    getItemKey: (i) => runs[i].id,
+  })
+  const rows = virtualizer.getVirtualItems()
+  const padTop = rows.length > 0 ? rows[0].start - scrollMargin : 0
+  const padBottom = rows.length > 0 ? virtualizer.getTotalSize() - (rows[rows.length - 1].end - scrollMargin) : 0
 
   if (runs.length === 0) {
     return <p className="p-4 text-xs text-muted-foreground">No load tests yet. Configure one and press Start.</p>
@@ -44,7 +63,7 @@ export function History({ compare, setCompare, onOpen }: HistoryProps) {
           </Button>
         )}
       </div>
-      <div className="min-h-0 flex-1 overflow-auto">
+      <div ref={setScroller} className="min-h-0 flex-1 overflow-auto">
         {compare.length === 2 && <Compare ids={compare as [string, string]} />}
         <Table className={DENSE_TABLE}>
           <TableHeader>
@@ -60,11 +79,19 @@ export function History({ compare, setCompare, onOpen }: HistoryProps) {
               <TableHead className="text-right">Errors</TableHead>
             </TableRow>
           </TableHeader>
-          <TableBody>
-            {runs.map((r) => {
+          <TableBody ref={body}>
+            {padTop > 0 && <tr aria-hidden style={{ height: padTop }} />}
+            {rows.map((row) => {
+              const r = runs[row.index]
               const idx = compare.indexOf(r.id)
               return (
-                <TableRow key={r.id} className="cursor-pointer" onClick={() => onOpen(r.id)}>
+                <TableRow
+                  key={row.key}
+                  ref={virtualizer.measureElement}
+                  data-index={row.index}
+                  className="cursor-pointer"
+                  onClick={() => onOpen(r.id)}
+                >
                   <TableCell onClick={(e) => e.stopPropagation()}>
                     <div className="flex items-center gap-1">
                       <Checkbox
@@ -95,6 +122,7 @@ export function History({ compare, setCompare, onOpen }: HistoryProps) {
                 </TableRow>
               )
             })}
+            {padBottom > 0 && <tr aria-hidden style={{ height: padBottom }} />}
           </TableBody>
         </Table>
       </div>
@@ -120,7 +148,7 @@ function Compare({ ids }: { ids: [string, string] }) {
 
   const rows = useMemo(() => {
     if (!a || !b) return []
-    const byT = new Map<number, { t: number; aP95?: number; bP95?: number; aRps?: number; bRps?: number }>()
+    const byT = new Map<number, CompareRow>()
     for (const s of a.timeline ?? []) byT.set(s.t, { t: s.t, aP95: s.p95, aRps: s.rps })
     for (const s of b.timeline ?? []) byT.set(s.t, { ...(byT.get(s.t) ?? { t: s.t }), bP95: s.p95, bRps: s.rps })
     return [...byT.values()].sort((x, y) => x.t - y.t)
@@ -136,46 +164,18 @@ function Compare({ ids }: { ids: [string, string] }) {
 
   const ka = computeKpis(a.timeline ?? [], a.summary)
   const kb = computeKpis(b.timeline ?? [], b.summary)
-  const p95Config: ChartConfig = {
-    aP95: { label: "A p95", theme: SERIES_COLORS.a },
-    bP95: { label: "B p95", theme: SERIES_COLORS.b },
-  }
-  const rpsConfig: ChartConfig = {
-    aRps: { label: "A req/s", theme: SERIES_COLORS.a },
-    bRps: { label: "B req/s", theme: SERIES_COLORS.b },
-  }
-  const axisX = (
-    <XAxis dataKey="t" type="number" domain={["dataMin", "dataMax"]} tickLine={false} axisLine={false} minTickGap={24} tickFormatter={(t: number) => `${Math.round(t)}s`} />
-  )
 
   return (
     <div className="grid grid-cols-1 gap-2 border-b p-2 lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_minmax(16rem,0.8fr)]">
-      <ChartCard title="p95 latency over time (ms)" hint={EXPLAIN.speed}>
-        <ChartContainer config={p95Config} className="aspect-auto h-44 w-full">
-          <LineChart data={rows} margin={{ left: 0, right: 8, top: 4 }}>
-            <CartesianGrid vertical={false} />
-            {axisX}
-            <YAxis tickLine={false} axisLine={false} width={40} tickFormatter={compactTick} />
-            <ChartTooltip content={<ChartTooltipContent />} />
-            <ChartLegend content={<ChartLegendContent />} />
-            <Line dataKey="aP95" stroke="var(--color-aP95)" dot={false} connectNulls isAnimationActive={false} strokeWidth={2} />
-            <Line dataKey="bP95" stroke="var(--color-bP95)" dot={false} connectNulls isAnimationActive={false} strokeWidth={2} />
-          </LineChart>
-        </ChartContainer>
-      </ChartCard>
-      <ChartCard title="Throughput over time (req/s)" hint={EXPLAIN.rps}>
-        <ChartContainer config={rpsConfig} className="aspect-auto h-44 w-full">
-          <LineChart data={rows} margin={{ left: 0, right: 8, top: 4 }}>
-            <CartesianGrid vertical={false} />
-            {axisX}
-            <YAxis tickLine={false} axisLine={false} width={40} tickFormatter={compactTick} />
-            <ChartTooltip content={<ChartTooltipContent />} />
-            <ChartLegend content={<ChartLegendContent />} />
-            <Line dataKey="aRps" stroke="var(--color-aRps)" dot={false} connectNulls isAnimationActive={false} strokeWidth={2} />
-            <Line dataKey="bRps" stroke="var(--color-bRps)" dot={false} connectNulls isAnimationActive={false} strokeWidth={2} />
-          </LineChart>
-        </ChartContainer>
-      </ChartCard>
+      <Suspense
+        fallback={
+          <div className="flex h-52 items-center justify-center lg:col-span-2">
+            <Spinner />
+          </div>
+        }
+      >
+        <CompareCharts rows={rows} />
+      </Suspense>
       <div className="min-w-0 rounded-lg border">
         <div className="flex items-center gap-1 px-2 pt-2 text-[11px] font-medium text-muted-foreground">
           <GitCompareArrows className="size-3" /> B compared to A

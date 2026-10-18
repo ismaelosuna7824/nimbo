@@ -12,10 +12,10 @@ import { nodeLabelById } from "../lib/nodes"
 const ORDER: Severity[] = ["error", "warning", "info"]
 
 export function ProblemsTab() {
-  const workflow = useWorkflowStore((s) => s.workflow)
+  const nodes = useWorkflowStore((s) => s.workflow?.nodes)
+  const diagnostics = useWorkflowStore((s) => s.workflow?.diagnostics) ?? []
   const select = useWorkflowStore((s) => s.select)
-  const labels = useMemo(() => nodeLabelById(workflow), [workflow])
-  const diagnostics = workflow?.diagnostics ?? []
+  const labels = useMemo(() => nodeLabelById(nodes), [nodes])
 
   if (diagnostics.length === 0) {
     return (

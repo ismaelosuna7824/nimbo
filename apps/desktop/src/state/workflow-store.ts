@@ -50,8 +50,11 @@ interface WorkflowStoreState {
   close: () => void
   /** Replace the workflow with a server response (no save scheduled). */
   setWorkflow: (wf: Workflow) => void
-  /** Apply a local edit and schedule a debounced PUT. */
-  update: (mutate: (draft: Workflow) => Workflow) => void
+  /**
+   * Apply a local edit and schedule a debounced PUT. `mutate` must not modify
+   * its argument: return a new workflow that shares every unchanged part.
+   */
+  update: (mutate: (current: Workflow) => Workflow) => void
   flush: () => Promise<void>
 
   select: (nodeId: string | null) => void
@@ -67,6 +70,19 @@ interface WorkflowStoreState {
 
 let saveTimer: number | undefined
 let unsubscribe: (() => void) | undefined
+/** Bumped by every open()/close(); an open() that is no longer the latest drops its result. */
+let openSeq = 0
+
+/** Streamed log lines waiting to be appended in one store update (bursts of output arrive line by line). */
+let pendingLogs: Record<string, LogLine[]> = {}
+let logTimer: number | undefined
+const LOG_FLUSH_MS = 50
+
+function resetPendingLogs() {
+  clearTimeout(logTimer)
+  logTimer = undefined
+  pendingLogs = {}
+}
 
 export const useWorkflowStore = create<WorkflowStoreState>((set, get) => ({
   workflow: null,
@@ -86,9 +102,12 @@ export const useWorkflowStore = create<WorkflowStoreState>((set, get) => ({
   loadSamples: {},
 
   async open(id) {
+    const seq = ++openSeq
     await get().flush()
-    unsubscribe?.()
     const wf = await api.getWorkflow(id)
+    if (seq !== openSeq) return
+    unsubscribe?.()
+    resetPendingLogs()
     set({
       workflow: wf,
       dirty: false,
@@ -108,20 +127,31 @@ export const useWorkflowStore = create<WorkflowStoreState>((set, get) => ({
   },
 
   close() {
+    openSeq++
     unsubscribe?.()
     unsubscribe = undefined
-    set({ workflow: null, selectedNodeId: null, sandbox: null, runs: [], deployed: null, loadTests: [] })
+    resetPendingLogs()
+    set({
+      workflow: null,
+      selectedNodeId: null,
+      sandbox: null,
+      runs: [],
+      runLogs: {},
+      deployed: null,
+      loadTests: [],
+      loadSamples: {},
+    })
     reportSession(null)
   },
 
   setWorkflow(wf) {
-    set({ workflow: wf, dirty: false })
+    set({ workflow: shareWorkflow(get().workflow, wf), dirty: false })
   },
 
   update(mutate) {
     const wf = get().workflow
     if (!wf) return
-    set({ workflow: mutate(structuredClone(wf)), dirty: true })
+    set({ workflow: mutate(wf), dirty: true })
     clearTimeout(saveTimer)
     saveTimer = window.setTimeout(() => void get().flush(), SAVE_DEBOUNCE_MS)
   },
@@ -134,8 +164,10 @@ export const useWorkflowStore = create<WorkflowStoreState>((set, get) => ({
     try {
       const saved = await api.saveWorkflow(workflow)
       // Keep edits made while the request was in flight.
-      if (!get().dirty) set({ workflow: saved })
-      else set({ workflow: { ...get().workflow!, edges: saved.edges, diagnostics: saved.diagnostics, clouds: saved.clouds } })
+      const current = get().workflow!
+      const shared = shareWorkflow(current, saved)
+      if (!get().dirty) set({ workflow: shared })
+      else set({ workflow: { ...current, edges: shared.edges, diagnostics: shared.diagnostics, clouds: shared.clouds } })
       set({ saveError: null })
     } catch (err) {
       set({ saveError: err instanceof Error ? err.message : String(err), dirty: true })
@@ -209,7 +241,7 @@ function applyEvent(
         break
       }
       // Ignore echoes of our own saves while local edits are pending.
-      if (!s.dirty && !s.saving) set({ workflow: e.data })
+      if (!s.dirty && !s.saving) set({ workflow: shareWorkflow(s.workflow, e.data) })
       break
     case "workflow.deleted":
       s.close()
@@ -223,8 +255,15 @@ function applyEvent(
       break
     }
     case "run.log": {
-      const prev = s.runLogs[e.data.runId] ?? []
-      set({ runLogs: { ...s.runLogs, [e.data.runId]: [...prev, e.data.line] } })
+      // Coalesce bursts of output into one update per LOG_FLUSH_MS.
+      ;(pendingLogs[e.data.runId] ??= []).push(e.data.line)
+      logTimer ??= window.setTimeout(() => {
+        const batch = pendingLogs
+        resetPendingLogs()
+        const runLogs = { ...get().runLogs }
+        for (const [runId, lines] of Object.entries(batch)) runLogs[runId] = [...(runLogs[runId] ?? []), ...lines]
+        set({ runLogs })
+      }, LOG_FLUSH_MS)
       break
     }
     case "state.updated":
@@ -241,4 +280,53 @@ function applyEvent(
       break
     }
   }
+}
+
+/** Structural equality of JSON values (what the API sends). */
+function jsonEqual(a: unknown, b: unknown): boolean {
+  if (a === b) return true
+  if (typeof a !== "object" || typeof b !== "object" || a === null || b === null) return false
+  if (Array.isArray(a)) {
+    if (!Array.isArray(b) || a.length !== b.length) return false
+    for (let i = 0; i < a.length; i++) if (!jsonEqual(a[i], b[i])) return false
+    return true
+  }
+  if (Array.isArray(b)) return false
+  const ak = Object.keys(a)
+  if (ak.length !== Object.keys(b).length) return false
+  for (const k of ak) {
+    if (!Object.hasOwn(b, k) || !jsonEqual((a as Record<string, unknown>)[k], (b as Record<string, unknown>)[k])) return false
+  }
+  return true
+}
+
+/** `next` with every item equal to the one with the same id in `prev` replaced by the `prev` object. */
+function shareById<T extends { id: string }>(prev: T[], next: T[]): T[] {
+  const byId = new Map(prev.map((x) => [x.id, x]))
+  let reusedAll = prev.length === next.length
+  const out = next.map((x, i) => {
+    const old = byId.get(x.id)
+    if (old && jsonEqual(old, x)) {
+      if (prev[i] !== old) reusedAll = false
+      return old
+    }
+    reusedAll = false
+    return x
+  })
+  return reusedAll ? prev : out
+}
+
+/**
+ * A server copy of the open workflow that keeps the identity of every part
+ * that did not change, so views keyed on nodes, edges or diagnostics (canvas
+ * cards, inspector) skip re-rendering after saves and their SSE echoes.
+ */
+function shareWorkflow(prev: Workflow | null, next: Workflow): Workflow {
+  if (!prev || prev.id !== next.id) return next
+  const out = { ...next, nodes: shareById(prev.nodes, next.nodes), edges: prev.edges && next.edges ? shareById(prev.edges, next.edges) : next.edges }
+  for (const key of Object.keys(next) as (keyof Workflow)[]) {
+    if (key === "nodes" || key === "edges") continue
+    if (jsonEqual(prev[key], next[key])) (out as Record<string, unknown>)[key] = prev[key]
+  }
+  return out
 }

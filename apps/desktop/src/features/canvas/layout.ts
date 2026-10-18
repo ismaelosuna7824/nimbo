@@ -1,4 +1,4 @@
-import ELK, { type ElkExtendedEdge, type ElkNode } from "elkjs/lib/elk.bundled.js"
+import type { ELK, ElkExtendedEdge, ElkNode } from "elkjs/lib/elk.bundled.js"
 import type { Position, WorkflowEdge, WorkflowNode } from "@/lib/api/types"
 
 export const NODE_WIDTH = 248
@@ -6,7 +6,8 @@ export const NODE_HEIGHT = 84
 export const GROUP_PAD = 24
 export const GROUP_HEADER = 44
 
-const elk = new ELK()
+// elkjs is ~1.4 MB: loaded on the first layout instead of with the app.
+let elk: Promise<ELK> | undefined
 
 const ROOT_OPTIONS = {
   "elk.algorithm": "layered",
@@ -97,7 +98,12 @@ export async function computeLayout(nodes: WorkflowNode[], edges: WorkflowEdge[]
     children: nodes.filter((n) => !parentOf.has(n.id)).map(build),
     edges: elkEdges,
   }
-  const result = await elk.layout(graph)
+  elk ??= import("elkjs/lib/elk.bundled.js").then(({ default: Elk }) => new Elk())
+  const engine = await elk.catch((err: unknown) => {
+    elk = undefined // the chunk failed to load: retry on the next layout
+    throw err
+  })
+  const result = await engine.layout(graph)
 
   const positions = new Map<string, Position>()
   const walk = (node: ElkNode, ox: number, oy: number) => {

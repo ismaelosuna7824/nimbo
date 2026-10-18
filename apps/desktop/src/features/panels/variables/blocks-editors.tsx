@@ -5,6 +5,7 @@ import { Button } from "@/components/ui/button"
 import { Switch } from "@/components/ui/switch"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
 import type { NamedBlock } from "@/lib/api/types"
+import { useShallow } from "zustand/react/shallow"
 import { useWorkflowStore } from "@/state/workflow-store"
 import { editWorkflow as edit } from "../lib/edit"
 import { CommitInput } from "../components/commit-input"
@@ -47,7 +48,7 @@ function EmptyRow({ colSpan, children }: { colSpan: number; children: ReactNode 
 }
 
 export function VariablesEditor() {
-  const workflow = useWorkflowStore((s) => s.workflow)!
+  const workflow = useWorkflowStore(useShallow((s) => ({ variables: s.workflow!.variables })))
   const pro = useWorkflowStore((s) => s.mode === "pro")
   const names = workflow.variables.map((v) => v.name)
 
@@ -198,7 +199,7 @@ export function VariablesEditor() {
 }
 
 export function OutputsEditor() {
-  const workflow = useWorkflowStore((s) => s.workflow)!
+  const workflow = useWorkflowStore(useShallow((s) => ({ outputs: s.workflow!.outputs })))
   const names = workflow.outputs.map((o) => o.name)
 
   return (
@@ -294,7 +295,7 @@ export function OutputsEditor() {
 }
 
 export function LocalsEditor() {
-  const workflow = useWorkflowStore((s) => s.workflow)!
+  const workflow = useWorkflowStore(useShallow((s) => ({ locals: s.workflow!.locals })))
   const names = workflow.locals.map((l) => l.name)
 
   return (

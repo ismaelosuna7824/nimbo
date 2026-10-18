@@ -1,6 +1,7 @@
 import { useQuery } from "@tanstack/react-query"
 import { ArchiveIcon, CheckIcon, ChevronsUpDownIcon, CopyIcon, EllipsisIcon, PaletteIcon, PlusIcon, Trash2Icon, XIcon } from "lucide-react"
 import { useState } from "react"
+import { useShallow } from "zustand/react/shallow"
 import { type IconTarget, WorkflowIconDialog } from "@/components/workflow-icon/icon-picker"
 import { WorkflowIconTile } from "@/components/workflow-icon/workflow-icon-tile"
 import {
@@ -26,7 +27,9 @@ import { archiveWorkflow, closeWorkflow, duplicateWorkflow } from "./workflow-ac
 const RECENT_LIMIT = 12
 
 export function WorkflowSwitcher() {
-  const current = useWorkflowStore((s) => s.workflow)
+  const current = useWorkflowStore(
+    useShallow((s) => s.workflow && { id: s.workflow.id, name: s.workflow.name, icon: s.workflow.icon }),
+  )
   const openDialog = useWorkflowStore((s) => s.openDialog)
   const workflows = useQuery({ queryKey: ["workflows"], queryFn: api.listWorkflows })
   const [deleting, setDeleting] = useState<WorkflowSummary | null>(null)

@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react"
 import { useQuery } from "@tanstack/react-query"
+import { useVirtualizer } from "@tanstack/react-virtual"
 import { ArrowDownToLine, Search, X } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { InputGroup, InputGroupAddon, InputGroupInput } from "@/components/ui/input-group"
@@ -42,12 +43,27 @@ export function RunLog({ run }: { run: Run }) {
   const scroller = useRef<HTMLDivElement>(null)
 
   const needle = search.trim().toLowerCase()
-  const visible = needle ? lines.filter((l) => l.text.toLowerCase().includes(needle)) : lines
+  const visible = useMemo(
+    () => (needle ? lines.filter((l) => l.text.toLowerCase().includes(needle)) : lines),
+    [lines, needle],
+  )
+  // Logs reach thousands of lines: only the rows in view are rendered (lines wrap, so rows are measured).
+  // eslint-disable-next-line react/incompatible-library -- no React Compiler; the virtualizer re-renders this component itself
+  const virtualizer = useVirtualizer({
+    count: visible.length,
+    getScrollElement: () => scroller.current,
+    estimateSize: () => 17,
+    overscan: 20,
+    paddingStart: 4,
+    paddingEnd: 4,
+  })
+  const totalSize = virtualizer.getTotalSize()
 
+  // Follow: stay at the bottom as lines arrive and as new rows get measured.
   useEffect(() => {
     const el = scroller.current
     if (el && follow && !needle) el.scrollTop = el.scrollHeight
-  }, [visible.length, follow, needle])
+  }, [visible.length, totalSize, follow, needle])
 
   return (
     <div className="flex h-full min-h-0 flex-col">
@@ -89,7 +105,7 @@ export function RunLog({ run }: { run: Run }) {
       </div>
       <div
         ref={scroller}
-        className="min-h-0 flex-1 overflow-auto bg-muted/20 py-1 font-mono text-[11.5px] leading-[1.45]"
+        className="min-h-0 flex-1 overflow-auto bg-muted/20 font-mono text-[11.5px] leading-[1.45]"
         onScroll={(e) => {
           const el = e.currentTarget
           const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 24
@@ -97,24 +113,35 @@ export function RunLog({ run }: { run: Run }) {
         }}
       >
         {visible.length === 0 ? (
-          <p className="px-3 py-2 text-muted-foreground">
+          <p className="px-3 py-3 text-muted-foreground">
             {query.isPending ? "Loading log…" : needle ? "No matching lines." : "Waiting for output…"}
           </p>
         ) : (
-          visible.map((l, i) => (
-            <div key={i} className="flex gap-3 px-3 hover:bg-muted/60">
-              <span className="shrink-0 text-muted-foreground/60 select-none">{formatClock(l.t)}</span>
-              <span
-                className={cn(
-                  "min-w-0 flex-1 break-words whitespace-pre-wrap",
-                  l.stream === "stderr" && "text-destructive",
-                  l.stream === "system" && "text-sky-600 italic dark:text-sky-400",
-                )}
-              >
-                {needle ? <Highlight text={l.text} needle={needle} /> : l.text || " "}
-              </span>
-            </div>
-          ))
+          <div className="relative" style={{ height: totalSize }}>
+            {virtualizer.getVirtualItems().map((row) => {
+              const l = visible[row.index]
+              return (
+                <div
+                  key={row.key}
+                  ref={virtualizer.measureElement}
+                  data-index={row.index}
+                  className="absolute inset-x-0 top-0 flex gap-3 px-3 hover:bg-muted/60"
+                  style={{ transform: `translateY(${row.start}px)` }}
+                >
+                  <span className="shrink-0 text-muted-foreground/60 select-none">{formatClock(l.t)}</span>
+                  <span
+                    className={cn(
+                      "min-w-0 flex-1 break-words whitespace-pre-wrap",
+                      l.stream === "stderr" && "text-destructive",
+                      l.stream === "system" && "text-sky-600 italic dark:text-sky-400",
+                    )}
+                  >
+                    {needle ? <Highlight text={l.text} needle={needle} /> : l.text || " "}
+                  </span>
+                </div>
+              )
+            })}
+          </div>
         )}
       </div>
     </div>

@@ -39,7 +39,7 @@ const CONFIRM: Record<"stop" | "reset", { title: string; description: string; ac
 }
 
 export function SandboxCard() {
-  const workflow = useWorkflowStore((s) => s.workflow)!
+  const workflowId = useWorkflowStore((s) => s.workflow!.id)
   const sandbox = useWorkflowStore((s) => s.sandbox)
   const [busy, setBusy] = useState<SandboxAction | null>(null)
   const [confirm, setConfirm] = useState<"stop" | "reset" | null>(null)
@@ -48,10 +48,10 @@ export function SandboxCard() {
   const run = async (action: SandboxAction) => {
     setBusy(action)
     try {
-      const status = await api.sandboxAction(workflow.id, action)
+      const status = await api.sandboxAction(workflowId, action)
       useWorkflowStore.setState({ sandbox: status })
       if (action === "reset") {
-        useWorkflowStore.setState({ deployed: await api.state(workflow.id).catch(() => null) })
+        useWorkflowStore.setState({ deployed: await api.state(workflowId).catch(() => null) })
         toast.success("Sandbox reset")
       }
     } catch (err) {

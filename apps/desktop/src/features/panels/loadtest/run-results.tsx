@@ -1,4 +1,4 @@
-import { useState } from "react"
+import { lazy, Suspense, useState } from "react"
 import { Check, Info, Square, X } from "lucide-react"
 import { toast } from "sonner"
 import { Button } from "@/components/ui/button"
@@ -12,9 +12,11 @@ import { cn } from "@/lib/utils"
 import { StatusBadge } from "../components/status-badge"
 import { formatDuration, formatMs, formatNumber, formatPercent } from "../lib/format"
 import { DENSE_TABLE } from "../variables/blocks-editors"
-import { LoadCharts } from "./charts"
 import { computeKpis, EXPLAIN, formatThreshold, METRIC_META, modeUnit, runDurationSec, stabilityLabel, totalDuration } from "./metrics"
 import { useLoadRun } from "./use-load-run"
+
+// recharts loads with the first run shown, not with the tab.
+const LoadCharts = lazy(() => import("./charts").then((m) => ({ default: m.LoadCharts })))
 
 const TONE_TEXT = {
   ok: "text-emerald-600 dark:text-emerald-400",
@@ -181,7 +183,15 @@ export function RunResults({ runId }: { runId: string }) {
             )}
           </div>
         ) : (
-          <LoadCharts samples={samples} mode={run.spec.profile.mode} />
+          <Suspense
+            fallback={
+              <div className="flex h-full items-center justify-center rounded-lg border">
+                <Spinner />
+              </div>
+            }
+          >
+            <LoadCharts samples={samples} mode={run.spec.profile.mode} />
+          </Suspense>
         )}
       </div>
 
