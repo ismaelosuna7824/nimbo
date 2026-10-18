@@ -83,6 +83,19 @@ sudo dnf install ./Nimbo-Linux-x86_64.rpm
 openSUSE: `sudo zypper install ./Nimbo-Linux-x86_64.rpm`. On arm64, use the
 `aarch64` files.
 
+## Updates
+
+Nimbo checks for a new version when it starts and shows a notification when
+there is one; **Settings → About** shows the release notes and has *Check for
+updates* and *Update & restart* (download, signature check, install, relaunch).
+Turn off *Check automatically* there to only check by hand. Updates are signed
+separately from the OS: no Gatekeeper or SmartScreen prompt after the first
+install.
+
+Linux `.deb`/`.rpm` installs are managed by your package manager: Nimbo links
+to the new release, and you install the new package the same way as the first
+one. The AppImage updates itself.
+
 ## Verify the download (optional)
 
 Each release has a `SHA256SUMS.txt`:

@@ -138,11 +138,11 @@ bun run tauri:build                            # desktop bundle
 ```
 
 CI (`.github/workflows/ci.yml`) runs these checks on every push and pull
-request. Releases: pushing a `vX.Y.Z` tag runs
-`.github/workflows/release.yml`, which builds the macOS universal, Windows
-x64 and Linux x86_64/arm64 installers, smoke-tests them and publishes the
-GitHub release with `SHA256SUMS.txt`. Run it manually (*Actions → Release →
-Run workflow*, `dry_run` on) to build the same artifacts without publishing.
+request. Releases are automatic: every push to `main` with `feat`, `fix`,
+`perf` or breaking-change commits (Conventional Commits) builds the macOS
+universal, Windows x64 and Linux x86_64/arm64 installers, tags `vX.Y.Z` and
+publishes the GitHub release; installed apps pick it up through the in-app
+updater. See [docs/RELEASING.md](docs/RELEASING.md).
 
 ## Layout
 
