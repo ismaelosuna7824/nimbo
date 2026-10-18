@@ -1,0 +1,26 @@
+---
+/** A 16×16 pixel glyph from the desktop app as crisp SVG rects. Decorative. */
+import { glyphRects, type GlyphId, type TileColorId } from "../lib/pixel";
+
+interface Props {
+  glyph: GlyphId;
+  color?: TileColorId;
+  size?: number;
+  class?: string;
+}
+
+const { glyph, color = "violet", size = 16, class: className } = Astro.props;
+const rects = glyphRects(glyph, color);
+---
+
+<svg
+  class={className}
+  viewBox="0 0 16 16"
+  width={size}
+  height={size}
+  shape-rendering="crispEdges"
+  aria-hidden="true"
+  focusable="false"
+>
+  {rects.map((r) => <rect x={r.x} y={r.y} width={r.w} height={r.h} fill={r.fill} />)}
+</svg>

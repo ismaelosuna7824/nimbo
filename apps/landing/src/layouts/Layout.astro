@@ -1,0 +1,147 @@
+---
+import "../styles/global.css";
+import geistFont from "@fontsource-variable/geist/files/geist-latin-wght-normal.woff2?url";
+import geistMonoFont from "@fontsource-variable/geist-mono/files/geist-mono-latin-wght-normal.woff2?url";
+import Header from "../components/Header.astro";
+import Footer from "../components/Footer.astro";
+import ConsentBanner from "../components/ConsentBanner.astro";
+import { firebaseConfigured } from "../lib/firebase";
+import { LANGS, OG_LOCALE, homePath, t, type Lang } from "../i18n";
+
+interface Props {
+  lang: Lang;
+  title?: string;
+  description?: string;
+  /** Path of this page in each language; omit for pages without translations. */
+  alternates?: Partial<Record<Lang, string>>;
+  noindex?: boolean;
+}
+
+const { lang, title, description, alternates, noindex = false } = Astro.props;
+const s = t(lang);
+const pageTitle = title ?? s.meta.title;
+const pageDescription = description ?? s.meta.description;
+
+// Canonical, hreflang and og:url/og:image must be absolute, so they are only
+// emitted when `site` (SITE_URL) is configured.
+const site = Astro.site;
+const abs = (path: string) => new URL(path, site).href;
+const ogImage = site ? abs("/og.png") : undefined;
+---
+
+<!doctype html>
+<html lang={lang} dir="ltr">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>{pageTitle}</title>
+    <meta name="description" content={pageDescription} />
+    <meta name="theme-color" content="#0a0a0b" />
+    <meta name="color-scheme" content="dark" />
+    {noindex && <meta name="robots" content="noindex" />}
+    {
+      site && (
+        <>
+          <link rel="canonical" href={abs(Astro.url.pathname)} />
+          <meta property="og:url" content={abs(Astro.url.pathname)} />
+          {alternates &&
+            LANGS.filter((l) => alternates[l]).map((l) => (
+              <link rel="alternate" hreflang={l} href={abs(alternates[l] as string)} />
+            ))}
+          {alternates?.en && <link rel="alternate" hreflang="x-default" href={abs(alternates.en)} />}
+          <link rel="sitemap" href="/sitemap-index.xml" />
+        </>
+      )
+    }
+
+    <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+    <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
+    <link rel="preload" href={geistFont} as="font" type="font/woff2" crossorigin />
+    <link rel="preload" href={geistMonoFont} as="font" type="font/woff2" crossorigin />
+
+    <meta property="og:type" content="website" />
+    <meta property="og:site_name" content="Nimbo" />
+    <meta property="og:title" content={pageTitle} />
+    <meta property="og:description" content={pageDescription} />
+    <meta property="og:locale" content={OG_LOCALE[lang]} />
+    {
+      LANGS.filter((l) => l !== lang && alternates?.[l]).map((l) => (
+        <meta property="og:locale:alternate" content={OG_LOCALE[l]} />
+      ))
+    }
+    {
+      ogImage && (
+        <>
+          <meta property="og:image" content={ogImage} />
+          <meta property="og:image:width" content="1200" />
+          <meta property="og:image:height" content="630" />
+          <meta property="og:image:alt" content={s.meta.ogImageAlt} />
+          <meta name="twitter:image" content={ogImage} />
+          <meta name="twitter:image:alt" content={s.meta.ogImageAlt} />
+        </>
+      )
+    }
+    <meta name="twitter:card" content={ogImage ? "summary_large_image" : "summary"} />
+    <meta name="twitter:title" content={pageTitle} />
+    <meta name="twitter:description" content={pageDescription} />
+  </head>
+  <body class="bg-bg text-fg antialiased" data-lang={lang}>
+    <a
+      href="#main"
+      class="sr-only-focusable fixed top-3 left-3 z-[100] rounded-lg bg-primary-strong px-4 py-2 text-sm font-medium text-white"
+    >
+      {s.a11y.skip}
+    </a>
+    <Header lang={lang} alternates={alternates ?? { [lang]: homePath(lang) }} />
+    <main id="main" tabindex="-1" class="outline-none">
+      <slot />
+    </main>
+    <Footer lang={lang} alternates={alternates ?? { [lang]: homePath(lang) }} showCookieSettings={firebaseConfigured} />
+    {firebaseConfigured && <ConsentBanner lang={lang} />}
+
+    <script>
+      import { disableTracking, track } from "../lib/analytics";
+
+      const lang = document.body.dataset.lang ?? "en";
+      // No consent banner means no Firebase config: drop events instead of queueing.
+      if (!document.getElementById("consent")) disableTracking();
+
+      // OS detection for download CTAs (labels are server-rendered generic).
+      const ua = navigator.userAgent;
+      const platform =
+        (navigator as Navigator & { userAgentData?: { platform?: string } }).userAgentData?.platform ??
+        navigator.platform ??
+        "";
+      const mobile = /Android|iPhone|iPad|iPod/i.test(ua) || (/Mac/i.test(platform) && navigator.maxTouchPoints > 1);
+      const os = mobile
+        ? "mobile"
+        : /Win/i.test(platform) || /Windows/i.test(ua)
+          ? "windows"
+          : /Mac/i.test(platform) || /Mac OS X/i.test(ua)
+            ? "mac"
+            : /Linux|X11|CrOS/i.test(platform + ua)
+              ? "linux"
+              : "unknown";
+      document.documentElement.dataset.os = os;
+
+      for (const el of document.querySelectorAll<HTMLElement>("[data-download-label]")) {
+        const names = JSON.parse(el.dataset.osNames ?? "{}") as Record<string, string>;
+        if (os === "mobile") el.textContent = el.dataset.mobileLabel ?? el.textContent;
+        else if (names[os]) el.textContent = (el.dataset.downloadLabel ?? "").replace("{os}", names[os]);
+      }
+
+      // Delegated analytics for CTAs and the language switch.
+      document.addEventListener("click", (event) => {
+        const target = (event.target as Element | null)?.closest<HTMLElement>("[data-cta], [data-lang-switch]");
+        if (!target) return;
+        if (target.dataset.cta) {
+          track("cta_click", { cta: target.dataset.cta, os, lang, placement: target.dataset.placement });
+        } else if (target instanceof HTMLAnchorElement) {
+          track("language_switch", { from: lang, to: target.dataset.langSwitch });
+          // Keep the visitor on the same section after switching.
+          if (location.hash) target.hash = location.hash;
+        }
+      });
+    </script>
+  </body>
+</html>

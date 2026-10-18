@@ -1,0 +1,148 @@
+---
+import FeatureRow from "./FeatureRow.astro";
+import SectionHeading from "./SectionHeading.astro";
+import Hero from "./sections/Hero.astro";
+import Modes from "./sections/Modes.astro";
+import GetStarted from "./sections/GetStarted.astro";
+import Faq from "./sections/Faq.astro";
+import FinalCta from "./sections/FinalCta.astro";
+import { getDemo } from "./demos";
+import { t, type Lang } from "../i18n";
+
+interface Props {
+  lang: Lang;
+}
+
+const { lang } = Astro.props;
+const s = t(lang);
+const f = s.features.items;
+
+const HeroDemo = getDemo("hero").component;
+const FlowDemo = getDemo("flow").component;
+const ModesDemo = getDemo("modes").component;
+const McpDemo = getDemo("mcp").component;
+
+const rows = [
+  { id: "design", demo: "design", glyph: "flow", color: "violet", item: f.design },
+  { id: "terraform", demo: "terraform", glyph: "diamond", color: "blue", item: f.terraform },
+  { id: "local-cloud", demo: "sandbox", glyph: "cloud", color: "cyan", item: f.sandbox },
+  { id: "endpoints", demo: "endpoints", glyph: "globe", color: "lime", item: f.endpoints },
+  { id: "load-testing", demo: "loadtest", glyph: "fire", color: "amber", item: f.loadtest },
+] as const;
+
+const agents = ["Claude Code", "Claude Desktop", "Cursor", "Codex", "VS Code", "Windsurf", "Gemini CLI"];
+const Connections = getDemo("connections").component;
+---
+
+<Hero lang={lang}>
+  <HeroDemo lang={lang} />
+</Hero>
+
+<section id="how-it-works" class="relative border-t border-border py-24 sm:py-32" aria-labelledby="how-title">
+  <div class="container-page">
+    <SectionHeading id="how-title" eyebrow={s.how.eyebrow} title={s.how.title} sub={s.how.sub} />
+    <div class="mt-14">
+      <FlowDemo lang={lang} />
+    </div>
+  </div>
+</section>
+
+<section id="features" class="relative isolate py-24 sm:py-32" aria-labelledby="features-title">
+  <div class="features-glow" aria-hidden="true"></div>
+  <div class="container-page">
+    <SectionHeading id="features-title" eyebrow={s.features.eyebrow} title={s.features.title} sub={s.features.sub} />
+    <div class="mt-20 space-y-28 sm:space-y-36">
+      {
+        rows.map((row, i) => {
+          const Demo = getDemo(row.demo).component;
+          return (
+            <FeatureRow
+              id={row.id}
+              eyebrow={row.item.eyebrow}
+              title={row.item.title}
+              body={row.item.body}
+              bullets={row.item.bullets}
+              glyph={row.glyph}
+              color={row.color}
+              reverse={i % 2 === 1}
+            >
+              <Demo lang={lang} />
+            </FeatureRow>
+          );
+        })
+      }
+
+      <FeatureRow
+        id="ai-agents"
+        eyebrow={f.mcp.eyebrow}
+        title={f.mcp.title}
+        body={f.mcp.body}
+        glyph="robot"
+        color="pink"
+        reverse
+      >
+        <McpDemo lang={lang} />
+        <div slot="extra">
+          <p class="mt-6 text-sm font-medium text-fg/90">{f.mcp.agentsLabel}</p>
+          <ul class="mt-3 flex flex-wrap gap-2">
+            {
+              agents.map((a) => (
+                <li class="rounded-md border border-border bg-surface-2 px-2.5 py-1 font-mono text-xs text-muted">{a}</li>
+              ))
+            }
+          </ul>
+          <p class="mt-6 text-sm font-medium text-fg/90">{f.mcp.promptsLabel}</p>
+          <ul class="mt-3 space-y-2">
+            {
+              f.mcp.prompts.map((p) => (
+                <li class="prompt flex gap-2.5 rounded-xl border border-border bg-surface/80 px-3.5 py-2.5 text-[0.9rem] leading-snug">
+                  <span class="font-mono text-pink" aria-hidden="true">›</span>
+                  <q class="text-fg/90">{p}</q>
+                </li>
+              ))
+            }
+          </ul>
+        </div>
+      </FeatureRow>
+
+      <FeatureRow
+        id="connections"
+        eyebrow={f.connections.eyebrow}
+        title={f.connections.title}
+        body={f.connections.body}
+        bullets={f.connections.bullets}
+        glyph="network"
+        color="blue"
+      >
+        <Connections lang={lang} />
+      </FeatureRow>
+    </div>
+  </div>
+</section>
+
+<Modes lang={lang}>
+  <ModesDemo lang={lang} />
+</Modes>
+
+<GetStarted lang={lang} />
+
+<Faq lang={lang} />
+
+<FinalCta lang={lang} />
+
+<style>
+  .features-glow {
+    position: absolute;
+    inset: 0 0 auto;
+    height: 40rem;
+    z-index: -1;
+    background: radial-gradient(50rem 24rem at 50% 0%, rgb(139 92 246 / 0.12), transparent 70%);
+    pointer-events: none;
+  }
+  .prompt q {
+    quotes: "“" "”";
+  }
+  :global(html[lang="es"]) .prompt q {
+    quotes: "«" "»";
+  }
+</style>

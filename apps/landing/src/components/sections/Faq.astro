@@ -1,0 +1,62 @@
+---
+import Icon from "../Icon.astro";
+import SectionHeading from "../SectionHeading.astro";
+import { t, type Lang } from "../../i18n";
+
+interface Props {
+  lang: Lang;
+}
+
+const s = t(Astro.props.lang);
+
+/** Renders `code` spans in answers (backticks in the copy). */
+const withCode = (text: string) =>
+  text
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/`([^`]+)`/g, '<code class="rounded bg-white/[0.06] px-1.5 py-0.5 text-[0.85em] text-fg">$1</code>');
+---
+
+<section id="faq" class="py-24 sm:py-32" aria-labelledby="faq-title">
+  <div class="container-page">
+    <SectionHeading id="faq-title" eyebrow={s.faq.eyebrow} title={s.faq.title} />
+    <div class="faq mx-auto mt-12 max-w-3xl divide-y divide-border rounded-2xl border border-border bg-surface/60">
+      {
+        s.faq.items.map((item) => (
+          <details class="group" data-faq={item.id}>
+            <summary class="flex cursor-pointer list-none items-center justify-between gap-4 px-5 py-5 text-left font-medium sm:px-6 sm:text-[1.0625rem]">
+              {item.q}
+              <span class="grid size-7 shrink-0 place-items-center rounded-full border border-border text-muted transition-transform duration-200 group-open:rotate-180">
+                <Icon name="chevron" size={15} />
+              </span>
+            </summary>
+            <p class="-mt-1 px-5 pb-6 leading-relaxed text-pretty text-muted sm:px-6" set:html={withCode(item.a)} />
+          </details>
+        ))
+      }
+    </div>
+  </div>
+</section>
+
+<style>
+  .faq summary::-webkit-details-marker {
+    display: none;
+  }
+  .faq summary:hover {
+    color: #fff;
+  }
+  .faq details:first-child summary:focus-visible {
+    border-radius: 1rem 1rem 0 0;
+  }
+</style>
+
+<script>
+  import { track } from "../../lib/analytics";
+
+  const lang = document.documentElement.lang;
+  for (const details of document.querySelectorAll<HTMLDetailsElement>("details[data-faq]")) {
+    details.addEventListener("toggle", () => {
+      if (details.open) track("faq_open", { question: details.dataset.faq, lang });
+    });
+  }
+</script>

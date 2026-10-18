@@ -1,0 +1,91 @@
+---
+import Icon from "../Icon.astro";
+import DownloadButton from "../DownloadButton.astro";
+import { GITHUB_URL } from "../../config";
+import { t, type Lang } from "../../i18n";
+
+interface Props {
+  lang: Lang;
+}
+
+const { lang } = Astro.props;
+const s = t(lang);
+const clouds = [
+  { name: "AWS", color: "var(--color-aws)" },
+  { name: "Azure", color: "var(--color-azure)" },
+  { name: "Google Cloud", color: "var(--color-gcp)" },
+  { name: "OCI", color: "var(--color-oci)" },
+];
+---
+
+<section class="hero relative isolate overflow-hidden" aria-labelledby="hero-title">
+  <div class="hero-bg" aria-hidden="true"></div>
+  <div
+    class="container-page grid items-center gap-12 pt-14 pb-20 sm:pt-20 lg:grid-cols-[minmax(0,1fr)_minmax(0,1.05fr)] lg:gap-10 lg:pt-24 lg:pb-28"
+  >
+    <div class="max-w-2xl">
+      <p
+        class="inline-flex items-center gap-2 rounded-full border border-border-strong bg-white/[0.03] px-3 py-1 font-mono text-xs text-muted"
+      >
+        <span class="size-1.5 rounded-full bg-green shadow-[0_0_10px_var(--color-green)]"></span>
+        {s.hero.eyebrow}
+      </p>
+      <h1
+        id="hero-title"
+        class="mt-6 text-[2.35rem] leading-[1.06] font-semibold tracking-[-0.03em] text-balance sm:text-5xl lg:text-[3.6rem]"
+      >
+        {s.hero.titleStart} <span class="hero-accent">{s.hero.titleAccent}</span>
+      </h1>
+      <p class="mt-6 max-w-xl text-base leading-relaxed text-pretty text-muted sm:text-lg">{s.hero.sub}</p>
+      <div class="mt-8 flex flex-col gap-3 sm:flex-row sm:items-center">
+        <DownloadButton lang={lang} placement="hero" class="h-12 px-5 text-base" />
+        <a href={GITHUB_URL} rel="noopener" class="btn btn-ghost h-12 px-5 text-base" data-cta="github" data-placement="hero">
+          <Icon name="github" />
+          {s.hero.github}
+        </a>
+      </div>
+      <p class="mt-5 font-mono text-xs text-subtle sm:text-[0.8125rem]">{s.hero.meta}</p>
+      <ul class="mt-8 flex flex-wrap gap-2" aria-label="AWS, Azure, Google Cloud, OCI">
+        {
+          clouds.map((c) => (
+            <li
+              class="inline-flex items-center gap-2 rounded-md border border-border bg-surface/70 px-2.5 py-1 text-xs text-muted"
+              style={`--c:${c.color}`}
+            >
+              <span class="size-2 rounded-[2px] bg-[var(--c)]" aria-hidden="true" />
+              {c.name}
+            </li>
+          ))
+        }
+      </ul>
+    </div>
+    <div class="min-w-0">
+      <slot />
+    </div>
+  </div>
+</section>
+
+<style>
+  .hero-bg {
+    position: absolute;
+    inset: 0;
+    z-index: -1;
+    background:
+      radial-gradient(60rem 32rem at 75% -10%, rgb(139 92 246 / 0.22), transparent 60%),
+      radial-gradient(40rem 24rem at 0% 10%, rgb(34 211 238 / 0.08), transparent 60%);
+  }
+  .hero-bg::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+    background-image: radial-gradient(rgb(255 255 255 / 0.07) 1px, transparent 1px);
+    background-size: 22px 22px;
+    mask-image: radial-gradient(ellipse 70% 60% at 60% 30%, #000 30%, transparent 80%);
+  }
+  .hero-accent {
+    background: linear-gradient(90deg, #a78bfa, #22d3ee 55%, #f472b6);
+    -webkit-background-clip: text;
+    background-clip: text;
+    color: transparent;
+  }
+</style>

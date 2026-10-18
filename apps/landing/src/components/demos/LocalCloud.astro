@@ -1,0 +1,365 @@
+---
+/** Floci emulators for four clouds in Docker on your machine; Terraform applies locally. */
+import type { Lang } from "../../i18n";
+import { demoStrings } from "./lib/strings";
+import DemoFrame from "./ui/DemoFrame.astro";
+import Icon from "./ui/Icon.astro";
+
+interface Props {
+  lang: Lang;
+  class?: string;
+}
+
+const { lang, class: className } = Astro.props;
+const all = demoStrings(lang);
+const s = all.sandbox;
+
+const emulators = [
+  { label: "AWS", image: "floci", port: 45123, color: "#f97316" },
+  { label: "Azure", image: "floci-az", port: 45124, color: "#3b82f6" },
+  { label: "Google Cloud", image: "floci-gcp", port: 45125, color: "#22c55e" },
+  { label: "Oracle Cloud", image: "floci-oci", port: 45126, color: "#ef4444" },
+];
+
+const resources = [
+  { address: "aws_sqs_queue.jobs", color: "#f97316", time: "1s" },
+  { address: "azurerm_storage_account.files", color: "#3b82f6", time: "2s" },
+  { address: "google_pubsub_topic.events", color: "#22c55e", time: "1s" },
+  { address: "oci_objectstorage_bucket.media", color: "#ef4444", time: "1s" },
+];
+---
+
+<DemoFrame id="sandbox" lang={lang} label={s.label} title={s.windowTitle} class={className}>
+  <div class="wrap" data-fade>
+    <div class="machine">
+      <span class="lbl"><Icon name="laptop" size={12} />{s.machine}</span>
+      <div class="docker">
+        <span class="lbl lbl-docker"><Icon name="container" size={12} />{s.docker}</span>
+        <div class="emus">
+          {
+            emulators.map((e) => (
+              <div class="emu" data-state="run" data-state0="off" style={{ "--c": e.color }}>
+                <span class="dot" />
+                <span class="emu-txt">
+                  <span class="emu-name">{e.label}</span>
+                  <span class="emu-img">
+                    {e.image} · :{e.port}
+                  </span>
+                </span>
+              </div>
+            ))
+          }
+        </div>
+      </div>
+
+      <div class="term">
+        <span class="term-head"><span class="prompt">$</span> {s.log}</span>
+        <div class="term-body">
+          <span class="tl muted" data-anim="up">Sandbox · 4 Floci emulators ready</span>
+          <span class="tl" data-anim="up">aws_sqs_queue.jobs: <span class="muted">Creating...</span></span>
+          {
+            resources.map((r) => (
+              <span class="tl" data-anim="up">
+                {r.address}: <span class="ok">Creation complete after {r.time}</span>
+              </span>
+            ))
+          }
+          <span class="tl done" data-anim="up">Apply complete! Resources: 4 added, 0 changed, 0 destroyed.</span>
+        </div>
+        <div class="stamp" data-anim="stamp">
+          <span class="stamp-top">{s.stampTop}</span>
+          <span class="stamp-amount">$0.00</span>
+          <span class="strike"></span>
+        </div>
+      </div>
+
+      <div class="res">
+        {
+          resources.map((r) => (
+            <span class="chip" style={{ "--c": r.color }}>
+              <span class="chip-addr">{r.address}</span>
+              <span class="pill" data-anim="pop">
+                <Icon name="circle-check" size={9} strokeWidth={2.5} />
+                {all.common.deployed}
+              </span>
+            </span>
+          ))
+        }
+      </div>
+    </div>
+  </div>
+</DemoFrame>
+
+<style>
+  .wrap {
+    position: relative;
+    padding: 12px;
+  }
+  .machine {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    padding: 10px;
+    border: 1px solid var(--color-border-strong);
+    border-radius: 12px;
+    background: linear-gradient(180deg, rgb(255 255 255 / 0.02), transparent);
+  }
+  .lbl {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    color: var(--color-muted);
+    font-size: 10.5px;
+    font-weight: 600;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+  }
+  .lbl-docker {
+    color: #7dd3fc;
+  }
+  .docker {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    padding: 9px;
+    border: 1px dashed rgb(125 211 252 / 0.35);
+    border-radius: 10px;
+    background: rgb(14 165 233 / 0.04);
+  }
+  .emus {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 6px;
+  }
+  .emu {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    min-width: 0;
+    padding: 6px 8px;
+    border: 1px solid var(--color-border);
+    border-left: 3px solid var(--c);
+    border-radius: 8px;
+    background: var(--color-surface-2);
+  }
+  .dot {
+    flex-shrink: 0;
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    background: var(--color-subtle);
+    transition:
+      background 0.3s,
+      box-shadow 0.3s;
+  }
+  .emu[data-state="start"] .dot {
+    background: var(--color-amber);
+    animation: lc-pulse 0.7s ease-in-out infinite;
+  }
+  .emu[data-state="run"] .dot {
+    background: var(--color-green);
+    box-shadow: 0 0 6px var(--color-green);
+  }
+  .emu-txt {
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+  }
+  .emu-name {
+    font-size: 11.5px;
+    font-weight: 600;
+    white-space: nowrap;
+  }
+  .emu-img {
+    overflow: hidden;
+    color: var(--color-muted);
+    font-family: var(--font-mono);
+    font-size: 9.5px;
+    white-space: nowrap;
+    text-overflow: ellipsis;
+  }
+
+  .term {
+    position: relative;
+    overflow: hidden;
+    border: 1px solid var(--color-border);
+    border-radius: 9px;
+    background: #08080a;
+    font-family: var(--font-mono);
+    font-size: 10px;
+  }
+  .term-head {
+    display: block;
+    padding: 5px 9px;
+    border-bottom: 1px solid var(--color-border);
+    color: var(--color-muted);
+  }
+  .prompt {
+    color: var(--color-primary-soft);
+  }
+  .term-body {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    min-height: 118px;
+    padding: 7px 9px 9px;
+  }
+  .tl {
+    overflow: hidden;
+    color: #d4d4d8;
+    white-space: nowrap;
+    text-overflow: ellipsis;
+  }
+  .muted {
+    color: var(--color-subtle);
+  }
+  .ok {
+    color: var(--color-green);
+  }
+  .done {
+    color: var(--color-green);
+    font-weight: 600;
+  }
+
+  .res {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 6px;
+  }
+  .chip {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 6px;
+    min-width: 0;
+    padding: 5px 7px 5px 9px;
+    border: 1px solid var(--color-border);
+    border-radius: 8px;
+    background: var(--color-surface-2);
+    box-shadow: inset 3px 0 0 var(--c);
+  }
+  .chip-addr {
+    overflow: hidden;
+    font-family: var(--font-mono);
+    font-size: 9.5px;
+    white-space: nowrap;
+    text-overflow: ellipsis;
+  }
+  .pill {
+    display: inline-flex;
+    flex-shrink: 0;
+    align-items: center;
+    gap: 3px;
+    height: 16px;
+    padding: 0 6px;
+    border-radius: 999px;
+    background: rgb(52 211 153 / 0.14);
+    color: var(--color-green);
+    font-size: 9.5px;
+    font-weight: 500;
+  }
+
+  .stamp {
+    position: absolute;
+    top: 32px;
+    right: 14px;
+    z-index: 4;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    padding: 4px 11px 5px;
+    border: 2px solid var(--color-green);
+    border-radius: 9px;
+    background: rgb(10 10 11 / 0.88);
+    box-shadow:
+      0 0 0 3px rgb(10 10 11 / 0.88),
+      0 0 0 4px rgb(52 211 153 / 0.4),
+      0 14px 34px -10px rgb(0 0 0 / 0.9);
+    color: var(--color-green);
+    rotate: -8deg;
+  }
+  .stamp-top {
+    font-size: 9.5px;
+    font-weight: 700;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+  }
+  .stamp-amount {
+    font-family: var(--font-mono);
+    font-size: 18px;
+    font-weight: 700;
+    line-height: 1.1;
+  }
+  .strike {
+    position: absolute;
+    top: 50%;
+    left: -6px;
+    right: -6px;
+    height: 2.5px;
+    border-radius: 2px;
+    background: var(--color-pink);
+    box-shadow: 0 0 8px rgb(244 114 182 / 0.7);
+    rotate: -14deg;
+    transform-origin: left;
+    transition: transform 0.35s 0.35s var(--ease-out-soft);
+  }
+  .stamp:global(.is-off) .strike {
+    transform: scaleX(0);
+    transition-delay: 0s;
+  }
+
+  @keyframes lc-pulse {
+    50% {
+      opacity: 0.35;
+    }
+  }
+
+  @container (max-width: 440px) {
+    .emus,
+    .res {
+      grid-template-columns: 1fr;
+    }
+    .term {
+      font-size: 9px;
+    }
+    .term-body {
+      min-height: 160px;
+      padding-bottom: 76px;
+    }
+    .tl {
+      padding-left: 2ch;
+      text-indent: -2ch;
+      white-space: normal;
+      overflow-wrap: anywhere;
+    }
+    .stamp {
+      top: auto;
+      bottom: 12px;
+      right: 12px;
+      scale: 0.85;
+    }
+  }
+</style>
+
+<script>
+  import { mountDemo } from "./lib/timeline";
+
+  mountDemo("sandbox", (tl) => {
+    const emus = tl.els(".emu");
+    const lines = tl.els(".tl");
+    const pills = tl.els(".res .pill");
+
+    emus.forEach((e, i) => tl.state(300 + i * 160, e, "start"));
+    emus.forEach((e, i) => tl.state(1300 + i * 160, e, "run"));
+    tl.show(2000, lines[0]!);
+    tl.show(2400, lines[1]!);
+    pills.forEach((p, i) => {
+      tl.show(3000 + i * 500, lines[i + 2]!);
+      tl.show(3100 + i * 500, p);
+    });
+    tl.show(5100, lines[6]!);
+    tl.show(5600, ".stamp");
+
+    return { length: 9800 };
+  });
+</script>

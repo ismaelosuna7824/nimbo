@@ -1,0 +1,278 @@
+---
+/** Guided mode: drag SQS → Lambda, pick the recipe, helper resources wire themselves. */
+import type { Lang } from "../../i18n";
+import { demoStrings } from "./lib/strings";
+import Cursor from "./ui/Cursor.astro";
+import DemoFrame from "./ui/DemoFrame.astro";
+import Edges from "./ui/Edges.astro";
+import Icon from "./ui/Icon.astro";
+import NodeCard from "./ui/NodeCard.astro";
+
+interface Props {
+  lang: Lang;
+  class?: string;
+}
+
+const { lang, class: className } = Astro.props;
+const s = demoStrings(lang).design;
+---
+
+<DemoFrame id="design" lang={lang} label={s.label} title={s.windowTitle} class={className}>
+  <div class="cv" data-fade>
+    <Edges
+      edges={[
+        { from: "sqs", to: "esm" },
+        { from: "esm", to: "fn" },
+        { from: "pol", to: "fn" },
+      ]}
+    />
+    <svg class="drag-layer" aria-hidden="true">
+      <path class="drag is-off"></path>
+    </svg>
+
+    <NodeCard id="sqs" lang={lang} label={s.queue} address="aws_sqs_queue.jobs" icon="inbox" anim="fade" />
+    <NodeCard id="fn" lang={lang} label={s.worker} address="aws_lambda_function.worker" icon="zap" anim="fade" />
+    <NodeCard id="esm" lang={lang} label={s.mapping} address="aws_lambda_event_source_mapping.jobs" icon="cable" anim="pop" />
+    <NodeCard id="pol" lang={lang} label={s.policy} address="aws_iam_role_policy.worker_sqs" icon="key-round" anim="pop" />
+
+    <div class="pop is-off" data-anim="drop">
+      <span class="pop-title"><Icon name="link" size={12} />{s.popTitle}</span>
+      <ul>
+        {
+          s.options.map((o, i) => (
+            <li class:list={["opt", { "opt-main": i === 0 }]}>
+              <span class="radio" />
+              <span class="opt-txt">
+                <span class="opt-name">
+                  {o}
+                  {i === 0 && <span class="badge">{s.recommended}</span>}
+                </span>
+                <span class="opt-hint">{s.optionHints[i]}</span>
+              </span>
+            </li>
+          ))
+        }
+      </ul>
+    </div>
+
+    <div class="toast" data-anim="up">
+      <Icon name="sparkles" size={12} />
+      {s.toast}
+    </div>
+
+    <Cursor x="46%" y="88%" />
+  </div>
+</DemoFrame>
+
+<style>
+  .cv {
+    position: relative;
+    height: 330px;
+    overflow: hidden;
+    background-color: var(--color-bg);
+    background-image: radial-gradient(circle, rgb(255 255 255 / 0.11) 1.1px, transparent 1.3px);
+    background-size: 16px 16px;
+    background-position: 8px 8px;
+    --nw: clamp(136px, 42cqw, 196px);
+  }
+  .cv :global([data-node="sqs"]) {
+    top: 22px;
+    left: 4%;
+  }
+  .cv :global([data-node="fn"]) {
+    top: 22px;
+    right: 4%;
+  }
+  .cv :global([data-node="esm"]) {
+    top: 186px;
+    left: 4%;
+  }
+  .cv :global([data-node="pol"]) {
+    top: 186px;
+    right: 4%;
+  }
+
+  .drag-layer {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    overflow: visible;
+    pointer-events: none;
+  }
+  .drag {
+    fill: none;
+    stroke: var(--color-primary-soft);
+    stroke-width: 2;
+    stroke-dasharray: 5 4;
+    transition: opacity 0.3s;
+  }
+
+  .pop {
+    position: absolute;
+    top: 64px;
+    left: 50%;
+    z-index: 10;
+    width: min(320px, 92%);
+    margin-left: calc(min(320px, 92%) / -2);
+    padding: 10px;
+    border: 1px solid var(--color-border-strong);
+    border-radius: 12px;
+    background: var(--color-surface-2);
+    box-shadow: 0 20px 50px -14px rgb(0 0 0 / 0.95);
+  }
+  .pop-title {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    margin-bottom: 8px;
+    color: var(--color-muted);
+    font-size: 11px;
+    font-weight: 500;
+  }
+  .pop ul {
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+    margin: 0;
+    padding: 0;
+    list-style: none;
+  }
+  .opt {
+    display: flex;
+    gap: 8px;
+    padding: 7px 8px;
+    border: 1px solid transparent;
+    border-radius: 8px;
+    transition:
+      background 0.2s,
+      border-color 0.2s;
+  }
+  .opt-main {
+    border-color: rgb(139 92 246 / 0.35);
+    background: rgb(139 92 246 / 0.08);
+  }
+  .opt:global(.is-hover) {
+    border-color: var(--color-primary);
+    background: rgb(139 92 246 / 0.2);
+  }
+  .radio {
+    flex-shrink: 0;
+    width: 12px;
+    height: 12px;
+    margin-top: 1px;
+    border: 1.5px solid var(--color-subtle);
+    border-radius: 50%;
+  }
+  .opt-main .radio {
+    border: 3.5px solid var(--color-primary-soft);
+  }
+  .opt-txt {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    min-width: 0;
+  }
+  .opt-name {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 6px;
+    font-size: 11.5px;
+    font-weight: 500;
+  }
+  .badge {
+    padding: 0 5px;
+    border-radius: 999px;
+    background: rgb(52 211 153 / 0.14);
+    color: var(--color-green);
+    font-size: 9px;
+    font-weight: 600;
+  }
+  .opt-hint {
+    color: var(--color-muted);
+    font-size: 10.5px;
+  }
+
+  .toast {
+    position: absolute;
+    bottom: 12px;
+    left: 50%;
+    z-index: 5;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 6px 11px;
+    border: 1px solid rgb(52 211 153 / 0.35);
+    border-radius: 999px;
+    background: rgb(16 40 32 / 0.92);
+    color: #a7f3d0;
+    font-size: 11px;
+    font-weight: 500;
+    white-space: nowrap;
+    transform: translateX(-50%);
+  }
+
+  @container (max-width: 400px) {
+    .cv {
+      height: 340px;
+    }
+    .opt-hint {
+      display: none;
+    }
+    .toast {
+      font-size: 10px;
+    }
+  }
+</style>
+
+<script>
+  import { boxIn, layoutEdges } from "./lib/edges";
+  import { easeOut, mountDemo } from "./lib/timeline";
+
+  mountDemo("design", (tl) => {
+    const cv = tl.$(".cv");
+    const cur = tl.$("[data-cursor]");
+    const drag = tl.$<SVGPathElement>(".drag");
+    const sqs = tl.$('[data-node="sqs"]');
+    const fn = tl.$('[data-node="fn"]');
+    const opt = tl.$(".opt-main");
+
+    tl.cursor(300, cur, sqs, 1, 0.5);
+    tl.cls(1100, cur, "is-down");
+    tl.cls(1150, cur, "no-ease");
+    tl.show(1150, drag);
+    tl.tween(1200, 1100, (p) => {
+      if (p === 0) return drag.removeAttribute("d");
+      const a = boxIn(sqs, cv);
+      const b = boxIn(fn, cv);
+      const sx = a.x + a.w;
+      const sy = a.y + a.h / 2;
+      const e = easeOut(p);
+      const x = sx + (b.x - sx) * e;
+      const y = sy + (b.y + b.h / 2 - sy) * e + Math.sin(e * Math.PI) * 26;
+      const c = Math.max((x - sx) / 2, 10);
+      drag.setAttribute("d", `M${sx} ${sy}C${sx + c} ${sy} ${x - c} ${y} ${x} ${y}`);
+      cur.style.translate = `${Math.round(x - cur.offsetLeft)}px ${Math.round(y - cur.offsetTop)}px`;
+    });
+    tl.cls(2100, fn, "is-selected");
+    tl.cls(2400, cur, "is-down", false);
+    tl.cls(2400, cur, "no-ease", false);
+    tl.show(2500, ".pop");
+    tl.cursor(3000, cur, opt, 0.35, 0.4);
+    tl.cls(3600, opt, "is-hover");
+    tl.click(3800, cur);
+    tl.hide(4050, ".pop");
+    tl.hide(4050, drag);
+    tl.cls(4050, fn, "is-selected", false);
+    tl.cursor(4200, cur, cv, 0.5, 0.92);
+    tl.show(4300, '[data-node="esm"]');
+    tl.show(4650, '[data-edge="sqs>esm"]');
+    tl.show(4900, '[data-edge="esm>fn"]');
+    tl.show(5200, '[data-node="pol"]');
+    tl.show(5550, '[data-edge="pol>fn"]');
+    tl.show(6000, ".toast");
+
+    return { layout: () => layoutEdges(cv) };
+  });
+</script>

@@ -1,0 +1,47 @@
+---
+/** A workflow-style pixel icon on its tinted dark tile, like the app's WorkflowIconTile. Decorative. */
+import PixelGlyph from "./PixelGlyph.astro";
+import { tileColor, type GlyphId, type TileColorId } from "../lib/pixel";
+
+interface Props {
+  glyph: GlyphId;
+  color?: TileColorId;
+  size?: number;
+  class?: string;
+}
+
+const { glyph, color = "violet", size = 32, class: className } = Astro.props;
+const c = tileColor(color);
+// Whole multiples of 8 px keep glyph pixels on device pixels (same rule as the app).
+const snapped = Math.floor((size * 0.85) / 8) * 8;
+const inner = snapped >= size * 0.6 ? snapped : Math.round(size * 0.72);
+---
+
+<span
+  class:list={["pixel-tile", className]}
+  aria-hidden="true"
+  style={{
+    width: `${size}px`,
+    height: `${size}px`,
+    borderRadius: `${Math.round(size * 0.22)}px`,
+    borderColor: `${c.base}b3`,
+    backgroundImage: `linear-gradient(160deg, ${c.bgFrom}, ${c.bgTo})`,
+    "--tile-glow": `${c.base}80`,
+  }}
+>
+  <PixelGlyph glyph={glyph} color={color} size={inner} />
+</span>
+
+<style>
+  .pixel-tile {
+    display: inline-flex;
+    flex-shrink: 0;
+    align-items: center;
+    justify-content: center;
+    border: 1px solid;
+    user-select: none;
+    box-shadow:
+      inset 0 1px 0 rgb(255 255 255 / 0.08),
+      0 0 8px -1px var(--tile-glow);
+  }
+</style>

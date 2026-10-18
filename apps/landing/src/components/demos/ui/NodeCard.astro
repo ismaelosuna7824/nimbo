@@ -1,0 +1,197 @@
+---
+/**
+ * Resource node like the app's canvas card: left cloud-colored bar, icon
+ * tile, label + mono address and status pills. Positioned by the parent via
+ * `[data-node="<id>"]` (absolute by default, `flow` keeps it in the flow).
+ */
+import type { Lang } from "../../../i18n";
+import type { IconName } from "../lib/icons";
+import { demoStrings } from "../lib/strings";
+import Icon from "./Icon.astro";
+
+const ACCENT: Record<string, string> = {
+  aws: "#f97316",
+  azure: "#3b82f6",
+  gcp: "#22c55e",
+  oci: "#ef4444",
+  module: "#a855f7",
+};
+
+interface Props {
+  id: string;
+  lang: Lang;
+  label: string;
+  /** Terraform address, e.g. `aws_lambda_function.api`. */
+  address: string;
+  icon: IconName;
+  cloud?: "aws" | "azure" | "gcp" | "oci" | "module";
+  /** Show the "Local" (runs in the sandbox) pill. */
+  local?: boolean;
+  /** Render the "Deployed" pill (`.nc-dep`, toggle it from the timeline). */
+  deployed?: boolean;
+  /** Entrance used by Timeline.show(). */
+  anim?: "drop" | "up" | "pop" | "left" | "fade";
+  flow?: boolean;
+  class?: string;
+}
+
+const { id, lang, label, address, icon, cloud = "aws", local = true, deployed = false, anim = "drop", flow = false, class: className } = Astro.props;
+const s = demoStrings(lang).common;
+const isModule = cloud === "module";
+---
+
+<div class:list={["nc", { "nc-mod": isModule, "nc-flow": flow }, className]} data-node={id} data-anim={anim} style={{ "--accent": ACCENT[cloud] }}>
+  <span class="nc-bar"></span>
+  <div class="nc-head">
+    <span class="nc-ic"><Icon name={isModule ? "package" : icon} size={14} /></span>
+    <span class="nc-txt">
+      <span class="nc-label">
+        <span class="nc-name">{label}</span>
+        {isModule && <span class="nc-kind">{s.module}</span>}
+      </span>
+      <span class="nc-addr">{address}</span>
+    </span>
+  </div>
+  <div class="nc-pills">
+    {
+      local && !isModule && (
+        <span class="pill pill-local">
+          <Icon name="zap" size={9} strokeWidth={2.5} />
+          {s.local}
+        </span>
+      )
+    }
+    {
+      deployed && (
+        <span class="pill pill-dep nc-dep" data-anim="pop">
+          <Icon name="circle-check" size={9} strokeWidth={2.5} />
+          {s.deployed}
+        </span>
+      )
+    }
+    <slot />
+  </div>
+</div>
+
+<style>
+  .nc {
+    position: absolute;
+    display: flex;
+    flex-direction: column;
+    gap: 7px;
+    width: var(--nw, 168px);
+    padding: 8px 10px 8px 12px;
+    border: 1px solid var(--color-border-strong);
+    border-radius: 10px;
+    background: var(--color-surface-2);
+    box-shadow: 0 6px 16px -8px rgb(0 0 0 / 0.7);
+    transition:
+      opacity 0.4s var(--ease-out-soft),
+      translate 0.55s var(--ease-out-soft),
+      scale 0.55s var(--ease-out-soft),
+      box-shadow 0.3s,
+      border-color 0.3s;
+  }
+  .nc-flow {
+    position: relative;
+  }
+  .nc-mod {
+    border-color: rgb(168 85 247 / 0.5);
+    box-shadow: 4px 4px 0 -1px rgb(255 255 255 / 0.1);
+  }
+  .nc.is-selected {
+    border-color: var(--color-primary);
+    box-shadow:
+      0 0 0 2px var(--color-bg),
+      0 0 0 4px rgb(139 92 246 / 0.7);
+  }
+  .nc-bar {
+    position: absolute;
+    top: 8px;
+    bottom: 8px;
+    left: 0;
+    width: 3px;
+    border-radius: 0 3px 3px 0;
+    background: var(--accent);
+  }
+  .nc-head {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    min-width: 0;
+  }
+  .nc-ic {
+    display: flex;
+    flex-shrink: 0;
+    align-items: center;
+    justify-content: center;
+    width: 26px;
+    height: 26px;
+    border-radius: 7px;
+    color: var(--accent);
+    background: color-mix(in srgb, var(--accent) 13%, transparent);
+  }
+  .nc-txt {
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+  }
+  .nc-label {
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    min-width: 0;
+  }
+  .nc-name {
+    overflow: hidden;
+    font-size: 12px;
+    font-weight: 500;
+    line-height: 1.25;
+    white-space: nowrap;
+    text-overflow: ellipsis;
+  }
+  .nc-kind {
+    flex-shrink: 0;
+    padding: 0 4px;
+    border-radius: 4px;
+    background: rgb(139 92 246 / 0.16);
+    color: var(--color-primary-soft);
+    font-size: 8.5px;
+    font-weight: 600;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+  }
+  .nc-addr {
+    overflow: hidden;
+    color: var(--color-muted);
+    font-family: var(--font-mono);
+    font-size: 10px;
+    white-space: nowrap;
+    text-overflow: ellipsis;
+  }
+  .nc-pills {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px;
+    min-height: 16px;
+  }
+  .pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 3px;
+    height: 16px;
+    padding: 0 6px;
+    border-radius: 999px;
+    font-size: 9.5px;
+    font-weight: 500;
+    white-space: nowrap;
+  }
+  .pill-local {
+    background: rgb(34 211 238 / 0.1);
+    color: #67e8f9;
+  }
+  .pill-dep {
+    background: rgb(52 211 153 / 0.14);
+    color: var(--color-green);
+  }
+</style>

@@ -1,0 +1,429 @@
+---
+/** An AI agent drives Nimbo through MCP: tool calls on the left, the canvas filling in on the right. */
+import type { Lang } from "../../i18n";
+import { demoStrings } from "./lib/strings";
+import DemoFrame from "./ui/DemoFrame.astro";
+import Edges from "./ui/Edges.astro";
+import Icon from "./ui/Icon.astro";
+import NodeCard from "./ui/NodeCard.astro";
+import PixelTile from "./ui/PixelTile.astro";
+
+interface Props {
+  lang: Lang;
+  class?: string;
+}
+
+const { lang, class: className } = Astro.props;
+const s = demoStrings(lang).mcp;
+
+const calls = [
+  { tool: "create_workflow", arg: "orders-api" },
+  { tool: "add_node", arg: "aws_apigatewayv2_api" },
+  { tool: "add_node", arg: "aws_lambda_function" },
+  { tool: "add_node", arg: "aws_dynamodb_table" },
+  { tool: "connect", arg: "api → fn → table" },
+  { tool: "deploy", arg: "sandbox" },
+  { tool: "run_load_test", arg: "smoke" },
+];
+---
+
+<DemoFrame id="mcp" lang={lang} label={s.label} title={s.windowTitle} class={className}>
+  <div class="grid" data-fade>
+    <div class="chat">
+      <div class="chat-head">
+        <span class="bot"><Icon name="bot" size={14} /></span>
+        <span class="who">{s.agent}</span>
+        <span class="conn"><i></i>{s.connected}</span>
+      </div>
+      <div class="msgs">
+        <div class="bubble" data-anim="up">{s.prompt}</div>
+        <span class="thinking is-off" data-anim="fade"><i></i><i></i><i></i></span>
+        <ul class="calls">
+          {
+            calls.map((c) => (
+              <li class="call" data-anim="up" data-state="done" data-state0="run">
+                <span class="call-st">
+                  <span class="spin" />
+                  <Icon name="check" size={10} strokeWidth={3} class="call-ok" />
+                </span>
+                <span class="call-srv">nimbo</span>
+                <span class="call-tool">{c.tool}</span>
+                <span class="call-arg">{c.arg}</span>
+              </li>
+            ))
+          }
+        </ul>
+        <div class="reply" data-anim="up">
+          {s.reply}
+          <span class="result"><Icon name="circle-check" size={11} />{s.result}</span>
+        </div>
+      </div>
+      <div class="composer">
+        <span class="comp-t" data-text={s.prompt} data-ph={s.placeholder}></span>
+        <span class="comp-send"><Icon name="arrow-up" size={12} strokeWidth={2.5} /></span>
+      </div>
+    </div>
+
+    <div class="pane">
+      <div class="pane-head" data-anim="fade">
+        <PixelTile glyph="network" size={16} />
+        {s.canvas}
+      </div>
+      <div class="cv">
+        <Edges
+          edges={[
+            { from: "api", to: "fn", live: true },
+            { from: "fn", to: "db", live: true },
+          ]}
+        />
+        <NodeCard id="api" lang={lang} label="API Gateway" address="aws_apigatewayv2_api.http" icon="waypoints" deployed anim="pop" />
+        <NodeCard id="fn" lang={lang} label="Lambda" address="aws_lambda_function.api" icon="zap" deployed anim="pop" />
+        <NodeCard id="db" lang={lang} label="DynamoDB" address="aws_dynamodb_table.items" icon="table" deployed anim="pop" />
+        <span class="badge" data-anim="up"><Icon name="gauge" size={11} />{s.result}</span>
+      </div>
+    </div>
+  </div>
+</DemoFrame>
+
+<style>
+  .grid {
+    display: grid;
+    grid-template-columns: minmax(0, 1.1fr) minmax(0, 0.9fr);
+    background: var(--color-bg);
+  }
+
+  .chat {
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+    border-right: 1px solid var(--color-border);
+    background: var(--color-surface);
+  }
+  .chat-head {
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    padding: 8px 10px;
+    border-bottom: 1px solid var(--color-border);
+  }
+  .bot {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 22px;
+    height: 22px;
+    border-radius: 6px;
+    background: rgb(34 211 238 / 0.12);
+    color: var(--color-cyan);
+  }
+  .who {
+    font-size: 11.5px;
+    font-weight: 600;
+  }
+  .conn {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    margin-left: auto;
+    overflow: hidden;
+    color: var(--color-muted);
+    font-family: var(--font-mono);
+    font-size: 9.5px;
+    white-space: nowrap;
+  }
+  .conn i {
+    flex-shrink: 0;
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: var(--color-green);
+  }
+  .msgs {
+    display: flex;
+    flex: 1;
+    flex-direction: column;
+    gap: 8px;
+    min-height: 318px;
+    padding: 10px;
+  }
+  .bubble {
+    align-self: flex-end;
+    max-width: 92%;
+    padding: 7px 10px;
+    border-radius: 12px 12px 3px 12px;
+    background: var(--color-primary-strong);
+    color: #fff;
+    font-size: 11.5px;
+    line-height: 1.4;
+  }
+  .thinking {
+    display: flex;
+    gap: 3px;
+    height: 0;
+    overflow: visible;
+  }
+  .thinking i {
+    width: 5px;
+    height: 5px;
+    border-radius: 50%;
+    background: var(--color-muted);
+    animation: mcp-dot 0.9s ease-in-out infinite;
+  }
+  .thinking i:nth-child(2) {
+    animation-delay: 0.15s;
+  }
+  .thinking i:nth-child(3) {
+    animation-delay: 0.3s;
+  }
+  .calls {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    margin: 0;
+    padding: 0;
+    list-style: none;
+  }
+  .call {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    min-width: 0;
+    height: 22px;
+    padding: 0 7px;
+    border: 1px solid var(--color-border);
+    border-radius: 6px;
+    background: var(--color-surface-2);
+    font-family: var(--font-mono);
+    font-size: 10px;
+  }
+  .call-st {
+    display: flex;
+    flex-shrink: 0;
+    width: 11px;
+    justify-content: center;
+  }
+  .spin {
+    width: 9px;
+    height: 9px;
+    border: 1.5px solid rgb(167 139 250 / 0.35);
+    border-top-color: var(--color-primary-soft);
+    border-radius: 50%;
+    animation: mcp-spin 0.7s linear infinite;
+  }
+  .call :global(.call-ok) {
+    display: none;
+    color: var(--color-green);
+  }
+  .call[data-state="done"] .spin {
+    display: none;
+  }
+  .call[data-state="done"] :global(.call-ok) {
+    display: block;
+  }
+  .call-srv {
+    padding: 0 4px;
+    border-radius: 3px;
+    background: rgb(139 92 246 / 0.16);
+    color: var(--color-primary-soft);
+    font-size: 9px;
+  }
+  .call-tool {
+    color: var(--color-fg);
+  }
+  .call-arg {
+    overflow: hidden;
+    color: var(--color-muted);
+    white-space: nowrap;
+    text-overflow: ellipsis;
+  }
+  .reply {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 6px;
+    font-size: 11.5px;
+    line-height: 1.45;
+  }
+  .result {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    padding: 2px 8px;
+    border-radius: 999px;
+    background: rgb(52 211 153 / 0.14);
+    color: var(--color-green);
+    font-size: 10.5px;
+    font-weight: 600;
+  }
+  .composer {
+    display: flex;
+    align-items: flex-end;
+    gap: 6px;
+    margin: 0 10px 10px;
+    padding: 6px 6px 6px 10px;
+    border: 1px solid var(--color-border-strong);
+    border-radius: 10px;
+    background: var(--color-bg);
+    font-size: 11px;
+  }
+  .comp-t {
+    flex: 1;
+    min-width: 0;
+    min-height: 4.5em;
+    line-height: 1.5;
+    align-self: center;
+  }
+  .comp-t:empty::before {
+    content: attr(data-ph);
+    color: var(--color-subtle);
+  }
+  .comp-send {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 22px;
+    height: 22px;
+    border-radius: 6px;
+    background: var(--color-primary-strong);
+    color: #fff;
+    transition:
+      scale 0.15s,
+      filter 0.15s;
+  }
+
+  .pane {
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+  }
+  .pane-head {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    height: 39px;
+    padding: 0 10px;
+    border-bottom: 1px solid var(--color-border);
+    font-size: 11px;
+    font-weight: 600;
+  }
+  .cv {
+    position: relative;
+    flex: 1;
+    min-height: 330px;
+    background-image: radial-gradient(circle, rgb(255 255 255 / 0.1) 1.1px, transparent 1.3px);
+    background-size: 16px 16px;
+    --nw: min(196px, calc(100% - 24px));
+  }
+  .cv :global([data-node]) {
+    left: 50%;
+    margin-left: calc(var(--nw) / -2);
+  }
+  .cv :global([data-node="api"]) {
+    top: 16px;
+  }
+  .cv :global([data-node="fn"]) {
+    top: 114px;
+  }
+  .cv :global([data-node="db"]) {
+    top: 212px;
+  }
+  .badge {
+    position: absolute;
+    bottom: 12px;
+    left: 50%;
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    padding: 3px 9px;
+    border: 1px solid rgb(52 211 153 / 0.4);
+    border-radius: 999px;
+    background: rgb(16 40 32 / 0.92);
+    color: var(--color-green);
+    font-size: 10.5px;
+    font-weight: 600;
+    white-space: nowrap;
+    transform: translateX(-50%);
+  }
+
+  @keyframes mcp-spin {
+    to {
+      rotate: 360deg;
+    }
+  }
+  @keyframes mcp-dot {
+    50% {
+      opacity: 0.25;
+      translate: 0 -2px;
+    }
+  }
+
+  @container (max-width: 520px) {
+    .grid {
+      grid-template-columns: 1fr;
+    }
+    .chat {
+      border-right: 0;
+      border-bottom: 1px solid var(--color-border);
+    }
+    .msgs {
+      min-height: 320px;
+    }
+    .cv {
+      min-height: 294px;
+    }
+    .cv :global([data-node="api"]) {
+      top: 12px;
+    }
+    .cv :global([data-node="fn"]) {
+      top: 96px;
+    }
+    .cv :global([data-node="db"]) {
+      top: 180px;
+    }
+    .badge {
+      bottom: 10px;
+    }
+  }
+</style>
+
+<script>
+  import { layoutEdges } from "./lib/edges";
+  import { mountDemo } from "./lib/timeline";
+
+  mountDemo("mcp", (tl) => {
+    const cv = tl.$(".cv");
+    const calls = tl.els(".call");
+    const nodes = ["api", "fn", "db"].map((id) => tl.$(`[data-node="${id}"]`));
+
+    const comp = tl.$(".comp-t");
+    const typed = tl.type(400, comp, 48);
+    tl.pulse(typed + 200, ".comp-send", "is-pressed", 160);
+    tl.add(typed + 300, () => (comp.textContent = ""), () => {});
+    tl.show(typed + 350, ".bubble");
+    tl.show(typed + 700, ".thinking");
+    tl.hide(typed + 1300, ".thinking");
+
+    let t = typed + 1300;
+    const STEP = 640;
+    calls.forEach((call, i) => {
+      tl.show(t, call);
+      tl.state(t + 420, call, "done");
+      const done = t + 420;
+      if (i === 0) tl.show(done, ".pane-head");
+      if (i >= 1 && i <= 3) tl.show(done, nodes[i - 1]!);
+      if (i === 4) {
+        tl.show(done, '[data-edge="api>fn"]');
+        tl.show(done + 200, '[data-edge="fn>db"]');
+      }
+      if (i === 5) {
+        nodes.forEach((n, k) => tl.show(done + k * 150, n.querySelector<HTMLElement>(".nc-dep")!));
+        tl.show(done + 450, ".edge-dot");
+      }
+      if (i === 6) tl.show(done + 200, ".badge");
+      t += STEP;
+    });
+    tl.show(t + 300, ".reply");
+
+    return { layout: () => layoutEdges(cv) };
+  });
+</script>

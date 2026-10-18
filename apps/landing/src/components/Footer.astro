@@ -1,0 +1,115 @@
+---
+import mark from "../assets/nimbo-mark.svg";
+import Icon from "./Icon.astro";
+import LanguageSwitch from "./LanguageSwitch.astro";
+import { DOCS, FLOCI_URL, GITHUB_URL, RELEASES_URL } from "../config";
+import { homePath, t, type Lang } from "../i18n";
+
+interface Props {
+  lang: Lang;
+  alternates: Partial<Record<Lang, string>>;
+  showCookieSettings: boolean;
+}
+
+const { lang, alternates, showCookieSettings } = Astro.props;
+const s = t(lang);
+const home = homePath(lang);
+const product = [
+  { href: `${home}#how-it-works`, label: s.nav.how },
+  { href: `${home}#features`, label: s.nav.features },
+  { href: `${home}#ai-agents`, label: s.nav.agents },
+  { href: `${home}#faq`, label: s.nav.faq },
+  { href: RELEASES_URL, label: s.footer.releases, cta: "download" },
+];
+const docs = [
+  { href: DOCS.readme, label: s.footer.docsReadme },
+  { href: DOCS.setup, label: s.footer.docsSetup },
+  { href: DOCS.mcp, label: s.footer.docsMcp },
+  { href: DOCS.architecture, label: s.footer.docsArchitecture },
+];
+---
+
+<footer class="border-t border-border bg-[#08080a]">
+  <div class="container-page grid gap-10 py-14 md:grid-cols-[1.4fr_1fr_1fr]">
+    <div class="max-w-sm">
+      <a href={home} class="inline-flex items-center gap-2.5 rounded-lg" aria-label={s.a11y.home}>
+        <img src={mark.src} width="32" height="32" alt="" class="size-8 rounded-[7px]" loading="lazy" />
+        <span class="text-lg font-semibold tracking-tight">Nimbo</span>
+      </a>
+      <p class="mt-3 text-sm text-muted">{s.footer.tagline}</p>
+      <p class="mt-4 text-sm text-muted">
+        {s.footer.poweredBy}{" "}
+        <a href={FLOCI_URL} rel="noopener" class="text-primary-soft underline decoration-primary-soft/40 underline-offset-4 hover:decoration-primary-soft">
+          {s.footer.poweredByName}
+        </a>
+      </p>
+      <div class="mt-6 flex items-center gap-3">
+        <LanguageSwitch lang={lang} alternates={alternates} />
+        <a
+          href={GITHUB_URL}
+          rel="noopener"
+          data-cta="github"
+          data-placement="footer"
+          class="grid size-9 place-items-center rounded-lg border border-border text-muted transition-colors hover:text-fg"
+        >
+          <Icon name="github" size={18} label="GitHub" />
+        </a>
+      </div>
+    </div>
+
+    <nav aria-label={s.a11y.footerNav} class="contents">
+      <div>
+        <h2 class="font-mono text-xs tracking-[0.08em] text-subtle uppercase">{s.footer.product}</h2>
+        <ul class="mt-4 space-y-2.5 text-sm">
+          {
+            product.map((l) => (
+              <li>
+                <a
+                  href={l.href}
+                  class="text-muted transition-colors hover:text-fg"
+                  data-cta={l.cta}
+                  data-placement={l.cta ? "footer" : undefined}
+                >
+                  {l.label}
+                </a>
+              </li>
+            ))
+          }
+        </ul>
+      </div>
+      <div>
+        <h2 class="font-mono text-xs tracking-[0.08em] text-subtle uppercase">{s.footer.docs}</h2>
+        <ul class="mt-4 space-y-2.5 text-sm">
+          {
+            docs.map((l) => (
+              <li>
+                <a href={l.href} rel="noopener" class="text-muted transition-colors hover:text-fg">
+                  {l.label}
+                </a>
+              </li>
+            ))
+          }
+        </ul>
+      </div>
+    </nav>
+  </div>
+
+  <div class="border-t border-border">
+    <div
+      class="container-page flex flex-col gap-3 py-6 text-xs text-subtle md:flex-row md:items-center md:justify-between"
+    >
+      <p class="max-w-3xl">© {new Date().getFullYear()} Nimbo. {s.footer.license}</p>
+      {
+        showCookieSettings && (
+          <button
+            type="button"
+            data-consent-open
+            class="self-start rounded text-muted underline-offset-4 hover:text-fg hover:underline md:self-auto"
+          >
+            {s.footer.cookies}
+          </button>
+        )
+      }
+    </div>
+  </div>
+</footer>

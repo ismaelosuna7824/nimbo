@@ -1,0 +1,45 @@
+---
+import { LANGS, LANG_NAMES, homePath, t, type Lang } from "../i18n";
+
+interface Props {
+  lang: Lang;
+  alternates: Partial<Record<Lang, string>>;
+  class?: string;
+}
+
+const { lang, alternates, class: className } = Astro.props;
+const s = t(lang);
+---
+
+<nav aria-label={s.nav.language} class:list={["lang-switch", className]}>
+  <ul class="flex items-center rounded-lg border border-border bg-white/[0.03] p-0.5 font-mono text-xs">
+    {
+      LANGS.map((l) => (
+        <li>
+          {l === lang ? (
+            <span
+              aria-current="true"
+              class="block rounded-md bg-white/10 px-2 py-1 font-medium text-fg"
+              title={LANG_NAMES[l]}
+            >
+              <span aria-hidden="true">{l.toUpperCase()}</span>
+              <span class="sr-only">{LANG_NAMES[l]}</span>
+            </span>
+          ) : (
+            <a
+              href={alternates[l] ?? homePath(l)}
+              hreflang={l}
+              lang={l}
+              data-lang-switch={l}
+              title={LANG_NAMES[l]}
+              class="block rounded-md px-2 py-1 text-muted transition-colors hover:text-fg"
+            >
+              <span aria-hidden="true">{l.toUpperCase()}</span>
+              <span class="sr-only">{LANG_NAMES[l]}</span>
+            </a>
+          )}
+        </li>
+      ))
+    }
+  </ul>
+</nav>

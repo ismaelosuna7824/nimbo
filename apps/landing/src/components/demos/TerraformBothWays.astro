@@ -1,0 +1,324 @@
+---
+/** Import an IaC folder → diagram with a module; add a node → clean HCL types out. */
+import type { Lang } from "../../i18n";
+import { demoStrings } from "./lib/strings";
+import Code from "./ui/Code.astro";
+import DemoFrame from "./ui/DemoFrame.astro";
+import Edges from "./ui/Edges.astro";
+import Icon from "./ui/Icon.astro";
+import NodeCard from "./ui/NodeCard.astro";
+
+interface Props {
+  lang: Lang;
+  class?: string;
+}
+
+const { lang, class: className } = Astro.props;
+const s = demoStrings(lang).terraform;
+
+const tree = [
+  { depth: 0, name: "envs/", dir: true },
+  { depth: 1, name: "dev/", dir: true },
+  { depth: 2, name: "terraform.tfvars", dir: false },
+  { depth: 1, name: "prod/", dir: true },
+  { depth: 0, name: "modules/", dir: true },
+  { depth: 1, name: "network/", dir: true },
+  { depth: 0, name: "main.tf", dir: false },
+];
+
+const code = `module "network" {
+  source = "./modules/network"
+}
+
+resource "aws_s3_bucket" "uploads" {
+  bucket = "\${var.env}-uploads"
+}
+
+resource "aws_lambda_function" "thumbs" {
+  function_name = "\${var.env}-thumbs"
+  vpc_config {
+    subnet_ids = module.network.subnets
+  }
+}`;
+---
+
+<DemoFrame id="terraform" lang={lang} label={s.label} title={s.windowTitle} class={className}>
+  <div class="bar">
+    <span class="seg" data-state="export" data-state0="import">
+      <span class="seg-imp"><Icon name="upload" size={11} />{s.import}</span>
+      <span class="seg-exp"><Icon name="download" size={11} />{s.export}</span>
+    </span>
+    <span class="status" data-anim="fade"><Icon name="circle-check" size={11} />{s.imported}</span>
+  </div>
+  <div class="split" data-fade>
+    <div class="cv">
+      <Edges edges={[{ from: "net", to: "fn" }]} />
+      <NodeCard id="net" lang={lang} label={s.network} address="module.network" icon="package" cloud="module" anim="pop">
+        <span class="src-pill"><Icon name="folder" size={9} />./modules/network</span>
+      </NodeCard>
+      <NodeCard id="fn" lang={lang} label={s.thumbs} address="aws_lambda_function.thumbs" icon="zap" anim="drop" />
+      <NodeCard id="up" lang={lang} label={s.uploads} address="aws_s3_bucket.uploads" icon="hard-drive" anim="pop" />
+    </div>
+    <div class="pane">
+      <div class="folder is-off" data-anim="drop">
+        <span class="folder-head"><Icon name="folder-open" size={14} />~/infra</span>
+        <ul>
+          {
+            tree.map((f) => (
+              <li class="tree-row" data-anim="left" style={{ paddingLeft: `${f.depth * 14}px` }}>
+                <Icon name={f.dir ? "folder" : "file-code"} size={11} class={f.dir ? "ic-dir" : "ic-file"} />
+                {f.name}
+              </li>
+            ))
+          }
+        </ul>
+        <span class="progress"><span class="progress-fill"></span></span>
+        <span class="progress-label">{s.importing}</span>
+      </div>
+      <div class="editor" data-anim="up">
+        <div class="tabs">
+          <span class="tab on">main.tf</span>
+          <span class="tab">envs/dev.tfvars</span>
+          <span class="fmt" data-anim="pop">{s.fmt}</span>
+        </div>
+        <Code code={code} class="src" />
+      </div>
+    </div>
+  </div>
+</DemoFrame>
+
+<style>
+  .bar {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    padding: 8px 10px;
+    border-bottom: 1px solid var(--color-border);
+  }
+  .seg {
+    display: flex;
+    padding: 2px;
+    border: 1px solid var(--color-border-strong);
+    border-radius: 7px;
+    font-size: 10.5px;
+  }
+  .seg span {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    padding: 2px 8px;
+    border-radius: 5px;
+    color: var(--color-muted);
+    transition:
+      background 0.3s,
+      color 0.3s;
+  }
+  .seg[data-state="import"] .seg-imp,
+  .seg[data-state="export"] .seg-exp {
+    background: var(--color-primary-strong);
+    color: #fff;
+  }
+  .status {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    color: var(--color-green);
+    font-size: 10.5px;
+  }
+
+  .split {
+    display: grid;
+    grid-template-columns: minmax(0, 0.9fr) minmax(0, 1.1fr);
+    min-height: 262px;
+  }
+  .cv {
+    position: relative;
+    border-right: 1px solid var(--color-border);
+    background-color: var(--color-bg);
+    background-image: radial-gradient(circle, rgb(255 255 255 / 0.1) 1.1px, transparent 1.3px);
+    background-size: 16px 16px;
+    --nw: calc(100% - 28px);
+  }
+  .cv :global([data-node="net"]) {
+    top: 14px;
+    left: 14px;
+  }
+  .cv :global([data-node="fn"]) {
+    top: 98px;
+    left: 14px;
+  }
+  .cv :global([data-node="up"]) {
+    top: 182px;
+    left: 14px;
+  }
+  .src-pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 3px;
+    height: 16px;
+    padding: 0 6px;
+    border-radius: 999px;
+    background: rgb(139 92 246 / 0.14);
+    color: var(--color-primary-soft);
+    font-family: var(--font-mono);
+    font-size: 9px;
+  }
+
+  .pane {
+    display: grid;
+    min-width: 0;
+    background: #0c0c0e;
+  }
+  .folder,
+  .editor {
+    grid-area: 1 / 1;
+    min-width: 0;
+  }
+
+  .folder {
+    align-self: start;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    margin: 14px;
+    padding: 10px 12px;
+    border: 1px dashed rgb(167 139 250 / 0.5);
+    border-radius: 10px;
+    background: rgb(139 92 246 / 0.06);
+  }
+  .folder-head {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    color: var(--color-primary-soft);
+    font-family: var(--font-mono);
+    font-size: 12px;
+    font-weight: 600;
+  }
+  .folder ul {
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+    margin: 0;
+    padding: 0;
+    list-style: none;
+  }
+  .tree-row {
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    font-family: var(--font-mono);
+    font-size: 10.5px;
+    color: #d4d4d8;
+  }
+  .folder :global(.ic-dir) {
+    color: var(--color-primary-soft);
+  }
+  .folder :global(.ic-file) {
+    color: var(--color-subtle);
+  }
+  .progress {
+    position: relative;
+    height: 3px;
+    margin-top: 4px;
+    overflow: hidden;
+    border-radius: 3px;
+    background: rgb(255 255 255 / 0.08);
+  }
+  .progress-fill {
+    position: absolute;
+    inset: 0;
+    background: var(--color-primary);
+    transform-origin: left;
+    transform: scaleX(var(--p, 1));
+  }
+  .progress-label {
+    color: var(--color-muted);
+    font-size: 10px;
+  }
+
+  .editor {
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+  }
+  .tabs {
+    display: flex;
+    align-items: center;
+    gap: 2px;
+    padding: 6px 8px 0;
+    border-bottom: 1px solid var(--color-border);
+    font-family: var(--font-mono);
+    font-size: 10px;
+  }
+  .tab {
+    padding: 4px 8px;
+    border-radius: 6px 6px 0 0;
+    color: var(--color-subtle);
+    white-space: nowrap;
+  }
+  .tab.on {
+    background: var(--color-surface-2);
+    color: var(--color-fg);
+  }
+  .fmt {
+    margin-left: auto;
+    margin-bottom: 4px;
+    padding: 1px 6px;
+    border-radius: 999px;
+    background: rgb(52 211 153 / 0.14);
+    color: var(--color-green);
+    white-space: nowrap;
+  }
+  .editor :global(.src) {
+    padding: 10px 6px 12px 0;
+  }
+
+  @container (max-width: 520px) {
+    .split {
+      grid-template-columns: 1fr;
+    }
+    .cv {
+      height: 262px;
+      border-right: 0;
+      border-bottom: 1px solid var(--color-border);
+      --nw: min(250px, calc(100% - 28px));
+    }
+    .cv :global([data-node]) {
+      left: 50%;
+      margin-left: calc(var(--nw) / -2);
+    }
+    .pane {
+      min-height: 250px;
+    }
+  }
+</style>
+
+<script>
+  import { layoutEdges } from "./lib/edges";
+  import { mountDemo } from "./lib/timeline";
+
+  mountDemo("terraform", (tl) => {
+    const cv = tl.$(".cv");
+    const fill = tl.$(".progress-fill");
+
+    tl.show(300, ".folder");
+    tl.els(".tree-row").forEach((row, i) => tl.show(700 + i * 110, row));
+    tl.tween(1600, 1300, (p) => fill.style.setProperty("--p", String(p)));
+    tl.show(2700, '[data-node="net"]');
+    tl.show(3000, '[data-node="up"]');
+    tl.show(3300, ".status");
+
+    tl.hide(4500, ".folder");
+    tl.state(4600, ".seg", "export");
+    tl.show(4700, ".editor");
+    tl.show(4800, '[data-node="fn"]');
+    tl.show(5200, '[data-edge="net>fn"]');
+    const end = tl.lines(5400, ".src", 75);
+    tl.show(end + 200, ".fmt");
+
+    return { layout: () => layoutEdges(cv) };
+  });
+</script>

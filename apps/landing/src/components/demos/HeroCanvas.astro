@@ -1,0 +1,579 @@
+---
+/** Hero: a mini Nimbo window where three resources are dropped, wired and deployed. */
+import type { Lang } from "../../i18n";
+import { demoStrings } from "./lib/strings";
+import Cursor from "./ui/Cursor.astro";
+import DemoFrame from "./ui/DemoFrame.astro";
+import Edges from "./ui/Edges.astro";
+import Icon from "./ui/Icon.astro";
+import NodeCard from "./ui/NodeCard.astro";
+import PixelTile from "./ui/PixelTile.astro";
+
+interface Props {
+  lang: Lang;
+  class?: string;
+}
+
+const { lang, class: className } = Astro.props;
+const all = demoStrings(lang);
+const s = all.hero;
+const c = all.common;
+
+const palette = [
+  { id: "api", label: "API Gateway", icon: "waypoints" },
+  { id: "fn", label: "Lambda", icon: "zap" },
+  { id: "db", label: "DynamoDB", icon: "table" },
+  { id: "sqs", label: "SQS", icon: "inbox" },
+  { id: "s3", label: "S3", icon: "hard-drive" },
+  { id: "rds", label: "RDS", icon: "database" },
+] as const;
+---
+
+<DemoFrame id="hero" lang={lang} label={s.label} chrome={false} class={className}>
+  <div class="win">
+    <div class="tb">
+      <span class="lights"><i></i><i></i><i></i></span>
+      <span class="wf">
+        <PixelTile glyph="network" color="violet" size={20} />
+        <span class="wf-name">{s.workflow}</span>
+      </span>
+      <span class="tb-mid">
+        <span class="seg"><span class="seg-on">{c.guided}</span><span>{c.pro}</span></span>
+        <span class="chip" data-state="run" data-state0="off">
+          <span class="chip-dot"></span>
+          <span class="l-off">{c.sandboxOff}</span>
+          <span class="l-start">{c.sandboxStarting}</span>
+          <span class="l-run">{c.sandboxRunning}</span>
+        </span>
+      </span>
+      <span class="deploy" data-state="idle" data-state0="idle">
+        <Icon name="cloud-upload" size={13} class="deploy-ic" />
+        <span class="spin"></span>
+        {c.deploy}
+      </span>
+    </div>
+
+    <div class="main">
+      <aside class="pal">
+        <span class="pal-title">{s.palette}</span>
+        <span class="pal-search"><Icon name="search" size={11} />{s.search}<kbd>⌘K</kbd></span>
+        <span class="pal-clouds">
+          <span class="on"><i style="background:#f97316"></i>AWS</span>
+          <span><i style="background:#3b82f6"></i>Azure</span>
+          <span><i style="background:#22c55e"></i>GCP</span>
+          <span><i style="background:#ef4444"></i>OCI</span>
+        </span>
+        <ul>
+          {
+            palette.map((p) => (
+              <li data-pal={p.id}>
+                <span class="pal-ic">
+                  <Icon name={p.icon} size={11} />
+                </span>
+                {p.label}
+              </li>
+            ))
+          }
+        </ul>
+      </aside>
+
+      <div class="cv" data-fade>
+        <Edges
+          edges={[
+            { from: "api", to: "fn", live: true },
+            { from: "fn", to: "db", live: true },
+          ]}
+        />
+        <NodeCard id="api" lang={lang} label="API Gateway" address="aws_apigatewayv2_api.http" icon="waypoints" deployed />
+        <NodeCard id="fn" lang={lang} label="Lambda" address="aws_lambda_function.api" icon="zap" deployed />
+        <NodeCard id="db" lang={lang} label="DynamoDB" address="aws_dynamodb_table.items" icon="table" deployed />
+
+        <div class="toast" data-anim="up">
+          <span class="toast-title"><Icon name="circle-check" size={13} class="toast-ok" />{s.toastTitle}</span>
+          <span class="toast-url">
+            <span class="method">GET</span>
+            <span class="url">http://127.0.0.1:45123/…/items</span>
+            <span class="copy" data-state="idle" data-state0="idle">
+              <Icon name="copy" size={11} class="i-copy" />
+              <Icon name="check" size={11} class="i-done" />
+            </span>
+          </span>
+          <span class="toast-actions">
+            <span class="btn-xs btn-pri"><Icon name="plug" size={10} />{s.endpoints}</span>
+            <span class="btn-xs"><Icon name="gauge" size={10} />{s.loadTest}</span>
+          </span>
+        </div>
+      </div>
+    </div>
+
+    <Cursor x="62%" y="80%"><span class="ghost"><i></i></span></Cursor>
+  </div>
+</DemoFrame>
+
+<style>
+  .win {
+    position: relative;
+    display: flex;
+    flex-direction: column;
+    background: var(--color-bg);
+  }
+
+  /* Top bar */
+  .tb {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    height: 40px;
+    padding: 0 10px;
+    border-bottom: 1px solid var(--color-border);
+    background: var(--color-surface);
+  }
+  .lights {
+    display: flex;
+    gap: 5px;
+    margin-right: 4px;
+  }
+  .lights i {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: rgb(255 255 255 / 0.13);
+  }
+  .wf {
+    display: flex;
+    flex: 1;
+    align-items: center;
+    gap: 7px;
+    min-width: 0;
+  }
+  .wf-name {
+    overflow: hidden;
+    font-size: 12px;
+    font-weight: 600;
+    white-space: nowrap;
+    text-overflow: ellipsis;
+  }
+  .tb-mid {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+  .seg {
+    display: flex;
+    padding: 2px;
+    border: 1px solid var(--color-border-strong);
+    border-radius: 7px;
+    font-size: 10.5px;
+    color: var(--color-muted);
+  }
+  .seg span {
+    padding: 2px 7px;
+    border-radius: 5px;
+  }
+  .seg .seg-on {
+    background: var(--color-surface-3);
+    color: var(--color-fg);
+  }
+  .chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    height: 24px;
+    padding: 0 8px;
+    border: 1px solid var(--color-border-strong);
+    border-radius: 7px;
+    font-size: 10.5px;
+    white-space: nowrap;
+  }
+  .chip-dot {
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    background: var(--color-subtle);
+    transition: background 0.3s;
+  }
+  .chip [class^="l-"] {
+    display: none;
+  }
+  .chip[data-state="off"] .l-off,
+  .chip[data-state="start"] .l-start,
+  .chip[data-state="run"] .l-run {
+    display: inline;
+  }
+  .chip[data-state="start"] .chip-dot {
+    background: var(--color-amber);
+    animation: hero-pulse 0.8s ease-in-out infinite;
+  }
+  .chip[data-state="run"] .chip-dot {
+    background: var(--color-green);
+    box-shadow: 0 0 6px var(--color-green);
+  }
+  .deploy {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    height: 26px;
+    padding: 0 10px;
+    border-radius: 7px;
+    background: var(--color-primary-strong);
+    color: #fff;
+    font-size: 11px;
+    font-weight: 500;
+    box-shadow: 0 0 0 1px rgb(167 139 250 / 0.35) inset;
+    transition:
+      scale 0.15s,
+      filter 0.15s;
+  }
+  .spin {
+    display: none;
+    width: 11px;
+    height: 11px;
+    border: 1.5px solid rgb(255 255 255 / 0.35);
+    border-top-color: #fff;
+    border-radius: 50%;
+    animation: hero-spin 0.7s linear infinite;
+  }
+  .deploy[data-state="busy"] .spin {
+    display: block;
+  }
+  .deploy[data-state="busy"] :global(.deploy-ic) {
+    display: none;
+  }
+
+  /* Palette */
+  .main {
+    display: grid;
+    grid-template-columns: 128px 1fr;
+  }
+  .pal {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    padding: 10px 8px;
+    border-right: 1px solid var(--color-border);
+    background: var(--color-surface);
+    font-size: 11px;
+  }
+  .pal-title {
+    color: var(--color-muted);
+    font-size: 10px;
+    font-weight: 600;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+  }
+  .pal-search {
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    overflow: hidden;
+    height: 24px;
+    padding: 0 6px;
+    border: 1px solid var(--color-border-strong);
+    border-radius: 6px;
+    color: var(--color-subtle);
+    font-size: 10px;
+    white-space: nowrap;
+  }
+  .pal-search kbd {
+    margin-left: auto;
+    padding: 0 3px;
+    border: 1px solid var(--color-border-strong);
+    border-radius: 4px;
+    font-family: var(--font-sans);
+    font-size: 9px;
+  }
+  .pal-clouds {
+    display: grid;
+    grid-template-columns: repeat(2, 1fr);
+    gap: 3px;
+    font-size: 9.5px;
+    color: var(--color-muted);
+  }
+  .pal-clouds span {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    padding: 2px 5px;
+    border-radius: 5px;
+  }
+  .pal-clouds .on {
+    background: var(--color-surface-3);
+    color: var(--color-fg);
+  }
+  .pal-clouds i {
+    width: 5px;
+    height: 5px;
+    border-radius: 50%;
+  }
+  .pal ul {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    margin: 0;
+    padding: 0;
+    list-style: none;
+  }
+  .pal li {
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    padding: 4px 5px;
+    border-radius: 6px;
+    transition: background 0.2s;
+  }
+  .pal li:global(.is-hover) {
+    background: rgb(139 92 246 / 0.16);
+    box-shadow: 0 0 0 1px rgb(139 92 246 / 0.45) inset;
+  }
+  .pal-ic {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 18px;
+    height: 18px;
+    border-radius: 5px;
+    background: rgb(249 115 22 / 0.13);
+    color: var(--color-aws);
+  }
+
+  /* Canvas */
+  .cv {
+    position: relative;
+    height: 350px;
+    overflow: hidden;
+    background-color: var(--color-bg);
+    background-image: radial-gradient(circle, rgb(255 255 255 / 0.11) 1.1px, transparent 1.3px);
+    background-size: 16px 16px;
+    background-position: 8px 8px;
+    --nw: clamp(128px, 38cqw, 166px);
+  }
+  .cv :global([data-node="api"]) {
+    top: 18px;
+    left: 4%;
+  }
+  .cv :global([data-node="fn"]) {
+    top: 82px;
+    right: 4%;
+  }
+  .cv :global([data-node="db"]) {
+    top: 180px;
+    right: 4%;
+  }
+
+  /* Deploy toast */
+  .toast {
+    position: absolute;
+    bottom: 12px;
+    left: 4%;
+    z-index: 5;
+    display: flex;
+    flex-direction: column;
+    gap: 7px;
+    width: min(226px, 52%);
+    padding: 9px 10px;
+    border: 1px solid var(--color-border-strong);
+    border-radius: 10px;
+    background: var(--color-surface-2);
+    box-shadow: 0 16px 40px -12px rgb(0 0 0 / 0.9);
+  }
+  .toast-title {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 11.5px;
+    font-weight: 600;
+  }
+  .toast :global(.toast-ok) {
+    flex-shrink: 0;
+    color: var(--color-green);
+  }
+  .toast-url {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    min-width: 0;
+    padding: 3px 3px 3px 5px;
+    border-radius: 6px;
+    background: rgb(255 255 255 / 0.05);
+  }
+  .method {
+    flex-shrink: 0;
+    padding: 0 4px;
+    border-radius: 4px;
+    background: rgb(52 211 153 / 0.15);
+    color: var(--color-green);
+    font-family: var(--font-mono);
+    font-size: 9px;
+    font-weight: 600;
+  }
+  .url {
+    flex: 1;
+    overflow: hidden;
+    font-family: var(--font-mono);
+    font-size: 10px;
+    white-space: nowrap;
+    text-overflow: ellipsis;
+  }
+  .copy {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 20px;
+    height: 20px;
+    border-radius: 5px;
+    color: var(--color-muted);
+    transition: background 0.2s;
+  }
+  .copy :global(.i-done),
+  .copy[data-state="done"] :global(.i-copy) {
+    display: none;
+  }
+  .copy[data-state="done"] {
+    background: rgb(52 211 153 / 0.15);
+    color: var(--color-green);
+  }
+  .copy[data-state="done"] :global(.i-done) {
+    display: block;
+  }
+  .toast-actions {
+    display: flex;
+    gap: 5px;
+  }
+  .btn-xs {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    height: 20px;
+    padding: 0 7px;
+    border: 1px solid var(--color-border-strong);
+    border-radius: 5px;
+    font-size: 10px;
+    white-space: nowrap;
+  }
+  .btn-pri {
+    border-color: transparent;
+    background: var(--color-primary-strong);
+    color: #fff;
+  }
+
+  /* Drag ghost carried by the cursor */
+  .ghost {
+    position: absolute;
+    top: 10px;
+    left: 10px;
+    width: 64px;
+    height: 24px;
+    border: 1px dashed var(--color-primary-soft);
+    border-radius: 7px;
+    background: rgb(139 92 246 / 0.18);
+    opacity: 0;
+    transition: opacity 0.2s;
+  }
+  .ghost i {
+    position: absolute;
+    top: 5px;
+    bottom: 5px;
+    left: 0;
+    width: 3px;
+    border-radius: 0 3px 3px 0;
+    background: var(--color-aws);
+  }
+  :global(.is-drag) > .ghost {
+    opacity: 1;
+  }
+
+  @keyframes hero-spin {
+    to {
+      rotate: 360deg;
+    }
+  }
+  @keyframes hero-pulse {
+    50% {
+      opacity: 0.35;
+    }
+  }
+
+  @container (max-width: 520px) {
+    .seg {
+      display: none;
+    }
+  }
+  @container (max-width: 460px) {
+    .main {
+      grid-template-columns: 1fr;
+    }
+    .pal {
+      display: none;
+    }
+    .cv {
+      height: 368px;
+      --nw: 46cqw;
+    }
+    .cv :global([data-node="api"]) {
+      top: 14px;
+      left: 3%;
+    }
+    .cv :global([data-node="fn"]) {
+      top: 92px;
+      right: 3%;
+    }
+    .cv :global([data-node="db"]) {
+      top: 172px;
+      right: 3%;
+    }
+    .toast {
+      left: 3%;
+      right: 3%;
+      width: auto;
+    }
+    .lights {
+      display: none;
+    }
+  }
+  @container (max-width: 360px) {
+    .chip {
+      padding: 0 6px;
+    }
+  }
+</style>
+
+<script>
+  import { layoutEdges } from "./lib/edges";
+  import { mountDemo } from "./lib/timeline";
+
+  mountDemo("hero", (tl) => {
+    const cur = tl.$("[data-cursor]");
+    const cv = tl.$(".cv");
+    const ids = ["api", "fn", "db"] as const;
+
+    let t = 500;
+    ids.forEach((id, i) => {
+      const node = tl.$(`[data-node="${id}"]`);
+      tl.cursor(t, cur, tl.$(`[data-pal="${id}"]`), 0.35, 0.5);
+      tl.click(t + 700, cur);
+      tl.pulse(t + 700, `[data-pal="${id}"]`, "is-hover", 950);
+      tl.pulse(t + 760, cur, "is-drag", 760);
+      tl.cursor(t + 820, cur, node, 0.3, 0.45);
+      tl.show(t + 1500, node);
+      if (i > 0) tl.show(t + 1750, `[data-edge="${ids[i - 1]}>${id}"]`);
+      t += 1800;
+    });
+
+    const deploy = tl.$(".deploy");
+    tl.cursor(t, cur, deploy);
+    tl.click(t + 750, cur);
+    tl.pulse(t + 750, deploy, "is-pressed", 180);
+    tl.state(t + 800, deploy, "busy");
+    tl.state(t + 800, ".chip", "start");
+    tl.state(t + 1800, ".chip", "run");
+    ids.forEach((id, i) => tl.show(t + 2100 + i * 350, `[data-node="${id}"] .nc-dep`));
+    tl.state(t + 3000, deploy, "idle");
+    tl.show(t + 3050, ".edge-dot");
+    tl.show(t + 3300, ".toast");
+    tl.cursor(t + 3900, cur, ".toast .copy");
+    tl.click(t + 4650, cur);
+    tl.state(t + 4700, ".toast .copy", "done");
+
+    return { layout: () => layoutEdges(cv) };
+  });
+</script>

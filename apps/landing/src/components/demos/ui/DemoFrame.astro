@@ -1,0 +1,245 @@
+---
+/**
+ * Window frame shared by every demo: the accessible wrapper (role="img" +
+ * label), optional title bar, and the global animation plumbing used by
+ * lib/timeline.ts (pause, instant reset, reduced-motion static frame).
+ */
+import type { Lang } from "../../../i18n";
+
+interface Props {
+  id: string;
+  lang: Lang;
+  /** Accessible description of what the animation shows. */
+  label: string;
+  /** Title-bar text; omit together with `chrome={false}` for frameless demos. */
+  title?: string;
+  chrome?: boolean;
+  class?: string;
+}
+
+const { id, lang, label, title, chrome = true, class: className } = Astro.props;
+---
+
+<figure class:list={["demo", className]} data-demo={id} data-lang={lang} role="img" aria-label={label}>
+  {
+    chrome && (
+      <div class="demo-chrome" aria-hidden="true">
+        <span class="demo-lights">
+          <i />
+          <i />
+          <i />
+        </span>
+        <span class="demo-title">{title}</span>
+        <span class="demo-chrome-end">
+          <slot name="chrome-end" />
+        </span>
+      </div>
+    )
+  }
+  <div class="demo-body" aria-hidden="true">
+    <slot />
+  </div>
+</figure>
+
+<style>
+  .demo {
+    position: relative;
+    margin: 0;
+    overflow: hidden;
+    container-type: inline-size;
+    border: 1px solid var(--color-border-strong);
+    border-radius: 14px;
+    background: var(--color-surface);
+    color: var(--color-fg);
+    font-family: var(--font-sans);
+    font-size: 12px;
+    line-height: 1.35;
+    text-align: left;
+    box-shadow:
+      0 1px 0 rgb(255 255 255 / 0.04) inset,
+      0 30px 80px -32px rgb(0 0 0 / 0.85),
+      0 0 0 1px rgb(0 0 0 / 0.4);
+    user-select: none;
+    -webkit-user-select: none;
+  }
+  .demo-chrome {
+    display: grid;
+    grid-template-columns: 1fr auto 1fr;
+    align-items: center;
+    height: 32px;
+    padding-inline: 12px;
+    border-bottom: 1px solid var(--color-border);
+    background: var(--color-surface-2);
+  }
+  .demo-lights {
+    display: flex;
+    gap: 6px;
+  }
+  .demo-lights i {
+    width: 9px;
+    height: 9px;
+    border-radius: 50%;
+    background: rgb(255 255 255 / 0.12);
+  }
+  .demo-title {
+    overflow: hidden;
+    color: var(--color-muted);
+    font-size: 11px;
+    font-weight: 500;
+    white-space: nowrap;
+    text-overflow: ellipsis;
+  }
+  .demo-chrome-end {
+    display: flex;
+    justify-content: flex-end;
+  }
+  .demo-body {
+    position: relative;
+  }
+</style>
+
+<style is:global>
+  /* Entrance states driven by lib/timeline.ts (markup = final frame). */
+  .demo [data-anim] {
+    transition:
+      opacity 0.4s var(--ease-out-soft),
+      translate 0.55s var(--ease-out-soft),
+      scale 0.55s var(--ease-out-soft);
+  }
+  .demo .is-off {
+    opacity: 0;
+  }
+  .demo [data-anim="drop"].is-off {
+    translate: 0 -14px;
+    scale: 0.94;
+  }
+  .demo [data-anim="up"].is-off {
+    translate: 0 10px;
+  }
+  .demo [data-anim="left"].is-off {
+    translate: -12px 0;
+  }
+  .demo [data-anim="pop"].is-off {
+    scale: 0.6;
+  }
+  .demo [data-anim="stamp"] {
+    transition:
+      opacity 0.25s ease-out,
+      scale 0.35s cubic-bezier(0.34, 1.56, 0.64, 1);
+  }
+  .demo [data-anim="stamp"].is-off {
+    scale: 1.8;
+  }
+  .demo [data-fade] {
+    transition: opacity 0.45s ease;
+  }
+  .demo.d-fade [data-fade] {
+    opacity: 0;
+  }
+
+  /* Typed text caret. */
+  .demo .is-typing::after {
+    content: "";
+    display: inline-block;
+    width: 0.5em;
+    height: 1.05em;
+    margin-left: 1px;
+    vertical-align: -0.18em;
+    background: var(--color-primary-soft);
+    animation: demo-caret 0.9s steps(1) infinite;
+  }
+  @keyframes demo-caret {
+    50% {
+      opacity: 0;
+    }
+  }
+
+  /* Code rows typed by Timeline.lines(): clip the text to --n characters. */
+  .demo [data-line] {
+    position: relative;
+    white-space: pre;
+  }
+  .demo [data-line] .ln-t {
+    display: inline-block;
+    clip-path: inset(-2px max(0px, calc(100% - var(--n, 9999) * 1ch)) -2px 0);
+  }
+  .demo [data-line].is-typing::after {
+    position: absolute;
+    top: 0.15em;
+    left: calc(var(--gutter, 0px) + var(--n) * 1ch);
+    margin: 0;
+    width: 0.55ch;
+    height: 1.1em;
+    vertical-align: 0;
+  }
+
+  /* Fake pointer. */
+  .demo [data-cursor] {
+    position: absolute;
+    z-index: 30;
+    width: 18px;
+    height: 18px;
+    pointer-events: none;
+    transition:
+      translate 0.7s var(--ease-out-soft),
+      opacity 0.3s;
+    filter: drop-shadow(0 2px 3px rgb(0 0 0 / 0.6));
+  }
+  .demo [data-cursor].no-ease {
+    transition: opacity 0.3s;
+  }
+  .demo [data-cursor] svg {
+    transition: scale 0.15s;
+    transform-origin: 3px 2px;
+  }
+  .demo [data-cursor].is-down svg {
+    scale: 0.82;
+  }
+  .demo [data-cursor]::after {
+    content: "";
+    position: absolute;
+    top: -8px;
+    left: -9px;
+    width: 22px;
+    height: 22px;
+    border-radius: 50%;
+    border: 2px solid var(--color-primary-soft);
+    opacity: 0;
+    scale: 0.4;
+    transition:
+      opacity 0.35s,
+      scale 0.35s;
+  }
+  .demo [data-cursor].is-down::after {
+    opacity: 0.9;
+    scale: 1;
+    transition: none;
+  }
+
+  /* Pressed buttons. */
+  .demo .is-pressed {
+    scale: 0.95;
+    filter: brightness(1.25);
+  }
+
+  /* Runner states. */
+  .demo.d-paused *,
+  .demo.d-paused *::before,
+  .demo.d-paused *::after {
+    animation-play-state: paused !important;
+  }
+  .demo.d-instant *,
+  .demo.d-instant *::before,
+  .demo.d-instant *::after {
+    transition: none !important;
+  }
+  .demo.d-static *,
+  .demo.d-static *::before,
+  .demo.d-static *::after {
+    animation: none !important;
+    transition: none !important;
+  }
+  .demo.d-static [data-cursor] {
+    display: none;
+  }
+</style>

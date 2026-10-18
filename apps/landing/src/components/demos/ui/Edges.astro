@@ -1,0 +1,96 @@
+---
+/**
+ * Edge layer for a mini canvas: one `<g data-edge="from>to">` per edge
+ * (paths filled in by lib/edges.ts layoutEdges) plus optional traveling
+ * dots for "live" edges, like deployed edges in the app.
+ * `.is-off` on a group = not drawn yet; on a dot = not live yet.
+ */
+interface Props {
+  edges: ReadonlyArray<{ from: string; to: string; live?: boolean }>;
+}
+
+const { edges } = Astro.props;
+const uid = `e${Math.random().toString(36).slice(2, 8)}`;
+---
+
+<svg class="edges" aria-hidden="true" focusable="false">
+  <defs>
+    <marker id={`${uid}-end`} viewBox="0 0 8 8" refX="4" refY="4" markerWidth="7" markerHeight="7" markerUnits="userSpaceOnUse">
+      <circle cx="4" cy="4" r="3" fill="#a1a1aa" stroke="#0a0a0b" stroke-width="1.4"></circle>
+    </marker>
+  </defs>
+  {
+    edges.map((e) => (
+      <g class="edge" data-edge={`${e.from}>${e.to}`}>
+        <path class="edge-line" pathLength="100" />
+        <path class="edge-flow" pathLength="100" marker-start={`url(#${uid}-end)`} marker-end={`url(#${uid}-end)`} />
+      </g>
+    ))
+  }
+</svg>
+{edges.filter((e) => e.live).map((e) => <span class="edge-dot" data-edge-dot={`${e.from}>${e.to}`} />)}
+
+<style>
+  .edges {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    overflow: visible;
+    pointer-events: none;
+  }
+  .edge path {
+    fill: none;
+  }
+  .edge-line {
+    stroke: rgb(161 161 170 / 0.45);
+    stroke-width: 1.5;
+    stroke-dasharray: 100;
+    stroke-dashoffset: 0;
+    transition: stroke-dashoffset 0.75s var(--ease-out-soft);
+  }
+  .edge-flow {
+    stroke: var(--color-primary-soft);
+    stroke-width: 1.5;
+    stroke-dasharray: 2 3;
+    opacity: 0.85;
+    animation: edge-flow 1.1s linear infinite;
+    transition: opacity 0.35s 0.55s;
+  }
+  .edge.is-off .edge-line {
+    stroke-dashoffset: 100;
+  }
+  .edge.is-off .edge-flow {
+    opacity: 0;
+    transition-delay: 0s;
+  }
+  @keyframes edge-flow {
+    to {
+      stroke-dashoffset: -10;
+    }
+  }
+  .edge-dot {
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: var(--color-cyan);
+    box-shadow: 0 0 8px 2px rgb(34 211 238 / 0.6);
+    offset-rotate: 0deg;
+    animation: edge-dot 1.8s linear infinite;
+    transition: opacity 0.4s;
+  }
+  .edge-dot.is-off {
+    opacity: 0;
+  }
+  @keyframes edge-dot {
+    from {
+      offset-distance: 0%;
+    }
+    to {
+      offset-distance: 100%;
+    }
+  }
+</style>

@@ -1,0 +1,52 @@
+---
+import Icon from "../Icon.astro";
+import SectionHeading from "../SectionHeading.astro";
+import PixelTile from "../demos/ui/PixelTile.astro";
+import { t, type Lang } from "../../i18n";
+
+interface Props {
+  lang: Lang;
+}
+
+const s = t(Astro.props.lang);
+const modes = [
+  { ...s.modes.guided, glyph: "leaf", color: "lime", accent: "var(--color-green)" },
+  { ...s.modes.pro, glyph: "rocket", color: "violet", accent: "var(--color-primary-soft)" },
+] as const;
+---
+
+<section id="modes" class="relative py-24 sm:py-32" aria-labelledby="modes-title">
+  <div class="container-page">
+    <SectionHeading id="modes-title" eyebrow={s.modes.eyebrow} title={s.modes.title} sub={s.modes.sub} />
+    <div class="mt-14 grid items-center gap-10 lg:grid-cols-[minmax(0,0.9fr)_minmax(0,1.1fr)] lg:gap-14">
+      <div class="grid gap-4 sm:grid-cols-2 lg:grid-cols-1">
+        {
+          modes.map((m) => (
+            <div class="card reveal p-6" style={`--accent:${m.accent}`}>
+              <div class="flex items-center gap-3">
+                <PixelTile glyph={m.glyph} color={m.color} size={36} />
+                <div>
+                  <h3 class="text-lg font-semibold">{m.title}</h3>
+                  <p class="text-sm text-muted">{m.body}</p>
+                </div>
+              </div>
+              <ul class="mt-5 space-y-2.5">
+                {m.bullets.map((b) => (
+                  <li class="flex gap-2.5 text-[0.9375rem] text-fg/90">
+                    <span class="mt-[3px] text-[var(--accent)]">
+                      <Icon name="check" size={15} />
+                    </span>
+                    {b}
+                  </li>
+                ))}
+              </ul>
+            </div>
+          ))
+        }
+      </div>
+      <div class="min-w-0">
+        <slot />
+      </div>
+    </div>
+  </div>
+</section>

@@ -1,0 +1,71 @@
+---
+/**
+ * Highlighted code block; every row is a `[data-line]` so Timeline.lines()
+ * can type it out while keeping the colors.
+ */
+import { hclLine, jsonLine } from "../lib/code";
+
+interface Props {
+  code: string;
+  syntax?: "hcl" | "json";
+  numbers?: boolean;
+  class?: string;
+}
+
+const { code, syntax = "hcl", numbers = true, class: className } = Astro.props;
+const lines = code.replace(/\n$/, "").split("\n");
+const paint = syntax === "json" ? jsonLine : hclLine;
+---
+
+<div class:list={["code", className]} style={{ "--gutter": numbers ? "2.4em" : "0px" }}>
+  {
+    lines.map((line, i) => (
+      <div class="row" data-line>
+        {numbers && <span class="no">{i + 1}</span>}
+        <span class="ln-t" set:html={paint(line) || " "} />
+      </div>
+    ))
+  }
+</div>
+
+<style>
+  .code {
+    font-family: var(--font-mono);
+    font-size: 10.5px;
+    line-height: 1.5;
+    color: #e4e4e7;
+  }
+  .row {
+    display: flex;
+    min-width: 0;
+  }
+  .no {
+    flex-shrink: 0;
+    width: var(--gutter);
+    padding-right: 0.9em;
+    color: #52525b;
+    text-align: right;
+    transition: opacity 0.2s;
+  }
+  .row:global(.is-pending) .no {
+    opacity: 0;
+  }
+  .code :global(.t-kw) {
+    color: #c4b5fd;
+  }
+  .code :global(.t-attr) {
+    color: #67e8f9;
+  }
+  .code :global(.t-str) {
+    color: #a7f3d0;
+  }
+  .code :global(.t-ref) {
+    color: #f9a8d4;
+  }
+  .code :global(.t-num) {
+    color: #fcd34d;
+  }
+  .code :global(.t-com) {
+    color: #71717a;
+  }
+</style>

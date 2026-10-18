@@ -1,0 +1,41 @@
+---
+import Icon from "./Icon.astro";
+import { RELEASES_URL } from "../config";
+import { t, type Lang } from "../i18n";
+
+interface Props {
+  lang: Lang;
+  /** Where the button lives, sent with the cta_click event. */
+  placement: string;
+  size?: "sm" | "md";
+  /** Short static label (header); skips OS detection. */
+  compact?: boolean;
+  class?: string;
+}
+
+const { lang, placement, size = "md", compact = false, class: className } = Astro.props;
+const s = t(lang);
+---
+
+<a
+  href={RELEASES_URL}
+  class:list={["btn btn-primary", size === "sm" && "btn-sm", className]}
+  data-cta="download"
+  data-placement={placement}
+  rel="noopener"
+>
+  <Icon name="download" size={size === "sm" ? 16 : 18} />
+  {
+    compact ? (
+      <span>{s.nav.download}</span>
+    ) : (
+      <span
+        data-download-label={s.hero.downloadFor}
+        data-mobile-label={s.hero.downloadDesktop}
+        data-os-names={JSON.stringify(s.os)}
+      >
+        {s.hero.download}
+      </span>
+    )
+  }
+</a>

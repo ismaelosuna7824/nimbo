@@ -1,0 +1,32 @@
+---
+import Layout from "../layouts/Layout.astro";
+import Icon from "../components/Icon.astro";
+import { homePath, t } from "../i18n";
+
+// Firebase serves this one file for every unknown path, so the language
+// isn't known at build time: English first, Spanish right below.
+const en = t("en").notFound;
+const es = t("es").notFound;
+---
+
+<Layout lang="en" title={`404 · ${en.title} · Nimbo`} description={en.body} noindex>
+  <section class="container-page grid min-h-[70vh] place-items-center py-24 text-center">
+    <div>
+      <p class="font-mono text-7xl font-semibold tracking-tighter text-primary-soft sm:text-8xl" aria-hidden="true">404</p>
+      <h1 class="mt-8 text-2xl font-semibold tracking-tight">{en.title}</h1>
+      <p class="mt-2 text-muted">{en.body}</p>
+      <a href={homePath("en")} class="btn btn-ghost mt-5">
+        {en.home}
+        <Icon name="arrowRight" size={16} />
+      </a>
+      <div lang="es" class="mt-12 border-t border-border pt-8">
+        <h2 class="text-xl font-semibold tracking-tight">{es.title}</h2>
+        <p class="mt-2 text-muted">{es.body}</p>
+        <a href={homePath("es")} class="btn btn-ghost mt-5">
+          {es.home}
+          <Icon name="arrowRight" size={16} />
+        </a>
+      </div>
+    </div>
+  </section>
+</Layout>

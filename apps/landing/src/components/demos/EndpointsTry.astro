@@ -1,0 +1,445 @@
+---
+/** Endpoints tab: copy a URL, build and send a request with Try it, then send an SQS message. */
+import type { Lang } from "../../i18n";
+import { demoStrings } from "./lib/strings";
+import Code from "./ui/Code.astro";
+import Cursor from "./ui/Cursor.astro";
+import DemoFrame from "./ui/DemoFrame.astro";
+import Icon from "./ui/Icon.astro";
+
+interface Props {
+  lang: Lang;
+  class?: string;
+}
+
+const { lang, class: className } = Astro.props;
+const all = demoStrings(lang);
+const s = all.endpoints;
+const c = all.common;
+
+const response = `{
+  "id": "itm_8f2c41",
+  "name": "Nimbo",
+  "createdAt": "2026-10-18T09:24:11Z"
+}`;
+---
+
+<DemoFrame id="endpoints" lang={lang} label={s.label} title={s.windowTitle} class={className}>
+  <div class="tabs">
+    {s.tabs.map((tab, i) => <span class:list={["tab", { on: i === 1 }]}>{tab}</span>)}
+  </div>
+  <div class="body" data-fade>
+    <div class="card">
+      <div class="head">
+        <span class="ic" style={{ "--c": "#f97316" }}><Icon name="waypoints" size={13} /></span>
+        <span class="head-txt">
+          <span class="name">{s.api}</span>
+          <span class="addr">aws_apigatewayv2_api.http</span>
+        </span>
+        <span class="pill-dep"><Icon name="circle-check" size={9} strokeWidth={2.5} />{c.deployed}</span>
+      </div>
+
+      <div class="url-row">
+        <span class="url">http://127.0.0.1:45123/execute-api/q1w2e3</span>
+        <span class="copy" data-state="idle" data-state0="idle">
+          <span class="copy-idle"><Icon name="copy" size={11} />{c.copy}</span>
+          <span class="copy-done"><Icon name="check" size={11} />{c.copied}</span>
+        </span>
+      </div>
+
+      <div class="snips">
+        <span class="snip on"><Icon name="play" size={9} />{s.tryIt}</span>
+        {s.snippets.map((sn) => <span class="snip">{sn}</span>)}
+      </div>
+
+      <div class="req">
+        <span class="method" data-state="post" data-state0="get">
+          <span class="m-get">GET</span><span class="m-post">POST</span>
+          <Icon name="chevron-down" size={10} />
+        </span>
+        <span class="path"><span class="path-t">/items</span></span>
+        <span class="send" data-state="idle" data-state0="idle">
+          <span class="spin"></span>
+          <Icon name="send" size={11} class="send-ic" />
+          {c.send}
+        </span>
+      </div>
+      <span class="req-body"><span class="body-t">{`{ "name": "Nimbo" }`}</span></span>
+
+      <div class="resp" data-anim="up">
+        <span class="resp-head">
+          {s.response}
+          <span class="status">{s.created}</span>
+          <span class="lat"><Icon name="clock" size={10} /><span class="lat-n">14</span> ms</span>
+        </span>
+        <Code code={response} syntax="json" numbers={false} class="json" />
+      </div>
+    </div>
+
+    <div class="card card-q">
+      <div class="head">
+        <span class="ic" style={{ "--c": "#f97316" }}><Icon name="inbox" size={13} /></span>
+        <span class="head-txt">
+          <span class="name">{s.queue}</span>
+          <span class="addr">aws_sqs_queue.jobs</span>
+        </span>
+      </div>
+      <div class="q-row">
+        <span class="q-input">{`{"task":"resize","id":42}`}</span>
+        <span class="q-send" data-state="sent" data-state0="idle">
+          <span class="spin"></span>
+          <span class="q-idle"><Icon name="send" size={11} />{s.sendMessage}</span>
+          <span class="q-sent"><Icon name="circle-check" size={11} />{s.sent}</span>
+        </span>
+      </div>
+    </div>
+    <Cursor x="70%" y="96%" />
+  </div>
+</DemoFrame>
+
+<style>
+  .tabs {
+    display: flex;
+    gap: 2px;
+    padding: 6px 10px 0;
+    overflow: hidden;
+    border-bottom: 1px solid var(--color-border);
+    font-size: 11px;
+  }
+  .tab {
+    padding: 5px 9px 6px;
+    border-bottom: 2px solid transparent;
+    color: var(--color-muted);
+    white-space: nowrap;
+  }
+  .tab.on {
+    border-color: var(--color-primary);
+    color: var(--color-fg);
+  }
+  .body {
+    position: relative;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    padding: 12px;
+    background: var(--color-bg);
+  }
+  .card {
+    display: flex;
+    flex-direction: column;
+    gap: 9px;
+    padding: 10px;
+    border: 1px solid var(--color-border-strong);
+    border-radius: 11px;
+    background: var(--color-surface);
+  }
+  .head {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+  .ic {
+    display: flex;
+    flex-shrink: 0;
+    align-items: center;
+    justify-content: center;
+    width: 26px;
+    height: 26px;
+    border-radius: 7px;
+    background: color-mix(in srgb, var(--c) 14%, transparent);
+    color: var(--c);
+  }
+  .head-txt {
+    display: flex;
+    flex: 1;
+    flex-direction: column;
+    min-width: 0;
+  }
+  .name {
+    font-size: 12px;
+    font-weight: 600;
+  }
+  .addr {
+    overflow: hidden;
+    color: var(--color-muted);
+    font-family: var(--font-mono);
+    font-size: 10px;
+    white-space: nowrap;
+    text-overflow: ellipsis;
+  }
+  .pill-dep {
+    display: inline-flex;
+    flex-shrink: 0;
+    align-items: center;
+    gap: 3px;
+    height: 17px;
+    padding: 0 6px;
+    border-radius: 999px;
+    background: rgb(52 211 153 / 0.14);
+    color: var(--color-green);
+    font-size: 9.5px;
+    font-weight: 500;
+  }
+
+  .url-row {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 3px 3px 3px 8px;
+    border-radius: 7px;
+    background: rgb(255 255 255 / 0.04);
+  }
+  .url {
+    flex: 1;
+    overflow: hidden;
+    font-family: var(--font-mono);
+    font-size: 10.5px;
+    white-space: nowrap;
+    text-overflow: ellipsis;
+  }
+  .copy {
+    display: inline-flex;
+    flex-shrink: 0;
+    align-items: center;
+    height: 22px;
+    padding: 0 7px;
+    border: 1px solid var(--color-border-strong);
+    border-radius: 6px;
+    font-size: 10px;
+    transition:
+      background 0.2s,
+      color 0.2s,
+      border-color 0.2s;
+  }
+  .copy span {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+  }
+  .copy .copy-done,
+  .copy[data-state="done"] .copy-idle {
+    display: none;
+  }
+  .copy[data-state="done"] {
+    border-color: rgb(52 211 153 / 0.4);
+    background: rgb(52 211 153 / 0.12);
+    color: var(--color-green);
+  }
+  .copy[data-state="done"] .copy-done {
+    display: inline-flex;
+  }
+
+  .snips {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px;
+  }
+  .snip {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    padding: 2px 8px;
+    border: 1px solid var(--color-border);
+    border-radius: 999px;
+    color: var(--color-muted);
+    font-size: 10px;
+  }
+  .snip.on {
+    border-color: rgb(139 92 246 / 0.5);
+    background: rgb(139 92 246 / 0.14);
+    color: #ddd6fe;
+  }
+
+  .req {
+    display: flex;
+    gap: 6px;
+  }
+  .method,
+  .path,
+  .req-body,
+  .q-input {
+    display: flex;
+    align-items: center;
+    height: 26px;
+    padding: 0 8px;
+    border: 1px solid var(--color-border-strong);
+    border-radius: 7px;
+    background: var(--color-bg);
+    font-family: var(--font-mono);
+    font-size: 10.5px;
+  }
+  .method {
+    gap: 4px;
+    color: var(--color-amber);
+    font-weight: 600;
+  }
+  .method[data-state="get"] {
+    color: var(--color-green);
+  }
+  .m-get,
+  .method[data-state="get"] .m-post {
+    display: none;
+  }
+  .method[data-state="get"] .m-get {
+    display: inline;
+  }
+  .path {
+    flex: 1;
+    min-width: 0;
+  }
+  .send,
+  .q-send {
+    display: inline-flex;
+    flex-shrink: 0;
+    align-items: center;
+    gap: 5px;
+    height: 26px;
+    padding: 0 10px;
+    border-radius: 7px;
+    background: var(--color-primary-strong);
+    color: #fff;
+    font-size: 10.5px;
+    font-weight: 500;
+    transition:
+      scale 0.15s,
+      filter 0.15s,
+      background 0.3s;
+  }
+  .spin {
+    display: none;
+    width: 10px;
+    height: 10px;
+    border: 1.5px solid rgb(255 255 255 / 0.35);
+    border-top-color: #fff;
+    border-radius: 50%;
+    animation: ep-spin 0.7s linear infinite;
+  }
+  .send[data-state="busy"] .spin,
+  .q-send[data-state="busy"] .spin {
+    display: block;
+  }
+  .send[data-state="busy"] :global(.send-ic) {
+    display: none;
+  }
+  .req-body {
+    height: 26px;
+    color: #d4d4d8;
+  }
+
+  .resp {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    padding: 8px 9px;
+    border: 1px solid var(--color-border);
+    border-radius: 8px;
+    background: #0c0c0e;
+  }
+  .resp-head {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    color: var(--color-muted);
+    font-size: 10.5px;
+  }
+  .status {
+    padding: 0 6px;
+    border-radius: 999px;
+    background: rgb(52 211 153 / 0.14);
+    color: var(--color-green);
+    font-family: var(--font-mono);
+    font-size: 10px;
+    font-weight: 600;
+  }
+  .lat {
+    display: inline-flex;
+    align-items: center;
+    gap: 3px;
+    margin-left: auto;
+    font-family: var(--font-mono);
+    font-size: 10px;
+  }
+
+  .card-q {
+    gap: 8px;
+  }
+  .q-row {
+    display: flex;
+    gap: 6px;
+  }
+  .q-input {
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    color: #d4d4d8;
+    white-space: nowrap;
+  }
+  .q-idle,
+  .q-sent {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+  }
+  .q-send .q-sent,
+  .q-send[data-state="sent"] .q-idle {
+    display: none;
+  }
+  .q-send[data-state="sent"] {
+    background: rgb(52 211 153 / 0.16);
+    color: var(--color-green);
+  }
+  .q-send[data-state="sent"] .q-sent {
+    display: inline-flex;
+  }
+
+  @keyframes ep-spin {
+    to {
+      rotate: 360deg;
+    }
+  }
+
+  @container (max-width: 400px) {
+    .snip:nth-child(n + 4) {
+      display: none;
+    }
+  }
+</style>
+
+<script>
+  import { mountDemo } from "./lib/timeline";
+
+  mountDemo("endpoints", (tl) => {
+    const cur = tl.$("[data-cursor]");
+    const copy = tl.$(".copy");
+    const send = tl.$(".send");
+    const qSend = tl.$(".q-send");
+
+    tl.cursor(300, cur, copy);
+    tl.click(1000, cur);
+    tl.state(1050, copy, "done");
+    tl.state(2600, copy, "idle");
+
+    tl.cursor(1700, cur, ".method", 0.4);
+    tl.click(2400, cur);
+    tl.state(2450, ".method", "post");
+    tl.cursor(2700, cur, ".path", 0.3);
+    tl.click(3400, cur);
+    tl.type(3500, ".path-t", 12);
+    tl.type(4200, ".body-t", 32);
+
+    tl.cursor(4900, cur, send);
+    tl.click(5600, cur);
+    tl.pulse(5600, send, "is-pressed", 160);
+    tl.state(5650, send, "busy");
+    tl.state(6150, send, "idle");
+    tl.show(6150, ".resp");
+    tl.count(6150, 500, ".lat-n", 14, (v) => String(Math.round(v)));
+    tl.lines(6250, ".json", 160);
+
+    tl.cursor(7300, cur, qSend);
+    tl.click(8000, cur);
+    tl.pulse(8000, qSend, "is-pressed", 160);
+    tl.state(8050, qSend, "busy");
+    tl.state(8600, qSend, "sent");
+  });
+</script>

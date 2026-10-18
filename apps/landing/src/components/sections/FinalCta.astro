@@ -1,0 +1,54 @@
+---
+import Icon from "../Icon.astro";
+import DownloadButton from "../DownloadButton.astro";
+import Mascot from "../demos/Mascot.astro";
+import { GITHUB_URL } from "../../config";
+import { t, type Lang } from "../../i18n";
+
+interface Props {
+  lang: Lang;
+}
+
+const { lang } = Astro.props;
+const s = t(lang);
+---
+
+<section class="pb-24 sm:pb-32" aria-labelledby="cta-title">
+  <div class="container-page">
+    <div
+      class="cta relative isolate overflow-hidden rounded-3xl border border-border-strong px-6 py-14 text-center sm:px-12 sm:py-20"
+    >
+      <Mascot size={104} class="mx-auto" />
+      <h2 id="cta-title" class="mx-auto mt-6 max-w-2xl text-3xl font-semibold tracking-tight text-balance sm:text-[2.6rem] sm:leading-[1.1]">
+        {s.cta.title}
+      </h2>
+      <p class="mt-4 text-muted sm:text-lg">{s.cta.sub}</p>
+      <div class="mt-8 flex flex-col items-stretch justify-center gap-3 sm:flex-row sm:items-center">
+        <DownloadButton lang={lang} placement="final-cta" class="h-12 px-5 text-base" />
+        <a href={GITHUB_URL} rel="noopener" class="btn btn-ghost h-12 px-5 text-base" data-cta="github" data-placement="final-cta">
+          <Icon name="github" />
+          {s.hero.github}
+        </a>
+      </div>
+      <p class="mt-5 font-mono text-xs text-subtle">{s.hero.meta}</p>
+    </div>
+  </div>
+</section>
+
+<style>
+  .cta {
+    background:
+      radial-gradient(40rem 20rem at 50% 0%, rgb(139 92 246 / 0.28), transparent 70%),
+      radial-gradient(30rem 16rem at 100% 100%, rgb(244 114 182 / 0.1), transparent 70%),
+      var(--color-surface);
+  }
+  .cta::before {
+    content: "";
+    position: absolute;
+    inset: 0;
+    z-index: -1;
+    background-image: radial-gradient(rgb(255 255 255 / 0.06) 1px, transparent 1px);
+    background-size: 20px 20px;
+    mask-image: radial-gradient(ellipse at 50% 30%, #000 20%, transparent 70%);
+  }
+</style>

@@ -1,0 +1,434 @@
+---
+/** The same inspector in Guided mode (three friendly fields) and Pro mode (every attribute, expressions, HCL). */
+import type { Lang } from "../../i18n";
+import { demoStrings } from "./lib/strings";
+import Code from "./ui/Code.astro";
+import Cursor from "./ui/Cursor.astro";
+import DemoFrame from "./ui/DemoFrame.astro";
+import Icon from "./ui/Icon.astro";
+
+interface Props {
+  lang: Lang;
+  class?: string;
+}
+
+const { lang, class: className } = Astro.props;
+const all = demoStrings(lang);
+const s = all.modes;
+const c = all.common;
+
+const attrs = [
+  { name: "function_name", value: '"orders-api"', kind: "str" },
+  { name: "runtime", value: '"nodejs22.x"', kind: "str" },
+  { name: "handler", value: '"index.handler"', kind: "str" },
+  { name: "memory_size", value: "512", kind: "num" },
+  { name: "timeout", value: "10", kind: "num" },
+];
+
+const hcl = `resource "aws_lambda_function" "api" {
+  function_name = "orders-api"
+  runtime       = "nodejs22.x"
+  memory_size   = 512
+  role          = aws_iam_role.api.arn
+}`;
+---
+
+<DemoFrame id="modes" lang={lang} label={s.label} title={s.windowTitle} class={className}>
+  <div class="insp" data-fade>
+    <div class="head">
+      <span class="ic"><Icon name="zap" size={13} /></span>
+      <span class="txt">
+        <span class="name">Lambda</span>
+        <span class="addr">aws_lambda_function.api</span>
+      </span>
+      <span class="seg" data-state="pro" data-state0="guided">
+        <span class="thumb"></span>
+        <span class="seg-g">{c.guided}</span>
+        <span class="seg-p">{c.pro}</span>
+      </span>
+    </div>
+
+    <div class="panels">
+      <div class="p-guided is-off" data-anim="left">
+        <label class="field">
+          <span class="f-l">{s.fields.name}</span>
+          <span class="input">orders-api</span>
+          <span class="hint">{s.hints.name}</span>
+        </label>
+        <label class="field">
+          <span class="f-l">{s.fields.runtime}</span>
+          <span class="input select">Node.js 22 <Icon name="chevron-down" size={12} /></span>
+          <span class="hint">{s.hints.runtime}</span>
+        </label>
+        <label class="field">
+          <span class="f-l">{s.fields.memory}<span class="mem"><span class="mem-v">512</span> MB</span></span>
+          <span class="slider" style={{ "--v": 0.43 }}><span class="s-fill"></span><span class="s-thumb"></span></span>
+          <span class="hint">{s.hints.memory}</span>
+        </label>
+        <span class="tip"><Icon name="sparkles" size={12} />{s.tip}</span>
+      </div>
+
+      <div class="p-pro" data-anim="up">
+        <ul class="attrs">
+          {
+            attrs.map((a) => (
+              <li class="attr" data-anim="up">
+                <span class="a-n">{a.name}</span>
+                <span class:list={["a-v", `t-${a.kind}`]}>{a.value}</span>
+              </li>
+            ))
+          }
+          <li class="attr role" data-anim="up" data-state="expr" data-state0="pick">
+            <span class="a-n">role</span>
+            <span class="a-v a-pick">aws_iam_role.api <Icon name="chevron-down" size={11} /></span>
+            <span class="a-v a-expr"><span class="expr-t">aws_iam_role.api.arn</span></span>
+            <span class="fx" title={s.expr}><Icon name="braces" size={11} /></span>
+          </li>
+        </ul>
+        <span class="meta" data-anim="up">
+          <span class="meta-l">{s.meta}</span>
+          <span class="chip">count</span><span class="chip">for_each</span><span class="chip">depends_on</span>
+        </span>
+        <div class="hcl" data-anim="up">
+          <span class="hcl-l"><Icon name="code" size={11} />{s.hcl}</span>
+          <Code code={hcl} numbers={false} class="src" />
+        </div>
+      </div>
+    </div>
+    <Cursor x="60%" y="100%" />
+  </div>
+</DemoFrame>
+
+<style>
+  .insp {
+    position: relative;
+    display: flex;
+    flex-direction: column;
+    background: var(--color-surface);
+  }
+  .head {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 10px 12px;
+    border-bottom: 1px solid var(--color-border);
+  }
+  .ic {
+    display: flex;
+    flex-shrink: 0;
+    align-items: center;
+    justify-content: center;
+    width: 26px;
+    height: 26px;
+    border-radius: 7px;
+    background: rgb(249 115 22 / 0.13);
+    color: var(--color-aws);
+  }
+  .txt {
+    display: flex;
+    flex: 1;
+    flex-direction: column;
+    min-width: 0;
+  }
+  .name {
+    font-size: 12px;
+    font-weight: 600;
+  }
+  .addr {
+    overflow: hidden;
+    color: var(--color-muted);
+    font-family: var(--font-mono);
+    font-size: 10px;
+    white-space: nowrap;
+    text-overflow: ellipsis;
+  }
+  .seg {
+    position: relative;
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    flex-shrink: 0;
+    padding: 2px;
+    border: 1px solid var(--color-border-strong);
+    border-radius: 8px;
+    font-size: 11px;
+    font-weight: 500;
+  }
+  .seg span {
+    position: relative;
+    z-index: 1;
+    padding: 3px 10px;
+    color: var(--color-muted);
+    text-align: center;
+    transition: color 0.3s;
+  }
+  .seg .thumb {
+    position: absolute;
+    top: 2px;
+    bottom: 2px;
+    left: 2px;
+    z-index: 0;
+    width: calc(50% - 2px);
+    padding: 0;
+    border-radius: 6px;
+    background: var(--color-primary-strong);
+    transition: translate 0.35s var(--ease-out-soft);
+  }
+  .seg[data-state="pro"] .thumb {
+    translate: 100% 0;
+  }
+  .seg[data-state="guided"] .seg-g,
+  .seg[data-state="pro"] .seg-p {
+    color: #fff;
+  }
+
+  .panels {
+    display: grid;
+    padding: 12px;
+  }
+  .p-guided,
+  .p-pro {
+    grid-area: 1 / 1;
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+  }
+  .p-guided {
+    gap: 12px;
+  }
+  .p-pro {
+    gap: 8px;
+  }
+  .p-guided:global(.is-off),
+  .p-pro:global(.is-off) {
+    visibility: hidden;
+    transition:
+      opacity 0.3s,
+      translate 0.3s,
+      visibility 0s 0.3s;
+  }
+
+  .field {
+    display: flex;
+    flex-direction: column;
+    gap: 5px;
+  }
+  .f-l {
+    display: flex;
+    justify-content: space-between;
+    font-size: 11.5px;
+    font-weight: 500;
+  }
+  .mem {
+    color: var(--color-primary-soft);
+    font-family: var(--font-mono);
+    font-variant-numeric: tabular-nums;
+  }
+  .input {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    height: 30px;
+    padding: 0 10px;
+    border: 1px solid var(--color-border-strong);
+    border-radius: 7px;
+    background: var(--color-bg);
+    font-size: 12px;
+  }
+  .hint {
+    color: var(--color-muted);
+    font-size: 10.5px;
+  }
+  .slider {
+    position: relative;
+    height: 16px;
+  }
+  .slider::before,
+  .s-fill {
+    content: "";
+    position: absolute;
+    top: 6px;
+    left: 0;
+    height: 4px;
+    border-radius: 4px;
+  }
+  .slider::before {
+    right: 0;
+    background: rgb(255 255 255 / 0.1);
+  }
+  .s-fill {
+    width: calc(var(--v) * 100%);
+    background: var(--color-primary);
+  }
+  .s-thumb {
+    position: absolute;
+    top: 0;
+    left: calc(var(--v) * 100%);
+    width: 16px;
+    height: 16px;
+    margin-left: -8px;
+    border: 2px solid var(--color-primary);
+    border-radius: 50%;
+    background: #fff;
+  }
+  .tip {
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    padding: 8px 10px;
+    border: 1px solid rgb(139 92 246 / 0.3);
+    border-radius: 8px;
+    background: rgb(139 92 246 / 0.08);
+    color: #ddd6fe;
+    font-size: 11px;
+  }
+
+  .attrs {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    margin: 0;
+    padding: 0;
+    list-style: none;
+  }
+  .attr {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    height: 26px;
+    padding: 0 4px 0 8px;
+    border: 1px solid var(--color-border);
+    border-radius: 6px;
+    background: var(--color-bg);
+    font-family: var(--font-mono);
+    font-size: 10.5px;
+  }
+  .a-n {
+    flex-shrink: 0;
+    width: 9.5em;
+    color: #67e8f9;
+  }
+  .a-v {
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    white-space: nowrap;
+    text-overflow: ellipsis;
+  }
+  .t-str {
+    color: #a7f3d0;
+  }
+  .t-num {
+    color: #fcd34d;
+  }
+  .a-pick {
+    display: none;
+    align-items: center;
+    gap: 4px;
+    color: var(--color-muted);
+  }
+  .a-expr {
+    color: #f9a8d4;
+  }
+  .role[data-state="pick"] .a-pick {
+    display: flex;
+  }
+  .role[data-state="pick"] .a-expr {
+    display: none;
+  }
+  .role[data-state="expr"] {
+    border-color: rgb(139 92 246 / 0.5);
+  }
+  .fx {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 20px;
+    height: 20px;
+    border-radius: 5px;
+    color: var(--color-muted);
+    transition:
+      background 0.2s,
+      color 0.2s;
+  }
+  .role[data-state="expr"] .fx {
+    background: rgb(139 92 246 / 0.25);
+    color: #ddd6fe;
+  }
+  .meta {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 5px;
+  }
+  .meta-l {
+    margin-right: 2px;
+    color: var(--color-muted);
+    font-size: 10.5px;
+  }
+  .chip {
+    padding: 1px 6px;
+    border: 1px dashed var(--color-border-strong);
+    border-radius: 5px;
+    color: var(--color-muted);
+    font-family: var(--font-mono);
+    font-size: 9.5px;
+  }
+  .hcl {
+    display: flex;
+    flex-direction: column;
+    gap: 5px;
+    padding: 8px 10px;
+    border: 1px solid var(--color-border);
+    border-radius: 8px;
+    background: #0c0c0e;
+    overflow: hidden;
+  }
+  .hcl-l {
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    color: var(--color-muted);
+    font-size: 10px;
+  }
+</style>
+
+<script>
+  import { mountDemo } from "./lib/timeline";
+
+  mountDemo("modes", (tl) => {
+    const cur = tl.$("[data-cursor]");
+    const slider = tl.$(".slider");
+    const mem = tl.$(".mem-v");
+    const role = tl.$(".role");
+
+    tl.cursor(400, cur, ".s-thumb");
+    tl.cls(1100, cur, "is-down");
+    tl.cls(1100, cur, "no-ease");
+    tl.tween(1150, 900, (p) => {
+      const v = p * 0.43;
+      slider.style.setProperty("--v", String(v));
+      mem.textContent = String(Math.round((128 + v * 896) / 64) * 64);
+      if (p > 0) {
+        const thumb = slider.querySelector<HTMLElement>(".s-thumb")!;
+        const box = thumb.getBoundingClientRect();
+        const base = (cur.offsetParent as HTMLElement).getBoundingClientRect();
+        cur.style.translate = `${Math.round(box.left - base.left + box.width / 2 - cur.offsetLeft)}px ${Math.round(box.top - base.top + box.height / 2 - cur.offsetTop)}px`;
+      }
+    });
+    tl.cls(2100, cur, "is-down", false);
+    tl.cls(2100, cur, "no-ease", false);
+
+    tl.cursor(2600, cur, ".seg-p");
+    tl.click(3300, cur);
+    tl.state(3350, ".seg", "pro");
+    tl.hide(3350, ".p-guided");
+    tl.show(3450, ".p-pro");
+    tl.els(".p-pro [data-anim]").forEach((el, i) => tl.show(3500 + i * 80, el));
+
+    tl.cursor(4400, cur, ".fx");
+    tl.click(5100, cur);
+    tl.state(5150, role, "expr");
+    tl.type(5250, ".expr-t", 28);
+    tl.lines(6200, ".src", 140);
+  });
+</script>

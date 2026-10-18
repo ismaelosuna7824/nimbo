@@ -1,0 +1,104 @@
+---
+import Icon from "../Icon.astro";
+import DownloadButton from "../DownloadButton.astro";
+import SectionHeading from "../SectionHeading.astro";
+import { DOCS, SETUP_COMMAND_UNIX, SETUP_COMMAND_WINDOWS } from "../../config";
+import { t, type Lang } from "../../i18n";
+
+interface Props {
+  lang: Lang;
+}
+
+const { lang } = Astro.props;
+const s = t(lang);
+const commands = [
+  { id: "unix", label: s.start.unix, prompt: "$", code: SETUP_COMMAND_UNIX },
+  { id: "windows", label: s.start.windows, prompt: "PS>", code: SETUP_COMMAND_WINDOWS },
+];
+---
+
+<section id="get-started" class="relative py-24 sm:py-32" aria-labelledby="get-started-title">
+  <div class="container-page">
+    <SectionHeading id="get-started-title" eyebrow={s.start.eyebrow} title={s.start.title} sub={s.start.sub} />
+
+    <div class="mx-auto mt-12 max-w-3xl space-y-4">
+      {
+        commands.map((c) => (
+          <div class="card overflow-hidden" data-os-block={c.id}>
+            <div class="flex items-center justify-between gap-3 border-b border-border bg-surface-2 px-4 py-2">
+              <span class="flex items-center gap-2 font-mono text-xs text-muted">
+                <Icon name="terminal" size={14} />
+                {c.label}
+              </span>
+              <button
+                type="button"
+                class="copy-btn inline-flex items-center gap-1.5 rounded-md border border-border px-2.5 py-1 text-xs text-muted transition-colors hover:bg-white/5 hover:text-fg"
+                data-copy={c.code}
+                data-cta="setup_copy"
+                data-placement={c.id}
+                data-label-copied={s.start.copied}
+              >
+                <Icon name="copy" size={13} class="i-copy" />
+                <Icon name="check" size={13} class="i-check hidden text-green" />
+                <span class="label">{s.start.copy}</span>
+              </button>
+            </div>
+            <pre class="px-4 py-4 text-[0.8125rem] leading-relaxed [overflow-wrap:anywhere] whitespace-pre-wrap sm:text-sm"><code><span class="text-subtle select-none" aria-hidden="true">{c.prompt} </span><span class="text-fg">{c.code}</span></code></pre>
+          </div>
+        ))
+      }
+      <p class="sr-only" aria-live="polite" data-copy-status></p>
+
+      <p class="flex gap-3 pt-4 text-sm leading-relaxed text-muted">
+        <span class="mt-0.5 grid size-6 shrink-0 place-items-center rounded-md bg-cyan/10 text-cyan" aria-hidden="true">
+          <Icon name="shield" size={14} />
+        </span>
+        <span>
+          {s.start.docker}{" "}
+          <a href={DOCS.setup} rel="noopener" class="text-primary-soft underline decoration-primary-soft/40 underline-offset-4 hover:decoration-primary-soft">
+            {s.start.docs} →
+          </a>
+        </span>
+      </p>
+
+      <div
+        class="mt-6 flex flex-col items-start gap-4 rounded-2xl border border-border bg-gradient-to-br from-primary/10 to-transparent p-5 sm:flex-row sm:items-center sm:justify-between"
+      >
+        <p class="font-medium">{s.start.or}</p>
+        <DownloadButton lang={lang} placement="get-started" />
+      </div>
+    </div>
+  </div>
+</section>
+
+<script>
+  const status = document.querySelector<HTMLElement>("[data-copy-status]");
+  for (const button of document.querySelectorAll<HTMLButtonElement>(".copy-btn")) {
+    const label = button.querySelector<HTMLElement>(".label");
+    const original = label?.textContent ?? "";
+    button.addEventListener("click", async () => {
+      try {
+        await navigator.clipboard.writeText(button.dataset.copy ?? "");
+      } catch {
+        return;
+      }
+      const copied = button.dataset.labelCopied ?? "";
+      if (label) label.textContent = copied;
+      if (status) status.textContent = copied;
+      button.querySelector(".i-copy")?.classList.add("hidden");
+      button.querySelector(".i-check")?.classList.remove("hidden");
+      setTimeout(() => {
+        if (label) label.textContent = original;
+        if (status) status.textContent = "";
+        button.querySelector(".i-copy")?.classList.remove("hidden");
+        button.querySelector(".i-check")?.classList.add("hidden");
+      }, 2000);
+    });
+  }
+
+  // Show the visitor's platform first.
+  if (/Win/i.test(navigator.platform || navigator.userAgent)) {
+    const win = document.querySelector('[data-os-block="windows"]');
+    win?.parentElement?.prepend(win);
+  }
+</script>

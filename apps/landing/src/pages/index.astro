@@ -1,0 +1,10 @@
+---
+import Layout from "../layouts/Layout.astro";
+import Landing from "../components/Landing.astro";
+
+const lang = "en";
+---
+
+<Layout lang={lang} alternates={{ en: "/", es: "/es/" }}>
+  <Landing lang={lang} />
+</Layout>

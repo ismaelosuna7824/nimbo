@@ -1,0 +1,138 @@
+---
+/**
+ * The Nimbo mascot (apps/desktop/src/assets/nimbo-mark.svg, pixel for pixel)
+ * with a gentle float, a periodic blink and twinkling sparkles. Pure CSS;
+ * still under prefers-reduced-motion. Decorative unless `decorative={false}`.
+ */
+interface Props {
+  /** Width in px; height follows the artwork. */
+  size?: number;
+  /** Draw the app-icon tile behind the cloud. */
+  tile?: boolean;
+  decorative?: boolean;
+  label?: string;
+  class?: string;
+}
+
+const { size = 96, tile = false, decorative = true, label = "Nimbo", class: className } = Astro.props;
+const BODY = `<rect x="28.4" y="15.8" width="7.22" height="1.82" fill="#4c1d95"/><rect x="24.8" y="17.6" width="3.62" height="1.82" fill="#4c1d95"/><rect x="28.4" y="17.6" width="7.22" height="1.82" fill="#ffffff"/><rect x="35.6" y="17.6" width="3.62" height="1.82" fill="#4c1d95"/><rect x="23" y="19.4" width="1.82" height="1.82" fill="#4c1d95"/><rect x="24.8" y="19.4" width="14.42" height="1.82" fill="#ffffff"/><rect x="39.2" y="19.4" width="1.82" height="1.82" fill="#4c1d95"/><rect x="15.8" y="21.2" width="7.22" height="1.82" fill="#4c1d95"/><rect x="23" y="21.2" width="18.02" height="1.82" fill="#ffffff"/><rect x="41" y="21.2" width="7.22" height="1.82" fill="#4c1d95"/><rect x="14" y="23" width="1.82" height="1.82" fill="#4c1d95"/><rect x="15.8" y="23" width="32.42" height="1.82" fill="#ffffff"/><rect x="48.2" y="23" width="1.82" height="1.82" fill="#4c1d95"/><rect x="12.2" y="24.8" width="1.82" height="1.82" fill="#4c1d95"/><rect x="14" y="24.8" width="36.02" height="1.82" fill="#ffffff"/><rect x="50" y="24.8" width="1.82" height="1.82" fill="#4c1d95"/><rect x="12.2" y="26.6" width="1.82" height="1.82" fill="#4c1d95"/><rect x="14" y="26.6" width="36.02" height="1.82" fill="#ffffff"/><rect x="50" y="26.6" width="1.82" height="1.82" fill="#ddd6fe"/><rect x="51.8" y="26.6" width="1.82" height="1.82" fill="#4c1d95"/><rect x="10.4" y="28.4" width="3.62" height="1.82" fill="#4c1d95"/><rect x="14" y="28.4" width="36.02" height="1.82" fill="#ffffff"/><rect x="50" y="28.4" width="1.82" height="1.82" fill="#ddd6fe"/><rect x="51.8" y="28.4" width="1.82" height="1.82" fill="#4c1d95"/><rect x="8.6" y="30.2" width="1.82" height="1.82" fill="#4c1d95"/><rect x="10.4" y="30.2" width="10.82" height="1.82" fill="#ffffff"/><rect x="24.8" y="30.2" width="14.42" height="1.82" fill="#ffffff"/><rect x="42.8" y="30.2" width="7.22" height="1.82" fill="#ffffff"/><rect x="50" y="30.2" width="1.82" height="1.82" fill="#ddd6fe"/><rect x="51.8" y="30.2" width="1.82" height="1.82" fill="#4c1d95"/><rect x="6.8" y="32" width="1.82" height="1.82" fill="#4c1d95"/><rect x="8.6" y="32" width="10.82" height="1.82" fill="#ffffff"/><rect x="26.6" y="32" width="10.82" height="1.82" fill="#ffffff"/><rect x="44.6" y="32" width="7.22" height="1.82" fill="#ffffff"/><rect x="51.8" y="32" width="1.82" height="1.82" fill="#ddd6fe"/><rect x="53.6" y="32" width="1.82" height="1.82" fill="#4c1d95"/><rect x="5" y="33.8" width="1.82" height="1.82" fill="#4c1d95"/><rect x="6.8" y="33.8" width="12.62" height="1.82" fill="#ffffff"/><rect x="26.6" y="33.8" width="10.82" height="1.82" fill="#ffffff"/><rect x="44.6" y="33.8" width="9.02" height="1.82" fill="#ffffff"/><rect x="53.6" y="33.8" width="1.82" height="1.82" fill="#ddd6fe"/><rect x="55.4" y="33.8" width="1.82" height="1.82" fill="#4c1d95"/><rect x="5" y="35.6" width="1.82" height="1.82" fill="#4c1d95"/><rect x="6.8" y="35.6" width="14.42" height="1.82" fill="#ffffff"/><rect x="24.8" y="35.6" width="14.42" height="1.82" fill="#ffffff"/><rect x="42.8" y="35.6" width="12.62" height="1.82" fill="#ffffff"/><rect x="55.4" y="35.6" width="1.82" height="1.82" fill="#ddd6fe"/><rect x="57.2" y="35.6" width="1.82" height="1.82" fill="#4c1d95"/><rect x="5" y="37.4" width="1.82" height="1.82" fill="#4c1d95"/><rect x="6.8" y="37.4" width="7.22" height="1.82" fill="#ffffff"/><rect x="14" y="37.4" width="1.82" height="1.82" fill="#f9a8d4"/><rect x="15.8" y="37.4" width="1.82" height="1.82" fill="#fccde6"/><rect x="17.6" y="37.4" width="1.82" height="1.82" fill="#f9a8d4"/><rect x="19.4" y="37.4" width="7.22" height="1.82" fill="#ffffff"/><rect x="26.6" y="37.4" width="1.82" height="1.82" fill="#1e1b4b"/><rect x="28.4" y="37.4" width="1.82" height="1.82" fill="#ffffff"/><rect x="30.2" y="37.4" width="1.82" height="1.82" fill="#1e1b4b"/><rect x="32" y="37.4" width="1.82" height="1.82" fill="#ffffff"/><rect x="33.8" y="37.4" width="1.82" height="1.82" fill="#1e1b4b"/><rect x="35.6" y="37.4" width="9.02" height="1.82" fill="#ffffff"/><rect x="44.6" y="37.4" width="1.82" height="1.82" fill="#f9a8d4"/><rect x="46.4" y="37.4" width="1.82" height="1.82" fill="#fccde6"/><rect x="48.2" y="37.4" width="9.02" height="1.82" fill="#2e1065"/><rect x="57.2" y="37.4" width="1.82" height="1.82" fill="#4c1d95"/><rect x="5" y="39.2" width="1.82" height="1.82" fill="#4c1d95"/><rect x="6.8" y="39.2" width="1.82" height="1.82" fill="#ddd6fe"/><rect x="8.6" y="39.2" width="19.82" height="1.82" fill="#ffffff"/><rect x="28.4" y="39.2" width="1.82" height="1.82" fill="#1e1b4b"/><rect x="30.2" y="39.2" width="1.82" height="1.82" fill="#ffffff"/><rect x="32" y="39.2" width="1.82" height="1.82" fill="#1e1b4b"/><rect x="33.8" y="39.2" width="12.62" height="1.82" fill="#ffffff"/><rect x="46.4" y="39.2" width="1.82" height="1.82" fill="#2e1065"/><rect x="48.2" y="39.2" width="1.82" height="1.82" fill="#c4b5fd"/><rect x="50" y="39.2" width="1.82" height="1.82" fill="#ffffff"/><rect x="51.8" y="39.2" width="3.62" height="1.82" fill="#c4b5fd"/><rect x="55.4" y="39.2" width="1.82" height="1.82" fill="#2e1065"/><rect x="57.2" y="39.2" width="1.82" height="1.82" fill="#4c1d95"/><rect x="6.8" y="41" width="1.82" height="1.82" fill="#4c1d95"/><rect x="8.6" y="41" width="1.82" height="1.82" fill="#ddd6fe"/><rect x="10.4" y="41" width="34.22" height="1.82" fill="#ffffff"/><rect x="44.6" y="41" width="1.82" height="1.82" fill="#2e1065"/><rect x="46.4" y="41" width="7.22" height="1.82" fill="#c4b5fd"/><rect x="53.6" y="41" width="1.82" height="1.82" fill="#22d3ee"/><rect x="55.4" y="41" width="1.82" height="1.82" fill="#2e1065"/><rect x="8.6" y="42.8" width="1.82" height="1.82" fill="#4c1d95"/><rect x="10.4" y="42.8" width="34.22" height="1.82" fill="#ddd6fe"/><rect x="44.6" y="42.8" width="1.82" height="1.82" fill="#2e1065"/><rect x="46.4" y="42.8" width="1.82" height="1.82" fill="#a78bfa"/><rect x="48.2" y="42.8" width="1.82" height="1.82" fill="#f472b6"/><rect x="50" y="42.8" width="3.62" height="1.82" fill="#a78bfa"/><rect x="53.6" y="42.8" width="1.82" height="1.82" fill="#22d3ee"/><rect x="55.4" y="42.8" width="1.82" height="1.82" fill="#2e1065"/><rect x="10.4" y="44.6" width="3.62" height="1.82" fill="#4c1d95"/><rect x="14" y="44.6" width="30.62" height="1.82" fill="#ddd6fe"/><rect x="44.6" y="44.6" width="1.82" height="1.82" fill="#2e1065"/><rect x="46.4" y="44.6" width="3.62" height="1.82" fill="#a78bfa"/><rect x="50" y="44.6" width="1.82" height="1.82" fill="#f472b6"/><rect x="51.8" y="44.6" width="1.82" height="1.82" fill="#a78bfa"/><rect x="53.6" y="44.6" width="1.82" height="1.82" fill="#22d3ee"/><rect x="55.4" y="44.6" width="1.82" height="1.82" fill="#2e1065"/><rect x="12.2" y="46.4" width="1.82" height="1.82" fill="#4c1d95"/><rect x="14" y="46.4" width="30.62" height="1.82" fill="#ddd6fe"/><rect x="44.6" y="46.4" width="1.82" height="1.82" fill="#2e1065"/><rect x="46.4" y="46.4" width="7.22" height="1.82" fill="#a78bfa"/><rect x="53.6" y="46.4" width="1.82" height="1.82" fill="#2e1065"/><rect x="14" y="48.2" width="30.62" height="1.82" fill="#4c1d95"/><rect x="44.6" y="48.2" width="9.02" height="1.82" fill="#2e1065"/>`;
+const EYES = `<rect x="21.2" y="30.2" width="3.62" height="1.82" fill="#1e1b4b"/><rect x="39.2" y="30.2" width="3.62" height="1.82" fill="#1e1b4b"/><rect x="19.4" y="32" width="1.82" height="1.82" fill="#1e1b4b"/><rect x="21.2" y="32" width="1.82" height="1.82" fill="#ffffff"/><rect x="23" y="32" width="3.62" height="1.82" fill="#1e1b4b"/><rect x="37.4" y="32" width="1.82" height="1.82" fill="#1e1b4b"/><rect x="39.2" y="32" width="1.82" height="1.82" fill="#ffffff"/><rect x="41" y="32" width="3.62" height="1.82" fill="#1e1b4b"/><rect x="19.4" y="33.8" width="7.22" height="1.82" fill="#1e1b4b"/><rect x="37.4" y="33.8" width="7.22" height="1.82" fill="#1e1b4b"/><rect x="21.2" y="35.6" width="3.62" height="1.82" fill="#1e1b4b"/><rect x="39.2" y="35.6" width="3.62" height="1.82" fill="#1e1b4b"/>`;
+const viewBox = tile ? "0 0 64 64" : "2 8 60 48";
+const height = tile ? size : Math.round((size * 48) / 60);
+---
+
+<svg
+  class:list={["mascot", className]}
+  viewBox={viewBox}
+  width={size}
+  height={height}
+  shape-rendering="crispEdges"
+  role={decorative ? undefined : "img"}
+  aria-label={decorative ? undefined : label}
+  aria-hidden={decorative ? "true" : undefined}
+  focusable="false"
+>
+  {
+    tile && (
+      <Fragment>
+        <defs>
+          <linearGradient id="mascot-bg" x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0" stop-color="#1c1630" />
+            <stop offset="1" stop-color="#0b0a12" />
+          </linearGradient>
+          <radialGradient id="mascot-glow" cx="0.5" cy="0.55" r="0.5">
+            <stop offset="0" stop-color="#8b5cf6" stop-opacity="0.45" />
+            <stop offset="1" stop-color="#8b5cf6" stop-opacity="0" />
+          </radialGradient>
+        </defs>
+        <rect width="64" height="64" rx="14.3" fill="url(#mascot-bg)" shape-rendering="geometricPrecision" />
+        <rect width="64" height="64" rx="14.3" fill="url(#mascot-glow)" shape-rendering="geometricPrecision" />
+        <rect x="0.5" y="0.5" width="63" height="63" rx="13.8" fill="none" stroke="#8b5cf6" stroke-opacity="0.45" shape-rendering="geometricPrecision" />
+      </Fragment>
+    )
+  }
+  <g class="mascot-float">
+    <rect x="19.4" y="30.2" width="7.22" height="7.22" fill="#ffffff"></rect>
+    <rect x="37.4" y="30.2" width="7.22" height="7.22" fill="#ffffff"></rect>
+    <g set:html={BODY} />
+    <g class="mascot-eyes" set:html={EYES} />
+  </g>
+  <g class="mascot-sparkles">
+    <g class="sparkle" style="--d: 0s">
+      <rect x="7" y="13" width="1.8" height="5.4" fill="#fbbf24"></rect>
+      <rect x="5.2" y="14.8" width="5.4" height="1.8" fill="#fbbf24"></rect>
+    </g>
+    <g class="sparkle" style="--d: 1.1s">
+      <rect x="54" y="11" width="1.8" height="5.4" fill="#22d3ee"></rect>
+      <rect x="52.2" y="12.8" width="5.4" height="1.8" fill="#22d3ee"></rect>
+    </g>
+    <g class="sparkle" style="--d: 2.2s">
+      <rect x="57" y="22" width="1.8" height="1.8" fill="#f9a8d4"></rect>
+      <rect x="57" y="18.4" width="1.8" height="1.8" fill="#f9a8d4" opacity="0.6"></rect>
+      <rect x="57" y="25.6" width="1.8" height="1.8" fill="#f9a8d4" opacity="0.6"></rect>
+      <rect x="53.4" y="22" width="1.8" height="1.8" fill="#f9a8d4" opacity="0.6"></rect>
+      <rect x="60.6" y="22" width="1.8" height="1.8" fill="#f9a8d4" opacity="0.6"></rect>
+    </g>
+  </g>
+</svg>
+
+<style>
+  .mascot {
+    display: block;
+    overflow: visible;
+  }
+  .mascot-float {
+    animation: mascot-float 3.4s ease-in-out infinite;
+  }
+  .mascot-eyes {
+    transform-box: fill-box;
+    transform-origin: 50% 55%;
+    animation: mascot-blink 5.2s infinite;
+  }
+  .sparkle {
+    transform-box: fill-box;
+    transform-origin: center;
+    opacity: 0;
+    animation: mascot-twinkle 3.3s ease-in-out var(--d) infinite;
+  }
+  @keyframes mascot-float {
+    50% {
+      transform: translateY(-1.8px);
+    }
+  }
+  @keyframes mascot-blink {
+    0%,
+    93%,
+    100% {
+      transform: scaleY(1);
+    }
+    95.5% {
+      transform: scaleY(0.12);
+    }
+  }
+  @keyframes mascot-twinkle {
+    0%,
+    100% {
+      opacity: 0;
+      transform: scale(0.3);
+    }
+    20% {
+      opacity: 1;
+      transform: scale(1);
+    }
+    40% {
+      opacity: 0;
+      transform: scale(0.3);
+    }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .mascot-float,
+    .mascot-eyes {
+      animation: none;
+    }
+    .sparkle {
+      animation: none;
+      opacity: 1;
+    }
+  }
+</style>

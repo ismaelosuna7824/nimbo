@@ -1,0 +1,150 @@
+---
+import mark from "../assets/nimbo-mark.svg";
+import Icon from "./Icon.astro";
+import DownloadButton from "./DownloadButton.astro";
+import LanguageSwitch from "./LanguageSwitch.astro";
+import { GITHUB_URL } from "../config";
+import { homePath, t, type Lang } from "../i18n";
+
+interface Props {
+  lang: Lang;
+  alternates: Partial<Record<Lang, string>>;
+}
+
+const { lang, alternates } = Astro.props;
+const s = t(lang);
+const home = homePath(lang);
+const links = [
+  { href: `${home}#how-it-works`, label: s.nav.how },
+  { href: `${home}#features`, label: s.nav.features },
+  { href: `${home}#ai-agents`, label: s.nav.agents },
+  { href: `${home}#get-started`, label: s.nav.start },
+  { href: `${home}#faq`, label: s.nav.faq },
+];
+---
+
+<header class="site-header sticky top-0 z-50 border-b border-transparent">
+  <div class="container-page flex h-[var(--header-h)] items-center gap-4">
+    <a href={home} class="flex shrink-0 items-center gap-2.5 rounded-lg" aria-label={s.a11y.home}>
+      <img src={mark.src} width="30" height="30" alt="" class="size-[30px] rounded-[7px]" />
+      <span class="text-[1.05rem] font-semibold tracking-tight">Nimbo</span>
+    </a>
+
+    <nav aria-label={s.a11y.primaryNav} class="ml-6 hidden lg:block">
+      <ul class="flex items-center gap-1 text-sm text-muted">
+        {
+          links.map((l) => (
+            <li>
+              <a href={l.href} class="rounded-md px-3 py-2 transition-colors hover:text-fg">
+                {l.label}
+              </a>
+            </li>
+          ))
+        }
+      </ul>
+    </nav>
+
+    <div class="ml-auto hidden items-center gap-2 lg:flex">
+      <LanguageSwitch lang={lang} alternates={alternates} />
+      <a
+        href={GITHUB_URL}
+        class="grid size-9 place-items-center rounded-lg text-muted transition-colors hover:bg-white/5 hover:text-fg"
+        data-cta="github"
+        data-placement="header"
+        rel="noopener"
+      >
+        <Icon name="github" size={18} label={s.nav.github} />
+      </a>
+      <DownloadButton lang={lang} placement="header" size="sm" compact />
+    </div>
+
+    <div class="ml-auto flex items-center gap-2 lg:hidden">
+      <DownloadButton lang={lang} placement="header" size="sm" compact />
+      <details class="mobile-menu relative">
+        <summary
+          class="grid size-9 cursor-pointer list-none place-items-center rounded-lg border border-border text-fg hover:bg-white/5"
+        >
+          <span class="sr-only">{s.a11y.menu}</span>
+          <Icon name="menu" class="icon-open" />
+          <Icon name="close" class="icon-close" />
+        </summary>
+        <div
+          class="absolute right-0 mt-2 w-[min(18rem,calc(100vw-2.5rem))] rounded-xl border border-border-strong bg-surface-2 p-2 shadow-2xl shadow-black/60"
+        >
+          <nav aria-label={s.a11y.primaryNav}>
+            <ul class="flex flex-col text-[0.95rem]">
+              {
+                links.map((l) => (
+                  <li>
+                    <a href={l.href} class="block rounded-lg px-3 py-2.5 text-muted hover:bg-white/5 hover:text-fg">
+                      {l.label}
+                    </a>
+                  </li>
+                ))
+              }
+            </ul>
+          </nav>
+          <div class="mt-2 flex items-center justify-between border-t border-border px-2 pt-3 pb-1">
+            <LanguageSwitch lang={lang} alternates={alternates} />
+            <a
+              href={GITHUB_URL}
+              class="inline-flex items-center gap-2 rounded-lg px-2 py-1.5 text-sm text-muted hover:text-fg"
+              data-cta="github"
+              data-placement="menu"
+              rel="noopener"
+            >
+              <Icon name="github" size={16} />
+              {s.nav.github}
+            </a>
+          </div>
+        </div>
+      </details>
+    </div>
+  </div>
+</header>
+
+<style>
+  .site-header {
+    background: rgb(10 10 11 / 0.72);
+    backdrop-filter: saturate(140%) blur(14px);
+    -webkit-backdrop-filter: saturate(140%) blur(14px);
+    transition: border-color 200ms;
+  }
+  .site-header[data-scrolled] {
+    border-bottom-color: var(--color-border);
+  }
+  .mobile-menu summary::-webkit-details-marker {
+    display: none;
+  }
+  .mobile-menu :global(.icon-close),
+  .mobile-menu[open] :global(.icon-open) {
+    display: none;
+  }
+  .mobile-menu[open] :global(.icon-close) {
+    display: block;
+  }
+</style>
+
+<script>
+  const header = document.querySelector<HTMLElement>(".site-header");
+  const onScroll = () => header?.toggleAttribute("data-scrolled", window.scrollY > 8);
+  onScroll();
+  window.addEventListener("scroll", onScroll, { passive: true });
+
+  // Close the mobile menu after picking a link, on Escape or on outside click.
+  const menu = document.querySelector<HTMLDetailsElement>(".mobile-menu");
+  if (menu) {
+    menu.addEventListener("click", (e) => {
+      if ((e.target as Element).closest("a")) menu.open = false;
+    });
+    document.addEventListener("keydown", (e) => {
+      if (e.key === "Escape" && menu.open) {
+        menu.open = false;
+        menu.querySelector("summary")?.focus();
+      }
+    });
+    document.addEventListener("click", (e) => {
+      if (menu.open && !menu.contains(e.target as Node)) menu.open = false;
+    });
+  }
+</script>
