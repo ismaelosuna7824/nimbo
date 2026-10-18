@@ -7,13 +7,13 @@ export function getAttr(body: Body, name: string): Value | undefined {
   return body.attrs?.find((a) => a.name === name)?.value
 }
 
-/** Returns a copy of body with attribute `name` set (or removed when value is undefined). */
+/** Returns a copy of body with attribute `name` set (or removed when value is undefined); its comments stay. */
 export function setAttr(body: Body, name: string, value: Value | undefined): Body {
   const attrs = body.attrs ?? []
   const idx = attrs.findIndex((a) => a.name === name)
   if (value === undefined) return { ...body, attrs: attrs.filter((a) => a.name !== name) }
   if (idx < 0) return { ...body, attrs: [...attrs, { name, value }] }
-  return { ...body, attrs: attrs.map((a, i) => (i === idx ? { name, value } : a)) }
+  return { ...body, attrs: attrs.map((a, i) => (i === idx ? { ...a, value } : a)) }
 }
 
 export function blocksOf(body: Body, type: string): Block[] {

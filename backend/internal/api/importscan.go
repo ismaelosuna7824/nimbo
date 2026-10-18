@@ -65,6 +65,7 @@ type repoScan struct {
 func scanRepo(root, rootName string) (*repoScan, error) {
 	rs := &repoScan{root: root, rootName: rootName, dirs: map[string]*tfDir{}, usedBy: map[string][]string{}}
 	tfvars := map[string][]string{}
+	jsonFiles := map[string][]string{} // dir -> *.tf.json base names
 	files := 0
 	err := filepath.WalkDir(root, func(p string, d fs.DirEntry, err error) error {
 		rel := relSlash(root, p)
@@ -117,6 +118,8 @@ func scanRepo(root, rootName string) (*repoScan, error) {
 			} else {
 				tfvars[dir] = append(tfvars[dir], base)
 			}
+		case strings.HasSuffix(base, ".tf.json"):
+			jsonFiles[dir] = append(jsonFiles[dir], base)
 		}
 		return nil
 	})
@@ -129,17 +132,40 @@ func scanRepo(root, rootName string) (*repoScan, error) {
 		slices.Sort(td.tfvars)
 		src := make(map[string][]byte, len(td.tfFiles))
 		for _, name := range td.tfFiles {
+			if d, unsupported := hclcodec.UnsupportedFile(name); unsupported {
+				td.diags = append(td.diags, d)
+				continue
+			}
 			data, err := os.ReadFile(filepath.Join(root, filepath.FromSlash(rel), name))
 			if err != nil {
 				return nil, fmt.Errorf("read %s: %w", path.Join(rel, name), err)
 			}
 			src[name] = data
 		}
+		for _, name := range jsonFiles[rel] {
+			d, _ := hclcodec.UnsupportedFile(name)
+			td.diags = append(td.diags, d)
+		}
 		td.sum = hclcodec.Summarize(src)
-		for i := range td.sum.Diagnostics {
-			td.sum.Diagnostics[i].Detail = prefixDetail(rel, td.sum.Diagnostics[i].Detail)
+		kept := td.sum.Diagnostics[:0]
+		for _, d := range td.sum.Diagnostics {
+			d.Detail = prefixDetail(rel, d.Detail)
+			if d.Code == "path_outside_folder" {
+				td.diags = append(td.diags, d) // also reported on the imported workflow
+				continue
+			}
+			kept = append(kept, d)
+		}
+		td.sum.Diagnostics = kept
+	}
+	var jsonOnly []string
+	for rel, names := range jsonFiles {
+		if rs.dirs[rel] == nil {
+			jsonOnly = append(jsonOnly, fmt.Sprintf("%s: only JSON configuration (%s), which Nimbo does not import", rel, strings.Join(names, ", ")))
 		}
 	}
+	slices.Sort(jsonOnly)
+	rs.skipped = append(rs.skipped, jsonOnly...)
 	slices.Sort(rs.order)
 	for _, rel := range rs.order {
 		td := rs.dirs[rel]
@@ -565,6 +591,10 @@ func (rs *repoScan) plan(rel, name string) (*importPlan, error) {
 		}
 	}
 	plan.diags = slices.Concat(diags, rs.dirs[rel].diags)
+	// Problems inside the copied modules surface on the workflow too.
+	for _, m := range plan.modules {
+		plan.diags = append(plan.diags, rs.dirs[m].diags...)
+	}
 	plan.wf = wf
 	return plan, nil
 }

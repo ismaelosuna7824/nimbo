@@ -7,7 +7,7 @@ export function getAttr(body: Body, name: string): Value | undefined {
   return body.attrs.find((a) => a.name === name)?.value
 }
 
-/** Sets (or with `undefined` removes) an attribute on a draft body in place. */
+/** Sets (or with `undefined` removes) an attribute on a draft body in place, keeping its comments. */
 export function setAttr(body: Body, name: string, value: Value | undefined): void {
   const i = body.attrs.findIndex((a) => a.name === name)
   if (value === undefined) {
@@ -15,7 +15,7 @@ export function setAttr(body: Body, name: string, value: Value | undefined): voi
   } else if (i === -1) {
     body.attrs.push({ name, value })
   } else {
-    body.attrs[i] = { name, value }
+    body.attrs[i] = { ...body.attrs[i], value }
   }
 }
 

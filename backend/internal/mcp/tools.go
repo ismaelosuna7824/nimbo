@@ -62,7 +62,7 @@ func registerTools(r *registry, t *tools) {
 	addTool(r, "apply_terraform_code", "Apply Terraform code", "Edit the workflow by writing Terraform code. files maps file name -> full content and is merged over the current files from get_terraform; an empty string deletes that file. The code is re-imported; node IDs, positions and environments are kept by address. Use for complex blocks that are awkward with update_node.", t.applyTerraformCode)
 	addTool(r, "scan_terraform_folder", "Scan Terraform folder", "Scan a local folder (e.g. a repository) for Terraform projects without importing: every directory with *.tf files, with resource/data/module counts, providers, clouds, tfvars files, backend and parse diagnostics. Directories used only as local modules are not separate projects. Pass the chosen paths to import_terraform as projects.", t.scanTerraformFolder)
 	addTool(r, "import_terraform", "Import Terraform", "Import existing Terraform as new workflows, from a local directory or from files (relative path -> content). Local modules (source = \"./modules/x\") are kept as assets and can be opened in the app. By default only the root folder is imported; pass projects (paths from scan_terraform_folder, \".\" = root) to import several projects, one workflow each.", t.importTerraform)
-	addTool(r, "export_terraform", "Export Terraform", "Write the workflow's Terraform (plus assets such as Lambda sources) to a local directory. With environments=true also writes environments/<name>.tfvars and .env.example files.", t.exportTerraform)
+	addTool(r, "export_terraform", "Export Terraform", "Write the workflow's Terraform (plus assets such as Lambda sources, local modules and the dependency lock file) to a local directory. Comments are kept. With environments=true also writes each environment's values (to the variable file it was imported from, e.g. terraform.tfvars, else environments/<name>.tfvars) and .env.example files.", t.exportTerraform)
 
 	r.group = groupRuns
 	addTool(r, "sandbox_status", "Sandbox status", "Show the workflow's local Floci sandbox: state, emulator URLs and running services.", t.sandboxStatus)
@@ -828,7 +828,7 @@ func (t *tools) importTerraform(ctx context.Context, in importIn) (any, error) {
 type exportIn struct {
 	Workflow     string `json:"workflow,omitempty" jsonschema:"workflow ID or name; omit or \"current\" for the workflow open in the Nimbo app"`
 	Dir          string `json:"dir" jsonschema:"absolute destination directory (created if missing; existing files with the same names are overwritten)"`
-	Environments bool   `json:"environments,omitempty" jsonschema:"also write environments/<name>.tfvars and .env.example"`
+	Environments bool   `json:"environments,omitempty" jsonschema:"also write each environment's variable file (imported name or environments/<name>.tfvars) and .env.example"`
 }
 
 func (t *tools) exportTerraform(ctx context.Context, in exportIn) (any, error) {

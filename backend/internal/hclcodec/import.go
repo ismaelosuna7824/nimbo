@@ -1,6 +1,7 @@
 package hclcodec
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
 	"path"
@@ -17,11 +18,16 @@ import (
 
 // Import parses Terraform files (path -> content; only root-level *.tf and
 // *.tfvars plus environments/*.tfvars and environments/*.env.example are
-// interpreted) into a new workflow. *.tfvars become environments named after
-// the file (terraform.tfvars -> "default", prod.auto.tfvars and
-// environments/prod.tfvars -> "prod"); environments/<name>.env.example
-// fills that environment's EnvVars (blank values are secrets, as exported).
-// Node positions are left with Positioned=false. Comments are dropped.
+// interpreted) into a new workflow. Each *.tfvars file becomes an
+// environment named after the file (terraform.tfvars -> "default",
+// prod.auto.tfvars and environments/prod.tfvars -> "prod"; a name already
+// taken by another file falls back to the file name without ".tfvars");
+// root-level files remember their name in Environment.File.
+// environments/<name>.env.example fills that environment's EnvVars (blank
+// values are secrets, as exported). Override files (override.tf,
+// *_override.tf) and JSON files are not interpreted (see IsOverrideFile).
+// CRLF line endings are converted to LF. Comments are kept (see
+// model.Comments). Node positions are left with Positioned=false.
 func Import(name string, files map[string][]byte) (*model.Workflow, []model.Diagnostic, error) {
 	wf := &model.Workflow{
 		Name:         name,
@@ -60,26 +66,28 @@ func Import(name string, files map[string][]byte) (*model.Workflow, []model.Diag
 			}
 			continue
 		}
+		if d, ok := UnsupportedFile(clean); ok {
+			diags = append(diags, d)
+			continue
+		}
 		switch {
 		case strings.HasSuffix(clean, ".tf"):
 			tfFiles = append(tfFiles, p)
 		case strings.HasSuffix(clean, ".tfvars"):
 			varFiles = append(varFiles, p)
-		case strings.HasSuffix(clean, ".tf.json"), strings.HasSuffix(clean, ".tfvars.json"):
-			diags = append(diags, model.Diagnostic{
-				Severity: model.SeverityWarning,
-				Code:     "unsupported_file",
-				Message:  fmt.Sprintf("Skipped %s: JSON Terraform files are not supported", clean),
-			})
 		}
 	}
 	if len(tfFiles) == 0 {
 		return nil, diags, errors.New("no root-level .tf files to import")
 	}
 
-	var nodes [3][]model.Node // data, resources, modules
+	var nodes [3][]model.Node       // data, resources, modules
+	var carry []string              // comments of comment-only files
+	var lastBody func() *model.Body // the last top-level block, for trailing comments
+	var localsCarry, terraformCarry []string
+	localsSeen := false
 	for _, p := range tfFiles {
-		src := hclwrite.Format(files[p])
+		src := hclwrite.Format(normalizeNewlines(files[p]))
 		f, hd := hclsyntax.ParseConfig(src, path.Base(p), hcl.InitialPos)
 		diags = append(diags, parseDiags(hd)...)
 		if f == nil {
@@ -89,8 +97,10 @@ func Import(name string, files map[string][]byte) (*model.Workflow, []model.Diag
 		if !ok {
 			continue
 		}
-		for _, b := range body.Blocks {
-			mb := convertBody(src, b.Body)
+		var blocks []topBlock
+		blocks, carry = newConverter(src).file(body, carry)
+		for i := range blocks {
+			b, mb := blocks[i].hb, blocks[i].body
 			labels := b.Labels
 			switch {
 			case b.Type == "resource" && len(labels) == 2:
@@ -106,11 +116,41 @@ func Import(name string, files map[string][]byte) (*model.Workflow, []model.Diag
 			case b.Type == "provider" && len(labels) == 1:
 				wf.Providers = append(wf.Providers, model.NamedBlock{Name: labels[0], Body: mb})
 			case b.Type == "locals" && len(labels) == 0:
+				// Every locals block merges into one; its comments stay
+				// next to the same attributes.
+				first := len(wf.Locals)
 				wf.Locals = append(wf.Locals, mb.Attrs...)
+				if !localsSeen {
+					localsSeen = true
+					if mb.Comments != nil {
+						wf.LocalsComments = &model.Comments{Lead: mb.Comments.Lead, Line: mb.Comments.Line, End: mb.Comments.End, After: mb.Comments.After}
+						localsCarry = mb.Comments.Tail
+					}
+					continue
+				}
+				merged := func() *model.Comments {
+					if wf.LocalsComments == nil {
+						wf.LocalsComments = &model.Comments{}
+					}
+					return wf.LocalsComments
+				}
+				localsCarry = mergeBlockComments(merged, mb.Comments, localsCarry, func() *model.Comments {
+					if first == len(wf.Locals) {
+						return nil
+					}
+					return firstItemComments(&model.Body{Attrs: wf.Locals[first:]})
+				})
 			case b.Type == "terraform" && len(labels) == 0:
 				if wf.Terraform == nil {
-					wf.Terraform = &model.Body{Attrs: []model.Attr{}, Blocks: []model.Block{}}
+					wf.Terraform = &model.Body{Attrs: mb.Attrs, Blocks: mb.Blocks}
+					if mb.Comments != nil {
+						wf.Terraform.Comments = &model.Comments{Lead: mb.Comments.Lead, Line: mb.Comments.Line, End: mb.Comments.End, After: mb.Comments.After}
+						terraformCarry = mb.Comments.Tail
+					}
+					continue
 				}
+				merged := func() *model.Comments { return bodyComments(wf.Terraform) }
+				terraformCarry = mergeBlockComments(merged, mb.Comments, terraformCarry, func() *model.Comments { return firstItemComments(&mb) })
 				wf.Terraform.Attrs = append(wf.Terraform.Attrs, mb.Attrs...)
 				wf.Terraform.Blocks = append(wf.Terraform.Blocks, mb.Blocks...)
 			default:
@@ -126,6 +166,35 @@ func Import(name string, files map[string][]byte) (*model.Workflow, []model.Diag
 				wf.Other = append(wf.Other, model.Block{Type: b.Type, Labels: labelsOrNil(labels), Body: mb})
 			}
 		}
+		if len(blocks) > 0 {
+			if loc := lastImported(wf, &nodes, blocks[len(blocks)-1].hb); loc != nil {
+				lastBody = loc
+			}
+		}
+	}
+	if len(localsCarry) > 0 {
+		if wf.LocalsComments == nil {
+			wf.LocalsComments = &model.Comments{}
+		}
+		wf.LocalsComments.Tail = localsCarry
+	}
+	if len(terraformCarry) > 0 {
+		bodyComments(wf.Terraform).Tail = terraformCarry
+	}
+	if len(carry) > 0 { // trailing comment-only files
+		var cms *model.Comments
+		switch {
+		case lastBody != nil:
+			cms = bodyComments(lastBody())
+		case localsSeen:
+			if wf.LocalsComments == nil {
+				wf.LocalsComments = &model.Comments{}
+			}
+			cms = wf.LocalsComments
+		}
+		if cms != nil {
+			cms.After = joinAfter(append(cms.After, ""), carry)
+		}
 	}
 	// main.tf groups data sources, resources and module calls; ordering the
 	// imported nodes the same way keeps Import(Export(wf)) stable.
@@ -135,15 +204,27 @@ func Import(name string, files map[string][]byte) (*model.Workflow, []model.Diag
 			wf.Nodes = append(wf.Nodes, nd)
 		}
 	}
+	gatherAfter(wf)
 
+	// Plain files claim environment names first: terraform.tfvars is
+	// "default" even next to terraform.auto.tfvars.
+	sort.SliceStable(varFiles, func(i, j int) bool {
+		return !strings.HasSuffix(varFiles[i], ".auto.tfvars") && strings.HasSuffix(varFiles[j], ".auto.tfvars")
+	})
 	for _, p := range varFiles {
-		env, d := importTfvars(path.Base(strings.ReplaceAll(p, "\\", "/")), files[p])
+		clean := path.Clean(strings.ReplaceAll(p, "\\", "/"))
+		env, d := importTfvars(path.Base(clean), files[p])
 		diags = append(diags, d...)
-		if i := envIndex(wf.Environments, env.Name); i >= 0 {
-			for k, v := range env.Values {
-				wf.Environments[i].Values[k] = v
+		if !strings.Contains(clean, "/") {
+			env.File = clean
+		}
+		if envIndex(wf.Environments, env.Name) >= 0 {
+			// Each file stays its own environment so export writes it back.
+			base := strings.TrimSuffix(path.Base(clean), ".tfvars")
+			env.Name = base
+			for i := 2; envIndex(wf.Environments, env.Name) >= 0; i++ {
+				env.Name = fmt.Sprintf("%s-%d", base, i)
 			}
-			continue
 		}
 		wf.Environments = append(wf.Environments, env)
 	}
@@ -165,6 +246,74 @@ func Import(name string, files map[string][]byte) (*model.Workflow, []model.Diag
 
 	diags = append(diags, Normalize(wf)...)
 	return wf, diags, nil
+}
+
+// IsOverrideFile reports whether Terraform treats a *.tf file as an override
+// file (override.tf, *_override.tf), merged into the blocks of the other
+// files instead of declaring its own.
+func IsOverrideFile(name string) bool {
+	base := path.Base(strings.ReplaceAll(name, "\\", "/"))
+	if !strings.HasSuffix(base, ".tf") {
+		return false
+	}
+	base = strings.TrimSuffix(base, ".tf")
+	return base == "override" || strings.HasSuffix(base, "_override")
+}
+
+// UnsupportedFile returns the warning for a root-level Terraform file that
+// Import does not interpret: override files and JSON configuration or
+// variables. ok is false for every other file.
+func UnsupportedFile(name string) (d model.Diagnostic, ok bool) {
+	var why string
+	switch {
+	case strings.HasSuffix(name, ".tf") && IsOverrideFile(name):
+		why = "override files are merged by Terraform into other blocks and are not imported"
+	case strings.HasSuffix(name, ".tf.json"), strings.HasSuffix(name, ".tfvars.json"):
+		why = "JSON configuration is not supported"
+	default:
+		return d, false
+	}
+	return model.Diagnostic{
+		Severity: model.SeverityWarning,
+		Code:     "unsupported_file",
+		Message:  fmt.Sprintf("%s is not shown on the canvas: %s", name, why),
+		Detail:   "A folder import keeps the file as is: it is exported unchanged and Terraform still reads it. Edit it outside Nimbo.",
+	}, true
+}
+
+// normalizeNewlines converts CRLF line endings to LF.
+func normalizeNewlines(src []byte) []byte {
+	return bytes.ReplaceAll(src, []byte("\r\n"), []byte("\n"))
+}
+
+// lastImported locates the body that holds the comments of hb, the block
+// just imported (nil for locals blocks, whose comments live elsewhere). The
+// locator is evaluated later, after the slices may have grown.
+func lastImported(wf *model.Workflow, nodes *[3][]model.Node, hb *hclsyntax.Block) func() *model.Body {
+	at := func(group, i int) func() *model.Body { return func() *model.Body { return &nodes[group][i].Body } }
+	switch {
+	case hb.Type == "resource" && len(hb.Labels) == 2:
+		return at(1, len(nodes[1])-1)
+	case hb.Type == "data" && len(hb.Labels) == 2:
+		return at(0, len(nodes[0])-1)
+	case hb.Type == "module" && len(hb.Labels) == 1:
+		return at(2, len(nodes[2])-1)
+	case hb.Type == "variable" && len(hb.Labels) == 1:
+		i := len(wf.Variables) - 1
+		return func() *model.Body { return &wf.Variables[i].Body }
+	case hb.Type == "output" && len(hb.Labels) == 1:
+		i := len(wf.Outputs) - 1
+		return func() *model.Body { return &wf.Outputs[i].Body }
+	case hb.Type == "provider" && len(hb.Labels) == 1:
+		i := len(wf.Providers) - 1
+		return func() *model.Body { return &wf.Providers[i].Body }
+	case hb.Type == "terraform" && len(hb.Labels) == 0:
+		return func() *model.Body { return wf.Terraform }
+	case hb.Type == "locals" && len(hb.Labels) == 0:
+		return nil
+	}
+	i := len(wf.Other) - 1
+	return func() *model.Body { return &wf.Other[i].Body }
 }
 
 func envIndex(envs []model.Environment, name string) int {
@@ -190,7 +339,7 @@ func importTfvars(file string, content []byte) (model.Environment, []model.Diagn
 		name = "default"
 	}
 	env := model.Environment{Name: name, Values: map[string]model.Value{}, EnvVars: []model.EnvVar{}}
-	src := hclwrite.Format(content)
+	src := hclwrite.Format(normalizeNewlines(content))
 	f, hd := hclsyntax.ParseConfig(src, file, hcl.InitialPos)
 	diags := parseDiags(hd)
 	if f == nil {
@@ -265,21 +414,4 @@ func parseDiags(hd hcl.Diagnostics) []model.Diagnostic {
 func exprSource(src []byte, e hclsyntax.Expression) string {
 	r := e.Range()
 	return string(src[r.Start.Byte:r.End.Byte])
-}
-
-// convertBody keeps attributes in source order; hclsyntax stores them in a map.
-func convertBody(src []byte, b *hclsyntax.Body) model.Body {
-	attrs := make([]*hclsyntax.Attribute, 0, len(b.Attributes))
-	for _, a := range b.Attributes {
-		attrs = append(attrs, a)
-	}
-	sort.Slice(attrs, func(i, j int) bool { return attrs[i].SrcRange.Start.Byte < attrs[j].SrcRange.Start.Byte })
-	out := model.Body{Attrs: make([]model.Attr, 0, len(attrs)), Blocks: make([]model.Block, 0, len(b.Blocks))}
-	for _, a := range attrs {
-		out.Attrs = append(out.Attrs, model.Attr{Name: a.Name, Value: model.Value{Expr: exprSource(src, a.Expr)}})
-	}
-	for _, blk := range b.Blocks {
-		out.Blocks = append(out.Blocks, model.Block{Type: blk.Type, Labels: labelsOrNil(blk.Labels), Body: convertBody(src, blk.Body)})
-	}
-	return out
 }

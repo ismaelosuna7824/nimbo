@@ -346,8 +346,10 @@ resource "aws_s3_bucket" "site" {
 		}
 		return nil
 	})
-	if !slices.Equal(assets, []string{"src/index.js"}) {
-		t.Fatalf("assets = %v, want only src/index.js", assets)
+	// The dependency lock file is kept (it pins provider versions); working
+	// data, state and VCS metadata are not.
+	if !slices.Equal(assets, []string{".terraform.lock.hcl", "src/index.js"}) {
+		t.Fatalf("assets = %v, want .terraform.lock.hcl and src/index.js", assets)
 	}
 
 	out := filepath.Join(t.TempDir(), "exported")
@@ -356,7 +358,7 @@ resource "aws_s3_bucket" "site" {
 		Files []string `json:"files"`
 	}
 	e.mustCall(http.StatusOK, "POST", "/workflows/"+wf.ID+"/export", map[string]any{"dir": out, "environments": true}, &res)
-	for _, want := range []string{"main.tf", "src/index.js", "environments/dev.tfvars", "environments/dev.env.example"} {
+	for _, want := range []string{"main.tf", ".terraform.lock.hcl", "src/index.js", "environments/dev.tfvars", "environments/dev.env.example"} {
 		if !slices.Contains(res.Files, want) {
 			t.Fatalf("export files %v missing %s", res.Files, want)
 		}

@@ -208,18 +208,24 @@ func zipFile(zw *zip.Writer, src, name string) error {
 // Import
 
 // skipImport reports names never imported: Terraform working data, state
-// and VCS metadata.
+// and VCS metadata. The dependency lock file is kept: it pins the provider
+// versions the configuration was written for, and export writes it back.
 func skipImport(name string) bool {
-	return strings.HasPrefix(name, ".terraform") || strings.Contains(name, ".tfstate") || name == ".git" || name == ".DS_Store"
+	return (strings.HasPrefix(name, ".terraform") && name != ".terraform.lock.hcl") ||
+		strings.Contains(name, ".tfstate") || name == ".git" || name == ".DS_Store"
 }
 
 // classify maps a relative slash path to its key for hclcodec.Import, or ""
 // for an asset. Root *.tf/*.tfvars are Terraform; environments/<name>.tfvars
 // and environments/<name>.env.example (as written by export) are passed
-// through so Import restores environment values and env vars.
+// through so Import restores environment values and env vars. Files Import
+// does not interpret (override files, JSON configuration) are assets, so
+// they are exported unchanged.
 func classify(rel string) (tfName string) {
 	dir, base := path.Split(rel)
 	switch {
+	case dir == "" && hclcodec.IsOverrideFile(base):
+		return ""
 	case dir == "" && (strings.HasSuffix(base, ".tf") || strings.HasSuffix(base, ".tfvars")):
 		return base
 	case dir == "environments/" && (strings.HasSuffix(base, ".tfvars") || strings.HasSuffix(base, ".env.example")):

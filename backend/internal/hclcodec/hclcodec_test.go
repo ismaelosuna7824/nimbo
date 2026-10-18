@@ -111,7 +111,7 @@ func TestImportExportRoundTrip(t *testing.T) {
 			},
 			providers: []string{"aws"},
 			clouds:    []model.Cloud{model.CloudAWS},
-			envs:      []string{"prod", "default"},
+			envs:      []string{"default", "prod"},
 		},
 		{
 			fixture: "network",
@@ -246,13 +246,14 @@ func TestExportEnvironments(t *testing.T) {
 	}
 	files := mustExport(t, wf, ExportOptions{Environments: true})
 
+	// Imported variable files are written back where Terraform loads them.
 	wantDefault := "region    = \"us-east-1\"\nmemory_mb = 256\n"
-	if got := string(files["environments/default.tfvars"]); got != wantDefault {
-		t.Errorf("default.tfvars =\n%s\nwant\n%s", got, wantDefault)
+	if got := string(files["terraform.tfvars"]); got != wantDefault {
+		t.Errorf("terraform.tfvars =\n%s\nwant\n%s", got, wantDefault)
 	}
 	wantProd := "stage     = \"prod\"\nmemory_mb = 1024\n"
-	if got := string(files["environments/prod.tfvars"]); got != wantProd {
-		t.Errorf("prod.tfvars =\n%s\nwant\n%s", got, wantProd)
+	if got := string(files["prod.auto.tfvars"]); got != wantProd {
+		t.Errorf("prod.auto.tfvars =\n%s\nwant\n%s", got, wantProd)
 	}
 	wantEnv := "TF_LOG=INFO\nAPI_TOKEN=\nGREETING=\"hello world\"\n"
 	if got := string(files["environments/prod.env.example"]); got != wantEnv {
@@ -262,6 +263,25 @@ func TestExportEnvironments(t *testing.T) {
 		t.Error("env.example written for environment without env vars")
 	}
 	checkTerraformFmt(t, files)
+
+	// Environments created in the app (no File) go to environments/.
+	designed := *wf
+	designed.Environments = slices.Clone(wf.Environments)
+	for i := range designed.Environments {
+		designed.Environments[i].File = ""
+	}
+	designedFiles := mustExport(t, &designed, ExportOptions{Environments: true})
+	if got := string(designedFiles["environments/default.tfvars"]); got != wantDefault {
+		t.Errorf("environments/default.tfvars =\n%s\nwant\n%s", got, wantDefault)
+	}
+	if _, ok := designedFiles["terraform.tfvars"]; ok {
+		t.Error("terraform.tfvars written for an environment without File")
+	}
+	// File must name a root variable file.
+	designed.Environments[0].File = "../x.tfvars"
+	if _, err := Export(&designed, ExportOptions{Environments: true}); err == nil {
+		t.Error("Export accepted environment file ../x.tfvars")
+	}
 
 	// An exported folder imports back with its environments (env vars are
 	// app-only and not part of the Terraform files).

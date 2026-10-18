@@ -1,0 +1,8 @@
+{
+  "variable": {
+    "from_json": {
+      "type": "string",
+      "default": "declared in JSON"
+    }
+  }
+}

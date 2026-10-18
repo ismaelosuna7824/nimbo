@@ -111,19 +111,26 @@ func Normalize(wf *model.Workflow) []model.Diagnostic
 // Export renders wf as Terraform files: "versions.tf" (terraform block),
 // "providers.tf", "variables.tf", "main.tf" (locals, data, resources,
 // modules, other), "outputs.tf". Files with no content are omitted.
-// With opts.Environments, also writes "environments/<name>.tfvars"
-// (values of every variable in that env) and
+// Comments (model.Comments) are written back where Import found them.
+// With opts.Environments, also writes each environment's values to its
+// Environment.File (the root variable file it was imported from, e.g.
+// "terraform.tfvars") or "environments/<name>.tfvars", and
 // "environments/<name>.env.example" (keys; secret values blank).
 func Export(wf *model.Workflow, opts ExportOptions) (map[string][]byte, error)
 type ExportOptions struct{ Environments bool }
 
 // Import parses Terraform files (path -> content; only root-level *.tf and
 // *.tfvars plus environments/*.tfvars and environments/*.env.example are
-// interpreted) into a new workflow. *.tfvars become environments named after
-// the file (terraform.tfvars -> "default", prod.auto.tfvars /
-// environments/prod.tfvars -> "prod"); environments/<name>.env.example fills
-// that environment's EnvVars (created if needed; blank value => Secret).
-// Node positions are left with Positioned=false. Comments are dropped.
+// interpreted) into a new workflow. Each *.tfvars file becomes an
+// environment named after the file (terraform.tfvars -> "default",
+// prod.auto.tfvars / environments/prod.tfvars -> "prod"; a taken name falls
+// back to the file name); root files keep their name in Environment.File.
+// environments/<name>.env.example fills that environment's EnvVars (created
+// if needed; blank value => Secret). Override files and *.tf.json are not
+// interpreted (warning "unsupported_file"; the folder import keeps them as
+// assets). CRLF becomes LF. Comments are kept on the attribute/block they
+// belong to (lead lines, same-line, block tail/end, end of file).
+// Node positions are left with Positioned=false.
 func Import(name string, files map[string][]byte) (*model.Workflow, []model.Diagnostic, error)
 
 // ExprFromLiteral / LiteralFromExpr convert between value forms.

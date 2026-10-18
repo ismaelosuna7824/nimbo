@@ -1,0 +1,8 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+%{ for i, q in queues ~}
+    {"Sid": "q${i}", "Effect": "Allow", "Principal": "*", "Action": "sns:Publish", "Resource": "*", "Condition": {"ArnEquals": {"aws:SourceArn": "${q}"}}}${i < length(queues) - 1 ? "," : ""}
+%{ endfor ~}
+  ]
+}

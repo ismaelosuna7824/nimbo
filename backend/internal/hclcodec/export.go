@@ -20,12 +20,15 @@ type ExportOptions struct{ Environments bool }
 // Export renders wf as Terraform files: "versions.tf" (terraform block),
 // "providers.tf", "variables.tf", "main.tf" (locals, data, resources,
 // modules, other), "outputs.tf". Files with no content are omitted.
-// With opts.Environments, also writes "environments/<name>.tfvars"
-// (values of every variable in that env) and
-// "environments/<name>.env.example" (keys; secret values blank).
+// Comments are written back where Import found them (see model.Comments).
+// With opts.Environments, also writes each environment's values to its
+// Environment.File (a root variable file such as "terraform.tfvars") or
+// "environments/<name>.tfvars", and "environments/<name>.env.example"
+// (keys; secret values blank).
 func Export(wf *model.Workflow, opts ExportOptions) (map[string][]byte, error) {
 	files := map[string][]byte{}
 	add := func(name string, w *writer) error {
+		w.finish(name)
 		if w.err != nil {
 			return fmt.Errorf("%s: %w", name, w.err)
 		}
@@ -63,8 +66,8 @@ func Export(wf *model.Workflow, opts ExportOptions) (map[string][]byte, error) {
 		variables.block("variable "+v.Name, "variable", []string{v.Name}, &v.Body)
 	}
 	main := &writer{}
-	if len(wf.Locals) > 0 {
-		main.block("locals", "locals", nil, &model.Body{Attrs: wf.Locals})
+	if len(wf.Locals) > 0 || !emptyComments(wf.LocalsComments) {
+		main.block("locals", "locals", nil, &model.Body{Attrs: wf.Locals, Comments: wf.LocalsComments})
 	}
 	for _, kind := range []model.NodeKind{model.KindData, model.KindResource, model.KindModule} {
 		for i := range wf.Nodes {
@@ -103,16 +106,28 @@ func Export(wf *model.Workflow, opts ExportOptions) (map[string][]byte, error) {
 	}
 
 	if opts.Environments {
+		usedFiles := map[string]bool{}
 		for i := range wf.Environments {
 			env := &wf.Environments[i]
 			if env.Name == "" || strings.ContainsAny(env.Name, `/\`) || env.Name == "." || env.Name == ".." {
 				return nil, fmt.Errorf("environment name %q cannot be used as a file name", env.Name)
 			}
+			file := "environments/" + env.Name + ".tfvars"
+			if env.File != "" {
+				if strings.ContainsAny(env.File, `/\`) || !strings.HasSuffix(env.File, ".tfvars") || env.File == ".tfvars" {
+					return nil, fmt.Errorf("environment %s: file %q must be a *.tfvars file name", env.Name, env.File)
+				}
+				file = env.File
+			}
+			if usedFiles[file] {
+				return nil, fmt.Errorf("environment %s: more than one environment is written to %s", env.Name, file)
+			}
+			usedFiles[file] = true
 			vars := &writer{}
 			for _, k := range envValueOrder(wf, env) {
-				vars.attr("environment "+env.Name, k, env.Values[k])
+				vars.attr("environment "+env.Name, model.Attr{Name: k, Value: env.Values[k]})
 			}
-			if err := add("environments/"+env.Name+".tfvars", vars); err != nil {
+			if err := add(file, vars); err != nil {
 				return nil, err
 			}
 			if len(env.EnvVars) > 0 {
@@ -177,6 +192,9 @@ func formatFile(name, src string) ([]byte, error) {
 type writer struct {
 	buf strings.Builder
 	err error
+	// after collects the end-of-file comments of the blocks written so
+	// far (model.Comments.After); finish writes them last.
+	after []string
 }
 
 func (w *writer) fail(format string, args ...any) {
@@ -191,6 +209,15 @@ func (w *writer) block(owner, typ string, labels []string, body *model.Body) {
 		w.buf.WriteByte('\n')
 	}
 	w.nested(owner, typ, labels, body)
+	if body.Comments != nil {
+		w.after = joinAfter(w.after, body.Comments.After)
+	}
+}
+
+// finish writes the end-of-file comments.
+func (w *writer) finish(name string) {
+	w.comments(name, w.after)
+	w.after = nil
 }
 
 func (w *writer) nested(owner, typ string, labels []string, body *model.Body) {
@@ -198,18 +225,25 @@ func (w *writer) nested(owner, typ string, labels []string, body *model.Body) {
 		w.fail("%s: invalid block type %q", owner, typ)
 		return
 	}
+	cms := body.Comments
+	if cms == nil {
+		cms = &model.Comments{}
+	}
+	w.comments(owner, cms.Lead)
 	w.buf.WriteString(typ)
 	for _, l := range labels {
 		w.buf.WriteByte(' ')
 		w.buf.Write(hclwrite.TokensForValue(cty.StringVal(l)).Bytes())
 	}
-	if len(body.Attrs) == 0 && len(body.Blocks) == 0 {
-		w.buf.WriteString(" {}\n")
+	if len(body.Attrs) == 0 && len(body.Blocks) == 0 && cms.Line == "" && len(cms.Tail) == 0 {
+		w.buf.WriteString(" {}")
+		w.lineComment(owner, cms.End)
 		return
 	}
-	w.buf.WriteString(" {\n")
+	w.buf.WriteString(" {")
+	w.lineComment(owner, cms.Line)
 	for _, a := range body.Attrs {
-		w.attr(owner, a.Name, a.Value)
+		w.attr(owner, a)
 	}
 	for i := range body.Blocks {
 		b := &body.Blocks[i]
@@ -218,23 +252,81 @@ func (w *writer) nested(owner, typ string, labels []string, body *model.Body) {
 		}
 		w.nested(owner, b.Type, b.Labels, &b.Body)
 	}
-	w.buf.WriteString("}\n")
+	w.comments(owner, cms.Tail)
+	w.buf.WriteString("}")
+	w.lineComment(owner, cms.End)
 }
 
-func (w *writer) attr(owner, name string, v model.Value) {
-	if !hclsyntax.ValidIdentifier(name) {
-		w.fail("%s: invalid attribute name %q", owner, name)
+func (w *writer) attr(owner string, a model.Attr) {
+	if !hclsyntax.ValidIdentifier(a.Name) {
+		w.fail("%s: invalid attribute name %q", owner, a.Name)
 		return
 	}
-	expr, err := exprOf(v)
+	expr, err := exprOf(a.Value)
 	if err != nil {
-		w.fail("%s: %s: %w", owner, name, err)
+		w.fail("%s: %s: %w", owner, a.Name, err)
 		return
 	}
-	w.buf.WriteString(name)
+	if a.Comments != nil {
+		w.comments(owner, a.Comments.Lead)
+	}
+	w.buf.WriteString(a.Name)
 	w.buf.WriteString(" = ")
 	w.buf.WriteString(expr)
+	if a.Comments == nil || a.Comments.Line == "" {
+		w.buf.WriteByte('\n')
+		return
+	}
+	if endsWithHeredoc(expr) {
+		// Nothing may follow a heredoc's closing marker on its line.
+		w.buf.WriteByte('\n')
+		w.comments(owner, []string{a.Comments.Line})
+		return
+	}
+	w.lineComment(owner, a.Comments.Line)
+}
+
+// comments writes whole-line comments; "" is a blank line.
+func (w *writer) comments(owner string, lines []string) {
+	for _, l := range lines {
+		if l != "" {
+			if err := validComment(l); err != nil {
+				w.fail("%s: %w", owner, err)
+				return
+			}
+			w.buf.WriteString(l)
+		}
+		w.buf.WriteByte('\n')
+	}
+}
+
+// lineComment ends the current line with an optional comment.
+func (w *writer) lineComment(owner, c string) {
+	if c != "" {
+		if err := validComment(c); err != nil {
+			w.fail("%s: %w", owner, err)
+			return
+		}
+		w.buf.WriteByte(' ')
+		w.buf.WriteString(c)
+	}
 	w.buf.WriteByte('\n')
+}
+
+// endsWithHeredoc reports whether expression source ends with a heredoc's
+// closing marker.
+func endsWithHeredoc(expr string) bool {
+	toks, _ := hclsyntax.LexExpression([]byte(expr+"\n"), "", hcl.InitialPos)
+	for i := len(toks) - 1; i >= 0; i-- {
+		switch toks[i].Type {
+		case hclsyntax.TokenEOF, hclsyntax.TokenNewline:
+			continue
+		case hclsyntax.TokenCHeredoc:
+			return true
+		}
+		return false
+	}
+	return false
 }
 
 // exprOf returns the validated expression source of v, deriving it from the

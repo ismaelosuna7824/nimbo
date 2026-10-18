@@ -1,0 +1,5 @@
+#!/bin/sh
+echo "stage=${stage}"
+%{ for q in queues ~}
+echo "queue ${q}"
+%{ endfor ~}

@@ -14,6 +14,7 @@ export interface Value {
 export interface Attr {
   name: string
   value: Value
+  comments?: Comments
 }
 
 export interface Block {
@@ -22,9 +23,28 @@ export interface Block {
   body: Body
 }
 
+/** `comments` belong to the block that owns the body (resource, variable, nested block, ...). */
 export interface Body {
   attrs: Attr[]
   blocks: Block[]
+  comments?: Comments
+}
+
+/**
+ * Source comments kept verbatim with their markers ("# x", "// y", "/* z *\/") so export writes
+ * them back. In lead/tail/after "" is a blank line between comment groups. Keep them when editing.
+ */
+export interface Comments {
+  /** Comment lines directly above (for the first block of a file, the file header). */
+  lead?: string[]
+  /** Same-line comment: after an attribute's value, or after a block's "{". */
+  line?: string
+  /** Block: comment lines after its last attribute/nested block, before "}". */
+  tail?: string[]
+  /** Block: same-line comment after "}". */
+  end?: string
+  /** Top-level block: comment lines after it at the end of its file. */
+  after?: string[]
 }
 
 export interface Position {
@@ -70,6 +90,8 @@ export interface Environment {
   name: string
   values: Record<string, Value>
   envVars: EnvVar[]
+  /** Root variable file it was imported from ("terraform.tfvars"); exported back there. Absent: environments/<name>.tfvars. */
+  file?: string
 }
 
 export type Severity = "error" | "warning" | "info"
@@ -97,6 +119,8 @@ export interface Workflow {
   variables: NamedBlock[]
   outputs: NamedBlock[]
   locals: Attr[]
+  /** Comments of the exported `locals` block (imported locals blocks are merged). */
+  localsComments?: Comments
   providers: NamedBlock[]
   terraform?: Body
   other: Block[]

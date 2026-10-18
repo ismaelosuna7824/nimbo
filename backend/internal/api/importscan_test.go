@@ -155,6 +155,9 @@ func TestImportFixtureProjectsWithLocalModules(t *testing.T) {
 			return nil
 		})
 		want := []string{"modules/network/README.md", "modules/network/main.tf", "modules/network/versions.tf", "modules/subnets/main.tf", "src/handler.py"}
+		if wf.Name == "dev" { // envs/dev has a dependency lock file
+			want = append([]string{".terraform.lock.hcl"}, want...)
+		}
 		if !slices.Equal(files, want) {
 			t.Fatalf("%s: assets = %v, want %v", wf.Name, files, want)
 		}
@@ -310,5 +313,74 @@ func TestScanNamesClashingProjectsAndFlagsUnusedModules(t *testing.T) {
 	want := map[string]string{"modules/unused": "unused", "stacks/api/dev": "api-dev", "stacks/web/dev": "web-dev", "stacks/web/prod": "prod"}
 	if !maps.Equal(names, want) || !maps.Equal(unused, map[string]bool{"modules/unused": true}) {
 		t.Fatalf("names = %v, unused = %v", names, unused)
+	}
+}
+
+func TestScanAndImportReportFilesNotImported(t *testing.T) {
+	e := newEnv(t)
+	root := t.TempDir()
+	writeFile(t, filepath.Join(root, "app", "main.tf"), `module "lib" {
+  source = "../lib"
+}
+
+resource "aws_lambda_function" "f" {
+  filename = "${path.module}/../build/f.zip"
+}
+`)
+	writeFile(t, filepath.Join(root, "app", "override.tf"), `resource "aws_lambda_function" "f" {
+  timeout = 30
+}
+`)
+	writeFile(t, filepath.Join(root, "app", "extra.tf.json"), `{"variable": {"x": {}}}`)
+	writeFile(t, filepath.Join(root, "lib", "main.tf"), `output "policy" {
+  value = file("../shared/policy.json")
+}
+`)
+	writeFile(t, filepath.Join(root, "json-only", "main.tf.json"), `{"resource": {}}`)
+
+	var scan model.ImportScan
+	e.mustCall(http.StatusOK, "POST", "/import/scan", map[string]string{"dir": root}, &scan)
+	if !slices.ContainsFunc(scan.Skipped, func(s string) bool { return strings.HasPrefix(s, "json-only: only JSON configuration (main.tf.json)") }) {
+		t.Errorf("skipped = %v", scan.Skipped)
+	}
+	if len(scan.Projects) != 1 || scan.Projects[0].Path != "app" || scan.Projects[0].Resources != 1 {
+		t.Fatalf("projects = %+v", scan.Projects)
+	}
+	codes := func(diags []model.Diagnostic) []string {
+		var out []string
+		for _, d := range diags {
+			out = append(out, d.Code+": "+d.Message)
+		}
+		slices.Sort(out)
+		return out
+	}
+	want := []string{
+		"path_outside_folder: main.tf refers to files outside its folder (${path.module}/../build/f.zip)",
+		"path_outside_folder: main.tf refers to files outside its folder (../shared/policy.json)",
+		"unsupported_file: extra.tf.json is not shown on the canvas: JSON configuration is not supported",
+		"unsupported_file: override.tf is not shown on the canvas: override files are merged by Terraform into other blocks and are not imported",
+	}
+	if got := codes(scan.Projects[0].Diagnostics); !slices.Equal(got, want) {
+		t.Errorf("scan diagnostics =\n%s\nwant\n%s", strings.Join(got, "\n"), strings.Join(want, "\n"))
+	}
+
+	// The import reports the same problems and keeps the files as assets.
+	wf := e.importOne(map[string]any{"dir": root, "projects": []string{"app"}})
+	var got []string
+	for _, c := range codes(wf.Diagnostics) {
+		if strings.HasPrefix(c, "path_outside_folder") || strings.HasPrefix(c, "unsupported_file") {
+			got = append(got, c)
+		}
+	}
+	if !slices.Equal(got, want) {
+		t.Errorf("workflow diagnostics =\n%s", strings.Join(got, "\n"))
+	}
+	for _, name := range []string{"override.tf", "extra.tf.json"} {
+		if _, err := os.Stat(filepath.Join(e.st.AssetsDir(wf.ID), name)); err != nil {
+			t.Errorf("%s not kept: %v", name, err)
+		}
+	}
+	if len(wf.Nodes) != 2 { // module.lib and the function, not the override
+		t.Errorf("nodes = %d", len(wf.Nodes))
 	}
 }

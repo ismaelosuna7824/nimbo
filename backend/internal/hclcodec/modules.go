@@ -53,6 +53,7 @@ func Summarize(files map[string][]byte) Summary {
 		if !ok {
 			continue
 		}
+		s.Diagnostics = append(s.Diagnostics, outsidePaths(name, body)...)
 		for _, b := range body.Blocks {
 			switch {
 			case b.Type == "resource" && len(b.Labels) == 2:
@@ -98,6 +99,62 @@ func Summarize(files map[string][]byte) Summary {
 		}
 	}
 	return s
+}
+
+// fileFunctions read a path relative to the working directory.
+var fileFunctions = map[string]bool{
+	"file": true, "filebase64": true, "filebase64sha256": true, "filebase64sha512": true, "fileexists": true,
+	"filemd5": true, "filesha1": true, "filesha256": true, "filesha512": true, "fileset": true, "templatefile": true,
+}
+
+// outsidePaths reports file paths that leave the directory: templates
+// starting with ${path.module}/.. or ${path.root}/.., and "../" literals
+// passed to file functions. A folder import copies a directory's own files
+// only, so such files are missing from the export.
+func outsidePaths(file string, body *hclsyntax.Body) []model.Diagnostic {
+	var out []model.Diagnostic
+	seen := map[string]bool{}
+	report := func(rng hcl.Range, p string) {
+		if seen[p] {
+			return
+		}
+		seen[p] = true
+		out = append(out, model.Diagnostic{
+			Severity: model.SeverityWarning,
+			Code:     "path_outside_folder",
+			Message:  fmt.Sprintf("%s refers to files outside its folder (%s)", file, p),
+			Detail:   fmt.Sprintf("%s:%d: the import copies only the folder's own files, so the export does not include %s. Copy it into the folder and update the path.", file, rng.Start.Line, p),
+		})
+	}
+	hclsyntax.VisitAll(body, func(n hclsyntax.Node) hcl.Diagnostics {
+		switch e := n.(type) {
+		case *hclsyntax.TemplateExpr:
+			if len(e.Parts) < 2 {
+				return nil
+			}
+			st, ok := e.Parts[0].(*hclsyntax.ScopeTraversalExpr)
+			lit, ok2 := e.Parts[1].(*hclsyntax.LiteralValueExpr)
+			if !ok || !ok2 || len(st.Traversal) != 2 || st.Traversal.RootName() != "path" || lit.Val.Type() != cty.String {
+				return nil
+			}
+			attr, ok := st.Traversal[1].(hcl.TraverseAttr)
+			rest := lit.Val.AsString()
+			if ok && (attr.Name == "module" || attr.Name == "root") && (rest == "/.." || strings.HasPrefix(rest, "/../")) {
+				report(e.SrcRange, "${path."+attr.Name+"}"+rest)
+			}
+		case *hclsyntax.FunctionCallExpr:
+			if !fileFunctions[e.Name] || len(e.Args) == 0 {
+				return nil
+			}
+			if v, d := e.Args[0].Value(nil); !d.HasErrors() && v.Type() == cty.String && v.IsKnown() && !v.IsNull() {
+				if p := v.AsString(); p == ".." || strings.HasPrefix(p, "../") {
+					report(e.Range(), p)
+				}
+			}
+		}
+		return nil
+	})
+	return out
 }
 
 // providerOfType is the implied provider local name of a resource type.

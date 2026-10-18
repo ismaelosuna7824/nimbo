@@ -45,8 +45,9 @@ type Value struct {
 
 // Attr is a named attribute inside a Body, kept in source order.
 type Attr struct {
-	Name  string `json:"name"`
-	Value Value  `json:"value"`
+	Name     string    `json:"name"`
+	Value    Value     `json:"value"`
+	Comments *Comments `json:"comments,omitempty"`
 }
 
 // Block is a nested HCL block (e.g. `attribute { ... }`, `lifecycle { ... }`,
@@ -59,10 +60,33 @@ type Block struct {
 
 // Body is an ordered HCL body. Meta-arguments (count, for_each, provider,
 // depends_on, lifecycle, source, version) live here like any other attribute
-// or block, exactly as in HCL.
+// or block, exactly as in HCL. Comments belong to the block that owns the
+// body (resource, variable, nested block, ...).
 type Body struct {
-	Attrs  []Attr  `json:"attrs"`
-	Blocks []Block `json:"blocks"`
+	Attrs    []Attr    `json:"attrs"`
+	Blocks   []Block   `json:"blocks"`
+	Comments *Comments `json:"comments,omitempty"`
+}
+
+// Comments are the source comments of an attribute or block, kept verbatim
+// with their markers ("# x", "// y", "/* z */") so export writes them back.
+// In Lead, Tail and After an empty string is a blank line between comment
+// groups. Comments inside an expression are part of Value.Expr.
+type Comments struct {
+	// Lead are the comment lines directly above (for the first block of a
+	// file, the file header).
+	Lead []string `json:"lead,omitempty"`
+	// Line is the comment on the same line: after the value of an
+	// attribute, after the opening "{" of a block.
+	Line string `json:"line,omitempty"`
+	// Tail are the comment lines of a block after its last attribute or
+	// nested block, before "}".
+	Tail []string `json:"tail,omitempty"`
+	// End is the comment after a block's closing "}" on the same line.
+	End string `json:"end,omitempty"`
+	// After are the comment lines that follow a top-level block at the end
+	// of its file.
+	After []string `json:"after,omitempty"`
 }
 
 // Position is the canvas position of a node (React Flow coordinates).
@@ -132,8 +156,11 @@ type Workflow struct {
 	Variables []NamedBlock `json:"variables"`
 	Outputs   []NamedBlock `json:"outputs"`
 	Locals    []Attr       `json:"locals"`
-	Providers []NamedBlock `json:"providers"` // Name = provider local name ("aws"); alias lives in Body
-	Terraform *Body        `json:"terraform,omitempty"`
+	// LocalsComments are the comments of the `locals` block that export
+	// writes (every imported locals block is merged into one).
+	LocalsComments *Comments    `json:"localsComments,omitempty"`
+	Providers      []NamedBlock `json:"providers"` // Name = provider local name ("aws"); alias lives in Body
+	Terraform      *Body        `json:"terraform,omitempty"`
 	// Other keeps top-level blocks with no dedicated field (moved, import,
 	// check, removed, ...) so import/export is lossless.
 	Other []Block `json:"other"`
@@ -238,6 +265,11 @@ type Environment struct {
 	Name    string           `json:"name"`
 	Values  map[string]Value `json:"values"` // variable name -> value
 	EnvVars []EnvVar         `json:"envVars"`
+	// File is the root variable file the environment was imported from
+	// ("terraform.tfvars", "prod.auto.tfvars"); export writes it back there
+	// so Terraform keeps loading it the same way. Empty: the environment is
+	// exported as environments/<name>.tfvars.
+	File string `json:"file,omitempty"`
 }
 
 // EnvVar is a process environment variable passed to Terraform runs.

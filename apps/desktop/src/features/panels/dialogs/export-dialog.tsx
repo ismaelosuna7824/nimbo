@@ -107,9 +107,9 @@ export function ExportDialog({ open, onOpenChange }: { open: boolean; onOpenChan
               <Label htmlFor="export-envs">Include environments</Label>
               <p className="text-xs text-muted-foreground">
                 {hasEnvs
-                  ? `Adds environments/<name>.tfvars and a .env.example per environment (${workflow!.environments
-                      .map((e) => e.name)
-                      .join(", ")}). Secret values are left blank.`
+                  ? `Writes each environment's values (${workflow!.environments
+                      .map((e) => e.file ?? `environments/${e.name}.tfvars`)
+                      .join(", ")}) and a .env.example per environment. Imported variable files keep their name. Secret values are left blank.`
                   : "This workflow has no environments yet."}
               </p>
             </div>
