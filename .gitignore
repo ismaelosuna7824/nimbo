@@ -1,0 +1,11 @@
+node_modules/
+dist/
+target/
+.DS_Store
+*.log
+backend/bin/
+apps/desktop/src-tauri/binaries/
+apps/desktop/src-tauri/gen/
+.terraform/
+*.tfstate
+*.tfstate.backup
