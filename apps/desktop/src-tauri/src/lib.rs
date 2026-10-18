@@ -173,10 +173,10 @@ pub fn run() {
     .on_menu_event(|app, event| {
       if event.id() == CLOSE_WORKFLOW {
         let _ = app.emit("close-workflow", ());
-      } else if event.id() == CLOSE_WINDOW {
-        if let Some(window) = app.get_webview_window("main") {
-          let _ = window.close();
-        }
+      } else if event.id() == CLOSE_WINDOW
+        && let Some(window) = app.get_webview_window("main")
+      {
+        let _ = window.close();
       }
     })
     .setup(|app| {
