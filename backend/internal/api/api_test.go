@@ -28,7 +28,7 @@ import (
 )
 
 type testEnv struct {
-	t     *testing.T
+	t     testing.TB
 	srv   *httptest.Server
 	hub   *events.Hub
 	st    *store.Store
@@ -38,11 +38,11 @@ type testEnv struct {
 
 var testCatalog *catalog.Catalog
 
-func newEnv(t *testing.T) *testEnv { return newEnvDocker(t, "") }
+func newEnv(t testing.TB) *testEnv { return newEnvDocker(t, "") }
 
 // newEnvDocker is newEnv with the sandbox driving the given docker binary
 // ("" for the default).
-func newEnvDocker(t *testing.T, docker string) *testEnv {
+func newEnvDocker(t testing.TB, docker string) *testEnv {
 	t.Helper()
 	home := t.TempDir()
 	st, err := store.Open(home)

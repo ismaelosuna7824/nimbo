@@ -31,13 +31,25 @@ var (
 // and reports Floci support. Module nodes are skipped.
 func (c *Catalog) Validate(wf *model.Workflow) []model.Diagnostic {
 	var out []model.Diagnostic
+	// Schema decodes the provider JSON on every call; workflows repeat a few
+	// types across many nodes, so decode each type once per validation.
+	type typeKey struct {
+		kind model.NodeKind
+		typ  string
+	}
+	schemas := map[typeKey]*model.ResourceSchema{}
 	for i := range wf.Nodes {
 		n := &wf.Nodes[i]
 		if n.Kind != model.KindResource && n.Kind != model.KindData {
 			continue
 		}
-		schema, ok := c.Schema(n.Kind, n.Type)
+		k := typeKey{n.Kind, n.Type}
+		schema, ok := schemas[k]
 		if !ok {
+			schema, _ = c.Schema(n.Kind, n.Type)
+			schemas[k] = schema
+		}
+		if schema == nil {
 			out = append(out, model.Diagnostic{
 				Severity: model.SeverityError,
 				Code:     CodeUnknownType,
