@@ -8,44 +8,44 @@ Links: https://github.com/ismaelosuna7824/nimbo · https://nimbo-hc.web.app
 
 ## LinkedIn
 
-I built Nimbo: design, deploy and load-test cloud infrastructure on your laptop, without touching a real cloud account.
+I've been working on a small side project called Nimbo, and I'd like to share it in case it's useful to someone.
 
-Testing a cloud architecture usually means a real account, a bill, and a slow loop between diagrams, Terraform and dashboards. Nimbo puts that whole loop on your machine:
+When I was learning cloud, the hardest part wasn't the concepts, it was everything around them: setting up Docker containers I didn't fully understand, writing Terraform before I knew what each resource did, and worrying about running something by mistake on a real account.
 
-- Design on a canvas: drag in resources from the AWS, Azure, Google Cloud and Oracle Cloud Terraform providers and connect them.
-- Deploy with one click into a private local cloud: Floci emulators running in Docker, one sandbox per workflow. $0 cloud bill.
-- Use what you deployed: the Endpoints tab gives you URLs, ready snippets and a built-in "Try it" (POST /items → 201).
-- Load-test it live: smoke, load, stress, spike and soak runs with latency percentiles, error rates and the breaking point.
-- Terraform both ways: export clean, `terraform fmt`-formatted files, or import an existing Terraform folder and get the diagram back.
+Nimbo is a desktop app that tries to make that easier:
 
-What makes it different: it runs locally, it's free and open source (MIT), and it isn't a closed box. Terraform goes in and out, and AI agents (Claude Code, Cursor, Codex and others) can design, deploy and test through its built-in MCP server.
+- You design infrastructure visually: drag resources (an API, a function, a queue, a database…) onto a canvas and connect them.
+- It runs everything locally, in a private sandbox on your machine, using Floci emulators for AWS, Azure, Google Cloud and Oracle Cloud. No cloud account and no bill.
+- It handles the Docker and Terraform setup for you, and a first-run guide checks what you need step by step.
+- You can see what you built working: call your API, send a message to a queue, look at a table, and run small load tests.
+- When you're ready, it shows you the Terraform behind your diagram, so you can learn how each piece is written. It also works the other way: import a Terraform folder and see it as a diagram.
 
-It's a desktop app for macOS, Windows and Linux. Feedback and issues are very welcome.
+It's meant for people who are learning or who just want to try an idea quickly before touching a real cloud. It's free and open source (MIT) for macOS, Windows and Linux.
 
-⭐ GitHub: https://github.com/ismaelosuna7824/nimbo
-🌐 Website: https://nimbo-hc.web.app
+If you try it, I'd really appreciate your feedback — what's confusing, what's missing, what would help you learn.
 
-#Terraform #CloudComputing #DevOps #OpenSource #PlatformEngineering
+GitHub: https://github.com/ismaelosuna7824/nimbo
+Website: https://nimbo-hc.web.app
+
+#CloudComputing #LearningInPublic #Terraform #DevOps #OpenSource
 
 ## X
 
 ### Main post (≤ 280 characters)
 
-Design, deploy and load-test cloud infrastructure on your laptop.
-
-Nimbo: drag & connect AWS/Azure/GCP/OCI resources, deploy to a local cloud in Docker ($0 bill), load-test it, export Terraform. Free and open source.
+I made Nimbo, a free desktop app to practice cloud locally: design infrastructure visually, run it in a local AWS/Azure/GCP/OCI sandbox (no account, no bill) and see the Terraform behind it as you learn.
 
 https://github.com/ismaelosuna7824/nimbo
 
 ### Optional thread (4 posts)
 
-1/ Nimbo is a desktop app (macOS, Windows, Linux) for designing cloud infrastructure on a canvas: resources from the AWS, Azure, Google Cloud and Oracle Cloud Terraform providers, connected by dragging.
+1/ Learning cloud often starts with setting up Docker, writing Terraform you don't understand yet, and hoping nothing runs on a real account. I wanted something gentler, so I built Nimbo.
 
-2/ One click deploys it into a private local cloud: Floci emulators in Docker, one sandbox per workflow. No cloud account, no bill. Then call your API from the Endpoints tab (POST /items → 201).
+2/ You drag resources onto a canvas and connect them. Nimbo runs them in a private sandbox on your machine (Floci emulators in Docker) and takes care of the setup for you.
 
-3/ Load-test what you deployed (smoke, load, stress, spike, soak) with live latency, errors and the breaking point. Terraform both ways: export fmt-clean files or import an existing folder.
+3/ Then you can try what you built: call the API, send a message to a queue, check a table, run a small load test. And you can open the Terraform behind the diagram to learn how it's written.
 
-4/ AI agents can do all of it too, through Nimbo's built-in MCP server (Claude Code, Cursor, Codex…). MIT licensed.
+4/ It's free and open source (MIT), for macOS, Windows and Linux. Feedback from people who are learning is very welcome.
 https://nimbo-hc.web.app
 
 ## Video alt text
