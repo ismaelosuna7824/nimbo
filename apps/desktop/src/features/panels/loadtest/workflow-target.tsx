@@ -1,5 +1,5 @@
 import { useMemo } from "react"
-import { CircleAlert, Globe, Plug, Rocket, ScrollText, Zap } from "lucide-react"
+import { CircleAlert, Globe, Plug, Rocket, Route, ScrollText, Zap } from "lucide-react"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
@@ -16,6 +16,8 @@ import { KIND_META } from "@/features/connections/meta"
 import { useConnections, useConnectionsStore } from "@/features/connections/store"
 import { ConnectionTargetPicker } from "@/features/connections/target-picker"
 import { INITIAL_CONNECTION_TARGET } from "@/features/connections/target-draft"
+import { openReachability } from "@/features/network/store"
+import { hasNetworkResources } from "@/features/network/use-network"
 import { nodeLabelById } from "../lib/nodes"
 import { CopyButton, MethodBadge } from "../endpoints/bits"
 import { apiPathOf } from "../endpoints/model"
@@ -37,6 +39,7 @@ export function WorkflowTargetStep({
   pro: boolean
 }) {
   const nodes = useWorkflowStore((s) => s.workflow!.nodes)
+  const deployedCount = useWorkflowStore((s) => s.deployed?.resources.filter((r) => r.mode === "managed").length ?? 0)
   const emulatorUrl = useWorkflowStore((s) => s.sandbox?.emulators.find((e) => e.state === "running")?.url)
   const labels = useMemo(() => nodeLabelById(nodes), [nodes])
   const accessResources = useEndpoints().data?.resources
@@ -92,7 +95,26 @@ export function WorkflowTargetStep({
           <Spinner />
         ) : targets.length === 0 ? (
           <div className="rounded-lg border border-dashed p-3 text-xs text-muted-foreground">
-            <p>Nothing to test yet. Deploy the workflow (button above) — its HTTP endpoints, queues, buckets, tables and functions then show up here.</p>
+            {deployedCount > 0 ? (
+              <>
+                <p>
+                  Your resources are deployed, but none of them receives traffic on its own. Networks, subnets, route tables,
+                  security groups and IAM are plumbing: load tests need something that answers requests, such as an HTTP API,
+                  a function, a queue, a bucket or a table. Add one and deploy again, or test a service you already have with
+                  Custom HTTP or a Connection.
+                </p>
+                {hasNetworkResources(nodes) && (
+                  <p className="mt-2">
+                    Want to know who can reach what in your network instead?{" "}
+                    <Button variant="link" size="xs" className="h-auto px-0" onClick={() => void openReachability()}>
+                      <Route /> Run network checks
+                    </Button>
+                  </p>
+                )}
+              </>
+            ) : (
+              <p>Nothing to test yet. Deploy the workflow (button above) — its HTTP endpoints, queues, buckets, tables and functions then show up here.</p>
+            )}
           </div>
         ) : (
           <div className="flex flex-col gap-2">

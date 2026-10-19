@@ -1,10 +1,14 @@
 package loadtest
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
+	"github.com/ismaelosuna7824/nimbo/backend/internal/hclcodec"
 	"github.com/ismaelosuna7824/nimbo/backend/internal/model"
+	"github.com/ismaelosuna7824/nimbo/backend/internal/sandbox"
 )
 
 type fixedResolver map[model.Cloud]string
@@ -53,7 +57,7 @@ func TestSuggestBuildsTargetsFromDeployedState(t *testing.T) {
 	}}
 	st.Resources[0].Index = float64(0)
 
-	got := Suggest(wf, st, fixedResolver{model.CloudAWS: "http://127.0.0.1:41000", model.CloudGCP: "http://127.0.0.1:42000/"})
+	got := Suggest(wf, st, fixedResolver{model.CloudAWS: "http://127.0.0.1:41000", model.CloudGCP: "http://127.0.0.1:42000/"}, nil)
 
 	type row struct{ label, nodeID, what string }
 	var rows []row
@@ -106,8 +110,59 @@ func TestSuggestFallsBackToSandboxURLs(t *testing.T) {
 	st := &model.DeployedState{WorkflowID: "wf1", Resources: []model.DeployedResource{
 		res("aws_lambda_function_url", "u", map[string]any{"url_id": "xyz789", "function_name": "hello"}),
 	}}
-	got := Suggest(nil, st, nil)
+	got := Suggest(nil, st, nil, nil)
 	if len(got) != 1 || got[0].HTTP.URL != "http://localhost:4566/lambda-url/xyz789/" {
 		t.Fatalf("got %+v", got)
+	}
+}
+
+// An EC2 instance whose port 80 the sandbox publishes on the host becomes an
+// HTTP GET target on that host URL (recorded Floci state of aws-vpc-basics
+// plus an instance).
+func TestSuggestInstancePublishedPorts(t *testing.T) {
+	dir := filepath.Join("..", "netcheck", "testdata", "deployed")
+	files := map[string][]byte{}
+	entries, err := os.ReadDir(filepath.Join(dir, "aws-vpc-basics"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, e := range entries {
+		b, err := os.ReadFile(filepath.Join(dir, "aws-vpc-basics", e.Name()))
+		if err != nil {
+			t.Fatal(err)
+		}
+		files[e.Name()] = b
+	}
+	wf, _, err := hclcodec.Import("vpc", files)
+	if err != nil {
+		t.Fatal(err)
+	}
+	hclcodec.Normalize(wf)
+	raw, err := os.ReadFile(filepath.Join(dir, "aws-vpc-basics.show.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	st, err := sandbox.ParseState(raw, wf)
+	if err != nil {
+		t.Fatal(err)
+	}
+	const iid = "i-e159e1fad6152831b"
+	insts := map[string]sandbox.InstanceAccess{iid: {InstanceID: iid, Running: true, Ports: map[int]int{22: 2200, 80: 30000, 5432: 30001}}}
+	var http []model.LoadTarget
+	for _, tg := range Suggest(wf, st, nil, insts) {
+		if tg.HTTP != nil {
+			http = append(http, tg)
+		}
+	}
+	if len(http) != 1 || http[0].Label != "GET / · web:80" || http[0].HTTP.Method != "GET" || http[0].HTTP.URL != "http://127.0.0.1:30000/" || http[0].NodeID == "" {
+		t.Fatalf("instance targets %+v", http)
+	}
+	// Not running, or not published: nothing to suggest.
+	insts[iid] = sandbox.InstanceAccess{InstanceID: iid, Ports: map[int]int{80: 30000}}
+	if got := Suggest(wf, st, nil, insts); len(got) != 0 {
+		t.Errorf("stopped instance %+v", got)
+	}
+	if got := Suggest(wf, st, nil, nil); len(got) != 0 {
+		t.Errorf("without instances %+v", got)
 	}
 }

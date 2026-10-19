@@ -30,12 +30,13 @@ import { Skeleton } from "@/components/ui/skeleton"
 import { Textarea } from "@/components/ui/textarea"
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip"
 import { api } from "@/lib/api/client"
-import type { Body, ResourceSchema, SchemaAttribute, WorkflowNode } from "@/lib/api/types"
+import { isNetworkFinding, type Body, type ResourceSchema, type SchemaAttribute, type WorkflowNode } from "@/lib/api/types"
 import { cn } from "@/lib/utils"
 import { useWorkflowStore } from "@/state/workflow-store"
 import { canvasHandle } from "../canvas/actions"
 import { openModuleView } from "../canvas/module-view-store"
 import { nodeAddress, nodeLabel, useNodeSchemas, useSchema } from "../canvas/catalog"
+import { NetworkSection } from "../network/network-section"
 import { useEndpoints } from "../panels/endpoints/use-endpoints"
 import { AttrField } from "./attr-field"
 import { BlockForm } from "./block-form"
@@ -129,10 +130,10 @@ function NodeInspector({ node }: { node: WorkflowNode }) {
         <div className="flex flex-col gap-5 p-4">
           <NameFields node={node} />
           {node.kind !== "module" && schema && <SupportNote schema={schema} />}
-          {diagnostics.filter((d) => !d.attribute).length > 0 && (
+          {diagnostics.filter((d) => !d.attribute && !isNetworkFinding(d)).length > 0 && (
             <div className="flex flex-col gap-1.5">
               {diagnostics
-                .filter((d) => !d.attribute)
+                .filter((d) => !d.attribute && !isNetworkFinding(d))
                 .map((d, i) => (
                   <Alert key={i} variant={d.severity === "error" ? "destructive" : "default"}>
                     {d.severity === "error" ? <CircleAlertIcon /> : <TriangleAlertIcon />}
@@ -161,6 +162,8 @@ function NodeInspector({ node }: { node: WorkflowNode }) {
               <LiveValues resources={live} />
             </Section>
           )}
+
+          {node.kind === "resource" && <NetworkSection node={node} section={Section} />}
 
           <Section title="Settings">
             {node.kind === "module" ? (

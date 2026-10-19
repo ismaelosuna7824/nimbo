@@ -86,7 +86,10 @@ func Try(ctx context.Context, wf *model.Workflow, st *model.DeployedState, sb Sa
 			return model.TryResult{}, err
 		}
 	}
-	if !sb.Running[e.t.cloud] {
+	switch {
+	case e.Kind == KindInstance && !sb.Instances[e.t.name].Running:
+		return model.TryResult{Error: "The instance is not running. Start the sandbox, then try again."}, nil
+	case e.Kind != KindInstance && !sb.Running[e.t.cloud]:
 		return model.TryResult{Error: "The sandbox is not running. Start it, then try again."}, nil
 	}
 
@@ -192,12 +195,13 @@ func (b *builder) checkHTTP(e *entry, req *model.TryRequest) error {
 	return nil
 }
 
-// sandboxURL reports whether u is served by one of the sandbox emulators.
+// sandboxURL reports whether u is served by one of the sandbox emulators or
+// a published app port of one of the workflow's EC2 instances.
 func (b *builder) sandboxURL(u *url.URL) bool {
 	if u.Scheme != "http" && u.Scheme != "https" {
 		return false
 	}
-	if !loopback(u.Hostname()) {
+	if !loopback(u.Hostname()) || u.Port() == "" {
 		return false
 	}
 	for _, base := range b.sb.Bases {
@@ -206,7 +210,7 @@ func (b *builder) sandboxURL(u *url.URL) bool {
 			return true
 		}
 	}
-	return false
+	return b.instancePort(u.Port())
 }
 
 func loopback(host string) bool {

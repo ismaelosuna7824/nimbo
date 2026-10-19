@@ -148,6 +148,13 @@ export function isBestPractice(d: Diagnostic): boolean {
   return d.code.startsWith(BEST_PRACTICE_PREFIX)
 }
 
+/** Network findings (configuration review) carry codes with this prefix; they never block deploys. */
+export const NETWORK_PREFIX = "net_"
+
+export function isNetworkFinding(d: Diagnostic): boolean {
+  return d.code.startsWith(NETWORK_PREFIX)
+}
+
 export interface Workflow {
   id: string
   name: string
@@ -373,6 +380,7 @@ export type AccessKind =
   | "web-service"
   | "key"
   | "kubernetes"
+  | "instance"
   | "generic"
 
 export interface AccessField {
@@ -437,6 +445,214 @@ export interface ResourceAccess {
   warning?: string
   /** Plumbing (roles, permissions, triggers, routing, settings) listed apart from what you call. */
   supporting?: boolean
+}
+
+// ---------------------------------------------------------------------------
+// Network checks (configuration review and reachability analysis)
+
+/** "deployed": values from the sandbox's Terraform state; "design": the workflow's expressions. */
+export type NetworkBasis = "deployed" | "design"
+
+/** GET /workflows/{id}/network. Addresses are instance addresses; nodeId is their canvas node. */
+export interface NetworkSummary {
+  workflowId: string
+  basis: NetworkBasis
+  basisReason: string
+  networks: NetNetwork[]
+  subnets: NetSubnet[]
+  routeTables: NetRouteTable[]
+  gateways: NetGateway[]
+  securityGroups: NetSecurityGroup[]
+  placements: NetPlacement[]
+  /** The "net_*" diagnostics of the same analysis. */
+  findings: Diagnostic[]
+  counts: NetFindingCounts
+  /** What was skipped because its inputs are unknown. */
+  notes: string[]
+}
+
+export interface NetFindingCounts {
+  errors: number
+  warnings: number
+  info: number
+}
+
+/** A VPC (AWS), virtual network (Azure) or VPC network (GCP). */
+export interface NetNetwork {
+  nodeId?: string
+  address: string
+  cloud: Cloud
+  name: string
+  /** Empty when unknown or not applicable (GCP). */
+  cidrs: string[]
+  id?: string
+}
+
+export type SubnetClassification = "public" | "private" | "isolated" | "unknown"
+
+export interface NetSubnet {
+  nodeId?: string
+  address: string
+  name: string
+  /** Address of its VPC/VNet. */
+  network?: string
+  cidr?: string
+  /** Availability zone. */
+  zone?: string
+  classification: SubnetClassification
+  /** Plain-language reason for the classification. */
+  why: string
+  /** Address ("main route table of aws_vpc.main" when implicit). */
+  routeTable?: string
+  nacl?: string
+  mapPublicIp?: boolean
+  id?: string
+}
+
+export interface NetRouteTable {
+  nodeId?: string
+  address: string
+  network?: string
+  main?: boolean
+  subnets: string[]
+  routes: NetRoute[]
+}
+
+/** targetKind: local | internet-gateway | egress-only-gateway | nat-gateway | vpc-endpoint | peering | transit-gateway | instance | network-interface | vpn-gateway | unknown */
+export interface NetRoute {
+  destination: string
+  targetKind: string
+  target?: string
+  nodeId?: string
+}
+
+/** kind uses the NetRoute.targetKind names. */
+export interface NetGateway {
+  nodeId?: string
+  address: string
+  kind: string
+  network?: string
+  /** NAT gateways. */
+  subnet?: string
+  /** VPC endpoints: "s3", "dynamodb", ... */
+  service?: string
+  detail?: string
+}
+
+export interface NetSecurityGroup {
+  nodeId?: string
+  address: string
+  network?: string
+  ingress: NetRule[]
+  egress: NetRule[]
+  /** e.g. "Allows 80, 443 from anywhere; all outbound" */
+  summary: string
+}
+
+/** One allow rule. ports: "80", "1024-65535" or "all"; peer: a CIDR, "anywhere", a security group address or "itself". */
+export interface NetRule {
+  /** tcp | udp | icmp | all */
+  protocol: string
+  ports: string
+  peer: string
+  description?: string
+  nodeId?: string
+}
+
+export type PlacementKind =
+  | "instance"
+  | "function"
+  | "database"
+  | "cache"
+  | "load-balancer"
+  | "container-service"
+  | "kubernetes"
+  | "interface"
+
+/** Where a workload sits in the network. */
+export interface NetPlacement {
+  nodeId?: string
+  address: string
+  kind: PlacementKind
+  network?: string
+  subnets: string[]
+  zones: string[]
+  securityGroups: string[]
+  public: boolean
+  publicWhy: string
+  /** Listening ports when known. */
+  ports?: number[]
+  /** false: a Lambda outside any VPC. */
+  inVpc: boolean
+}
+
+/** nodeId: node ID or address. */
+export interface NetEndpoint {
+  kind: "internet" | "node"
+  nodeId?: string
+}
+
+export type NetProtocol = "tcp" | "udp" | "icmp"
+
+/** POST /workflows/{id}/network/reachability. port is ignored for icmp; live also runs real connections in the sandbox. */
+export interface ReachabilityRequest {
+  source: NetEndpoint
+  destination: NetEndpoint
+  protocol: NetProtocol
+  port: number
+  live?: boolean
+}
+
+export type HopVerdict = "allow" | "deny" | "unknown"
+
+/** layer: endpoint | address | route | gateway | nacl | security-group | listener | target | service */
+export interface ReachabilityHop {
+  component: string
+  layer: string
+  nodeId?: string
+  verdict: HopVerdict
+  reason: string
+  /** Live results: "live" when the emulator enforces this layer, "analysis" when only the analyzer checked it. */
+  enforcement?: "live" | "analysis"
+}
+
+export interface ReachabilityResult {
+  reachable: boolean
+  verdict: "reachable" | "unreachable" | "unknown"
+  basis: NetworkBasis
+  summary: string
+  path: ReachabilityHop[]
+  blockers: string[]
+  suggestions: string[]
+  live?: LiveCheck
+}
+
+export interface LiveCheck {
+  probes: LiveProbe[]
+  /** Layers the probes exercise in the emulator. */
+  verified: string[]
+  /** Layers the emulator does not enforce (the analyzer's verdict stands). */
+  analysisOnly: string[]
+  /** Why nothing could run. */
+  unavailable?: string
+  note?: string
+}
+
+export interface LiveProbe {
+  name: string
+  command: string
+  connected: boolean
+  /** "HTTP 200", "connection refused", "timed out", ... */
+  result: string
+  output?: string
+  latencyMs: number
+  predicted: boolean
+  matches: boolean
+}
+
+/** POST /workflows/{id}/network/test-instance: the subnet (node ID or address). */
+export interface TestInstanceRequest {
+  subnet: string
 }
 
 /** GET /workflows/{id}/endpoints; refetch when the deployed state changes. */

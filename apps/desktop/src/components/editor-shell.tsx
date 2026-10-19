@@ -5,6 +5,7 @@ import { Sidebar, SidebarContent, SidebarHeader, SidebarInset, SidebarProvider }
 import { BottomPanel } from "@/features/panels"
 import { Canvas } from "@/features/canvas/canvas"
 import { Inspector } from "@/features/inspector/inspector"
+import { ReachabilityDialog } from "@/features/network/reachability-dialog"
 import { Palette } from "@/features/palette/palette"
 import { TopBar } from "@/features/toolbar/top-bar"
 import { useUiStore } from "@/features/toolbar/ui-store"
@@ -86,6 +87,7 @@ export function EditorShell() {
           )}
         </ResizablePanelGroup>
       </SidebarInset>
+      <ReachabilityDialog />
     </SidebarProvider>
   )
 }

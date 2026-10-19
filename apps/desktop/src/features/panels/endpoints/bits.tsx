@@ -24,6 +24,11 @@ const GLOSSARY: Record<string, string> = {
   "table name": "The name you pass to the SDK or CLI to read or write items in this table.",
   "bucket name": "The name you pass to the SDK or CLI to upload or download files.",
   "topic arn": "The ID you pass to the SDK or CLI to publish a message to this topic.",
+  "private ip":
+    "The instance's address inside its network (VPC). Only resources in the same network can use it, when security groups allow.",
+  "public ip":
+    "The instance's address on the internet. Only instances in a public subnet get one; security groups still decide which ports answer.",
+  "host url": "Open this on your computer to reach the instance's web server through the local sandbox.",
 }
 
 export function CopyButton({

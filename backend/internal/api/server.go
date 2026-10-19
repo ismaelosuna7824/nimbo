@@ -157,6 +157,9 @@ func (s *Server) routes() {
 	h("GET "+p+"/workflows/{id}/endpoints", s.getEndpoints)
 	h("POST "+p+"/workflows/{id}/endpoints/try", s.tryEndpoint)
 	h("GET "+p+"/workflows/{id}/endpoints/postman.json", s.postmanCollection)
+	h("GET "+p+"/workflows/{id}/network", s.getNetwork)
+	h("POST "+p+"/workflows/{id}/network/reachability", s.networkReachability)
+	h("POST "+p+"/workflows/{id}/network/test-instance", s.addTestInstance)
 
 	h("GET "+p+"/workflows/{id}/loadtests/targets", s.loadTargets)
 	h("POST "+p+"/workflows/{id}/loadtests", s.startLoadTest)

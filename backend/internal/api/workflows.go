@@ -11,6 +11,7 @@ import (
 	"github.com/ismaelosuna7824/nimbo/backend/internal/hclcodec"
 	"github.com/ismaelosuna7824/nimbo/backend/internal/lint"
 	"github.com/ismaelosuna7824/nimbo/backend/internal/model"
+	"github.com/ismaelosuna7824/nimbo/backend/internal/netcheck"
 	"github.com/ismaelosuna7824/nimbo/backend/internal/store"
 )
 
@@ -97,15 +98,17 @@ func (s *Server) save(wf *model.Workflow, extra []model.Diagnostic) error {
 
 // review replaces wf's best-practice findings (bp_*, info/warning only)
 // with fresh ones under the current settings (every rule when the server
-// has no settings store). It runs on every save and on GET, so toggling
-// rules in Settings shows up without an edit. Module views are never
-// reviewed.
+// has no settings store), and its network findings (net_*, design basis)
+// with fresh ones. It runs on every save and on GET, so toggling rules in
+// Settings shows up without an edit. Module views are never reviewed.
 func (s *Server) review(wf *model.Workflow) {
 	var cfg model.BestPracticeSettings
 	if s.cfg.Settings != nil {
 		cfg = s.cfg.Settings.Get().BestPractices
 	}
-	wf.Diagnostics = append(lint.Strip(wf.Diagnostics), lint.Check(wf, s.cfg.Catalog, cfg)...)
+	diags := netcheck.Strip(lint.Strip(wf.Diagnostics))
+	diags = append(diags, lint.Check(wf, s.cfg.Catalog, cfg)...)
+	wf.Diagnostics = append(diags, netcheck.Check(wf)...)
 }
 
 // recentIconWindow is how many recently updated workflows a new random icon

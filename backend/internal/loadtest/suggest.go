@@ -6,10 +6,12 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"slices"
 	"strconv"
 	"strings"
 
 	"github.com/ismaelosuna7824/nimbo/backend/internal/model"
+	"github.com/ismaelosuna7824/nimbo/backend/internal/sandbox"
 )
 
 // In-sandbox emulator URLs, used when the sandbox is not running; the engine
@@ -25,9 +27,11 @@ const (
 )
 
 // Suggest builds ready-to-run load targets for what is deployed: HTTP
-// endpoints (API Gateway v1/v2 routes, Lambda function URLs, GCS and Pub/Sub
-// REST APIs) first, then AWS SDK operations.
-func Suggest(wf *model.Workflow, st *model.DeployedState, r Resolver) []model.LoadTarget {
+// endpoints (API Gateway v1/v2 routes, Lambda function URLs, EC2 instance
+// ports published on the host, GCS and Pub/Sub REST APIs) first, then AWS
+// SDK operations. instances are the sandbox's EC2 containers by instance ID
+// (sandbox.Manager.Instances; nil when there are none).
+func Suggest(wf *model.Workflow, st *model.DeployedState, r Resolver, instances map[string]sandbox.InstanceAccess) []model.LoadTarget {
 	out := []model.LoadTarget{}
 	if st == nil {
 		return out
@@ -54,9 +58,26 @@ func Suggest(wf *model.Workflow, st *model.DeployedState, r Resolver) []model.Lo
 	s.apiGatewayV2()
 	s.apiGatewayREST()
 	s.functionURLs()
+	s.instances(instances)
 	s.gcp()
 	s.awsSDK()
 	return s.out
+}
+
+// instances suggests a GET on every HTTP port an EC2 instance has published
+// on the host (the Endpoints card's Host URL).
+func (s *suggester) instances(insts map[string]sandbox.InstanceAccess) {
+	for _, r := range s.byType["aws_instance"] {
+		acc, ok := insts[str(r, "id")]
+		if !ok {
+			continue
+		}
+		for _, p := range acc.AppPorts() {
+			if slices.Contains(sandbox.HTTPAppPorts, p) {
+				s.http(r, fmt.Sprintf("GET / · %s:%d", s.name(r, ""), p), http.MethodGet, acc.URL(p))
+			}
+		}
+	}
 }
 
 type suggester struct {

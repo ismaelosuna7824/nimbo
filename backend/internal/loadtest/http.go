@@ -48,6 +48,12 @@ type httpExec struct {
 	hasBody bool
 	host    string
 	headers http.Header
+	// warmup makes preflight retry, until its deadline, connections that are
+	// accepted and then dropped. That is what a sandbox port published by
+	// Docker does while the service behind it (an EC2 instance's web server,
+	// say) is still starting. Refused connections still fail at once: nothing
+	// is listening at all.
+	warmup bool
 }
 
 // newHTTPExec builds an HTTP executor. With a connection, its headers and
@@ -96,11 +102,21 @@ func newHTTPExec(t *model.HTTPTarget, rawURL string, workers int, conn *model.Co
 }
 
 func (h *httpExec) preflight(ctx context.Context) error {
-	o, err := h.send(ctx, 0)
-	if err != nil {
-		return fmt.Errorf("%s %s (%s): %w", h.method, h.url.render(0), o.errKind, err)
+	for {
+		o, err := h.send(ctx, 0)
+		if err == nil {
+			return nil
+		}
+		retryable := o.errKind == errConnectionReset || o.errKind == errConnectionClosed
+		if !h.warmup || !retryable {
+			return fmt.Errorf("%s %s (%s): %w", h.method, h.url.render(0), o.errKind, err)
+		}
+		select {
+		case <-ctx.Done():
+			return fmt.Errorf("%s %s (%s, still not answering): %w", h.method, h.url.render(0), o.errKind, err)
+		case <-time.After(time.Second):
+		}
 	}
-	return nil
 }
 
 func (h *httpExec) do(ctx context.Context, seq int64) outcome {

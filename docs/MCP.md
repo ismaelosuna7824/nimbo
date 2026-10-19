@@ -70,6 +70,8 @@ tells the daemon what is open and the tools use it when no workflow is named.
 | Import a repo folder | "Import the Terraform in ~/code/platform and tell me what's in it." | "Importa el Terraform de ~/code/platform y explícame qué contiene." |
 | Use what you deployed | "What's the URL of my API and how do I call it? Send a test order to it." | "¿Cuál es la URL de mi API y cómo la llamo? Envíale un pedido de prueba." |
 | Deploy + load test | "Deploy this workflow and load test the API: I need p95 under 200 ms at 50 rps." | "Despliega este workflow y haz una prueba de carga a la API: necesito p95 menor a 200 ms con 50 rps." |
+| Test a network | "Check my VPC design and tell me if the database is reachable from the internet." | "Revisa el diseño de mi VPC y dime si la base de datos es accesible desde internet." |
+| See traffic really flow | "Add a test instance to the public subnet, deploy, and prove port 80 is reachable." | "Agrega una instancia de prueba a la subred pública, despliega y demuestra que el puerto 80 es accesible." |
 | Test a deployed service | "Load test our staging API at https://staging.example.com using a connection." | "Haz una prueba de carga a nuestra API de staging en https://staging.example.com usando una conexión." |
 | Close finished work | "Archive the old demo workflows." | "Archiva los workflows de demo viejos." |
 
@@ -100,6 +102,17 @@ commands (e.g. `/mcp__nimbo__extend_workflow` in Claude Code).
    deployed (URLs, queue URLs, snippets) and smoke test it.
 8. `list_load_targets` → `run_load_test` (start with `smoke`).
 9. `export_terraform` to hand the code over.
+
+Networks: after designing or changing VPCs, subnets, route tables, gateways
+or security groups, call `check_network` and fix its `net_*` findings
+(errors first), then `check_reachability` for the paths that matter
+(internet → load balancer:443 ✓, app → database:5432 ✓, database →
+internet ✗). To show real traffic, `add_test_instance` into a public
+subnet, `deploy`, then `check_reachability` with `live: true`: each hop says
+whether the local emulator verified it (`enforcement: live`) or only the
+analysis did (`analysis`: Floci doesn't enforce security groups between
+instances, network ACLs or route tables). Network findings never block
+deploys.
 
 Existing code: `scan_terraform_folder` → `import_terraform` with `projects`
 (one workflow per project; local modules are kept and can be opened in the
@@ -258,6 +271,9 @@ Conventions).
 | `get_deployed_state` | `workflow`, `address?` | Deployed resources (key values; all values for matching `address`) and outputs |
 | `get_endpoints` | `workflow` | How to use what is deployed: sandbox address/env, and per resource a plain summary, host URLs, identifiers, the first ready-to-run snippet and its `try_endpoint` actions |
 | `try_endpoint` | `workflow`, `node`, `action`, `input?`, `method?`, `path?`, `headers?` | Call a deployed resource in the sandbox (HTTP request to a route, invoke, send/peek messages, publish, list/put/get files, scan/put items, …); returns status, latency and body |
+| `check_network` | `workflow` | Network review: basis (`deployed` sandbox values or `design`), VPCs, subnets classified public/private/isolated with why, route tables, gateways, security group summaries, placements (subnet, AZ, public or not), `net_*` findings with why and fix, notes on what was skipped (unknown values) |
+| `check_reachability` | `workflow`, `from`, `to` (`"internet"` or a node), `protocol?` (tcp/udp/icmp), `port`, `live?` | Can traffic get from A to B? `reachable`, `verdict`, the path hop by hop (allow/deny/unknown + reason), blockers, suggestions; `live` adds real probes for EC2 instances with per-hop `enforcement` |
+| `add_test_instance` | `workflow`, `subnet` | Add a labelled EC2 test web server (port 80 page) and its security group into a subnet, to test traffic for real after deploying |
 | `list_load_targets` | `workflow` | Suggested load-test targets (indexed) |
 | `run_load_test` | `workflow`, `target`, `preset?`, `stages?`, `mode?`, `thresholds?`, `confirm_external?`, `wait?` | Run a load test; returns summary and threshold results. Target objects may use `connectionId` (needs `confirm_external`) |
 | `get_load_test` | `run` | Status and results of a load test |

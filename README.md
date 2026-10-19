@@ -40,12 +40,57 @@ account. AI agents can do the same through the built-in MCP server.
   connection, and load-test it from the home screen or as a target in any
   workflow. Traffic that leaves the local sandbox always needs explicit
   confirmation.
-- **MCP**: 47 tools for agents (search → add → connect → validate → deploy →
-  use what you deployed → load test → export, plus the Connections library). See
-  [docs/MCP.md](docs/MCP.md).
+- **Test networks**: a VPC on its own receives no traffic, so Nimbo checks
+  it instead: a configuration review (Problems → Network) and a
+  reachability analyzer ("can the internet reach my database on 5432?"),
+  plus live tests against a one-click test instance. See
+  [Testing networks](#testing-networks).
+- **MCP**: 53 tools for agents (search → add → connect → validate → deploy →
+  use what you deployed → check networks → load test → export, plus the
+  Connections library). See [docs/MCP.md](docs/MCP.md).
 
 Architecture, contracts and verified Floci facts:
 [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
+
+## Testing networks
+
+Networks (VPCs, subnets, route tables, gateways, security groups) don't
+answer requests, so there is nothing to load-test. Nimbo tests them in three
+ways:
+
+1. **Configuration review** — every save checks the design and lists issues
+   in the Problems tab's **Network** group, each with why and how to fix it:
+   a subnet outside its VPC, overlapping CIDRs, a "public" subnet without a
+   route to the internet gateway, a private subnet whose Lambda/ECS/EKS has no
+   way out (no NAT gateway or VPC endpoints), a NAT gateway in a private
+   subnet, a load balancer in a single availability zone, network ACLs that
+   drop replies, and more. They never block a deploy.
+2. **Reachability** — select an instance, database, load balancer or subnet
+   and click **Check reachability…**: pick *from* (the internet or a
+   resource), *to*, protocol and port (presets for SSH, HTTP, HTTPS, MySQL,
+   PostgreSQL, Redis). Nimbo walks the path like AWS Reachability Analyzer —
+   internet gateway, route table, network ACL both ways, security groups,
+   listeners and targets — and shows each hop with ✓/✗, highlights it on the
+   canvas and tells you what blocks the traffic and how to fix it. The
+   inspector's **Network** section explains each subnet (public, private or
+   isolated, and why) and each security group. Once deployed, the analysis
+   uses the sandbox's real addresses and IDs.
+3. **Live test** — no instance to try? Use **Add a test instance here** on
+   a subnet: it adds a small EC2 web server (port 80, a friendly page) and its
+   security group. Deploy, open the Endpoints tab for its URL, then **Run
+   live test** in the reachability dialog: Nimbo makes real connections
+   (from your computer, between instances, or to the internet) and labels
+   each hop *Verified live* or *Checked by analysis*. The local emulator only
+   enforces some layers — it publishes a port only when a security group
+   opens it, but it does not enforce security groups between instances,
+   network ACLs or route tables — so those stay analysis-only, exactly as AWS
+   would enforce them.
+
+Public subnet = its route table sends internet traffic (0.0.0.0/0) to an
+internet gateway; private = it goes out through a NAT gateway (outbound
+only); isolated = no internet route at all. Security groups are stateful
+(replies are allowed automatically); network ACLs are stateless (replies on
+ports 1024-65535 need their own rule).
 
 ## Install
 

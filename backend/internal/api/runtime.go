@@ -7,6 +7,7 @@ import (
 
 	"github.com/ismaelosuna7824/nimbo/backend/internal/loadtest"
 	"github.com/ismaelosuna7824/nimbo/backend/internal/model"
+	"github.com/ismaelosuna7824/nimbo/backend/internal/netcheck"
 	"github.com/ismaelosuna7824/nimbo/backend/internal/sandbox"
 )
 
@@ -118,9 +119,11 @@ func (s *Server) startRun(w http.ResponseWriter, r *http.Request) error {
 		return err
 	}
 	if req.Action == model.ActionPlan || req.Action == model.ActionApply {
+		// Network findings are analysis: Terraform and the cloud have the
+		// final say, so they never block a run.
 		var errs []model.Diagnostic
 		for _, d := range wf.Diagnostics {
-			if d.Severity == model.SeverityError {
+			if d.Severity == model.SeverityError && !netcheck.IsFinding(d) {
 				errs = append(errs, d)
 			}
 		}
@@ -193,7 +196,7 @@ func (s *Server) loadTargets(w http.ResponseWriter, r *http.Request) error {
 	if err != nil {
 		return err
 	}
-	return ok(w, nonNil(loadtest.Suggest(wf, st, s.cfg.Sandbox)))
+	return ok(w, nonNil(loadtest.Suggest(wf, st, s.cfg.Sandbox, s.sandboxInstances(r.Context(), wf, st))))
 }
 
 func (s *Server) startLoadTest(w http.ResponseWriter, r *http.Request) error {

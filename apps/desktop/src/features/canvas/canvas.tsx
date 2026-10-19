@@ -51,7 +51,8 @@ import {
 } from "@/components/ui/context-menu"
 import { Empty, EmptyContent, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from "@/components/ui/empty"
 import { api } from "@/lib/api/client"
-import type { ConnectionRecipe, NodeKind, Position, Workflow, WorkflowNode } from "@/lib/api/types"
+import type { ConnectionRecipe, HopVerdict, NodeKind, Position, Workflow, WorkflowNode } from "@/lib/api/types"
+import { useReachability } from "@/features/network/store"
 import { useWorkflowStore } from "@/state/workflow-store"
 import { addResource, registerCanvas, RESOURCE_DRAG_TYPE } from "./actions"
 import { nodeLabel, schemaKey, useNodeSchemas } from "./catalog"
@@ -142,6 +143,7 @@ function sameFlowNode(a: ResourceFlowNode, b: ResourceFlowNode) {
     a.height === b.height &&
     a.zIndex === b.zIndex &&
     a.selected === b.selected &&
+    a.className === b.className &&
     a.position.x === b.position.x &&
     a.position.y === b.position.y &&
     sameFields(a.data, b.data)
@@ -199,6 +201,13 @@ const SNAP_GRID: [number, number] = [16, 16]
 const FIT_VIEW_OPTIONS = { padding: 0.2, maxZoom: 1.1 }
 const PRO_OPTIONS = { hideAttribution: true }
 const MINIMAP_STYLE = { width: 168, height: 112 }
+
+/** Canvas ring of a node on a checked reachability path, by hop verdict. */
+const HOP_RING: Record<HopVerdict, string> = {
+  allow: "rounded-xl ring-2 ring-emerald-500 ring-offset-2 ring-offset-background",
+  deny: "rounded-xl ring-2 ring-destructive ring-offset-2 ring-offset-background",
+  unknown: "rounded-xl ring-2 ring-amber-500 ring-offset-2 ring-offset-background",
+}
 
 function minimapColor(n: ResourceFlowNode) {
   const cloud = n.data.schema?.cloud ?? cloudOfType(n.data.node.type)
@@ -285,10 +294,18 @@ function CanvasInner() {
     () => (selectedNodeId && !selection.includes(selectedNodeId) ? [selectedNodeId] : selection),
     [selection, selectedNodeId],
   )
-  const derivedNodes = useMemo(
-    () => (selectedIds.length ? stableNodes.map((n) => (selectedIds.includes(n.id) ? { ...n, selected: true } : n)) : stableNodes),
-    [stableNodes, selectedIds],
-  )
+  // While the reachability dialog shows an answer: ring the nodes on the path by verdict, dim the rest.
+  const reachHighlight = useReachability((s) => s.highlight)
+  const derivedNodes = useMemo(() => {
+    const selectedNodes = selectedIds.length
+      ? stableNodes.map((n) => (selectedIds.includes(n.id) ? { ...n, selected: true } : n))
+      : stableNodes
+    if (!reachHighlight) return selectedNodes
+    return selectedNodes.map((n) => {
+      const verdict = reachHighlight[n.id]
+      return { ...n, className: verdict ? HOP_RING[verdict] : "opacity-35" }
+    })
+  }, [stableNodes, selectedIds, reachHighlight])
   const onSelectionChange = useCallback(
     ({ nodes: picked }: OnSelectionChangeParams) => {
       const ids = picked.map((n) => n.id)

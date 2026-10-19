@@ -134,6 +134,12 @@ type tfResource struct {
 	Values  map[string]any `json:"values"`
 }
 
+// ParseState maps recorded `terraform show -json` output onto wf's nodes,
+// exactly like State (used by tests replaying recorded sandbox states).
+func ParseState(data []byte, wf *model.Workflow) (*model.DeployedState, error) {
+	return parseState(data, wf)
+}
+
 // parseState maps `terraform show -json` output onto workflow nodes. Root
 // resources match the node with the same mode, type and name; resources in
 // module calls belong to the root module node.

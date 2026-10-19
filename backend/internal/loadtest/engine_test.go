@@ -419,6 +419,34 @@ func TestUnreachableTargetFailsFast(t *testing.T) {
 	}
 }
 
+// A sandbox port that accepts and drops connections (Docker publishing an
+// instance whose web server is still starting) is waited for, so a load test
+// started right after a deploy runs instead of failing its preflight.
+func TestPreflightWaitsForStartingSandboxService(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var ready atomic.Bool
+	srv := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {}))
+	srv.Listener.Close()
+	srv.Listener = ln
+	srv.Config.ConnState = func(c net.Conn, s http.ConnState) {
+		if s == http.StateNew && !ready.Load() {
+			c.Close()
+		}
+	}
+	srv.Start()
+	defer srv.Close()
+	time.AfterFunc(2*time.Second, func() { ready.Store(true) })
+
+	e, w := newTestEngine(t)
+	got := runSpec(t, e, w, httpSpec(srv.URL+"/", hold(1, 5)))
+	if got.Status != model.LoadPassed {
+		t.Fatalf("status %s (%s), want passed once the service answers", got.Status, got.Error)
+	}
+}
+
 func TestConcurrentRunsCappedAndPersisted(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
 	defer srv.Close()

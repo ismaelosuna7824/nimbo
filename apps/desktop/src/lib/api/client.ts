@@ -21,9 +21,12 @@ import type {
   LoadTestSpec,
   McpCatalog,
   McpCommand,
+  NetworkSummary,
   NodeKind,
   Position,
   ProviderInfo,
+  ReachabilityRequest,
+  ReachabilityResult,
   ResourceSchema,
   ResourceSummary,
   Run,
@@ -193,6 +196,16 @@ export const api = {
   tryEndpoint: (id: string, req: TryRequest) => request<TryResult>("POST", `/workflows/${id}/endpoints/try`, req),
   /** Postman Collection v2.1 download for the deployed endpoints. */
   postmanCollectionUrl: (id: string) => `${baseUrl}/api/v1/workflows/${id}/endpoints/postman.json`,
+
+  // network checks
+  /** Network model and "net_*" findings (deployed state when available, else the design). */
+  network: (id: string) => request<NetworkSummary>("GET", `/workflows/${id}/network`),
+  /** Can source reach destination? With `live: true` also runs real connections (can take ~30 s). */
+  reachability: (id: string, req: ReachabilityRequest) =>
+    request<ReachabilityResult>("POST", `/workflows/${id}/network/reachability`, req),
+  /** Adds a small, clearly-labelled EC2 test instance (web server on port 80) and its security group to a subnet. */
+  addTestInstance: (id: string, subnet: string) =>
+    request<{ workflow: Workflow; nodeId: string }>("POST", `/workflows/${id}/network/test-instance`, { subnet }),
 
   // load tests
   loadTargets: (id: string) => request<LoadTarget[]>("GET", `/workflows/${id}/loadtests/targets`),

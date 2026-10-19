@@ -24,6 +24,7 @@ const (
 	groupRuns        = "Sandbox and runs"
 	groupLoadTests   = "Load tests"
 	groupConnections = "Connections"
+	groupNetwork     = "Network"
 )
 
 // workflowArg is the input of tools that only need a workflow.
@@ -80,6 +81,11 @@ func registerTools(r *registry, t *tools) {
 	addTool(r, "get_deployed_state", "Get deployed state", "Show what is deployed in the sandbox: resources with key values (id, arn, name, url) and outputs. Pass address to get every value of matching resources.", t.getDeployedState)
 	addTool(r, "get_endpoints", "Get endpoints", "Explain how to use what is deployed: sandbox address and env settings, then per resource a plain summary, host URLs (API routes, function URLs), identifiers (queue URL, ARN, bucket, table…), a ready-to-run snippet and the try_endpoint actions. Deploy first.", t.getEndpoints)
 	addTool(r, "try_endpoint", "Try endpoint", "Call a deployed resource in the local sandbox: send an HTTP request to an API route, invoke a function, send/peek queue messages, publish to a topic, list/put/get bucket files, scan/put table items, … (actions from get_endpoints). Sandbox only; returns status, latency and the response body.", t.tryEndpoint)
+
+	r.group = groupNetwork
+	addTool(r, "check_network", "Check network", "Review the workflow's networks: VPCs/VNets, subnets classified public/private/isolated with the reason, route tables, gateways, security group summaries, where each workload sits (subnet, AZ, public or not), and the net_* findings (subnet outside its VPC, overlapping CIDRs, public subnet without internet gateway route, private subnet without egress, NAT in a private subnet, unassociated route tables, cross-VPC routes/security groups, NACLs dropping replies, single-AZ load balancers/DB subnet groups) with why and fix. Uses the deployed sandbox's exact values when everything is deployed (basis \"deployed\"), else the design (basis \"design\"); unknown values are skipped, never guessed. Call it after designing or changing a network.", t.checkNetwork)
+	addTool(r, "check_reachability", "Check reachability", "Answer \"can traffic get from A to B?\" like AWS Reachability Analyzer: from internet or a node to a node or internet, protocol and port. Returns reachable, the path hop by hop (internet gateway, route table, network ACL both ways with ephemeral ports, security groups, listeners, targets) each allow/deny/unknown with the reason, blockers and suggested fixes. live=true also runs real connections in the deployed sandbox for EC2 instances and labels each hop verified live or analysis-only (the local emulator doesn't enforce security groups between instances, NACLs or route tables).", t.checkReachability)
+	addTool(r, "add_test_instance", "Add test instance", "Add a small, clearly labelled EC2 test instance (Amazon Linux 2023, t3.micro, user_data web server on port 80 with a friendly page) and its security group (port 80 open to 0.0.0.0/0, commented) into a subnet, so traffic can be tested for real after deploying: get_endpoints then shows its host URL and check_reachability live=true connects to it. subnet is an aws_subnet address; for count/for_each subnets name one instance (aws_subnet.public[\"a\"]).", t.addTestInstance)
 
 	r.group = groupLoadTests
 	addTool(r, "list_load_targets", "List load targets", "List load-test targets suggested from the deployed workflow (HTTP endpoints, SQS queues, S3 buckets, DynamoDB tables, Lambda functions, ...). Deploy first.", t.listLoadTargets)

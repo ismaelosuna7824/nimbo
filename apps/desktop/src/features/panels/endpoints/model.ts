@@ -40,6 +40,13 @@ export const KIND_GROUPS: KindGroup[] = [
   },
   { id: "functions", title: "Functions", blurb: "Code that runs when you call it.", icon: Zap, kinds: ["function"] },
   {
+    id: "instances",
+    title: "EC2 instances",
+    blurb: "Virtual servers in your network: open their web page or a shell inside them.",
+    icon: Server,
+    kinds: ["instance"],
+  },
+  {
     id: "queues",
     title: "Queues",
     blurb: "Mailboxes for messages: one part of your app drops them, another picks them up.",
@@ -82,6 +89,7 @@ export const KIND_ICON: Record<AccessKind, LucideIcon> = {
   cache: Database,
   "web-service": Server,
   key: Key,
+  instance: Server,
   kubernetes: Boxes,
   generic: Box,
 }

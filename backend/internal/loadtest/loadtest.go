@@ -324,7 +324,12 @@ func (e *Engine) newExecutor(ctx context.Context, wfID string, spec *model.LoadT
 	pool := min(spec.MaxWorkers, maxPoolSize)
 	switch t.Kind {
 	case model.TargetHTTP:
-		return newHTTPExec(t.HTTP, p.url, spec.MaxWorkers, p.conn)
+		h, err := newHTTPExec(t.HTTP, p.url, spec.MaxWorkers, p.conn)
+		if err != nil {
+			return nil, err
+		}
+		h.warmup = !p.external
+		return h, nil
 	case model.TargetAWS:
 		if p.conn != nil {
 			return newAWSConnExec(ctx, t.AWS, *p.conn, spec.MaxWorkers)

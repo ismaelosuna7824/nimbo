@@ -611,7 +611,7 @@ type TryAction struct {
 // ResourceAccess explains one deployed resource in plain language. Kind is
 // http-api | function-url | function | queue | topic | bucket | table |
 // stream | event-bus | state-machine | secret | parameter | user-pool |
-// database | cache | web-service | key | kubernetes | generic. Supporting marks plumbing (permissions,
+// database | cache | web-service | key | kubernetes | instance | generic. Supporting marks plumbing (permissions,
 // triggers, routing, settings) that beginners don't call directly.
 type ResourceAccess struct {
 	NodeID    string         `json:"nodeId,omitempty"`
@@ -652,6 +652,248 @@ type TryResult struct {
 	Body        string            `json:"body,omitempty"`
 	Headers     map[string]string `json:"headers,omitempty"`
 	Error       string            `json:"error,omitempty"`
+}
+
+// ---------------------------------------------------------------------------
+// Network checks (configuration review and reachability analysis)
+
+// NetworkBasis says where the values of a network analysis came from:
+// "deployed" (the sandbox's Terraform state: exact CIDRs, IDs and
+// count/for_each instances) or "design" (the workflow's expressions
+// evaluated with variable defaults, the active environment and locals).
+type NetworkBasis string
+
+const (
+	NetworkBasisDeployed NetworkBasis = "deployed"
+	NetworkBasisDesign   NetworkBasis = "design"
+)
+
+// NetworkSummary is the network model of a workflow
+// (GET /workflows/{id}/network). Addresses are instance addresses
+// (`aws_subnet.public["a"]`); NodeID is the canvas node they belong to.
+// Findings are the "net_*" diagnostics of the same analysis. Notes list
+// what was skipped because its inputs are unknown (module calls, values
+// computed at deploy time, ...).
+type NetworkSummary struct {
+	WorkflowID     string             `json:"workflowId"`
+	Basis          NetworkBasis       `json:"basis"`
+	BasisReason    string             `json:"basisReason"`
+	Networks       []NetNetwork       `json:"networks"`
+	Subnets        []NetSubnet        `json:"subnets"`
+	RouteTables    []NetRouteTable    `json:"routeTables"`
+	Gateways       []NetGateway       `json:"gateways"`
+	SecurityGroups []NetSecurityGroup `json:"securityGroups"`
+	Placements     []NetPlacement     `json:"placements"`
+	Findings       []Diagnostic       `json:"findings"`
+	Counts         NetFindingCounts   `json:"counts"`
+	Notes          []string           `json:"notes"`
+}
+
+// NetFindingCounts counts findings by severity.
+type NetFindingCounts struct {
+	Errors   int `json:"errors"`
+	Warnings int `json:"warnings"`
+	Info     int `json:"info"`
+}
+
+// NetNetwork is a VPC (AWS), virtual network (Azure) or VPC network (GCP).
+type NetNetwork struct {
+	NodeID  string   `json:"nodeId,omitempty"`
+	Address string   `json:"address"`
+	Cloud   Cloud    `json:"cloud"`
+	Name    string   `json:"name"`
+	CIDRs   []string `json:"cidrs"` // empty when unknown or not applicable (GCP)
+	ID      string   `json:"id,omitempty"`
+}
+
+// Subnet classifications.
+const (
+	SubnetPublic   = "public"   // default route to an internet gateway
+	SubnetPrivate  = "private"  // outbound internet through NAT (or another gateway), no inbound
+	SubnetIsolated = "isolated" // no route to the internet at all
+	SubnetUnknown  = "unknown"
+)
+
+// NetSubnet is one subnet with its public/private classification and the
+// plain-language reason (Why).
+type NetSubnet struct {
+	NodeID         string `json:"nodeId,omitempty"`
+	Address        string `json:"address"`
+	Name           string `json:"name"`
+	Network        string `json:"network,omitempty"` // address of its VPC/VNet
+	CIDR           string `json:"cidr,omitempty"`
+	Zone           string `json:"zone,omitempty"` // availability zone
+	Classification string `json:"classification"`
+	Why            string `json:"why"`
+	RouteTable     string `json:"routeTable,omitempty"` // address ("main route table of aws_vpc.main" when implicit)
+	NACL           string `json:"nacl,omitempty"`
+	MapPublicIP    bool   `json:"mapPublicIp,omitempty"`
+	ID             string `json:"id,omitempty"`
+}
+
+// NetRouteTable is a route table with its routes and associated subnets.
+type NetRouteTable struct {
+	NodeID  string     `json:"nodeId,omitempty"`
+	Address string     `json:"address"`
+	Network string     `json:"network,omitempty"`
+	Main    bool       `json:"main,omitempty"`
+	Subnets []string   `json:"subnets"`
+	Routes  []NetRoute `json:"routes"`
+}
+
+// NetRoute is one route: Destination CIDR (or prefix list) to a target.
+// TargetKind: local | internet-gateway | egress-only-gateway | nat-gateway
+// | vpc-endpoint | peering | transit-gateway | instance | network-interface
+// | vpn-gateway | unknown.
+type NetRoute struct {
+	Destination string `json:"destination"`
+	TargetKind  string `json:"targetKind"`
+	Target      string `json:"target,omitempty"` // address or ID of the target
+	NodeID      string `json:"nodeId,omitempty"` // node of the route (aws_route) or of the table (inline routes)
+}
+
+// NetGateway is an internet, egress-only or NAT gateway, VPC endpoint,
+// peering connection or transit gateway attachment. Kind uses the
+// NetRoute.TargetKind names.
+type NetGateway struct {
+	NodeID  string `json:"nodeId,omitempty"`
+	Address string `json:"address"`
+	Kind    string `json:"kind"`
+	Network string `json:"network,omitempty"`
+	Subnet  string `json:"subnet,omitempty"`  // NAT gateways
+	Service string `json:"service,omitempty"` // VPC endpoints: "s3", "dynamodb", ...
+	Detail  string `json:"detail,omitempty"`
+}
+
+// NetSecurityGroup is a security group (AWS) or network security group
+// (Azure) / firewall (GCP) with its effective rules.
+type NetSecurityGroup struct {
+	NodeID  string    `json:"nodeId,omitempty"`
+	Address string    `json:"address"`
+	Network string    `json:"network,omitempty"`
+	Ingress []NetRule `json:"ingress"`
+	Egress  []NetRule `json:"egress"`
+	Summary string    `json:"summary"` // "Allows 80, 443 from anywhere; all outbound"
+}
+
+// NetRule is one allow rule. Ports: "80", "1024-65535" or "all"; Peer is a
+// CIDR, "anywhere", a security group address or "itself".
+type NetRule struct {
+	Protocol    string `json:"protocol"` // tcp | udp | icmp | all
+	Ports       string `json:"ports"`
+	Peer        string `json:"peer"`
+	Description string `json:"description,omitempty"`
+	NodeID      string `json:"nodeId,omitempty"` // node declaring the rule
+}
+
+// NetPlacement says where a workload (instance, Lambda, database, load
+// balancer, ECS service, EKS cluster, ...) sits in the network.
+type NetPlacement struct {
+	NodeID         string   `json:"nodeId,omitempty"`
+	Address        string   `json:"address"`
+	Kind           string   `json:"kind"` // instance | function | database | cache | load-balancer | container-service | kubernetes | interface
+	Network        string   `json:"network,omitempty"`
+	Subnets        []string `json:"subnets"`
+	Zones          []string `json:"zones"`
+	SecurityGroups []string `json:"securityGroups"`
+	Public         bool     `json:"public"`
+	PublicWhy      string   `json:"publicWhy"`
+	Ports          []int    `json:"ports,omitempty"` // listening ports when known (database port, listeners)
+	InVPC          bool     `json:"inVpc"`           // false: a Lambda outside any VPC
+}
+
+// NetEndpoint is one end of a reachability question: Kind "internet" or
+// "node" (NodeID: node ID or address; an instance address picks one
+// count/for_each instance, otherwise the first one is used).
+type NetEndpoint struct {
+	Kind   string `json:"kind"`
+	NodeID string `json:"nodeId,omitempty"`
+}
+
+// ReachabilityRequest is the body of POST /workflows/{id}/network/reachability.
+// Protocol is tcp | udp | icmp (Port ignored for icmp). Live also runs real
+// connections in the sandbox for the layers the emulator enforces.
+type ReachabilityRequest struct {
+	Source      NetEndpoint `json:"source"`
+	Destination NetEndpoint `json:"destination"`
+	Protocol    string      `json:"protocol"`
+	Port        int         `json:"port"`
+	Live        bool        `json:"live,omitempty"`
+}
+
+// Hop verdicts.
+const (
+	HopAllow   = "allow"
+	HopDeny    = "deny"
+	HopUnknown = "unknown"
+)
+
+// ReachabilityHop is one component on the path. Layer: endpoint | address
+// | route | gateway | nacl | security-group | listener | target | service.
+// Enforcement is set on live results: "live" when the sandbox emulator
+// enforces this layer (the probe verified it), "analysis" when only the
+// analyzer checked it (AWS would enforce it; the emulator does not).
+type ReachabilityHop struct {
+	Component   string `json:"component"`
+	Layer       string `json:"layer"`
+	NodeID      string `json:"nodeId,omitempty"`
+	Verdict     string `json:"verdict"`
+	Reason      string `json:"reason"`
+	Enforcement string `json:"enforcement,omitempty"`
+}
+
+// Reachability verdicts.
+const (
+	ReachYes     = "reachable"
+	ReachNo      = "unreachable"
+	ReachUnknown = "unknown"
+)
+
+// ReachabilityResult answers a ReachabilityRequest. Reachable is true only
+// when every hop allows; Verdict distinguishes a denial from unknown
+// inputs. Blockers explain each denial; Suggestions how to fix them.
+type ReachabilityResult struct {
+	Reachable   bool              `json:"reachable"`
+	Verdict     string            `json:"verdict"`
+	Basis       NetworkBasis      `json:"basis"`
+	Summary     string            `json:"summary"`
+	Path        []ReachabilityHop `json:"path"`
+	Blockers    []string          `json:"blockers"`
+	Suggestions []string          `json:"suggestions"`
+	Live        *LiveCheck        `json:"live,omitempty"`
+}
+
+// LiveCheck is the outcome of the real connections behind a live
+// reachability request. Verified names the layers the probes exercise in
+// the emulator; AnalysisOnly the layers the emulator does not enforce (the
+// analyzer's verdict stands for them). Unavailable explains why nothing
+// could run (sandbox stopped, nothing deployed, unsupported endpoints).
+type LiveCheck struct {
+	Probes       []LiveProbe `json:"probes"`
+	Verified     []string    `json:"verified"`
+	AnalysisOnly []string    `json:"analysisOnly"`
+	Unavailable  string      `json:"unavailable,omitempty"`
+	Note         string      `json:"note,omitempty"`
+}
+
+// LiveProbe is one real connection attempt. Connected is what happened;
+// Predicted what the analyzer expected for the layers the emulator
+// enforces; Matches compares them.
+type LiveProbe struct {
+	Name      string  `json:"name"`
+	Command   string  `json:"command"`
+	Connected bool    `json:"connected"`
+	Result    string  `json:"result"` // "HTTP 200", "connection refused", "timed out", ...
+	Output    string  `json:"output,omitempty"`
+	LatencyMs float64 `json:"latencyMs"`
+	Predicted bool    `json:"predicted"`
+	Matches   bool    `json:"matches"`
+}
+
+// TestInstanceRequest is the body of POST /workflows/{id}/network/test-instance:
+// the subnet (node ID or address) the test instance goes into.
+type TestInstanceRequest struct {
+	Subnet string `json:"subnet"`
 }
 
 // ---------------------------------------------------------------------------

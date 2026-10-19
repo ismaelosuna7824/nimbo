@@ -37,6 +37,7 @@ const (
 	KindWebService   = "web-service" // URL-serving compute: Cloud Run, Container Apps, Function Apps
 	KindKey          = "key"         // KMS/Vault encryption keys
 	KindKubernetes   = "kubernetes"  // Kubernetes clusters
+	KindInstance     = "instance"    // EC2 instances (containers in the sandbox)
 	KindGeneric      = "generic"
 )
 
@@ -75,6 +76,9 @@ type Sandbox struct {
 	// Sources are texts of the workflow's code assets (Lambda sources),
 	// scanned to pick a sample path for catch-all API routes.
 	Sources []string
+	// Instances are the sandbox's EC2 instance containers by instance ID
+	// (empty while the sandbox is stopped or nothing runs there).
+	Instances map[string]sandbox.InstanceAccess
 }
 
 // Build describes how to reach the sandbox and every deployed resource.
@@ -108,9 +112,10 @@ type target struct {
 	url      string // SQS queue URL (host form); Pub/Sub topic path
 	httpBase string // base of relative paths in HTTP requests
 	fifo     bool
-	dedup    bool   // FIFO content-based deduplication
-	item     string // DynamoDB example item in typed JSON
-	parts    int    // OCI stream partitions
+	dedup    bool     // FIFO content-based deduplication
+	item     string   // DynamoDB example item in typed JSON
+	parts    int      // OCI stream partitions
+	hostURLs []string // EC2 instance: host URLs of the published app ports
 }
 
 type resource = model.DeployedResource
@@ -186,6 +191,7 @@ func (b *builder) build() {
 		b.parameters()
 		b.userPools()
 	}
+	b.instances()
 	b.databases()
 	b.caches()
 	if b.gcp != "" {

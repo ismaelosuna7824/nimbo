@@ -48,10 +48,12 @@ type (
 		Value string `json:"value"`
 	}
 	PostmanURL struct {
-		Raw   string         `json:"raw"`
-		Host  []string       `json:"host"`
-		Path  []string       `json:"path,omitempty"`
-		Query []PostmanQuery `json:"query,omitempty"`
+		Raw      string         `json:"raw"`
+		Protocol string         `json:"protocol,omitempty"`
+		Host     []string       `json:"host"`
+		Port     string         `json:"port,omitempty"`
+		Path     []string       `json:"path,omitempty"`
+		Query    []PostmanQuery `json:"query,omitempty"`
 	}
 	PostmanQuery struct {
 		Key   string `json:"key"`
@@ -97,6 +99,7 @@ func Postman(wf *model.Workflow, st *model.DeployedState, sb Sandbox) PostmanCol
 	if b.aws != "" {
 		b.awsPostman(&col)
 	}
+	b.instancePostman(&col)
 	b.gcpPostman(&col)
 	b.azurePostman(&col)
 	b.ociPostman(&col)

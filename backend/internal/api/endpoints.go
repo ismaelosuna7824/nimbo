@@ -13,6 +13,7 @@ import (
 
 	"github.com/ismaelosuna7824/nimbo/backend/internal/endpoints"
 	"github.com/ismaelosuna7824/nimbo/backend/internal/model"
+	"github.com/ismaelosuna7824/nimbo/backend/internal/sandbox"
 )
 
 // endpointsSandbox gathers what the endpoints builder needs about the
@@ -21,8 +22,9 @@ import (
 // Running comes from a full status check (containers and emulator health);
 // otherwise from the pod's cached host ports, which costs no docker call so
 // "Try it" requests stay fast — a stopped emulator then surfaces as a
-// connection error in the result.
-func (s *Server) endpointsSandbox(ctx context.Context, wf *model.Workflow, live bool) endpoints.Sandbox {
+// connection error in the result. When st has EC2 instances, their
+// containers are listed (one docker ps) for their published host ports.
+func (s *Server) endpointsSandbox(ctx context.Context, wf *model.Workflow, st *model.DeployedState, live bool) endpoints.Sandbox {
 	sb := endpoints.Sandbox{
 		Bases:   map[model.Cloud]string{},
 		Running: map[model.Cloud]bool{},
@@ -54,7 +56,34 @@ func (s *Server) endpointsSandbox(ctx context.Context, wf *model.Workflow, live 
 			sb.Bases[c] = u
 		}
 	}
+	sb.Instances = s.sandboxInstances(ctx, wf, st)
 	return sb
+}
+
+// sandboxInstances lists wf's EC2 instance containers (one docker ps) when
+// st has instances; nil otherwise or when Docker can't be asked.
+func (s *Server) sandboxInstances(ctx context.Context, wf *model.Workflow, st *model.DeployedState) map[string]sandbox.InstanceAccess {
+	if !hasResourceType(st, "aws_instance") {
+		return nil
+	}
+	insts, err := s.cfg.Sandbox.Instances(ctx, wf.ID)
+	if err != nil {
+		s.log.Debug("list sandbox EC2 instances", "workflow", wf.ID, "err", err)
+		return nil
+	}
+	return insts
+}
+
+func hasResourceType(st *model.DeployedState, typ string) bool {
+	if st == nil {
+		return false
+	}
+	for _, r := range st.Resources {
+		if r.Type == typ && (r.Mode == "" || r.Mode == "managed") {
+			return true
+		}
+	}
+	return false
 }
 
 // Source files scanned for route hints: code only, bounded in size.
@@ -106,7 +135,7 @@ func (s *Server) endpointsInput(r *http.Request, live bool) (*model.Workflow, *m
 	if err != nil {
 		return nil, nil, endpoints.Sandbox{}, err
 	}
-	return wf, st, s.endpointsSandbox(r.Context(), wf, live), nil
+	return wf, st, s.endpointsSandbox(r.Context(), wf, st, live), nil
 }
 
 func (s *Server) getEndpoints(w http.ResponseWriter, r *http.Request) error {

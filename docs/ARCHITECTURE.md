@@ -25,6 +25,7 @@ flowchart LR
 | `backend/internal/hclcodec` | hclcodec | Workflow ⇄ HCL, value normalization, edge derivation |
 | `backend/internal/catalog` | catalog | Embedded provider schemas, curated metadata, Floci support map, connection recipes, templates, schema validation |
 | `backend/internal/lint` | lint | Best-practice checks (`bp_*` info/warning diagnostics with why + fix), run on every save after schema validation; see "Best-practice checks" below |
+| `backend/internal/netcheck` | netcheck | Network model of a workflow (deployed state or statically evaluated design), `net_*` configuration checks, reachability analyzer and live probes; see "netcheck" below |
 | `backend/internal/sandbox` | sandbox | Per-workflow Docker sandbox, Terraform runs in containers, deployed state |
 | `backend/internal/loadtest` | loadtest | Load engine, presets, target suggestions, results persistence |
 | `backend/internal/endpoints` | endpoints | "How to use what you deployed": per-resource summaries, host URLs/identifiers, runnable snippets, "Try it" executor, Postman export |
@@ -345,7 +346,8 @@ module views are not checked. Findings carry `detail` (why) and `fix`, never
 severity `error`, so plan/apply are never refused for them. Settings:
 `bestPractices: {disabled, disabledRules}` (codes `bp_[a-z0-9_]+`, sorted,
 deduplicated). The desktop Problems tab groups Errors / Warnings / Best
-practices; node badges and tab counts ignore `info`.
+practices / Network (`net_*`, see netcheck); node badges and tab counts
+ignore `info`.
 
 Rules (warnings: `bp_sensitive_not_marked`, `bp_provider_version`,
 `bp_open_ingress`, `bp_public_bucket` — public intent = website configuration
@@ -372,6 +374,162 @@ not duplicate candidates, −1): `bp_variable_type` 59 (11 roots),
 `bp_unencrypted_storage` 2 (2), `bp_hardcoded_region` 1, `bp_open_ingress` 1,
 every other rule 0. The 10 templates and a fresh workflow with every popular
 starter of each cloud have 0 findings (`lint` tests).
+
+### netcheck (network checks)
+
+```go
+func Analyze(wf *model.Workflow, st *model.DeployedState) *Analysis // normalized wf; st nil/empty: design basis
+func Check(wf *model.Workflow) []model.Diagnostic                    // design-basis net_* findings (every save)
+func Strip(diags []model.Diagnostic) []model.Diagnostic              // without net_* findings
+func IsFinding(d model.Diagnostic) bool
+func (a *Analysis) Summary() model.NetworkSummary                    // GET /network
+func (a *Analysis) Findings() []model.Diagnostic
+func (a *Analysis) Reachability(req model.ReachabilityRequest) (model.ReachabilityResult, error) // ErrBadRequest
+func (a *Analysis) Live(ctx context.Context, sb LiveSandbox, req model.ReachabilityRequest, res *model.ReachabilityResult)
+type LiveSandbox interface { Instances(...); ExecInstance(...) } // *sandbox.Manager
+```
+
+A VPC on its own receives no traffic, so a load test can't tell whether a
+network design works. Network checks answer that instead: a configuration
+review and a reachability analyzer modeled on AWS Reachability Analyzer.
+
+**Values.** The *deployed* basis reads the sandbox's `terraform show -json`
+(exact CIDRs, IDs, count/for_each instances; root module only); it is used
+when every network resource of the design has instances in the state,
+otherwise the *design* basis evaluates the expressions statically: an
+`hcl.EvalContext` with variable values (active environment, else
+`default`, converted to the declared type), locals and resources in
+dependency order, count/for_each expanded into instance addresses
+(`aws_subnet.public["a"]`), dynamic blocks expanded, and a curated function
+set (go-cty stdlib collection/string/number functions, `try`/`can`, type
+conversions, `cidrsubnet`/`cidrsubnets`/`cidrhost`/`cidrnetmask` with
+Terraform semantics). Provider-computed attributes become placeholders
+(`nimbo-ref:<address>` for `id`/`arn`, `nimbo-ref:<address>#<attr>` for
+`*_id`/`name`/`self_link`, so `aws_vpc.main.default_route_table_id` resolves
+to the VPC's main route table) or unknown values. References resolve to
+model entities by placeholder (design), real ID/ARN (deployed) or `name`.
+Unknown inputs (data sources, module outputs, unset variables, unsupported
+functions, unknown count/for_each) skip the checks that need them; the
+summary's `notes` say what was skipped and `basisReason` which basis was
+used. Module calls are not analyzed.
+
+**AWS model**: VPCs (+ secondary CIDR associations), subnets, route tables
+(inline routes, `aws_route`, explicit/main associations, `aws_default_route_table`,
+the implicit main table), internet/egress-only/VPN gateways, NAT gateways,
+VPC endpoints (gateway route tables, interface subnets/SGs/private DNS),
+peering, transit gateway attachments (opaque), NACLs (inline rules,
+`aws_network_acl_rule`, associations, default NACL), security groups
+(inline rules, `aws_security_group_rule`, `aws_vpc_security_group_*_rule`,
+SG references, the VPC default SG for resources without one; an
+`aws_security_group` without egress has none, as Terraform removes AWS's
+allow-all rule), and placements: instances (+ENIs, EIPs, public IP from
+`associate_public_ip_address`/subnet `map_public_ip_on_launch`), Lambda
+`vpc_config`, RDS/Aurora/ElastiCache/Redshift via subnet groups (engine
+ports, `publicly_accessible`), ALB/NLB (subnets, SGs, listeners → target
+groups → attachments/ASGs/ECS services), ECS `network_configuration`, EKS
+clusters/node groups, autoscaling groups + launch templates. Azure (VNets,
+subnets, NSGs, peerings) and GCP (networks, subnetworks with secondary
+ranges, firewalls) get the address-range and rule checks only.
+
+**Findings** (`net_*`, NodeID + Attribute, message, detail = why, fix):
+errors `net_subnet_outside_network`, `net_subnet_overlap`,
+`net_peering_overlap`, `net_route_cross_vpc`, `net_sg_cross_vpc` (not
+between peered VPCs), `net_single_az` (ALB, EKS, DB subnet group; warning
+for Multi-AZ ElastiCache), `net_rule_priority_duplicate` (Azure NSG);
+warnings `net_public_subnet_no_igw`, `net_no_egress` (Lambda/ECS/EKS in
+subnets without NAT and no VPC endpoints), `net_nat_no_igw`,
+`net_route_table_unassociated`, `net_nacl_ephemeral` (subnet hosting
+internet-facing resources whose NACL drops 1024-65535 replies); info
+`net_private_subnet_igw`. Open admin ports are not repeated: security group
+summaries point to `bp_open_ingress`. The API's `review` adds the design
+findings on every save/GET (Problems tab "Network" group, MCP diagnostics);
+they never block plan/apply (the run gate skips `net_*` errors: Terraform
+and the cloud have the final say).
+
+**Reachability** (internet | node → node | internet | AWS service node,
+tcp/udp/icmp + port): stateful security groups (outbound on the source,
+inbound on the destination; CIDR, SG reference, self, prefix list),
+stateless NACLs in both directions with the 1024-65535 return range (no
+NACL hop inside one subnet), longest-prefix route lookup (an internet
+address stands for "the internet"; the local route for the VPC; peering
+routes both ways between VPCs; transit gateways unknown), IGW needs a public
+IP/EIP, private egress through a NAT gateway in a public subnet, S3/DynamoDB
+gateway endpoints on the route table and interface endpoints with private
+DNS for AWS services (else the internet path on 443), Lambda outside a VPC
+as an internet client and never a destination, `publicly_accessible`
+databases, engine ports, and load balancer listeners forwarding to their
+first target (NLB without SGs: targets see client addresses). Every hop has
+a component, layer, node, verdict (allow/deny/unknown) and reason; denials
+become blockers with fixes. The verdict is `unreachable` on any deny,
+`unknown` on any unknown hop. With several subnets the first one is
+analyzed (the path says so).
+
+**Live mode** (`live: true`, deployed basis only, EC2 instances): what the
+local emulator really enforces decides what a probe can verify. Verified
+2026-10-19 with floci 2.3.0 on OrbStack (hashicorp/aws 6.69):
+
+- Floci runs every instance as `floci-aws-nimbo-<wf>-ec2-<iid>` (labels
+  `io.floci.resource-id`, `floci_namespace=nimbo-<wf>`) on one Docker
+  network per VPC (`floci-aws-nimbo-<wf>-vpc-…`), plus `bridge` (its default
+  route) and `nimbo-<wf>`. AMIs map to images (`ami-amazonlinux2023`,
+  `ami-alpine`, `ami-ubuntu2204/2404`, `ami-debian12`; unknown → Amazon
+  Linux 2023); `t3.micro` works; user_data runs after sshd, 30-60 s after
+  the apply returns.
+- Security groups, NACLs, route tables and internet gateways are **not
+  enforced between containers**: an instance whose SG allows only 22 still
+  answers on 80 to another instance, a private subnet without an IGW/NAT
+  route reaches the internet, a NACL deny is ignored, empty egress changes
+  nothing. (`FLOCI_NETWORK_SECURITY_GROUP_ENFORCEMENT_ENABLED=true` enforces
+  SGs with nftables but takes instances off the VPC network, breaks the
+  metadata service and disables port publishing, so Nimbo doesn't use it.)
+- The one network effect: a TCP SG ingress rule with a CIDR source (any
+  CIDR; never port 22) makes Floci publish that port on the host through a
+  socat sidecar `…-ec2-fwd-<iid>-<port>` (`0.0.0.0:30000+`); revoking the rule
+  removes it. SSH is always published (`0.0.0.0:22xx`). State
+  `public_ip`/`private_ip` are VPC addresses, not reachable from the host.
+- `associate_public_ip_address = true` makes Floci drop the instance's SGs
+  (the next plan wants to replace it): rely on `map_public_ip_on_launch`.
+- Every instance has a metadata proxy on `169.254.169.254:80`, so a server
+  binding `0.0.0.0:80` fails; bind the instance's own IP.
+- Destroying a VPC can leave its Docker network (the pod stays attached);
+  re-creating the same CIDR then gets `10.240.0.0/16` addresses until the
+  workflow's sandbox is removed.
+
+So: *your computer → instance* GETs `127.0.0.1:<published port>` (TCP
+connect for non-HTTP ports); it verifies the SG inbound port rule and the
+listening service, while IGW/public IP, route tables, NACLs and the SG's
+source CIDR stay "checked by analysis". *instance → instance / internet*
+runs `curl` (or `nc`/bash `/dev/tcp`) with `docker exec` in the source
+instance; it verifies only that the destination answers. Each probe lists
+its command, result, latency, `predicted` (what the emulator should do given
+the layers it enforces) and `matches`; hops get `enforcement: live |
+analysis` and the result explains differences ("the connection worked in the
+sandbox because the emulator doesn't enforce security groups between
+instances; on AWS the blockers apply"). Other endpoints → `unavailable`.
+
+**Test instance** (`POST /network/test-instance {subnet}`): adds
+`aws_security_group.test_web` (port 80 from 0.0.0.0/0, commented; close it
+with `ingress = []`, since deleting the block keeps the deployed rule) and
+`aws_instance.test_web` (`ami-amazonlinux2023`, `t3.micro`, user_data
+serving a page with `python3 -m http.server 80 --bind <instance IP>`), named
+`test_web_2`… when taken, labelled "Test web server". Verified end to end:
+aws-vpc-basics + test instance → deploy → Endpoints card URL and Try it
+answer the page; live internet → instance:80 connects (HTTP 200, matches);
+`ingress = []` + deploy → not published, unreachable, matches; a second
+instance → first:80 with that rule closed connects (labelled analysis-only
+for SGs); destroy.
+
+Tests: table tests per check (broken variants, unknown inputs, Azure/GCP),
+the aws-vpc-basics template (0 findings; internet → instance:80 ✓, :22 ✗
+by the SG), a 3-tier fixture (`testdata/three-tier`: internet → ALB:443 ✓
+through listener and target, internet → app ✗ with reasons, app → db:5432
+✓, db → internet ✗ isolated), NACL ephemeral/rule-order cases, CIDR
+functions, the deployed basis from a recorded Floci `terraform show -json`
+(`testdata/deployed`), and live probes against a fake sandbox. Corpus
+(`go test -tags corpus ./internal/tfqa/ -run TestCorpusNetworkChecks`,
+2026-10-19): the 48 public roots, 5 network modules as roots and
+terraform-aws-vpc fed with 9 of its examples' inputs (e.g. complete: 18
+subnets = 3 public, 12 private, 3 isolated) — 0 findings, 0 errors.
 
 ### sandbox
 
@@ -410,6 +568,12 @@ func (m *Manager) EmulatorURL(wfID string, cloud model.Cloud) (string, bool) // 
 func (m *Manager) StableEmulatorURL(wfID string, cloud model.Cloud) (string, bool) // live, else the saved port
 func SandboxIdentities() Identities // fake Azure/GCP/OCI identities wired into providers
 func (m *Manager) DockerAvailable(ctx context.Context) error // nil when the docker daemon answers
+type InstanceAccess struct { InstanceID, Container string; Running bool; Ports map[int]int } // Ports: instance TCP port -> 127.0.0.1 host port (app sidecars + 22)
+func (a InstanceAccess) AppPorts() []int    // published app ports (no 22), sorted; none unless Running
+func (a InstanceAccess) URL(port int) string // http(s)://127.0.0.1:<host port>/ ("" unpublished); shared by endpoints and loadtest.Suggest
+var HTTPAppPorts = []int{80, 8080, 8000, 3000, 5000} // offered as HTTP GET endpoints/targets
+func (m *Manager) Instances(ctx context.Context, wfID string) (map[string]InstanceAccess, error) // one docker ps; docker errors returned
+func (m *Manager) ExecInstance(ctx context.Context, wfID, instanceID, script string, timeout time.Duration) (output string, exitCode int, err error) // docker exec sh -c; output trimmed, ≤ 8 KB; err only for docker failures/timeout
 // Sandboxes keep running when the daemon exits; Status rediscovers them from container labels/names.
 var ErrRunActive error // Run while another run of the workflow is active; Stop/Reset during a run
 ```
@@ -495,7 +659,7 @@ type Resolver interface {
 }
 type ConnectionResolver interface { Connection(id string) (model.Connection, bool) }
 func Presets() []model.LoadProfile
-func Suggest(wf *model.Workflow, st *model.DeployedState, r Resolver) []model.LoadTarget
+func Suggest(wf *model.Workflow, st *model.DeployedState, r Resolver, instances map[string]sandbox.InstanceAccess) []model.LoadTarget // instances: sandbox.Manager.Instances (nil: none); EC2 instances get "GET / · <name>:<port>" on each published HTTP port (sandbox.HTTPAppPorts, InstanceAccess.URL — the Endpoints card's Host URL)
 func (e *Engine) Start(ctx context.Context, wfID string, spec model.LoadTestSpec) (*model.LoadTestRun, error) // async; ErrTooManyRuns when 3 are running
 func (e *Engine) StartConnection(ctx context.Context, connID string, spec model.LoadTestSpec) (*model.LoadTestRun, error) // run owned by the connection
 func (e *Engine) Stop(id string) error // ErrNotFound for unknown ids; no-op for finished runs
@@ -512,7 +676,11 @@ var ErrNotFound, ErrTooManyRuns, ErrConfirmationRequired, ErrConnectionNotFound,
 
 Load test semantics: Start validates the spec synchronously (bad spec, AWS
 sandbox not running → error, no run); the run then sends one preflight
-request and ends with status `error` if the target is unreachable. Latency
+request and ends with status `error` if the target is unreachable. For
+sandbox HTTP targets, preflight keeps retrying (until its 30 s deadline)
+while connections are accepted and then dropped: the case of a Docker-published
+EC2 port whose web server is still starting. Refused connections fail at once.
+Latency
 stats cover successful requests; failures show up as error kinds
 (`timeout`, `connection_refused`, `auth_failed`, `http_4xx`, `http_5xx`,
 `aws:<ErrorCode>`, `sql:<SQLSTATE>`, `mysql:<errno>`, `redis:<prefix>`,
@@ -546,6 +714,7 @@ type Sandbox struct {
     Running map[model.Cloud]bool   // emulators up and answering
     Region  string                 // settings' default AWS region
     Sources []string               // workflow code assets, scanned for route hints
+    Instances map[string]sandbox.InstanceAccess // EC2 containers by instance ID (sandbox.Instances)
 }
 func Build(wf *model.Workflow, st *model.DeployedState, sb Sandbox) model.EndpointsInfo
 func Try(ctx context.Context, wf *model.Workflow, st *model.DeployedState, sb Sandbox, req model.TryRequest) (model.TryResult, error) // ErrNotFound | *RequestError
@@ -568,6 +737,20 @@ on the host), and `generic` (identifiers only; common IAM/permission/mapping
 types get a plain explanation). GCP: see below; Azure/OCI resources not covered
 by their builders are generic. Without a known AWS address (legacy stopped
 pod) AWS resources are generic with a "start the sandbox" warning.
+
+EC2 (`ec2.go`): Floci runs each `aws_instance` as the container
+`floci-aws-nimbo-<wf>-ec2-<iid>`; its private/public IPs are VPC addresses
+not reachable from the host. Kind `instance` shows instance ID, IPs (public
+= VPC address too), zone and subnet, plus what the API reads with one
+`docker ps` (only when the state has instances): `Host URL (port N)` per app
+port Floci publishes through `…-ec2-fwd-<iid>-<port>` socat sidecars (one per
+TCP security-group ingress rule with a CIDR source, never 22) and `SSH` =
+`127.0.0.1:<port>`. Ports 80/8080/8000/3000/5000 become GET endpoints;
+snippets are curl and `docker exec -it <container> sh`; Try sends HTTP to
+the published ports (allowed for any of the workflow's instances' app
+ports). Without published app ports the card explains the security-group
+rule needed; without a container it says to start the sandbox. Postman:
+"EC2 instances (sandbox)" with a GET per host URL.
 
 GCP (`gcp.go`, verified against floci-gcp 0.11.0; one base URL for REST and
 plaintext gRPC): `bucket` (JSON API list/upload/download), `topic` (REST
@@ -721,7 +904,8 @@ URLs containing `$default` are single-quoted in shell snippets.
 
 Try: AWS actions use `loadtest.SandboxAWSConfig` (shared with load tests:
 static test credentials, no retries); HTTP uses `net/http`. 15 s timeout;
-HTTP targets must be loopback URLs on one of the sandbox's emulator ports
+HTTP targets must be loopback URLs on one of the sandbox's emulator ports or
+a published app port of the workflow's EC2 instances
 (relative paths resolve against the API's first stage or the function URL);
 redirects are followed only to loopback hosts (max 5). Bodies are read up to
 256 KB (then truncated with a note) and pretty-printed when JSON. SQS
@@ -732,7 +916,8 @@ DynamoDB `scan` returns at most 25 items as plain JSON
 Step Functions `start` describes the execution after 1 s. FIFO queues/topics
 get message group `nimbo` (and a deduplication ID unless content-based).
 The API builds Try's (and Postman's) `Sandbox` from the pod's cached host
-ports, so a warm Try runs no docker command and no Terraform container (the
+ports, so a warm Try runs no docker command (one `docker ps` when the state
+has EC2 instances) and no Terraform container (the
 state comes from `State`'s cache); only `GET /endpoints` runs the full status
 check. A stopped emulator then shows as a connection error in the result.
 
@@ -899,7 +1084,7 @@ Docker; the desktop onboarding wizard (`GET /setup`) and `nimbo doctor`
 | `POST /workflows/{id}/modules/{nodeId}/inline` | → `Workflow` (`hclcodec.InlineModule`; then the module's `*.tf` and `README.md` are deleted, other files stay). 400 for non-local modules, count/for_each, clashes, whole-module references; 409 when another local module also calls the directory |
 | `GET /workflows/{id}/sandbox` | → `SandboxStatus` |
 | `POST /workflows/{id}/sandbox/start` / `stop` / `reset` | → `SandboxStatus` |
-| `POST /workflows/{id}/runs` | `{action, environment?}` → `Run` (starts sandbox if needed; environment defaults to the active one, 404 if unknown; plan/apply → 400 + diagnostics while error diagnostics exist; 409 while another run is active) |
+| `POST /workflows/{id}/runs` | `{action, environment?}` → `Run` (starts sandbox if needed; environment defaults to the active one, 404 if unknown; plan/apply → 400 + diagnostics while error diagnostics other than `net_*` exist; 409 while another run is active) |
 | `GET /workflows/{id}/runs` | → `Run[]` |
 | `GET /runs/{runId}` | → `Run` (with log) |
 | `POST /runs/{runId}/cancel` | → 204 |
@@ -907,6 +1092,9 @@ Docker; the desktop onboarding wizard (`GET /setup`) and `nimbo doctor`
 | `GET /workflows/{id}/endpoints` | → `EndpointsInfo` (empty `resources` when nothing is deployed; empty `sandbox` while the sandbox is not running — resource URLs then use the saved stable ports). Refetch when `state.updated` / `sandbox.status` arrive |
 | `POST /workflows/{id}/endpoints/try` | `TryRequest` → `TryResult`; always 200 for operation failures (`ok: false`, `error`; stopped sandbox included); 400 bad request (missing `nodeId`/`action`, unknown action, invalid JSON input, URL outside the sandbox); 404 unknown resource |
 | `GET /workflows/{id}/endpoints/postman.json` | → Postman Collection v2.1 download (`Content-Disposition: attachment`) |
+| `GET /workflows/{id}/network` | → `NetworkSummary` (`basis` deployed/design + `basisReason`, networks, subnets with `classification` public/private/isolated/unknown and `why`, route tables, gateways, security groups with `summary`, placements, `findings`, `counts`, `notes`). Reads the cached deployed state; nothing deployed → design |
+| `POST /workflows/{id}/network/reachability` | `ReachabilityRequest {source, destination: {kind: internet\|node, nodeId?}, protocol: tcp\|udp\|icmp, port, live?}` → `ReachabilityResult {reachable, verdict, basis, summary, path: ReachabilityHop[], blockers, suggestions, live?: LiveCheck}`; 400 for unknown nodes, non-network nodes, internet → internet, bad protocol/port. `live` adds real probes (`LiveCheck.unavailable` explains when they can't run) |
+| `POST /workflows/{id}/network/test-instance` | `{subnet}` (aws_subnet ID/address; count/for_each subnets need an instance address) → 201 `{workflow, nodeId}` |
 | `GET /workflows/{id}/loadtests/targets` | → `LoadTarget[]` |
 | `POST /workflows/{id}/loadtests` | `LoadTestSpec` → `LoadTestRun` (targets may use a saved connection; outside the sandbox without `confirmExternal` → 428 `confirmation_required`) |
 | `GET /workflows/{id}/loadtests` | → `LoadTestRun[]` |

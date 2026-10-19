@@ -1,22 +1,29 @@
 import { useMemo } from "react"
-import { ChevronRight, CircleAlert, CircleCheck, Settings2, ShieldCheck, TriangleAlert } from "lucide-react"
+import { ChevronRight, CircleAlert, CircleCheck, Route, Settings2, ShieldCheck, TriangleAlert } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible"
 import { Empty, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from "@/components/ui/empty"
 import { ScrollArea } from "@/components/ui/scroll-area"
 import { useSettingsView } from "@/features/settings/store"
-import { isBestPractice, type Diagnostic } from "@/lib/api/types"
+import { TermHint } from "@/features/network/glossary"
+import { openReachability } from "@/features/network/store"
+import { hasNetworkResources } from "@/features/network/use-network"
+import { isBestPractice, isNetworkFinding, type Diagnostic } from "@/lib/api/types"
 import { cn } from "@/lib/utils"
 import { useWorkflowStore } from "@/state/workflow-store"
 import { DiagnosticRow } from "../components/diagnostic-row"
 import { nodeLabelById } from "../lib/nodes"
 
 interface Group {
-  id: "errors" | "warnings" | "practices"
+  id: "errors" | "warnings" | "practices" | "network"
   label: string
   icon: typeof CircleAlert
   className: string
   hint?: string
+  /** Header tooltip. */
+  help?: string
+  /** Shown even without findings (a workflow with a network gets an explicit "all clear"). */
+  always?: boolean
   items: Diagnostic[]
 }
 
@@ -29,18 +36,29 @@ export function ProblemsTab() {
   const select = useWorkflowStore((s) => s.select)
   const openSettings = useSettingsView((s) => s.openView)
   const labels = useMemo(() => nodeLabelById(nodes), [nodes])
+  const withNetwork = useMemo(() => hasNetworkResources(nodes), [nodes])
 
   const groups = useMemo<Group[]>(() => {
     const all = diagnostics ?? []
-    const practices = all.filter(isBestPractice).sort((a, b) => RANK[a.severity] - RANK[b.severity])
+    const byRank = (a: Diagnostic, b: Diagnostic) => RANK[a.severity] - RANK[b.severity]
+    const practices = all.filter(isBestPractice).sort(byRank)
+    const network = all.filter(isNetworkFinding).sort(byRank)
     return [
-      { id: "errors", label: "Errors", icon: CircleAlert, className: "text-destructive", items: all.filter((d) => d.severity === "error") },
+      {
+        id: "errors",
+        label: "Errors",
+        icon: CircleAlert,
+        className: "text-destructive",
+        items: all.filter((d) => d.severity === "error" && !isNetworkFinding(d)),
+      },
       {
         id: "warnings",
         label: "Warnings",
         icon: TriangleAlert,
         className: "text-amber-600 dark:text-amber-400",
-        items: all.filter((d) => d.severity !== "error" && !isBestPractice(d)).sort((a, b) => RANK[a.severity] - RANK[b.severity]),
+        items: all
+          .filter((d) => d.severity !== "error" && !isBestPractice(d) && !isNetworkFinding(d))
+          .sort(byRank),
       },
       {
         id: "practices",
@@ -50,10 +68,20 @@ export function ProblemsTab() {
         hint: "Suggestions to make the Terraform production-ready. They never block a deploy.",
         items: practices,
       },
+      {
+        id: "network",
+        label: "Network",
+        icon: Route,
+        className: "text-teal-600 dark:text-teal-400",
+        hint: "Who can reach what. Never blocks a deploy.",
+        help: "Network checks review your VPCs, subnets, route tables, gateways and security groups: what is exposed to the internet, what can't get out, and what can't talk to each other. They never block a deploy.",
+        always: withNetwork,
+        items: network,
+      },
     ]
-  }, [diagnostics])
+  }, [diagnostics, withNetwork])
 
-  if (groups.every((g) => g.items.length === 0)) {
+  if (groups.every((g) => g.items.length === 0 && !g.always)) {
     return (
       <Empty className="h-full">
         <EmptyHeader>
@@ -72,7 +100,7 @@ export function ProblemsTab() {
   return (
     <ScrollArea className="h-full">
       {groups.map((g) =>
-        g.items.length === 0 ? null : (
+        g.items.length === 0 && !g.always ? null : (
           <Collapsible key={g.id} defaultOpen asChild>
             <section aria-label={g.label}>
               <div className="sticky top-0 z-10 flex items-center border-b bg-background/95 pr-2 backdrop-blur">
@@ -88,9 +116,15 @@ export function ProblemsTab() {
                   <span className="text-muted-foreground tabular-nums">{g.items.length}</span>
                   {g.hint && <span className="ml-2 truncate font-normal tracking-normal text-muted-foreground normal-case">{g.hint}</span>}
                 </CollapsibleTrigger>
+                {g.help && <TermHint text={g.help} label={`About ${g.label.toLowerCase()} checks`} />}
                 {g.id === "practices" && (
                   <Button size="xs" variant="ghost" className="text-muted-foreground" onClick={() => openSettings("practices")}>
                     <Settings2 /> Configure
+                  </Button>
+                )}
+                {g.id === "network" && (
+                  <Button size="xs" variant="ghost" className="ml-1 text-muted-foreground" onClick={() => void openReachability()}>
+                    <Route /> Check reachability…
                   </Button>
                 )}
               </div>
@@ -103,6 +137,12 @@ export function ProblemsTab() {
                     onSelect={d.nodeId ? () => select(d.nodeId!) : undefined}
                   />
                 ))}
+                {g.items.length === 0 && (
+                  <p className="flex items-center gap-2 px-3 py-1.5 text-xs text-muted-foreground">
+                    <CircleCheck className="size-3.5 text-emerald-500" />
+                    No network issues found. Use “Check reachability…” to test a specific connection.
+                  </p>
+                )}
               </CollapsibleContent>
             </section>
           </Collapsible>
