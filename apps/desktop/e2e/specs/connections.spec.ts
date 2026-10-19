@@ -9,9 +9,7 @@ test("connects two resources with a connection recipe", async ({ app, api, page 
   await expect(app.saved).toBeVisible()
 
   // Drag from the queue's output dot to the function's input dot.
-  const source = app.node("aws_sqs_queue.queue").locator(".react-flow__handle.source")
-  const target = app.node("aws_lambda_function.function").locator(".react-flow__handle.target")
-  await source.dragTo(target)
+  await app.connect("aws_sqs_queue.queue", "aws_lambda_function.function")
 
   const dialog = page.getByRole("dialog", { name: "How should these connect?" })
   await expect(dialog.getByRole("button", { name: /^Let the function use this queue/ })).toBeVisible()

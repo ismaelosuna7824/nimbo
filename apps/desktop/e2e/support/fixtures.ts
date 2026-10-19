@@ -110,6 +110,36 @@ export class App {
     await this.page.getByRole("button", { name: new RegExp(`^${escapeRegExp(label)} ${type}\\b`) }).click()
   }
 
+  /**
+   * Drags a connection from one node's output handle to another's input handle.
+   * Waits until both handles stop moving first: adding a node can make the
+   * engine nudge new cards clear of others right after the save echo, and a
+   * drag aimed at the old position would miss.
+   */
+  async connect(sourceAddress: string, targetAddress: string) {
+    const source = this.node(sourceAddress).locator(".react-flow__handle.source")
+    const target = this.node(targetAddress).locator(".react-flow__handle.target")
+    const boxes = async () => JSON.stringify([await source.boundingBox(), await target.boundingBox()])
+    let previous = ""
+    await expect
+      .poll(
+        async () => {
+          const current = await boxes()
+          const stable = current === previous && !current.includes("null")
+          previous = current
+          return stable
+        },
+        { intervals: [150] },
+      )
+      .toBe(true)
+    const from = (await source.boundingBox())!
+    const to = (await target.boundingBox())!
+    await this.page.mouse.move(from.x + from.width / 2, from.y + from.height / 2)
+    await this.page.mouse.down()
+    await this.page.mouse.move(to.x + to.width / 2, to.y + to.height / 2, { steps: 12 })
+    await this.page.mouse.up()
+  }
+
   bottomTab(name: string) {
     return this.page.getByRole("tab", { name, exact: true })
   }

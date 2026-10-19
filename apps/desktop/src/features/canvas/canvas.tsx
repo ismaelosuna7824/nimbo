@@ -153,6 +153,21 @@ function sameFlowEdge(a: RefFlowEdge, b: RefFlowEdge) {
 }
 
 /**
+ * Rebuilt nodes keep React Flow's DOM measurement (`measured`) from the local copy. A node object without it makes
+ * React Flow drop that node's handle bounds and re-measure; when that reset lands in the same commit as the previous
+ * re-measure, React Flow never observes the node again and its handles stay dead (drags from or onto them do nothing).
+ * Unchanged nodes keep their measured local object, so their cards don't re-render either.
+ */
+function keepMeasured(next: ResourceFlowNode[], current: ResourceFlowNode[]): ResourceFlowNode[] {
+  const byId = new Map(current.map((n) => [n.id, n]))
+  return next.map((n) => {
+    const local = byId.get(n.id)
+    if (!local?.measured || n.measured) return n
+    return sameFlowNode(local, n) ? local : { ...n, measured: local.measured }
+  })
+}
+
+/**
  * Returns `items` with every item that `same` finds unchanged (by id) replaced
  * by the object from the previous call (or the previous array itself when
  * nothing changed), so React Flow only re-renders the cards and edges whose
@@ -315,7 +330,7 @@ function CanvasInner() {
     [stableEdges, hoveredEdge],
   )
 
-  const [nodes, setNodes] = useSyncedState(derivedNodes)
+  const [nodes, setNodes] = useSyncedState(derivedNodes, keepMeasured)
   const [edges, setEdges] = useSyncedState(derivedEdges)
   /** What the context menu acts on: the right-clicked node (or the selection containing it); null = the pane. */
   const [menu, setMenu] = useState<{ ids: string[]; node?: WorkflowNode } | null>(null)
