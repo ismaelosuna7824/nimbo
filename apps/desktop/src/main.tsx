@@ -3,6 +3,7 @@ import { invoke, isTauri } from "@tauri-apps/api/core"
 import { ThemeProvider } from "next-themes"
 import { StrictMode } from "react"
 import { createRoot } from "react-dom/client"
+import { ArcadeCelebration } from "@/components/arcade/celebration"
 import { Toaster } from "@/components/ui/sonner"
 import { TooltipProvider } from "@/components/ui/tooltip"
 import { setApiBaseUrl } from "@/lib/api/client"
@@ -33,6 +34,7 @@ async function bootstrap() {
           <TooltipProvider delayDuration={300}>
             <App />
             <Toaster position="bottom-right" richColors closeButton />
+            <ArcadeCelebration />
           </TooltipProvider>
         </QueryClientProvider>
       </ThemeProvider>

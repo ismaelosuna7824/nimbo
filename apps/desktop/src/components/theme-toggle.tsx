@@ -1,5 +1,6 @@
 import { MoonIcon, SunIcon } from "lucide-react"
 import { useTheme } from "next-themes"
+import { ThemedIcon } from "@/components/arcade/themed-icon"
 import { Button } from "@/components/ui/button"
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip"
 
@@ -10,7 +11,7 @@ export function ThemeToggle() {
     <Tooltip>
       <TooltipTrigger asChild>
         <Button variant="ghost" size="icon-sm" onClick={() => setTheme(dark ? "light" : "dark")} aria-label="Toggle theme">
-          {dark ? <SunIcon /> : <MoonIcon />}
+          {dark ? <ThemedIcon icon={SunIcon} pixel="sun" /> : <ThemedIcon icon={MoonIcon} pixel="moon" />}
         </Button>
       </TooltipTrigger>
       <TooltipContent>{dark ? "Light theme" : "Dark theme"}</TooltipContent>

@@ -1,6 +1,7 @@
 import { lazy, Suspense, useState } from "react"
 import { Check, Info, Square, X } from "lucide-react"
 import { toast } from "sonner"
+import { PixelProgress } from "@/components/arcade/pixel-progress"
 import { Button } from "@/components/ui/button"
 import { Spinner } from "@/components/ui/spinner"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
@@ -39,7 +40,7 @@ function Kpi({
   tone?: keyof typeof TONE_TEXT
 }) {
   return (
-    <div className="min-w-0 rounded-lg border px-2.5 py-1.5">
+    <div data-slot="kpi" className="min-w-0 rounded-lg border px-2.5 py-1.5">
       <div className="flex items-center gap-1 text-[11px] text-muted-foreground">
         <span className="truncate">{label}</span>
         <Tooltip>
@@ -83,6 +84,7 @@ function Breakdown({ title, counts, total }: { title: string; counts: Record<str
               </span>
               <div className="h-1.5 overflow-hidden rounded-full bg-muted">
                 <div
+                  data-meter
                   className={cn("h-full rounded-full", /^2/.test(k) ? "bg-emerald-500" : "bg-destructive")}
                   style={{ width: `${total ? (n / total) * 100 : 0}%` }}
                 />
@@ -137,6 +139,7 @@ export function RunResults({ runId }: { runId: string }) {
           </Button>
         )}
       </div>
+      {running && <PixelProgress value={planned > 0 ? (elapsed / planned) * 100 : undefined} label="Load test progress" />}
       {run.error && <p className="text-xs text-destructive">{run.error}</p>}
 
       <div className="grid grid-cols-2 gap-2 sm:grid-cols-4 xl:grid-cols-8">

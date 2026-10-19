@@ -2,6 +2,7 @@ import {
   BaseEdge,
   EdgeLabelRenderer,
   getBezierPath,
+  getSmoothStepPath,
   Handle,
   Position,
   type Edge,
@@ -11,6 +12,7 @@ import {
 } from "@xyflow/react"
 import { CircleAlertIcon, CircleCheckIcon, CloudOffIcon, PlugIcon, TriangleAlertIcon, ZapIcon } from "lucide-react"
 import { memo } from "react"
+import { useArcade } from "@/components/arcade/arcade-store"
 import { CLOUD_META, cloudOfType } from "@/components/cloud-meta"
 import { ResourceIcon } from "@/components/resource-icon"
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip"
@@ -60,12 +62,12 @@ function StatusBadges({ data }: { data: ResourceNodeData }) {
         <Tooltip>
           <TooltipTrigger asChild>
             {supported ? (
-              <span className="inline-flex h-4.5 items-center gap-0.5 rounded-full bg-emerald-500/12 px-1.5 text-[10px] font-medium text-emerald-600 dark:text-emerald-400">
+              <span data-slot="node-badge" className="inline-flex h-4.5 items-center gap-0.5 rounded-full bg-emerald-500/12 px-1.5 text-[10px] font-medium text-emerald-600 dark:text-emerald-400">
                 <ZapIcon className="size-2.5" />
                 Local
               </span>
             ) : (
-              <span className="inline-flex h-4.5 items-center gap-0.5 rounded-full bg-muted px-1.5 text-[10px] font-medium text-muted-foreground">
+              <span data-slot="node-badge" className="inline-flex h-4.5 items-center gap-0.5 rounded-full bg-muted px-1.5 text-[10px] font-medium text-muted-foreground">
                 <CloudOffIcon className="size-2.5" />
                 Export only
               </span>
@@ -79,19 +81,19 @@ function StatusBadges({ data }: { data: ResourceNodeData }) {
         </Tooltip>
       )}
       {data.deployed && (
-        <span className="inline-flex h-4.5 items-center gap-0.5 rounded-full bg-sky-500/12 px-1.5 text-[10px] font-medium text-sky-600 dark:text-sky-400">
+        <span data-slot="node-badge" className="inline-flex h-4.5 items-center gap-0.5 rounded-full bg-sky-500/12 px-1.5 text-[10px] font-medium text-sky-600 dark:text-sky-400">
           <CircleCheckIcon className="size-2.5" />
           Deployed
         </span>
       )}
       {data.errors > 0 && (
-        <span className="inline-flex h-4.5 items-center gap-0.5 rounded-full bg-destructive/12 px-1.5 text-[10px] font-medium text-destructive">
+        <span data-slot="node-badge" className="inline-flex h-4.5 items-center gap-0.5 rounded-full bg-destructive/12 px-1.5 text-[10px] font-medium text-destructive">
           <CircleAlertIcon className="size-2.5" />
           {data.errors}
         </span>
       )}
       {data.warnings > 0 && (
-        <span className="inline-flex h-4.5 items-center gap-0.5 rounded-full bg-amber-500/12 px-1.5 text-[10px] font-medium text-amber-600 dark:text-amber-400">
+        <span data-slot="node-badge" className="inline-flex h-4.5 items-center gap-0.5 rounded-full bg-amber-500/12 px-1.5 text-[10px] font-medium text-amber-600 dark:text-amber-400">
           <TriangleAlertIcon className="size-2.5" />
           {data.warnings}
         </span>
@@ -101,6 +103,12 @@ function StatusBadges({ data }: { data: ResourceNodeData }) {
 }
 
 const handleClass = "!size-2.5 !border-2 !border-background !bg-muted-foreground/70 hover:!bg-primary"
+
+/** Arcade's square packet hops along a live edge in 12 discrete steps instead of gliding. */
+const PACKET_STEPS = (() => {
+  const steps = Array.from({ length: 12 }, (_, i) => (i / 12).toFixed(4)).join(";")
+  return { points: steps, times: steps }
+})()
 
 function KindTag({ kind }: { kind: WorkflowNode["kind"] }) {
   if (kind === "resource") return null
@@ -121,6 +129,7 @@ export const ResourceNode = memo(function ResourceNode({ data, selected }: NodeP
   const { node } = data
   return (
     <div
+      data-slot="node-card"
       className={cn(
         "group/node relative flex flex-col justify-between rounded-xl border bg-card px-3 py-2.5 text-card-foreground shadow-sm transition-shadow",
         node.kind === "data" && "border-dashed bg-card/70",
@@ -129,10 +138,11 @@ export const ResourceNode = memo(function ResourceNode({ data, selected }: NodeP
       )}
       style={{ width: NODE_WIDTH, height: NODE_HEIGHT }}
     >
-      <span className="absolute inset-y-2 left-0 w-1 rounded-r" style={{ background: accent }} />
+      <span data-slot="node-accent" className="absolute inset-y-2 left-0 w-1 rounded-r" style={{ background: accent }} />
       <Handle type="target" position={Position.Left} className={handleClass} />
       <div className="flex min-w-0 items-center gap-2.5">
         <span
+          data-slot="resource-tile"
           className="flex size-8 shrink-0 items-center justify-center rounded-lg"
           style={{ background: `${accent}1f`, color: accent }}
         >
@@ -185,6 +195,7 @@ export const GroupNode = memo(function GroupNode({ data, selected, width, height
   const { node } = data
   return (
     <div
+      data-slot="group-card"
       className={cn(
         "relative rounded-2xl border-2 border-dashed",
         selected && "ring-2 ring-primary ring-offset-2 ring-offset-background",
@@ -221,8 +232,13 @@ export const RefEdge = memo(function RefEdge({
   selected,
   data,
 }: EdgeProps<RefFlowEdge>) {
-  const [path, labelX, labelY] = getBezierPath({ sourceX, sourceY, targetX, targetY, sourcePosition, targetPosition })
+  // Arcade draws edges as stepped orthogonal wires; the default keeps its curves.
+  const arcade = useArcade()
+  const [path, labelX, labelY] = arcade
+    ? getSmoothStepPath({ sourceX, sourceY, targetX, targetY, sourcePosition, targetPosition, borderRadius: 0 })
+    : getBezierPath({ sourceX, sourceY, targetX, targetY, sourcePosition, targetPosition })
   const dependsOn = data?.kind === "depends_on"
+  const live = data?.live && !dependsOn
   return (
     <>
       <BaseEdge
@@ -230,13 +246,21 @@ export const RefEdge = memo(function RefEdge({
         path={path}
         markerEnd={markerEnd}
         style={{
-          strokeWidth: selected || data?.hovered ? 2.25 : 1.5,
+          strokeWidth: arcade ? 2 : selected || data?.hovered ? 2.25 : 1.5,
           strokeDasharray: dependsOn ? "6 5" : undefined,
           stroke: selected || data?.hovered ? "var(--color-primary)" : "var(--color-muted-foreground)",
           opacity: selected || data?.hovered ? 1 : 0.65,
         }}
       />
-      {data?.live && !dependsOn && (
+      {live && arcade && (
+        <>
+          <path d={path} className="arcade-live-edge" />
+          <rect x={-3} y={-3} width={6} height={6} className="fill-sky-500" shapeRendering="crispEdges">
+            <animateMotion dur="1.8s" repeatCount="indefinite" path={path} calcMode="discrete" keyPoints={PACKET_STEPS.points} keyTimes={PACKET_STEPS.times} />
+          </rect>
+        </>
+      )}
+      {live && !arcade && (
         <circle r={3} className="fill-sky-500">
           <animateMotion dur="1.8s" repeatCount="indefinite" path={path} />
         </circle>

@@ -2,8 +2,13 @@ import { useMutation, useQueryClient } from "@tanstack/react-query"
 import { GraduationCapIcon, MoonIcon, SunIcon, TerminalSquareIcon } from "lucide-react"
 import { useTheme } from "next-themes"
 import { toast } from "sonner"
+import { useArcadeStore } from "@/components/arcade/arcade-store"
 import { errorMessage } from "@/components/errors"
 import { Skeleton } from "@/components/ui/skeleton"
+import { Switch } from "@/components/ui/switch"
+import { DEFAULT_TILE_COLOR } from "@/components/workflow-icon/colors"
+import { glyphById } from "@/components/workflow-icon/glyphs"
+import { PixelGlyph } from "@/components/workflow-icon/pixel-glyph"
 import { api } from "@/lib/api/client"
 import type { Settings } from "@/lib/api/types"
 import { cn } from "@/lib/utils"
@@ -32,6 +37,10 @@ export function GeneralSection() {
   const mode = useWorkflowStore((s) => s.mode)
   const setMode = useWorkflowStore((s) => s.setMode)
   const { resolvedTheme, setTheme } = useTheme()
+  const arcade = useArcadeStore((s) => s.arcade)
+  const setArcade = useArcadeStore((s) => s.setArcade)
+  const crt = useArcadeStore((s) => s.crt)
+  const setCrt = useArcadeStore((s) => s.setCrt)
 
   const save = useMutation({
     mutationFn: (s: Settings) => api.saveSettings(s),
@@ -60,24 +69,42 @@ export function GeneralSection() {
             </div>
           )}
         </Row>
-        <Row label="Theme">
-          <div role="radiogroup" aria-label="Theme" className="grid max-w-sm grid-cols-2 gap-2">
-            <Choice selected={resolvedTheme === "light"} onSelect={() => setTheme("light")} icon={<SunIcon />} title="Light" />
-            <Choice selected={resolvedTheme !== "light"} onSelect={() => setTheme("dark")} icon={<MoonIcon />} title="Dark" />
+        <Row label="Theme" description="Arcade is a pixel-art style on top of light or dark.">
+          <div className="grid max-w-xl grid-cols-3 gap-2">
+            <div role="radiogroup" aria-label="Theme" className="col-span-2 grid grid-cols-2 gap-2">
+              <Choice selected={resolvedTheme === "light"} onSelect={() => setTheme("light")} icon={<SunIcon />} title="Light" />
+              <Choice selected={resolvedTheme !== "light"} onSelect={() => setTheme("dark")} icon={<MoonIcon />} title="Dark" />
+            </div>
+            <Choice
+              role="switch"
+              selected={arcade}
+              onSelect={() => setArcade(!arcade)}
+              icon={<PixelGlyph glyph={glyphById("gamepad")!} color={DEFAULT_TILE_COLOR} size={16} />}
+              title="Arcade"
+            >
+              8-bit pixel mode
+            </Choice>
           </div>
         </Row>
+        {arcade && (
+          <Row label="CRT scanlines" htmlFor="arcade-crt" description="A faint scanline overlay, like an old arcade cabinet. Stays still with reduced motion.">
+            <Switch id="arcade-crt" checked={crt} onCheckedChange={setCrt} />
+          </Row>
+        )}
       </div>
     </Section>
   )
 }
 
 function Choice({
+  role = "radio",
   selected,
   onSelect,
   icon,
   title,
   children,
 }: {
+  role?: "radio" | "switch"
   selected: boolean
   onSelect: () => void
   icon: React.ReactNode
@@ -87,7 +114,7 @@ function Choice({
   return (
     <button
       type="button"
-      role="radio"
+      role={role}
       aria-checked={selected}
       onClick={onSelect}
       className={cn(

@@ -28,7 +28,12 @@ import {
 } from "lucide-react"
 import { useTheme } from "next-themes"
 import { useEffect, useState } from "react"
+import { useArcadeStore } from "@/components/arcade/arcade-store"
+import { ThemedIcon } from "@/components/arcade/themed-icon"
 import { ResourceIcon } from "@/components/resource-icon"
+import { DEFAULT_TILE_COLOR } from "@/components/workflow-icon/colors"
+import { glyphById } from "@/components/workflow-icon/glyphs"
+import { PixelGlyph } from "@/components/workflow-icon/pixel-glyph"
 import { WorkflowIconTile } from "@/components/workflow-icon/workflow-icon-tile"
 import {
   Command,
@@ -111,6 +116,7 @@ function PaletteBody() {
   const sandbox = useWorkflowStore((s) => s.sandbox)
   const bottomOpen = useWorkflowStore((s) => s.bottomOpen)
   const { resolvedTheme, setTheme } = useTheme()
+  const arcade = useArcadeStore((s) => s.arcade)
   const [search, setSearch] = useState("")
   const q = search.trim()
 
@@ -154,23 +160,23 @@ function PaletteBody() {
           <>
             <CommandGroup heading="Run">
               <CommandItem value="validate check" onSelect={() => run(() => void runAction("validate"))}>
-                <FileCheck2Icon />
+                <ThemedIcon icon={FileCheck2Icon} pixel="check" />
                 Validate
               </CommandItem>
               <CommandItem value="plan preview changes" onSelect={() => run(() => void runAction("plan"))}>
-                <ListChecksIcon />
+                <ThemedIcon icon={ListChecksIcon} pixel="list" />
                 Plan
               </CommandItem>
               <CommandItem value="deploy apply" onSelect={() => run(() => void runAction("apply"))}>
-                <CloudUploadIcon />
+                <ThemedIcon icon={CloudUploadIcon} glyph="rocket" />
                 Deploy to sandbox
               </CommandItem>
               <CommandItem value="destroy teardown" onSelect={() => run(() => useUiStore.getState().setConfirmDestroy(true))}>
-                <Trash2Icon />
+                <ThemedIcon icon={Trash2Icon} pixel="trash" />
                 Destroy…
               </CommandItem>
               <CommandItem value="load test traffic" onSelect={() => run(() => useWorkflowStore.getState().showBottom("loadtest"))}>
-                <ActivityIcon />
+                <ThemedIcon icon={ActivityIcon} glyph="bolt" />
                 Load test
               </CommandItem>
               {sandboxUp ? (
@@ -256,6 +262,11 @@ function PaletteBody() {
           >
             <MoonIcon />
             Switch to {resolvedTheme === "light" ? "dark" : "light"} theme
+          </CommandItem>
+          <CommandItem value="theme arcade 8-bit pixel retro style" onSelect={() => run(() => useArcadeStore.getState().setArcade(!arcade))}>
+            <PixelGlyph glyph={glyphById("gamepad")!} color={DEFAULT_TILE_COLOR} size={16} />
+            {arcade ? "Theme: turn off Arcade" : "Theme: Arcade"}
+            <span className="ml-auto text-xs text-muted-foreground">8-bit pixel mode</span>
           </CommandItem>
           <CommandItem value="open settings preferences mcp ai agents docker images region" onSelect={() => run(() => useSettingsView.getState().openView())}>
             <SettingsIcon />

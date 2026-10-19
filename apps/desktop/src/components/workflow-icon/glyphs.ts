@@ -12,7 +12,8 @@ export interface PixelGlyphDef {
   label: string
   /** Extra search terms. */
   keywords: string
-  palette: Record<string, GlyphTone | `#${string}`>
+  /** A tile tone, a fixed color, or currentColor (one-color UI icons that follow the text color). */
+  palette: Record<string, GlyphTone | `#${string}` | "currentColor">
   rows: readonly string[]
 }
 

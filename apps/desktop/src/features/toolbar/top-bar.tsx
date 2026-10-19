@@ -14,6 +14,7 @@ import {
   UploadIcon,
 } from "lucide-react"
 import { useEffect } from "react"
+import { ThemedIcon } from "@/components/arcade/themed-icon"
 import { ThemeToggle } from "@/components/theme-toggle"
 import { SettingsButton } from "@/features/settings/settings-button"
 import { useSyncedState } from "@/components/use-synced-state"
@@ -142,7 +143,7 @@ function ProblemsBadge() {
           onClick={() => showBottom("problems")}
           className={cn(errors > 0 ? "text-destructive" : warnings > 0 ? "text-amber-600 dark:text-amber-400" : "text-muted-foreground")}
         >
-          {errors + warnings > 0 ? <CircleAlertIcon /> : <ListChecksIcon />}
+          {errors + warnings > 0 ? <ThemedIcon icon={CircleAlertIcon} pixel="warning" /> : <ThemedIcon icon={ListChecksIcon} pixel="list" />}
           {errors + warnings}
         </Button>
       </TooltipTrigger>
@@ -220,7 +221,7 @@ export function TopBar() {
               aria-label="Search or run a command"
               onClick={() => setCommandOpen(true)}
             >
-              <SearchIcon />
+              <ThemedIcon icon={SearchIcon} pixel="search" />
               <span className="hidden 2xl:inline">Search or run…</span>
               <Kbd className="ml-auto">{MOD_KEY} K</Kbd>
             </Button>
@@ -255,7 +256,7 @@ export function TopBar() {
         <Tooltip>
           <TooltipTrigger asChild>
             <Button variant="ghost" size="sm" disabled={busy} aria-label="Validate" onClick={() => void runAction("validate")}>
-              <FileCheck2Icon />
+              <ThemedIcon icon={FileCheck2Icon} pixel="check" />
               <span className="hidden 2xl:inline">Validate</span>
             </Button>
           </TooltipTrigger>
@@ -264,23 +265,23 @@ export function TopBar() {
         <Tooltip>
           <TooltipTrigger asChild>
             <Button variant="ghost" size="sm" disabled={busy} aria-label="Plan" onClick={() => void runAction("plan")}>
-              <ListChecksIcon />
+              <ThemedIcon icon={ListChecksIcon} pixel="list" />
               <span className="hidden 2xl:inline">Plan</span>
             </Button>
           </TooltipTrigger>
           <TooltipContent>Preview what a deploy would change</TooltipContent>
         </Tooltip>
         <Button size="sm" disabled={busy} onClick={() => void runAction("apply")}>
-          {busy ? <Spinner /> : <CloudUploadIcon />}
+          {busy ? <Spinner /> : <ThemedIcon icon={CloudUploadIcon} glyph="rocket" />}
           Deploy
         </Button>
         <IconAction label="Destroy everything in the sandbox" onClick={() => setConfirmDestroy(true)}>
-          <Trash2Icon />
+          <ThemedIcon icon={Trash2Icon} pixel="trash" />
         </IconAction>
         <Tooltip>
           <TooltipTrigger asChild>
             <Button variant="outline" size="sm" aria-label="Load test" onClick={() => showBottom("loadtest")}>
-              <ActivityIcon />
+              <ThemedIcon icon={ActivityIcon} glyph="bolt" />
               <span className="hidden 2xl:inline">Test</span>
             </Button>
           </TooltipTrigger>
@@ -289,15 +290,15 @@ export function TopBar() {
         <Separator orientation="vertical" className="mx-1 h-5" />
         <ProblemsBadge />
         <IconAction label="Import Terraform" onClick={() => openDialog("import")}>
-          <UploadIcon />
+          <ThemedIcon icon={UploadIcon} pixel="upload" />
         </IconAction>
         <IconAction label="Export Terraform" onClick={() => openDialog("export")}>
-          <DownloadIcon />
+          <ThemedIcon icon={DownloadIcon} pixel="download" />
         </IconAction>
         <ThemeToggle />
         <SettingsButton />
         <IconAction label={inspectorOpen ? "Hide inspector" : "Show inspector"} onClick={() => setInspectorOpen(!inspectorOpen)} kbd={`${MOD_KEY} I`}>
-          <PanelRightIcon />
+          <ThemedIcon icon={PanelRightIcon} pixel="panel" />
         </IconAction>
       </div>
     </header>

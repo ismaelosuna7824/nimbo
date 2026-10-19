@@ -1,6 +1,7 @@
 import { useEffect } from "react"
 import { Gauge, Plug } from "lucide-react"
 import { toast } from "sonner"
+import { useArcadeStore } from "@/components/arcade/arcade-store"
 import { Button } from "@/components/ui/button"
 import { api } from "@/lib/api/client"
 import { useWorkflowStore } from "@/state/workflow-store"
@@ -10,7 +11,7 @@ import { firstHttpEndpoint, openEndpoints } from "./use-endpoints"
 /**
  * After an apply this window watched succeed, tells the user where their
  * stuff lives: the first HTTP address (copyable) and a way to the Endpoints
- * and Load test tabs.
+ * and Load test tabs. In Arcade the mascot celebrates too.
  */
 export function useDeployToast() {
   useEffect(
@@ -23,7 +24,9 @@ export function useDeployToast() {
           const before = prev.runs.find((p) => p.id === r.id)?.status
           return before === "queued" || before === "running"
         })
-        if (finished) void announce(wf.id)
+        if (!finished) return
+        useArcadeStore.getState().celebrate()
+        void announce(wf.id)
       }),
     [],
   )

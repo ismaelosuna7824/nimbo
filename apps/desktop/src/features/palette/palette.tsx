@@ -2,6 +2,7 @@ import { useQuery } from "@tanstack/react-query"
 import { useVirtualizer } from "@tanstack/react-virtual"
 import { CloudOffIcon, SearchIcon, StarIcon, XIcon, ZapIcon } from "lucide-react"
 import { createContext, memo, useContext, useEffect, useMemo, useRef, useState } from "react"
+import { ThemedIcon } from "@/components/arcade/themed-icon"
 import { CLOUD_META } from "@/components/cloud-meta"
 import { useSyncedState } from "@/components/use-synced-state"
 import { ResourceIcon } from "@/components/resource-icon"
@@ -61,7 +62,7 @@ export function Palette() {
         <SearchField cloudLabel={CLOUD_TAB_LABEL[cloud]} onQuery={setQ} />
         <div className="flex items-center justify-between gap-2">
           <Label htmlFor="palette-supported" className="flex items-center gap-1.5 text-xs font-normal text-muted-foreground">
-            <ZapIcon className="size-3.5 text-emerald-500" />
+            <ThemedIcon icon={ZapIcon} pixel="zap" className="size-3.5 text-emerald-500" />
             Runs locally only
           </Label>
           <Switch id="palette-supported" size="sm" checked={supportedOnly} onCheckedChange={setSupportedOnly} />
@@ -96,7 +97,7 @@ function SearchField({ cloudLabel, onQuery }: { cloudLabel: string; onQuery: (q:
   return (
     <InputGroup>
       <InputGroupAddon>
-        <SearchIcon />
+        <ThemedIcon icon={SearchIcon} pixel="search" />
       </InputGroupAddon>
       <InputGroupInput
         value={text}
@@ -140,7 +141,7 @@ const Browse = memo(function Browse({ cloud, supported }: { cloud: Cloud; suppor
     <div className="flex flex-col gap-3">
       <section>
         <h3 className="flex items-center gap-1.5 px-2 pb-1 text-xs font-medium text-muted-foreground">
-          <StarIcon className="size-3.5" />
+          <ThemedIcon icon={StarIcon} pixel="star" className="size-3.5" />
           Popular
         </h3>
         {popular.isPending ? (
@@ -233,6 +234,7 @@ const PaletteItem = memo(function PaletteItem({ item }: { item: ResourceSummary 
           className="group flex w-full cursor-grab items-center gap-2.5 rounded-md px-2 py-1.5 text-left hover:bg-sidebar-accent active:cursor-grabbing"
         >
           <span
+            data-slot="resource-tile"
             className="flex size-7 shrink-0 items-center justify-center rounded-md"
             style={{ background: `${accent}1f`, color: accent }}
           >

@@ -1,5 +1,7 @@
 import { lazy, memo, Suspense, useEffect } from "react"
 import { ChevronDown, ChevronUp, Code2, Gauge, Plug, Rocket, SlidersHorizontal, TriangleAlert } from "lucide-react"
+import { ThemedIcon } from "@/components/arcade/themed-icon"
+import type { PixelIconName } from "@/components/arcade/pixel-icons"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Kbd } from "@/components/ui/kbd"
@@ -23,13 +25,13 @@ const TAB_FALLBACK = (
   </div>
 )
 
-const TABS: { id: BottomTab; label: string; icon: typeof Code2 }[] = [
-  { id: "terraform", label: "Code", icon: Code2 },
-  { id: "variables", label: "Variables & Environments", icon: SlidersHorizontal },
-  { id: "deploy", label: "Deploy", icon: Rocket },
-  { id: "endpoints", label: "Endpoints", icon: Plug },
-  { id: "loadtest", label: "Load test", icon: Gauge },
-  { id: "problems", label: "Problems", icon: TriangleAlert },
+const TABS: { id: BottomTab; label: string; icon: typeof Code2; pixel: PixelIconName }[] = [
+  { id: "terraform", label: "Code", icon: Code2, pixel: "code" },
+  { id: "variables", label: "Variables & Environments", icon: SlidersHorizontal, pixel: "sliders" },
+  { id: "deploy", label: "Deploy", icon: Rocket, pixel: "rocket" },
+  { id: "endpoints", label: "Endpoints", icon: Plug, pixel: "plug" },
+  { id: "loadtest", label: "Load test", icon: Gauge, pixel: "gauge" },
+  { id: "problems", label: "Problems", icon: TriangleAlert, pixel: "warning" },
 ]
 
 /**
@@ -71,7 +73,7 @@ export function BottomPanel() {
     >
       <div className="flex h-9 shrink-0 items-center gap-2 border-b px-2">
         <TabsList variant="line" className="h-full gap-0">
-          {TABS.map(({ id, label, icon: Icon }) => (
+          {TABS.map(({ id, label, icon, pixel }) => (
             <TabsTrigger
               key={id}
               value={id}
@@ -80,7 +82,7 @@ export function BottomPanel() {
                 if (!open) showBottom(id)
               }}
             >
-              <Icon />
+              <ThemedIcon icon={icon} pixel={pixel} />
               {label}
               {id === "problems" && alertCount > 0 && (
                 <Badge

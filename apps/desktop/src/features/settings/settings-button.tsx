@@ -1,4 +1,5 @@
 import { SettingsIcon } from "lucide-react"
+import { ThemedIcon } from "@/components/arcade/themed-icon"
 import { Button } from "@/components/ui/button"
 import { Kbd } from "@/components/ui/kbd"
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip"
@@ -11,7 +12,7 @@ export function SettingsButton() {
     <Tooltip>
       <TooltipTrigger asChild>
         <Button variant="ghost" size="icon-sm" onClick={() => openView()} aria-label="Settings">
-          <SettingsIcon />
+          <ThemedIcon icon={SettingsIcon} pixel="gear" />
         </Button>
       </TooltipTrigger>
       <TooltipContent>

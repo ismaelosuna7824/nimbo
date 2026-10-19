@@ -3,6 +3,7 @@ import { useQuery } from "@tanstack/react-query"
 import { CircleCheck, Eye, FileSearch, Rocket, ShieldCheck, Square, Trash2, TriangleAlert } from "lucide-react"
 import { useShallow } from "zustand/react/shallow"
 import { toast } from "sonner"
+import { PixelProgress } from "@/components/arcade/pixel-progress"
 import {
   AlertDialog,
   AlertDialogAction,
@@ -191,6 +192,7 @@ export function DeployTab() {
               </Button>
             </div>
           )}
+          {active && <PixelProgress label={`${active.action} in progress`} />}
         </section>
 
         <section className="flex min-h-0 flex-col rounded-lg border">

@@ -1,6 +1,7 @@
 import type { ReactNode } from "react"
 import { Info } from "lucide-react"
 import { Bar, BarChart, CartesianGrid, Line, LineChart, XAxis, YAxis } from "recharts"
+import { useArcade } from "@/components/arcade/arcade-store"
 import {
   ChartContainer,
   ChartLegend,
@@ -30,6 +31,12 @@ const xAxis = (
 const secondsLabel = (_: unknown, payload: readonly { payload?: { t?: number } }[]) =>
   payload[0]?.payload?.t !== undefined ? `t = ${Math.round(payload[0].payload.t)}s` : ""
 
+/** Arcade's chart marker: a crisp 4px square on every fifth sample, so lines read as pixel plots. */
+function PixelDot({ cx, cy, stroke, index }: { cx?: number; cy?: number; stroke?: string; index?: number }) {
+  if (cx === undefined || cy === undefined || (index ?? 0) % 5 !== 0) return <g />
+  return <rect x={Math.round(cx) - 2} y={Math.round(cy) - 2} width={4} height={4} fill={stroke} shapeRendering="crispEdges" />
+}
+
 function ChartCard({ title, hint, children }: { title: string; hint?: string; children: ReactNode }) {
   return (
     <div className="flex min-h-0 min-w-0 flex-col rounded-lg border p-2">
@@ -51,6 +58,10 @@ function ChartCard({ title, hint, children }: { title: string; hint?: string; ch
 
 export function LoadCharts({ samples, mode }: { samples: LoadSample[]; mode: LoadMode }) {
   const unit = modeUnit(mode)
+  // Arcade plots hard steps with pixel markers; the default keeps smooth curves.
+  const arcade = useArcade()
+  const curve = arcade ? "stepAfter" : "monotone"
+  const dot = arcade ? PixelDot : false
   const throughput: ChartConfig = {
     target: { label: `Target (${unit})`, theme: SERIES_COLORS.target },
     rps: { label: "Achieved req/s", theme: SERIES_COLORS.rps },
@@ -72,8 +83,8 @@ export function LoadCharts({ samples, mode }: { samples: LoadSample[]; mode: Loa
             <YAxis tickLine={false} axisLine={false} width={40} tickFormatter={compactTick} />
             <ChartTooltip content={<ChartTooltipContent labelFormatter={secondsLabel} />} />
             <ChartLegend content={<ChartLegendContent />} />
-            <Line dataKey="rps" type="monotone" stroke="var(--color-rps)" strokeWidth={2} dot={false} isAnimationActive={false} />
-            <Line dataKey="target" type="linear" stroke="var(--color-target)" strokeDasharray="4 3" dot={false} isAnimationActive={false} />
+            <Line dataKey="rps" type={curve} stroke="var(--color-rps)" strokeWidth={2} dot={dot} isAnimationActive={false} />
+            <Line dataKey="target" type={arcade ? "stepAfter" : "linear"} stroke="var(--color-target)" strokeDasharray="4 3" dot={false} isAnimationActive={false} />
           </LineChart>
         </ChartContainer>
       </ChartCard>
@@ -85,9 +96,9 @@ export function LoadCharts({ samples, mode }: { samples: LoadSample[]; mode: Loa
             <YAxis tickLine={false} axisLine={false} width={40} tickFormatter={compactTick} />
             <ChartTooltip content={<ChartTooltipContent labelFormatter={secondsLabel} />} />
             <ChartLegend content={<ChartLegendContent />} />
-            <Line dataKey="p50" type="monotone" stroke="var(--color-p50)" dot={false} isAnimationActive={false} />
-            <Line dataKey="p95" type="monotone" stroke="var(--color-p95)" strokeWidth={2} dot={false} isAnimationActive={false} />
-            <Line dataKey="p99" type="monotone" stroke="var(--color-p99)" dot={false} isAnimationActive={false} />
+            <Line dataKey="p50" type={curve} stroke="var(--color-p50)" strokeWidth={arcade ? 2 : undefined} dot={dot} isAnimationActive={false} />
+            <Line dataKey="p95" type={curve} stroke="var(--color-p95)" strokeWidth={2} dot={dot} isAnimationActive={false} />
+            <Line dataKey="p99" type={curve} stroke="var(--color-p99)" strokeWidth={arcade ? 2 : undefined} dot={dot} isAnimationActive={false} />
           </LineChart>
         </ChartContainer>
       </ChartCard>
@@ -98,7 +109,7 @@ export function LoadCharts({ samples, mode }: { samples: LoadSample[]; mode: Loa
             {xAxis}
             <YAxis tickLine={false} axisLine={false} width={40} tickFormatter={compactTick} allowDecimals={false} />
             <ChartTooltip content={<ChartTooltipContent labelFormatter={secondsLabel} />} />
-            <Bar dataKey="errors" fill="var(--color-errors)" isAnimationActive={false} radius={[2, 2, 0, 0]} />
+            <Bar dataKey="errors" fill="var(--color-errors)" isAnimationActive={false} radius={arcade ? 0 : [2, 2, 0, 0]} />
           </BarChart>
         </ChartContainer>
       </ChartCard>
@@ -129,6 +140,9 @@ const compareAxisX = (
 
 /** p95 and throughput of two runs over time (the history comparison). */
 export function CompareCharts({ rows }: { rows: CompareRow[] }) {
+  const arcade = useArcade()
+  const curve = arcade ? "stepAfter" : undefined
+  const dot = arcade ? PixelDot : false
   return (
     <>
       <ChartCard title="p95 latency over time (ms)" hint={EXPLAIN.speed}>
@@ -139,8 +153,8 @@ export function CompareCharts({ rows }: { rows: CompareRow[] }) {
             <YAxis tickLine={false} axisLine={false} width={40} tickFormatter={compactTick} />
             <ChartTooltip content={<ChartTooltipContent />} />
             <ChartLegend content={<ChartLegendContent />} />
-            <Line dataKey="aP95" stroke="var(--color-aP95)" dot={false} connectNulls isAnimationActive={false} strokeWidth={2} />
-            <Line dataKey="bP95" stroke="var(--color-bP95)" dot={false} connectNulls isAnimationActive={false} strokeWidth={2} />
+            <Line dataKey="aP95" type={curve} stroke="var(--color-aP95)" dot={dot} connectNulls isAnimationActive={false} strokeWidth={2} />
+            <Line dataKey="bP95" type={curve} stroke="var(--color-bP95)" dot={dot} connectNulls isAnimationActive={false} strokeWidth={2} />
           </LineChart>
         </ChartContainer>
       </ChartCard>
@@ -152,8 +166,8 @@ export function CompareCharts({ rows }: { rows: CompareRow[] }) {
             <YAxis tickLine={false} axisLine={false} width={40} tickFormatter={compactTick} />
             <ChartTooltip content={<ChartTooltipContent />} />
             <ChartLegend content={<ChartLegendContent />} />
-            <Line dataKey="aRps" stroke="var(--color-aRps)" dot={false} connectNulls isAnimationActive={false} strokeWidth={2} />
-            <Line dataKey="bRps" stroke="var(--color-bRps)" dot={false} connectNulls isAnimationActive={false} strokeWidth={2} />
+            <Line dataKey="aRps" type={curve} stroke="var(--color-aRps)" dot={dot} connectNulls isAnimationActive={false} strokeWidth={2} />
+            <Line dataKey="bRps" type={curve} stroke="var(--color-bRps)" dot={dot} connectNulls isAnimationActive={false} strokeWidth={2} />
           </LineChart>
         </ChartContainer>
       </ChartCard>

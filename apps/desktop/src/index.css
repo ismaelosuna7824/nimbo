@@ -2,6 +2,8 @@
 @import "tw-animate-css";
 @import "shadcn/tailwind.css";
 @import "@fontsource-variable/geist";
+/* Opt-in 8-bit style; every rule is scoped to html[data-style="arcade"]. */
+@import "./arcade.css";
 
 @custom-variant dark (&:is(.dark *));
 

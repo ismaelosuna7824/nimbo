@@ -248,7 +248,11 @@ function NodeHeader({ node, schema }: { node: WorkflowNode; schema?: ResourceSch
   const accent = cloud ? CLOUD_META[cloud].accent : "#a855f7"
   return (
     <div className="flex items-start gap-3 border-b p-4">
-      <span className="flex size-10 shrink-0 items-center justify-center rounded-xl" style={{ background: `${accent}1f`, color: accent }}>
+      <span
+        data-slot="resource-tile"
+        className="flex size-10 shrink-0 items-center justify-center rounded-xl"
+        style={{ background: `${accent}1f`, color: accent }}
+      >
         <ResourceIcon name={node.kind === "module" ? "package" : schema?.icon} className="size-5" />
       </span>
       <div className="min-w-0 flex-1">

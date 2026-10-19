@@ -1,0 +1,839 @@
+/*
+ * Arcade: the opt-in 8-bit style. Every rule is scoped to <html data-style="arcade">
+ * (set by components/arcade/arcade-store.ts), so the default look is untouched when
+ * it is off. Light/dark stay orthogonal: .dark picks the night palette.
+ *
+ * These rules are unlayered on purpose: they beat Tailwind's layered utilities
+ * without !important (only inline styles and third-party CSS need it).
+ */
+@import "@fontsource-variable/pixelify-sans";
+@import "@fontsource/press-start-2p/400.css";
+@import "@fontsource/silkscreen/400.css";
+
+/* ------------------------------------------------------------------ palette */
+
+:root[data-style="arcade"] {
+  /* Daylight cartridge: cream paper, ink outlines, the same neon accents. */
+  --background: #f1ede2;
+  --foreground: #19143a;
+  --card: #fbf8ef;
+  --card-foreground: #19143a;
+  --popover: #fffdf6;
+  --popover-foreground: #19143a;
+  --primary: #6a2fd0;
+  --primary-foreground: #ffffff;
+  --secondary: #e5def5;
+  --secondary-foreground: #19143a;
+  --muted: #e6e0cf;
+  --muted-foreground: #544e78;
+  --accent: #dcf3f8;
+  --accent-foreground: #19143a;
+  --destructive: #c4142f;
+  --border: #c5bddc;
+  --input: #b9b0d4;
+  --ring: #0b7d96;
+  --chart-1: #6a2fd0;
+  --chart-2: #0b7d96;
+  --chart-3: #b0187a;
+  --chart-4: #4d7a0c;
+  --chart-5: #b06a05;
+  --radius: 0rem;
+  --sidebar: #ebe6d8;
+  --sidebar-foreground: #19143a;
+  --sidebar-primary: #6a2fd0;
+  --sidebar-primary-foreground: #ffffff;
+  --sidebar-accent: #e0d9c6;
+  --sidebar-accent-foreground: #19143a;
+  --sidebar-border: #c5bddc;
+  --sidebar-ring: #0b7d96;
+
+  /* Arcade-only tokens. */
+  --arcade-edge: #2a2350;
+  --arcade-shadow: #2a235040;
+  --arcade-violet: #6a2fd0;
+  --arcade-cyan: #0b7d96;
+  --arcade-pink: #b0187a;
+  --arcade-lime: #4d7a0c;
+  --arcade-amber: #a35f00;
+  --arcade-dot: #19143a14;
+  --arcade-hi: rgb(255 255 255 / 0.55);
+  --arcade-lo: rgb(25 20 58 / 0.28);
+
+  /* Status colors used straight from the Tailwind palette, pulled onto the retro palette. */
+  --color-emerald-400: #4d7a0c;
+  --color-emerald-500: #4d7a0c;
+  --color-emerald-600: #3f660a;
+  --color-emerald-700: #355708;
+  --color-sky-400: #0b7d96;
+  --color-sky-500: #0b7d96;
+  --color-sky-600: #086a80;
+  --color-amber-400: #a35f00;
+  --color-amber-500: #b06a05;
+  --color-amber-600: #8f5200;
+  --color-amber-700: #7a4600;
+  --color-violet-400: #6a2fd0;
+  --color-violet-500: #6a2fd0;
+  --color-violet-600: #5a24b8;
+
+  /* Pixelify shares Geist's x-height, so sizes stay as declared; it runs ~25% wider, which the
+     tighter tracking and a few wrap rules below absorb in dense panels. */
+  font-family: "Pixelify Sans Variable", ui-sans-serif, system-ui, sans-serif;
+  letter-spacing: -0.01em;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* Nested .dark too: React Flow puts its colorMode class on the canvas, which would bring back the default palette. */
+:root[data-style="arcade"].dark,
+[data-style="arcade"] .dark {
+  /* Night arcade: deep navy, neon violet, mascot accents. */
+  --background: #0b0b1f;
+  --foreground: #eceaff;
+  --card: #13132f;
+  --card-foreground: #eceaff;
+  --popover: #16163a;
+  --popover-foreground: #eceaff;
+  --primary: #a66bff;
+  --primary-foreground: #12002e;
+  --secondary: #222250;
+  --secondary-foreground: #eceaff;
+  --muted: #1b1b42;
+  --muted-foreground: #a8a5d6;
+  --accent: #26265a;
+  --accent-foreground: #eceaff;
+  --destructive: #ff5c6c;
+  --border: #2d2c62;
+  --input: #3a3878;
+  --ring: #22d3ee;
+  --chart-1: #a66bff;
+  --chart-2: #22d3ee;
+  --chart-3: #ff4fb8;
+  --chart-4: #a3e635;
+  --chart-5: #fbbf24;
+  --sidebar: #0f0f28;
+  --sidebar-foreground: #eceaff;
+  --sidebar-primary: #a66bff;
+  --sidebar-primary-foreground: #12002e;
+  --sidebar-accent: #1f1f4a;
+  --sidebar-accent-foreground: #eceaff;
+  --sidebar-border: #2d2c62;
+  --sidebar-ring: #22d3ee;
+
+  --arcade-edge: #05050f;
+  --arcade-shadow: #000000a6;
+  --arcade-violet: #a66bff;
+  --arcade-cyan: #22d3ee;
+  --arcade-pink: #ff4fb8;
+  --arcade-lime: #a3e635;
+  --arcade-amber: #fbbf24;
+  --arcade-dot: #8f8cff1f;
+  --arcade-hi: rgb(255 255 255 / 0.28);
+  --arcade-lo: rgb(0 0 0 / 0.4);
+
+  --color-emerald-400: #a3e635;
+  --color-emerald-500: #8fd11f;
+  --color-emerald-600: #7cba12;
+  --color-emerald-300: #c3f56b;
+  --color-sky-400: #22d3ee;
+  --color-sky-500: #22d3ee;
+  --color-sky-600: #0fb5cf;
+  --color-amber-300: #ffd75e;
+  --color-amber-400: #fbbf24;
+  --color-amber-500: #fbbf24;
+  --color-amber-600: #e0a30b;
+  --color-violet-400: #b98bff;
+  --color-violet-500: #a66bff;
+  --color-violet-600: #8f4fff;
+}
+
+/* ------------------------------------------------------------------ type */
+
+[data-style="arcade"] :where(.font-sans, .font-heading, input, textarea, select, button):not(.font-mono) {
+  font-family: "Pixelify Sans Variable", ui-sans-serif, system-ui, sans-serif;
+}
+
+/* Page and section titles: the chunky arcade face (dialogs keep Pixelify for longer sentences). */
+[data-style="arcade"] :is(h1, h2).font-heading {
+  font-family: "Press Start 2P", monospace;
+  font-weight: 400;
+  font-size: 16px;
+  line-height: 1.5;
+  letter-spacing: 0;
+}
+/* Press Start 2P is drawn on an 8px grid: only 16px and 24px keep it crisp. */
+[data-style="arcade"] :is(h1, h2).font-heading:is(.text-xl, .text-2xl) {
+  font-size: 24px;
+  line-height: 1.25;
+  text-shadow: 3px 3px 0 var(--arcade-lo);
+}
+
+/* Tiny labels: Silkscreen is drawn for 8px multiples, so pin those sizes. */
+[data-style="arcade"] :is([data-slot="badge"], [data-slot="kbd"], .text-\[9px\], .text-\[10px\]):not(.font-mono) {
+  font-family: "Silkscreen", monospace;
+  font-size: 8px;
+  font-weight: 400;
+  letter-spacing: 0.02em;
+  line-height: 1;
+}
+[data-style="arcade"] [data-slot="badge"] {
+  text-transform: uppercase;
+}
+[data-style="arcade"] :is(.uppercase.text-xs, .uppercase.text-\[11px\]):not(.font-mono) {
+  font-family: "Silkscreen", monospace;
+  font-size: 8px;
+}
+
+/* Load-test KPIs read like a game HUD: micro caps labels, and both lines wrap instead of clipping. */
+[data-style="arcade"] [data-slot="kpi"] > div:first-child {
+  align-items: flex-start;
+  font-family: "Silkscreen", monospace;
+  font-size: 8px;
+  line-height: 1.25;
+  text-transform: uppercase;
+}
+[data-style="arcade"] [data-slot="kpi"] :is(.truncate) {
+  overflow: visible;
+  white-space: normal;
+  text-overflow: clip;
+}
+[data-style="arcade"] [data-slot="kpi"] > div:nth-child(2) {
+  line-height: 1.15;
+  margin-top: 4px;
+}
+
+/* Code and identifiers keep a real monospace face. */
+[data-style="arcade"] :is(.font-mono, code, pre, .cm-editor) {
+  letter-spacing: normal;
+}
+
+/* ------------------------------------------------------------------ shapes */
+
+[data-style="arcade"] *,
+[data-style="arcade"] *::before,
+[data-style="arcade"] *::after {
+  border-radius: 0 !important;
+}
+
+/* Dithered backdrop: a 2px dot every 8px, visible wherever the app shows the page. */
+[data-style="arcade"] body {
+  background-image: conic-gradient(at 2px 2px, transparent 75%, var(--arcade-dot) 0);
+  background-size: 8px 8px;
+}
+
+/* Panels: 2px pixel edges. Only the width changes so border-* colors still apply. */
+[data-style="arcade"] :is(.rounded-lg, .rounded-xl, .rounded-2xl, .rounded-md).border,
+[data-style="arcade"] [data-slot="card"] {
+  border-width: 2px;
+}
+[data-style="arcade"] [data-slot="card"] {
+  box-shadow: 4px 4px 0 0 var(--arcade-shadow);
+}
+
+/* Floating surfaces float on a hard drop shadow. */
+[data-style="arcade"]
+  :is(
+    [data-slot="popover-content"],
+    [data-slot="dropdown-menu-content"],
+    [data-slot="dropdown-menu-sub-content"],
+    [data-slot="select-content"],
+    [data-slot="context-menu-content"],
+    [data-slot="dialog-content"],
+    [data-slot="alert-dialog-content"],
+    [data-slot="sheet-content"]
+  ) {
+  border: 2px solid var(--arcade-edge);
+  box-shadow: 6px 6px 0 0 var(--arcade-shadow);
+}
+[data-style="arcade"]:not(.dark)
+  :is(
+    [data-slot="popover-content"],
+    [data-slot="dropdown-menu-content"],
+    [data-slot="select-content"],
+    [data-slot="dialog-content"],
+    [data-slot="alert-dialog-content"]
+  ) {
+  border-color: var(--arcade-edge);
+}
+[data-style="arcade"].dark
+  :is(
+    [data-slot="popover-content"],
+    [data-slot="dropdown-menu-content"],
+    [data-slot="select-content"],
+    [data-slot="dialog-content"],
+    [data-slot="alert-dialog-content"]
+  ) {
+  border-color: #3d3b85;
+}
+
+/* Modal backdrop: an ordered dither instead of blur. */
+[data-style="arcade"] :is([data-slot="dialog-overlay"], [data-slot="alert-dialog-overlay"], [data-slot="sheet-overlay"]) {
+  backdrop-filter: none;
+  background: repeating-conic-gradient(rgb(5 5 20 / 0.62) 0 25%, rgb(5 5 20 / 0.38) 0 50%) 0 0 / 4px 4px;
+}
+
+[data-style="arcade"] [data-slot="tooltip-content"] {
+  box-shadow: 3px 3px 0 0 var(--arcade-shadow);
+}
+[data-style="arcade"] [data-slot="tooltip-content"] svg[class*="rotate-45"] {
+  display: none;
+}
+
+/* Focus: a square pixel ring, everywhere. */
+[data-style="arcade"] :focus-visible:not(.cm-content, [data-slot="input-group-control"], [data-slot="input"], textarea, [cmdk-input]) {
+  outline: 2px solid var(--ring) !important;
+  outline-offset: 2px;
+}
+
+/* ------------------------------------------------------------------ buttons */
+
+[data-style="arcade"] [data-slot="button"] {
+  --arcade-btn-edge: var(--arcade-edge);
+  font-weight: 600;
+  transition: none;
+}
+
+/* Solid buttons: bevelled blocks with notched corners that sit on a 2px ledge and press into it. */
+[data-style="arcade"] [data-slot="button"]:is([data-variant="default"], [data-variant="outline"], [data-variant="secondary"], [data-variant="destructive"]) {
+  border-color: transparent;
+  box-shadow:
+    inset -2px -2px 0 0 var(--arcade-lo),
+    inset 2px 2px 0 0 var(--arcade-hi),
+    0 -2px 0 0 var(--arcade-btn-edge),
+    0 2px 0 0 var(--arcade-btn-edge),
+    -2px 0 0 0 var(--arcade-btn-edge),
+    2px 0 0 0 var(--arcade-btn-edge),
+    0 4px 0 0 var(--arcade-btn-edge);
+  margin-inline: 2px;
+}
+[data-style="arcade"] [data-slot="button"]:is([data-variant="default"], [data-variant="outline"], [data-variant="secondary"], [data-variant="destructive"]):active:not(:disabled, [aria-haspopup]) {
+  transform: translateY(2px);
+  box-shadow:
+    inset 2px 2px 0 0 var(--arcade-lo),
+    0 -2px 0 0 var(--arcade-btn-edge),
+    0 2px 0 0 var(--arcade-btn-edge),
+    -2px 0 0 0 var(--arcade-btn-edge),
+    2px 0 0 0 var(--arcade-btn-edge);
+}
+[data-style="arcade"] [data-slot="button"][data-variant="default"] {
+  text-shadow: 1px 1px 0 var(--arcade-hi);
+}
+[data-style="arcade"] [data-slot="button"][data-variant="default"]:hover:not(:disabled) {
+  background-color: color-mix(in oklab, var(--primary) 86%, white);
+}
+[data-style="arcade"] [data-slot="button"][data-variant="outline"] {
+  background-color: var(--card);
+}
+[data-style="arcade"] [data-slot="button"][data-variant="outline"]:hover:not(:disabled) {
+  background-color: var(--accent);
+}
+[data-style="arcade"] [data-slot="button"][data-variant="destructive"] {
+  background-color: color-mix(in oklab, var(--destructive) 22%, var(--card));
+}
+[data-style="arcade"] [data-slot="button"][data-variant="ghost"]:hover:not(:disabled) {
+  background-color: var(--accent);
+  box-shadow: inset 0 -2px 0 0 var(--arcade-lo);
+}
+[data-style="arcade"] [data-slot="button"][data-variant="ghost"]:active:not(:disabled) {
+  transform: translateY(1px);
+  box-shadow: inset 2px 2px 0 0 var(--arcade-lo);
+}
+[data-style="arcade"] [data-slot="button"]:disabled {
+  opacity: 0.45;
+  filter: grayscale(0.6);
+}
+
+/* Toggle groups (Guided / Pro): one pixel strip, the pressed key sunk in. */
+[data-style="arcade"] [data-slot="toggle-group"] {
+  box-shadow: 0 0 0 2px var(--arcade-edge);
+  gap: 0;
+}
+[data-style="arcade"] [data-slot="toggle-group-item"] {
+  border-width: 0 !important;
+  box-shadow: inset -2px -2px 0 0 var(--arcade-lo), inset 2px 2px 0 0 var(--arcade-hi);
+  background: var(--card);
+  font-weight: 600;
+}
+[data-style="arcade"] [data-slot="toggle-group-item"][data-state="on"] {
+  background: var(--primary);
+  color: var(--primary-foreground);
+  box-shadow: inset 2px 2px 0 0 var(--arcade-lo);
+}
+
+/* ------------------------------------------------------------------ fields */
+
+[data-style="arcade"] :is([data-slot="input"], [data-slot="textarea"], [data-slot="select-trigger"], [data-slot="input-group"]) {
+  border-width: 2px;
+  background-color: color-mix(in oklab, var(--background) 82%, var(--arcade-edge));
+  box-shadow: inset 2px 2px 0 0 var(--arcade-lo);
+}
+[data-style="arcade"] :is([data-slot="input"], [data-slot="textarea"], [data-slot="select-trigger"]):focus-visible,
+[data-style="arcade"] [data-slot="input-group"]:has(:focus-visible) {
+  border-color: var(--ring);
+  box-shadow:
+    inset 2px 2px 0 0 var(--arcade-lo),
+    0 0 0 2px color-mix(in oklab, var(--ring) 35%, transparent);
+}
+[data-style="arcade"] [data-slot="input-group"] [data-slot="input-group-control"] {
+  background: transparent;
+  box-shadow: none;
+}
+
+/* A block cursor that blinks on hard steps, like a terminal. */
+[data-style="arcade"] :is(input, textarea, [contenteditable="true"]) {
+  caret-color: var(--arcade-cyan);
+  caret-shape: block;
+}
+[data-style="arcade"] :is(input, textarea):focus {
+  caret-animation: manual;
+  animation: arcade-caret 1.06s steps(1, end) infinite;
+}
+@keyframes arcade-caret {
+  0%,
+  50% {
+    caret-color: var(--arcade-cyan);
+  }
+  50.01%,
+  100% {
+    caret-color: transparent;
+  }
+}
+
+[data-style="arcade"] [data-slot="checkbox"] {
+  border-width: 2px;
+  box-shadow: inset 2px 2px 0 0 var(--arcade-lo);
+}
+[data-style="arcade"] [data-slot="switch"] {
+  border-color: transparent;
+  box-shadow:
+    0 0 0 2px var(--input),
+    inset 2px 2px 0 0 var(--arcade-lo);
+}
+[data-style="arcade"] [data-slot="switch-thumb"] {
+  box-shadow: inset -2px -2px 0 0 var(--arcade-lo);
+  transition-timing-function: steps(3, end);
+}
+[data-style="arcade"] [data-slot="slider-thumb"] {
+  border-width: 2px;
+  box-shadow: 2px 2px 0 0 var(--arcade-shadow);
+}
+
+[data-style="arcade"] [data-slot="kbd"] {
+  height: 18px;
+  padding-inline: 4px;
+  background: var(--secondary);
+  color: var(--secondary-foreground);
+  box-shadow: inset -1px -2px 0 0 var(--arcade-lo), inset 1px 1px 0 0 var(--arcade-hi);
+}
+
+[data-style="arcade"] [data-slot="badge"] {
+  border-width: 2px;
+  padding-block: 3px;
+  height: auto;
+}
+
+/* ------------------------------------------------------------------ tabs */
+
+[data-style="arcade"] [data-slot="tabs-trigger"] {
+  font-weight: 600;
+  transition: none;
+}
+[data-style="arcade"] [data-slot="tabs-list"][data-variant="default"] {
+  box-shadow: inset 2px 2px 0 0 var(--arcade-lo);
+}
+[data-style="arcade"] [data-slot="tabs-list"][data-variant="default"] [data-slot="tabs-trigger"][data-state="active"] {
+  background: var(--card);
+  box-shadow: inset -2px -2px 0 0 var(--arcade-lo), inset 2px 2px 0 0 var(--arcade-hi);
+}
+/* Line tabs: the active marker is a 4px pixel bar in the brand violet. */
+[data-style="arcade"] [data-slot="tabs-list"][data-variant="line"] [data-slot="tabs-trigger"]::after {
+  height: 4px;
+  background: repeating-linear-gradient(90deg, var(--primary) 0 6px, transparent 6px 8px);
+  transition: none;
+}
+[data-style="arcade"] [data-slot="tabs-list"][data-variant="line"] [data-slot="tabs-trigger"][data-state="active"] {
+  color: var(--primary);
+}
+[data-style="arcade"].dark [data-slot="tabs-list"][data-variant="line"] [data-slot="tabs-trigger"][data-state="active"] {
+  color: #d3b8ff;
+}
+
+/* ------------------------------------------------------------------ command palette */
+
+[data-style="arcade"] [data-slot="command-input-wrapper"] [data-slot="input-group"] {
+  height: 36px !important;
+}
+[data-style="arcade"] [data-slot="command-item"][data-selected="true"] {
+  background: var(--primary);
+  color: var(--primary-foreground);
+}
+[data-style="arcade"] [data-slot="command-item"][data-selected="true"] * {
+  color: inherit;
+}
+[data-style="arcade"] [data-slot="command-item"][data-selected="true"]::before {
+  content: "▶";
+  font-family: "Press Start 2P", monospace;
+  font-size: 8px;
+  margin-right: -2px;
+}
+[data-style="arcade"] [cmdk-group-heading] {
+  font-family: "Silkscreen", monospace;
+  font-size: 8px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--arcade-cyan);
+}
+
+/* ------------------------------------------------------------------ scrollbars */
+
+[data-style="arcade"] ::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+[data-style="arcade"] ::-webkit-scrollbar-track {
+  background: conic-gradient(at 2px 2px, transparent 75%, var(--arcade-dot) 0) 0 0 / 4px 4px;
+}
+[data-style="arcade"] ::-webkit-scrollbar-thumb {
+  background: var(--input);
+  border: 2px solid transparent;
+  background-clip: padding-box;
+  box-shadow: inset -2px -2px 0 0 var(--arcade-lo), inset 2px 2px 0 0 var(--arcade-hi);
+}
+[data-style="arcade"] ::-webkit-scrollbar-thumb:hover {
+  background-color: var(--primary);
+}
+[data-style="arcade"] ::-webkit-scrollbar-corner {
+  background: transparent;
+}
+[data-style="arcade"] [data-slot="scroll-area-thumb"] {
+  background: var(--input);
+}
+
+/* ------------------------------------------------------------------ progress */
+
+[data-style="arcade"] [data-slot="progress"] {
+  height: 12px;
+  border: 2px solid var(--arcade-edge);
+  background: var(--muted);
+}
+[data-style="arcade"] [data-slot="progress-indicator"] {
+  background-image: repeating-linear-gradient(90deg, transparent 0 6px, var(--muted) 6px 8px);
+  transition-timing-function: steps(8, end);
+}
+/* Breakdown meters (status codes, error kinds): segmented blocks. */
+[data-style="arcade"] :has(> [data-meter]) {
+  height: 8px;
+  box-shadow: inset 0 0 0 1px var(--border);
+}
+[data-style="arcade"] [data-meter] {
+  background-image: repeating-linear-gradient(90deg, transparent 0 4px, var(--card) 4px 6px);
+}
+
+/* ------------------------------------------------------------------ toasts */
+
+[data-style="arcade"] [data-sonner-toaster] {
+  --border-radius: 0px;
+}
+[data-style="arcade"] [data-sonner-toast] {
+  border-width: 2px !important;
+  box-shadow: 5px 5px 0 0 var(--arcade-shadow) !important;
+  font-family: "Pixelify Sans Variable", ui-sans-serif, sans-serif;
+  transition-timing-function: steps(5, end) !important;
+}
+[data-style="arcade"] [data-sonner-toast] [data-title] {
+  font-family: "Press Start 2P", monospace;
+  font-size: 8px;
+  line-height: 2;
+  font-weight: 400;
+}
+[data-style="arcade"] [data-sonner-toast] [data-icon] {
+  width: 16px;
+  height: 16px;
+}
+
+/* ------------------------------------------------------------------ canvas */
+
+[data-style="arcade"] .react-flow {
+  --xy-background-pattern-dots-color: color-mix(in oklab, var(--arcade-violet) 34%, transparent);
+  --xy-selection-border: 2px dashed var(--arcade-cyan);
+  --xy-connectionline-stroke: var(--arcade-cyan);
+}
+[data-style="arcade"] .react-flow__background circle {
+  shape-rendering: crispEdges;
+}
+
+/* Resource cards: pixel panels on a hard shadow. */
+[data-style="arcade"] [data-slot="node-card"] {
+  border: 2px solid var(--border);
+  box-shadow: 4px 4px 0 0 var(--arcade-shadow);
+  padding-left: 16px;
+  transition: none;
+}
+[data-style="arcade"] .react-flow__node:hover [data-slot="node-card"] {
+  border-color: var(--input);
+}
+[data-style="arcade"] .react-flow__node.selected [data-slot="node-card"],
+[data-style="arcade"] [data-slot="node-card"][data-selected="true"] {
+  border-color: var(--primary);
+  box-shadow:
+    4px 4px 0 0 color-mix(in oklab, var(--primary) 55%, transparent),
+    0 0 0 2px var(--arcade-edge);
+  outline: 2px dashed var(--primary);
+  outline-offset: 4px;
+}
+/* The cloud color bar: a full-height stepped strip. */
+[data-style="arcade"] [data-slot="node-accent"] {
+  inset-block: 0;
+  width: 6px;
+  background-image: repeating-linear-gradient(to bottom, transparent 0 6px, rgb(0 0 0 / 0.38) 6px 8px) !important;
+}
+/* Resource icons (canvas cards, inspector, palette) on a dark sprite tile, like the workflow icon tile. */
+[data-style="arcade"] [data-slot="resource-tile"] {
+  border: 2px solid currentColor;
+  background-image: linear-gradient(160deg, #24204a, #0c0a1c) !important;
+  box-shadow: inset 0 2px 0 0 rgb(255 255 255 / 0.12), 2px 2px 0 0 var(--arcade-shadow);
+}
+[data-style="arcade"] [data-slot="resource-tile"] svg {
+  stroke-width: 2.5;
+  stroke-linecap: square;
+  stroke-linejoin: miter;
+}
+[data-style="arcade"] [data-slot="node-card"] [data-slot="node-badge"] {
+  font-family: "Silkscreen", monospace;
+  font-size: 8px;
+  height: 16px;
+  padding-inline: 4px;
+  box-shadow: inset 0 0 0 1px currentColor;
+}
+[data-style="arcade"] [data-slot="group-card"] {
+  border-style: dashed;
+  border-width: 2px;
+}
+
+[data-style="arcade"] .react-flow__edge-path,
+[data-style="arcade"] .react-flow__connection-path {
+  shape-rendering: crispEdges;
+}
+
+/* Deployed (live) edges: marching pixel dashes. */
+[data-style="arcade"] .arcade-live-edge {
+  stroke: var(--arcade-cyan);
+  stroke-width: 2;
+  stroke-dasharray: 4 4;
+  fill: none;
+  shape-rendering: crispEdges;
+  animation: arcade-march 0.8s steps(4, end) infinite;
+}
+@keyframes arcade-march {
+  to {
+    stroke-dashoffset: -8;
+  }
+}
+
+[data-style="arcade"] .react-flow__controls {
+  border: 2px solid var(--arcade-edge);
+  box-shadow: 4px 4px 0 0 var(--arcade-shadow);
+}
+[data-style="arcade"] .react-flow__controls-button {
+  border-bottom: 2px solid var(--arcade-edge);
+  box-shadow: inset -2px -2px 0 0 var(--arcade-lo), inset 2px 2px 0 0 var(--arcade-hi);
+}
+[data-style="arcade"] .react-flow__controls-button:active {
+  box-shadow: inset 2px 2px 0 0 var(--arcade-lo);
+}
+[data-style="arcade"] .react-flow__minimap {
+  border: 2px solid var(--arcade-edge);
+  box-shadow: 4px 4px 0 0 var(--arcade-shadow);
+}
+[data-style="arcade"] .react-flow__minimap-node {
+  rx: 0;
+  ry: 0;
+  shape-rendering: crispEdges;
+}
+[data-style="arcade"] .react-flow__minimap-mask {
+  shape-rendering: crispEdges;
+}
+
+/* ------------------------------------------------------------------ charts */
+
+[data-style="arcade"] .recharts-cartesian-axis-tick-value {
+  font-family: "Silkscreen", monospace;
+  font-size: 8px;
+}
+[data-style="arcade"] .recharts-legend-wrapper {
+  font-family: "Silkscreen", monospace;
+  font-size: 8px;
+  text-transform: uppercase;
+}
+[data-style="arcade"] .recharts-cartesian-grid line {
+  stroke-dasharray: 2 4;
+  shape-rendering: crispEdges;
+}
+[data-style="arcade"] .recharts-line-curve,
+[data-style="arcade"] .recharts-bar-rectangle path {
+  shape-rendering: crispEdges;
+}
+[data-style="arcade"].dark [data-chart] {
+  --color-rps: #22d3ee !important;
+  --color-target: #a8a5d6 !important;
+  --color-p50: #a3e635 !important;
+  --color-p95: #fbbf24 !important;
+  --color-p99: #ff4fb8 !important;
+  --color-errors: #ff5c6c !important;
+  --color-aP95: #a66bff !important;
+  --color-bP95: #22d3ee !important;
+  --color-aRps: #a66bff !important;
+  --color-bRps: #22d3ee !important;
+}
+
+/* ------------------------------------------------------------------ CRT overlay (Settings › Appearance) */
+
+:root[data-style="arcade"][data-crt] body::after {
+  content: "";
+  position: fixed;
+  inset: 0;
+  z-index: 2147483647;
+  pointer-events: none;
+  background:
+    repeating-linear-gradient(to bottom, rgb(0 0 0 / 0.2) 0 1px, transparent 1px 3px),
+    radial-gradient(ellipse at center, transparent 62%, rgb(0 0 0 / 0.32) 100%);
+  animation: arcade-flicker 5s steps(1, end) infinite;
+}
+:root[data-style="arcade"][data-crt]:not(.dark) body::after {
+  background:
+    repeating-linear-gradient(to bottom, rgb(25 20 58 / 0.09) 0 1px, transparent 1px 3px),
+    radial-gradient(ellipse at center, transparent 65%, rgb(25 20 58 / 0.14) 100%);
+}
+@keyframes arcade-flicker {
+  0%,
+  96% {
+    opacity: 1;
+  }
+  97% {
+    opacity: 0.86;
+  }
+  98% {
+    opacity: 1;
+  }
+}
+
+/* ------------------------------------------------------------------ micro-interactions */
+
+/* Spinners turn in eight hard steps. */
+[data-style="arcade"] .animate-spin {
+  animation-timing-function: steps(8, end);
+}
+
+/* Block progress bar (components/arcade/pixel-progress.tsx). */
+.arcade-progress {
+  position: relative;
+  height: 14px;
+  overflow: hidden;
+  border: 2px solid var(--arcade-edge);
+  background: var(--muted);
+  box-shadow: inset 2px 2px 0 0 var(--arcade-lo);
+}
+.arcade-progress-fill,
+.arcade-progress-runner {
+  position: absolute;
+  inset-block: 2px;
+  left: 2px;
+  background: repeating-linear-gradient(90deg, var(--primary) 0 6px, transparent 6px 8px);
+}
+.arcade-progress-fill {
+  max-width: calc(100% - 4px);
+  transition: width 0.4s steps(4, end);
+}
+.arcade-progress-runner {
+  width: 48px;
+  background-image: repeating-linear-gradient(90deg, var(--arcade-cyan) 0 6px, transparent 6px 8px);
+  animation: arcade-runner 1.6s steps(16, end) infinite;
+}
+@keyframes arcade-runner {
+  from {
+    transform: translateX(-48px);
+  }
+  to {
+    transform: translateX(calc(100cqw + 48px));
+  }
+}
+.arcade-progress {
+  container-type: inline-size;
+}
+
+/* Deploy celebration (components/arcade/celebration.tsx). */
+.arcade-celebration {
+  position: fixed;
+  left: 50%;
+  bottom: 30%;
+  z-index: 2147483000;
+  display: grid;
+  place-items: center;
+  width: 0;
+  height: 0;
+  pointer-events: none;
+}
+.arcade-celebration > * {
+  grid-area: 1 / 1;
+}
+.arcade-mascot {
+  filter: drop-shadow(4px 4px 0 rgb(0 0 0 / 0.5));
+  animation: arcade-hop 0.9s steps(6, end) 3;
+}
+.arcade-banner {
+  transform: translateY(64px);
+  white-space: nowrap;
+  padding: 6px 10px;
+  font-family: "Press Start 2P", monospace;
+  font-size: 16px;
+  color: var(--arcade-amber);
+  background: var(--arcade-edge);
+  box-shadow: 0 0 0 2px var(--arcade-amber), 4px 4px 0 2px rgb(0 0 0 / 0.5);
+  text-shadow: 2px 2px 0 #000;
+  animation: arcade-blink 0.5s steps(1, end) 5;
+}
+.arcade-sparkle {
+  box-shadow: 0 0 0 1px rgb(0 0 0 / 0.35);
+  animation: arcade-burst 1.3s steps(7, end) 2 both;
+}
+@keyframes arcade-hop {
+  0%,
+  100% {
+    transform: translateY(0);
+  }
+  50% {
+    transform: translateY(-24px);
+  }
+}
+@keyframes arcade-burst {
+  0% {
+    transform: translate(0, 0) scale(0.5);
+    opacity: 1;
+  }
+  70% {
+    opacity: 1;
+  }
+  100% {
+    transform: translate(var(--dx), var(--dy)) scale(1);
+    opacity: 0;
+  }
+}
+@keyframes arcade-blink {
+  50% {
+    opacity: 0.25;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  /* Still frame: sparkles parked on their ring. */
+  .arcade-sparkle {
+    transform: translate(var(--dx), var(--dy));
+  }
+}
+
+/* ------------------------------------------------------------------ motion */
+
+/* Reduced motion: only Arcade's own effects stop (the CRT flicker, marching edges, blink, sparkles). */
+@media (prefers-reduced-motion: reduce) {
+  :root[data-style="arcade"][data-crt] body::after,
+  [data-style="arcade"] :is(.arcade-live-edge, .arcade-anim, input, textarea) {
+    animation: none !important;
+  }
+}

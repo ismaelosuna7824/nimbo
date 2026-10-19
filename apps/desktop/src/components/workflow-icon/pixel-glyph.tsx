@@ -61,10 +61,11 @@ function fillOf(glyph: PixelGlyphDef, ch: string, color: TileColor): string {
 }
 
 /** A 16×16 glyph as crisp SVG rectangles, sized in CSS pixels. */
-export function PixelGlyph({ glyph, color, size }: { glyph: PixelGlyphDef; color: TileColor; size: number }) {
+export function PixelGlyph({ glyph, color, size, className }: { glyph: PixelGlyphDef; color: TileColor; size: number; className?: string }) {
   return (
     <svg
       viewBox="0 0 16 16"
+      className={className}
       width={size}
       height={size}
       // Inline size wins over menu/command item rules that resize nested svgs.
