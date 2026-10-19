@@ -199,6 +199,57 @@ func (c *Catalog) CloudOf(typ string) (model.Cloud, bool) {
 	return p.cloud, true
 }
 
+// categoryFiles names the recommended Terraform file of each category.
+// "Other" and unknown types go to main.tf (ResourceFile returns "").
+var categoryFiles = map[string]string{
+	"Storage":            "storage.tf",
+	"Databases":          "database.tf",
+	"Compute":            "compute.tf",
+	"Containers":         "containers.tf",
+	"Networking":         "network.tf",
+	"Messaging & Events": "messaging.tf",
+	"Identity":           "iam.tf",
+	"Security":           "security.tf",
+	"Observability":      "monitoring.tf",
+	"Analytics":          "analytics.tf",
+	"AI & ML":            "ai.tf",
+	"Developer Tools":    "devtools.tf",
+	"Cost":               "cost.tf",
+}
+
+// apiServices are the service keys whose resources go to api.tf instead of
+// their category's file (API gateways are "Networking" in the palette).
+var apiServices = map[string]bool{
+	"apigateway": true, "apigatewayv2": true, "appsync": true, "apim": true, "api": true,
+}
+
+// ResourceFile names the recommended Terraform file of a resource type,
+// from its catalog category ("aws_vpc" -> "network.tf", "aws_sqs_queue" ->
+// "messaging.tf", API gateways -> "api.tf"); "" for types without a cloud
+// category (main.tf). It is hclcodec.ExportOptions.ResourceFile.
+func (c *Catalog) ResourceFile(typ string) string {
+	p, ok := c.providerOf(typ)
+	if !ok || p.cloud == "" {
+		return ""
+	}
+	cs := c.clouds[p.cloud]
+	if cs == nil {
+		return ""
+	}
+	var key, category string
+	if svc := cs.serviceOf(typ); svc != nil {
+		key, category = svc.Key, svc.Category
+	} else {
+		tail := strings.TrimPrefix(typ, cs.prefix)
+		key, _, _ = strings.Cut(tail, "_")
+		category = c.categoryByKeywords(tail)
+	}
+	if apiServices[key] {
+		return "api.tf"
+	}
+	return categoryFiles[category]
+}
+
 // Schema returns the full schema of a type with curated metadata applied.
 func (c *Catalog) Schema(kind model.NodeKind, typ string) (*model.ResourceSchema, bool) {
 	if kind != model.KindResource && kind != model.KindData {
@@ -226,6 +277,24 @@ func (c *Catalog) Schema(kind model.NodeKind, typ string) (*model.ResourceSchema
 		applyAttrMeta(&rs.Block, cr.Attrs)
 	}
 	return rs, true
+}
+
+// NamingAttr returns the attribute that names the cloud resource of a
+// curated resource type ("bucket" for aws_s3_bucket, "function_name" for
+// aws_lambda_function), or "" when the type has none or its names have
+// constraints a "<prefix>-<role>" name could break (e.g. storage account
+// names without hyphens).
+func (c *Catalog) NamingAttr(typ string) string {
+	cr := c.cur.lookup(model.KindResource, typ)
+	if cr == nil || cr.Attrs == nil {
+		return ""
+	}
+	for _, key := range cr.Attrs.keys {
+		if cr.Attrs.values[key].Naming != "" {
+			return key
+		}
+	}
+	return ""
 }
 
 func docsURL(p *provider, kind model.NodeKind, typ string) string {

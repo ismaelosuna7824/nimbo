@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"testing"
 
@@ -15,6 +16,7 @@ import (
 	"github.com/ismaelosuna7824/nimbo/backend/internal/loadtest"
 	"github.com/ismaelosuna7824/nimbo/backend/internal/model"
 	"github.com/ismaelosuna7824/nimbo/backend/internal/sandbox"
+	"github.com/ismaelosuna7824/nimbo/backend/internal/settings"
 	"github.com/ismaelosuna7824/nimbo/backend/internal/store"
 )
 
@@ -47,8 +49,12 @@ func sessionURL(t *testing.T) (*sdk.ClientSession, *events.Hub, string) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	prefs, err := settings.Open(home)
+	if err != nil {
+		t.Fatal(err)
+	}
 	srv := httptest.NewServer(api.New(api.Config{
-		Version: "test", Home: home, Store: st, Connections: conns, Catalog: cat, Sandbox: sb, Events: hub,
+		Version: "test", Home: home, Store: st, Connections: conns, Catalog: cat, Sandbox: sb, Events: hub, Settings: prefs,
 		LoadTest: loadtest.NewEngine(loadtest.EngineConfig{Home: home, Events: hub, Resolver: sb, Connections: conns}),
 	}).Handler())
 	t.Cleanup(srv.Close)
@@ -129,7 +135,8 @@ func TestAgentBuildsWorkflowThroughTools(t *testing.T) {
 
 	var got workflowView
 	mustTool(t, cs, "get_workflow", map[string]any{"workflow": wf.ID}, &got)
-	if len(got.Nodes) != 2 || len(got.Edges) != 1 || got.Edges[0] != "aws_s3_bucket.uploads.id -> aws_sqs_queue.work.name" {
+	// The bucket starter adds its encryption configuration and public access block.
+	if len(got.Nodes) != 4 || !slices.Contains(got.Edges, "aws_s3_bucket.uploads.id -> aws_sqs_queue.work.name") {
 		t.Fatalf("get_workflow nodes=%d edges=%v", len(got.Nodes), got.Edges)
 	}
 
@@ -176,7 +183,34 @@ func TestApplyTerraformCodeMergesFiles(t *testing.T) {
 	mustTool(t, cs, "apply_terraform_code", map[string]any{"workflow": wf.ID, "files": map[string]string{
 		"extra.tf": "resource \"aws_s3_bucket\" \"b\" {\n  bucket = \"b-${var.env}\"\n}\n",
 	}}, &out)
-	if len(out.Nodes) != 2 || len(out.Variables) != 1 {
+	// project, environment and aws_region come with the first AWS resource.
+	if len(out.Nodes) != 2 || len(out.Variables) != 4 {
 		t.Fatalf("merge lost content: nodes=%d variables=%d", len(out.Nodes), len(out.Variables))
+	}
+}
+
+func TestUpdateNodeMovesFile(t *testing.T) {
+	cs, _ := session(t)
+	var wf workflowView
+	mustTool(t, cs, "create_workflow", map[string]any{"name": "Files"}, &wf)
+	var added nodeResult
+	mustTool(t, cs, "add_node", map[string]any{"workflow": wf.ID, "type": "aws_sqs_queue", "name": "q"}, &added)
+	if added.Node.File != "main.tf" {
+		t.Fatalf("new node file = %q, want main.tf", added.Node.File)
+	}
+	var moved nodeResult
+	mustTool(t, cs, "update_node", map[string]any{"workflow": wf.ID, "node": "aws_sqs_queue.q", "file": "queues.tf"}, &moved)
+	if moved.Node.File != "queues.tf" {
+		t.Fatalf("moved node file = %q", moved.Node.File)
+	}
+	if text, isErr := callTool(t, cs, "get_terraform", map[string]any{"workflow": wf.ID}); isErr || !strings.Contains(text, "queues.tf") {
+		t.Fatalf("get_terraform after move: %s", text)
+	}
+	mustTool(t, cs, "update_node", map[string]any{"workflow": wf.ID, "node": "aws_sqs_queue.q", "file": "auto"}, &moved)
+	if moved.Node.File != "main.tf" {
+		t.Fatalf("node back to the layout in %q", moved.Node.File)
+	}
+	if _, isErr := callTool(t, cs, "update_node", map[string]any{"workflow": wf.ID, "node": "aws_sqs_queue.q", "file": "../x.tf"}); !isErr {
+		t.Fatal("invalid file name accepted")
 	}
 }

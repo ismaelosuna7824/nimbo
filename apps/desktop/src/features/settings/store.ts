@@ -2,7 +2,7 @@ import { create } from "zustand"
 import { useQuery } from "@tanstack/react-query"
 import { api } from "@/lib/api/client"
 
-export type SettingsSection = "general" | "sandbox" | "agents" | "data" | "about"
+export type SettingsSection = "general" | "sandbox" | "practices" | "agents" | "data" | "about"
 
 interface SettingsViewState {
   /** The full-page Settings view covers home / the editor while open. */

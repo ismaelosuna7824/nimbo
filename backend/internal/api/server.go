@@ -143,6 +143,9 @@ func (s *Server) routes() {
 	h("POST "+p+"/import", s.importWorkflow)
 	h("POST "+p+"/import/scan", s.scanImport)
 	h("GET "+p+"/workflows/{id}/modules/{nodeId}", s.moduleView)
+	h("POST "+p+"/workflows/{id}/modules/extract", s.extractModule)
+	h("POST "+p+"/workflows/{id}/modules/extract/preview", s.previewExtract)
+	h("POST "+p+"/workflows/{id}/modules/{nodeId}/inline", s.inlineModule)
 
 	h("GET "+p+"/workflows/{id}/sandbox", s.sandboxStatus)
 	h("POST "+p+"/workflows/{id}/sandbox/{action}", s.sandboxAction)
@@ -178,6 +181,7 @@ func (s *Server) routes() {
 	h("GET "+p+"/settings", s.getSettings)
 	h("PUT "+p+"/settings", s.putSettings)
 	h("GET "+p+"/settings/defaults", s.settingsDefaults)
+	h("GET "+p+"/best-practices/rules", s.bestPracticeRules)
 	h("GET "+p+"/agents", s.listAgents)
 	h("POST "+p+"/agents/{id}/install", s.installAgent)
 	h("DELETE "+p+"/agents/{id}", s.uninstallAgent)

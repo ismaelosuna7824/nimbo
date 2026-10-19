@@ -5,7 +5,6 @@ import (
 	"net/http"
 	"os"
 
-	"github.com/ismaelosuna7824/nimbo/backend/internal/hclcodec"
 	"github.com/ismaelosuna7824/nimbo/backend/internal/loadtest"
 	"github.com/ismaelosuna7824/nimbo/backend/internal/model"
 	"github.com/ismaelosuna7824/nimbo/backend/internal/sandbox"
@@ -129,7 +128,7 @@ func (s *Server) startRun(w http.ResponseWriter, r *http.Request) error {
 			return &httpError{status: http.StatusBadRequest, msg: "the workflow has errors; fix them before running " + string(req.Action), diagnostics: errs}
 		}
 	}
-	files, err := hclcodec.Export(wf, hclcodec.ExportOptions{})
+	files, err := s.exportTerraform(wf, false)
 	if err != nil {
 		return err
 	}

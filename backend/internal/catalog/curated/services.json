@@ -195,7 +195,7 @@
         {"key": "eventhubs", "label": "Event Hubs", "category": "Messaging & Events", "icon": "waves", "floci": true, "prefixes": ["azurerm_eventhub"]},
         {"key": "servicebus", "label": "Service Bus", "category": "Messaging & Events", "icon": "inbox", "floci": true, "prefixes": ["azurerm_servicebus_"]},
         {"key": "eventgrid", "label": "Event Grid", "category": "Messaging & Events", "icon": "radio", "floci": true, "prefixes": ["azurerm_eventgrid_"]},
-        {"key": "functions", "label": "Functions", "category": "Compute", "icon": "zap", "floci": true, "prefixes": ["azurerm_linux_function_app", "azurerm_windows_function_app", "azurerm_function_app_", "azurerm_service_plan"]},
+        {"key": "functions", "label": "Functions", "category": "Compute", "icon": "zap", "prefixes": ["azurerm_linux_function_app", "azurerm_windows_function_app", "azurerm_function_app_", "azurerm_service_plan"]},
         {"key": "vm", "label": "Virtual Machines", "category": "Compute", "icon": "server", "floci": true, "prefixes": ["azurerm_linux_virtual_machine", "azurerm_windows_virtual_machine", "azurerm_virtual_machine", "azurerm_managed_disk", "azurerm_availability_set"]},
         {"key": "aks", "label": "AKS", "category": "Containers", "icon": "boxes", "floci": true, "prefixes": ["azurerm_kubernetes_cluster"]},
         {"key": "containerapps", "label": "Container Apps", "category": "Containers", "icon": "container", "floci": true, "prefixes": ["azurerm_container_app"]},

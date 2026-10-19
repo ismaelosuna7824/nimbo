@@ -80,8 +80,8 @@ commands (e.g. `/mcp__nimbo__extend_workflow` in Claude Code).
 
 | Prompt | Arguments | What it guides |
 |---|---|---|
-| `create_infrastructure` | `request`, `cloud?` | `list_templates` → `create_workflow` → `search_resources`/`describe_resource` → `add_node` → `connect` → `validate` → `deploy` → smoke test → summary |
-| `extend_workflow` | `request`, `workflow?` (default `current`) | Inspect the graph, add and connect services, `validate`, `plan` |
+| `create_infrastructure` | `request`, `cloud?` | `list_templates` → `create_workflow` → `search_resources`/`describe_resource` → `add_node` → `connect` → group large/repeated concerns with `extract_module` → `validate` → `deploy` → smoke test → summary |
+| `extend_workflow` | `request`, `workflow?` (default `current`) | Inspect the graph, add and connect services, extract a concern that grew large into a module, `validate`, `plan` |
 | `import_terraform_folder` | `dir` | `scan_terraform_folder` → `import_terraform` → summary of projects, diagnostics and Floci support |
 | `load_test` | `workflow?` (default `current`), `goal?` | Deploy if needed, choose targets, smoke test, then the profile that answers the goal; interpret the results |
 | `test_deployed_service` | `connection?` | Connections flow with explicit user confirmation before any traffic |
@@ -93,6 +93,8 @@ commands (e.g. `/mcp__nimbo__extend_workflow` in Claude Code).
 3. `add_node` with attributes as HCL expressions (strings quoted: `"\"my-bucket\""`).
 4. `list_connection_options` → `connect`.
 5. Fix diagnostics returned by every edit (`update_node`).
+   Group a concern with many resources, or one that repeats, into a local
+   module: `extract_module` (`dry_run: true` first) — see "Modules" below.
 6. `validate` → `deploy`.
 7. `get_endpoints` → `try_endpoint` to show the user how to call what was
    deployed (URLs, queue URLs, snippets) and smoke test it.
@@ -102,6 +104,39 @@ commands (e.g. `/mcp__nimbo__extend_workflow` in Claude Code).
 Existing code: `scan_terraform_folder` → `import_terraform` with `projects`
 (one workflow per project; local modules are kept and can be opened in the
 app).
+
+## Modules
+
+Agents are told to keep the root small and readable: a concern with many
+resources or one that repeats goes into a local module, called from the
+root with clear inputs and outputs. Typical groups: a network (VPC +
+subnets + route tables + gateways), a service (function + IAM role +
+policies + log group + permissions), a queue with its dead-letter queue and
+alarms. Providers, variables and locals shared by everything stay in the
+root.
+
+`extract_module` moves the chosen nodes into `modules/<name>/`
+(`versions.tf` with `required_providers`, `variables.tf`, `outputs.tf`,
+`main.tf` or category files, `README.md`) and calls it in their place:
+
+- what the group reads from the root becomes typed, described input
+  variables (types from the provider schema of the referenced attribute,
+  else of the attribute they feed, else the root variable's type, else
+  `string`/`number`/`bool` for a root local holding a string template or
+  literal such as `local.name_prefix`, else `any`);
+- what the root reads from the group becomes described outputs, and the
+  root references become `module.<name>.<output>`; `depends_on` on a moved
+  block becomes `depends_on = [module.<name>]`;
+- non-default provider aliases are passed with `providers = {}`;
+- root `moved` blocks keep deployed resources (count/for_each instances
+  too): the next plan only moves them — 0 to add, 0 to change, 0 to destroy
+  (verified on Floci, see TERRAFORM_FIDELITY.md).
+
+Selections that would form a dependency cycle through `depends_on`, or
+where `lifecycle.replace_triggered_by` crosses the module boundary, are
+rejected with the reason. `inline_module` reverses it for a local module
+called once without count/for_each (reverse `moved` blocks; the module's
+`.tf` files are deleted).
 
 Already-deployed services (no workflow): `create_connection` →
 `test_connection` → `list_connection_targets` → ask the user →
@@ -121,6 +156,41 @@ and `list_connection_targets` also contact the real service (read-only).
 `try_endpoint` only ever calls the workflow's local sandbox; its write
 actions (`send`, `publish`, `put`, `start`, POST requests) change sandbox data
 only.
+
+## Code quality
+
+Terraform written through Nimbo is meant to be handed over as production
+code. The server instructions and the `create_infrastructure` /
+`extend_workflow` prompts tell agents to use typed, described variables and
+locals for configurable values, derive names from `local.name_prefix`,
+describe outputs, mark secrets `sensitive`, group related resources into
+modules (`extract_module`) and call `review_terraform` before finishing.
+
+- **Generated defaults.** The first resource of a cloud adds variables
+  `project` (default: workflow name slug) and `environment` (default `dev`),
+  both validated; locals `name_prefix = "${var.project}-${var.environment}"`
+  and `common_tags` (`common_labels` on GCP); a region variable used by the
+  provider (`aws_region`, `location`, `gcp_region`, `oci_region`); AWS
+  `default_tags { tags = local.common_tags }` and `required_version`.
+  Starters name resources `"${local.name_prefix}-<role>"`, tag Azure/GCP
+  resources, and come with secure defaults (S3 SSE + public access block,
+  DynamoDB SSE, SQS managed SSE, RDS `storage_encrypted`, Lambda log group
+  with 14-day retention and a log policy scoped to it). Projects that already
+  have a provider block for the cloud keep their own scheme.
+- **Findings.** Best-practice checks run on every save: diagnostics with
+  codes `bp_*`, severity `info` or `warning` (never `error`, so they never
+  block a deploy), a why (`detail`) and a `fix`. They are kept out of tool
+  `diagnostics`; `get_workflow` shows a one-line `review` summary.
+- **`review_terraform`** returns the findings grouped into `warnings` and
+  `info`, each with `why` and `fix`, plus `disabled_rules` and what to do
+  next.
+- **Mutating tools** (`create_workflow`, `add_node`, `update_node`,
+  `remove_node`, `connect`, `set_*`, `remove_*`, `apply_terraform_code`)
+  return `best_practices`: only the findings their change introduced, in a
+  compact form (`code`, `node`, `message`, `fix`), so agents fix them right
+  away.
+- Rules are toggled in the app (**Settings → Best-practice checks**: on by
+  default, off as a whole or per rule); `GET /best-practices/rules` lists them.
 
 ## Conventions
 
@@ -165,16 +235,19 @@ Conventions).
 | `search_resources` | `query`, `cloud?`, `kind?`, `supported_only?`, `limit?` | Search the resource catalog |
 | `describe_resource` | `type`, `kind?` | Required/optional attributes, nested blocks, exported attributes, Floci support |
 | `add_node` | `workflow`, `type`, `name?`, `kind?`, `attributes?`, `x?`, `y?` | Add a node (curated starters add helper nodes) |
-| `update_node` | `workflow`, `node`, `set?`, `unset?`, `rename?` | Edit attributes or rename (references are rewritten) |
+| `update_node` | `workflow`, `node`, `set?`, `unset?`, `rename?`, `file?` | Edit attributes, rename (references are rewritten) or move the node to another root `.tf` file (`"auto"` = recommended layout); nodes report their `file` |
 | `remove_node` | `workflow`, `node` | Remove a node |
 | `list_connection_options` | `workflow`, `source`, `target` | Connection recipes between two nodes |
 | `connect` | `workflow`, `source`, `target`, `recipe` | Apply a recipe |
+| `extract_module` | `workflow`, `nodes`, `name` (snake_case), `dry_run?` | Move related nodes into a new local module `modules/<name>` called as `module.<name>`: typed inputs, described outputs, rewritten references/`depends_on`, provider alias pass-through and root `moved` blocks. `dry_run` only reports inputs, outputs, moved blocks and files |
+| `inline_module` | `workflow`, `node` | Bring a local module's blocks back to the root (called once, no count/for_each), with reverse `moved` blocks |
 | `set_variable` | `workflow`, `name`, `type?`, `default?`, `description?`, `sensitive?` | Create/update an input variable |
 | `remove_variable` | `workflow`, `name` | Remove a variable |
 | `set_output` | `workflow`, `name`, `value`, `description?`, `sensitive?` | Create/update an output |
 | `remove_output` | `workflow`, `name` | Remove an output |
 | `set_environment` | `workflow`, `name`, `values?`, `env_vars?`, `secret_keys?`, `activate?` | Create/update an environment |
 | `get_terraform` | `workflow` | Rendered Terraform files |
+| `review_terraform` | `workflow` | Best-practice findings grouped by severity, with why and fix (see Code quality) |
 | `apply_terraform_code` | `workflow`, `files` | Edit by code (merged over current files; `""` deletes a file) |
 | `scan_terraform_folder` | `dir` | Terraform projects in a folder/repo (counts, providers, clouds, tfvars, backend, diagnostics) without importing |
 | `import_terraform` | `dir?` \| `files?`, `projects?`, `name?` | Import Terraform as new workflows (default: the root only; `projects` from the scan, `"."` = root) |

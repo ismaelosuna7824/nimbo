@@ -71,16 +71,17 @@ locals {
 	if lc.Comments == nil || lc.Comments.End != "# end lifecycle" || lc.Attrs[0].Comments == nil || lc.Attrs[0].Comments.Lead[0] != "# keep it" {
 		t.Errorf("lifecycle comments = %s", toJSON(t, lc))
 	}
-	// Locals: the second block's header leads the merged block, the first
-	// block's tail leads the second block's first attribute.
-	if !reflect.DeepEqual(wf.LocalsComments, &model.Comments{Lead: []string{"# second block"}}) {
-		t.Errorf("locals comments = %s", toJSON(t, wf.LocalsComments))
+	// Locals: each block keeps its own comments and items.
+	want0 := model.BlockPart{File: "locals.tf", Order: 1, Comments: &model.Comments{Tail: []string{"# tail a"}}}
+	want1 := model.BlockPart{File: "locals.tf", Order: 2, Comments: &model.Comments{Lead: []string{"# second block"}}}
+	if len(wf.LocalsBlocks) != 2 || !reflect.DeepEqual(wf.LocalsBlocks[0], want0) || !reflect.DeepEqual(wf.LocalsBlocks[1], want1) {
+		t.Errorf("locals blocks = %s", toJSON(t, wf.LocalsBlocks))
 	}
-	if c := wf.Locals[1].Comments; c == nil || !slices.Equal(c.Lead, []string{"# tail a"}) {
-		t.Errorf("local b comments = %s", toJSON(t, c))
+	if a, b := wf.Locals[0], wf.Locals[1]; a.File != "locals.tf" || a.Order != 1 || b.Order != 2 || b.Comments != nil {
+		t.Errorf("locals = %s", toJSON(t, wf.Locals))
 	}
 	// End-of-file comments (also of comment-only files) stay after the
-	// block they followed, which Export writes last in variables.tf.
+	// block they followed, the last one of main.tf.
 	if c := q.Body.Comments; len(c.After) != 0 {
 		t.Errorf("queue After = %v", c.After)
 	}
@@ -88,15 +89,22 @@ locals {
 		t.Errorf("variable comments = %s", toJSON(t, v))
 	}
 
+	// Each block stays in its file, in source order.
 	out := mustExport(t, wf, ExportOptions{})
-	wantMain := `# second block
-locals {
+	wantLocals := `locals {
   a = 1
   # tail a
-  b = 2
 }
 
-# File header.
+# second block
+locals {
+  b = 2
+}
+`
+	if got := string(out["locals.tf"]); got != wantLocals {
+		t.Errorf("locals.tf =\n%s\nwant\n%s", got, wantLocals)
+	}
+	wantMain := `# File header.
 # Second header line.
 
 // Queue for jobs.
@@ -115,13 +123,20 @@ resource "aws_sqs_queue" "jobs" { # opening
   # commented out:
   # tags = {}
 } # end jobs
+
+variable "stage" {
+  default = "dev"
+}
+
+# End of main.tf.
+
+# only comments here
 `
 	if got := string(out["main.tf"]); got != wantMain {
 		t.Errorf("main.tf =\n%s\nwant\n%s", got, wantMain)
 	}
-	wantVars := "variable \"stage\" {\n  default = \"dev\"\n}\n\n# End of main.tf.\n\n# only comments here\n"
-	if got := string(out["variables.tf"]); got != wantVars {
-		t.Errorf("variables.tf =\n%q\nwant\n%q", got, wantVars)
+	if len(out) != 2 {
+		t.Errorf("exported files = %v, want locals.tf and main.tf", keysOf(out))
 	}
 	checkTerraformFmt(t, out)
 
@@ -133,6 +148,39 @@ resource "aws_sqs_queue" "jobs" { # opening
 	if !reflect.DeepEqual(out, mustExport(t, back, ExportOptions{})) {
 		t.Error("re-exported files differ")
 	}
+}
+
+func TestBlankLinesBetweenAttributes(t *testing.T) {
+	src := `module "network" {
+  source  = "terraform-aws-modules/vpc/aws"
+  version = "6.0.0"
+
+  name = "main"
+  cidr = "10.0.0.0/16"
+
+  # Two zones.
+  azs = ["a", "b"]
+}
+
+resource "aws_sqs_queue" "jobs" {
+
+  name = "jobs"
+}
+`
+	wf, _ := mustImport(t, map[string][]byte{"main.tf": []byte(src)})
+	attrs := wf.Nodes[0].Body.Attrs
+	if c := attrs[2].Comments; c == nil || !slices.Equal(c.Lead, []string{""}) || attrs[1].Comments != nil {
+		t.Errorf("name comments = %s, version %s", toJSON(t, c), toJSON(t, attrs[1].Comments))
+	}
+	if c := wf.Nodes[1].Body.Attrs[0].Comments; c != nil {
+		t.Errorf("first attribute keeps a blank line: %s", toJSON(t, c))
+	}
+	out := mustExport(t, wf, ExportOptions{})
+	want := strings.Replace(src, "{\n\n  name", "{\n  name", 1)
+	if got := string(out["main.tf"]); got != want {
+		t.Errorf("main.tf =\n%s\nwant\n%s", got, want)
+	}
+	checkTerraformFmt(t, out)
 }
 
 func TestCommentsSurviveEdits(t *testing.T) {
@@ -152,7 +200,7 @@ resource "aws_s3_bucket_website_configuration" "site" {
 	}
 	// Code edits re-import the code and merge app-only data.
 	next, _ := mustImport(t, mustExport(t, wf, ExportOptions{}))
-	MergeImported(wf, next)
+	MergeImported(wf, next, nil)
 	main := string(mustExport(t, next, ExportOptions{})["main.tf"])
 	for _, want := range []string{"# The bucket.\nresource \"aws_s3_bucket\" \"www\" {\n  bucket = \"site\" # name\n", "  bucket = aws_s3_bucket.www.id # reference\n"} {
 		if !strings.Contains(main, want) {

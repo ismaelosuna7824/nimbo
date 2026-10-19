@@ -20,7 +20,7 @@
   {
     "id": "aws-event-fanout",
     "name": "Event fan-out",
-    "description": "SNS topic that fans every message out to two SQS queues (billing and shipping) with least-privilege queue policies.",
+    "description": "SNS topic, encrypted with its own KMS key, that fans every message out to two SQS queues (billing and shipping) with least-privilege queue policies.",
     "cloud": "aws",
     "difficulty": "beginner",
     "tags": ["sns", "sqs", "pubsub", "events"],

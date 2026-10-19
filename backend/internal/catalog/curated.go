@@ -58,17 +58,33 @@ type curatedType struct {
 	Attrs       *orderedMap[attrMeta] `json:"attrs"`
 	Blocks      []initBlock           `json:"blocks"`
 	Needs       []need                `json:"needs"`
+	Companions  []companion           `json:"companions"`
 }
 
 // attrMeta: Basic/Default/Enum annotate the schema; Init (constant) or Expr
 // (HCL source) is written by AddNode. Strings support placeholders, see
-// placeholders.render.
+// placeholders.render. Naming marks the attribute that names the cloud
+// resource: its value is the content of an HCL string template written
+// instead of Init when the workflow has local.name_prefix (e.g.
+// "${local.name_prefix}-{{slug}}"); the bp_name_prefix check reads it too.
 type attrMeta struct {
 	Basic   bool            `json:"basic"`
 	Default json.RawMessage `json:"default"`
 	Enum    []string        `json:"enum"`
 	Init    json.RawMessage `json:"init"`
 	Expr    string          `json:"expr"`
+	Naming  string          `json:"naming"`
+}
+
+// companion is a node AddNode creates after a curated starter that refers
+// to it (e.g. a bucket's encryption configuration, a function's log group).
+// Init strings may use {{self}} (the starter's address), the starter's
+// {{name}}/{{slug}} and {{need:<type>}} for its needs and earlier companions.
+type companion struct {
+	Kind model.NodeKind `json:"kind"`
+	Type string         `json:"type"`
+	Name string         `json:"name"`
+	Init *initOverride  `json:"init"`
 }
 
 type initBlock struct {

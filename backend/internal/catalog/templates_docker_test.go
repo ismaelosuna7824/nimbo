@@ -15,6 +15,9 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/ismaelosuna7824/nimbo/backend/internal/hclcodec"
+	"github.com/ismaelosuna7824/nimbo/backend/internal/model"
 )
 
 // These tests deploy every AWS template into a throwaway Floci pod using the
@@ -109,10 +112,12 @@ func TestTemplatesValidate(t *testing.T) {
 	}
 }
 
-func TestAWSTemplatesApplyOnFloci(t *testing.T) {
-	c := mustLoad(t)
+// startFloci starts a throwaway pod + floci container (removed on cleanup)
+// and returns the pod name, the host base URL and the Terraform env.
+func startFloci(t *testing.T) (pod, base string, env []string) {
+	t.Helper()
 	name := fmt.Sprintf("nimbo-cattpl%d", time.Now().UnixNano()%1_000_000)
-	pod := name + "-pod"
+	pod = name + "-pod"
 	docker(t, "network", "create", name)
 	t.Cleanup(func() {
 		// Floci-spawned containers attach to the network; floci itself only
@@ -132,10 +137,14 @@ func TestAWSTemplatesApplyOnFloci(t *testing.T) {
 		"-v", "/var/run/docker.sock:/var/run/docker.sock", "-u", "root",
 		"-e", "FLOCI_SERVICES_DOCKER_NETWORK="+name, "floci/floci:latest")
 	hostPort := docker(t, "port", pod, "4566")
-	base := "http://" + hostPort[strings.LastIndex(hostPort, "\n")+1:]
+	base = "http://" + hostPort[strings.LastIndex(hostPort, "\n")+1:]
 	waitReady(t, base+"/_floci/init")
+	return pod, base, []string{"AWS_ENDPOINT_URL=http://localhost:4566", "AWS_ACCESS_KEY_ID=test", "AWS_SECRET_ACCESS_KEY=test", "AWS_REGION=us-east-1"}
+}
 
-	env := []string{"AWS_ENDPOINT_URL=http://localhost:4566", "AWS_ACCESS_KEY_ID=test", "AWS_SECRET_ACCESS_KEY=test", "AWS_REGION=us-east-1"}
+func TestAWSTemplatesApplyOnFloci(t *testing.T) {
+	c := mustLoad(t)
+	pod, base, env := startFloci(t)
 	for _, tpl := range c.Templates() {
 		if tpl.Cloud != "aws" {
 			continue
@@ -160,8 +169,57 @@ func TestAWSTemplatesApplyOnFloci(t *testing.T) {
 				}
 				check(t, base, vals)
 			}
+			planNoChanges(t, pod, dir, env)
 			runTerraform(t, pod, dir, env, "destroy", "-auto-approve", "-input=false", "-no-color")
 		})
+	}
+}
+
+// TestPopularAWSStartersApplyOnFloci builds one workflow with every popular
+// Floci-supported AWS starter (with Nimbo's conventions: name_prefix names,
+// default_tags, encryption, log retention), exports it and applies it.
+func TestPopularAWSStartersApplyOnFloci(t *testing.T) {
+	c := mustLoad(t)
+	wf := &model.Workflow{Name: "Starters"}
+	for _, r := range c.Search(Query{Cloud: model.CloudAWS, Kind: model.KindResource, PopularOnly: true, SupportedOnly: true}) {
+		if _, err := c.AddNode(wf, model.KindResource, r.Type, "", model.Position{}); err != nil {
+			t.Fatalf("add %s: %v", r.Type, err)
+		}
+	}
+	hclcodec.Normalize(wf)
+	files, err := hclcodec.Export(wf, hclcodec.ExportOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	extra := map[string]string{"floci_override.tf": flociOverride}
+	for name, b := range files {
+		extra[name] = string(b)
+	}
+	dir, err := os.MkdirTemp("", "nimbo-starters-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.RemoveAll(dir) })
+	for name, s := range extra {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(s), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	pod, _, env := startFloci(t)
+	runTerraform(t, pod, dir, env, "init", "-input=false", "-no-color")
+	start := time.Now()
+	runTerraform(t, pod, dir, env, "apply", "-auto-approve", "-input=false", "-no-color")
+	t.Logf("apply of %d nodes took %s", len(wf.Nodes), time.Since(start).Round(time.Millisecond))
+	planNoChanges(t, pod, dir, env)
+	runTerraform(t, pod, dir, env, "destroy", "-auto-approve", "-input=false", "-no-color")
+}
+
+// planNoChanges fails when a plan right after apply wants changes.
+func planNoChanges(t *testing.T, pod, dir string, env []string) {
+	t.Helper()
+	out, err := exec.Command("docker", terraformArgs(pod, dir, env, "plan", "-detailed-exitcode", "-input=false", "-no-color")...).CombinedOutput()
+	if err != nil {
+		t.Errorf("plan after apply is not empty: %v\n%s", err, out)
 	}
 }
 

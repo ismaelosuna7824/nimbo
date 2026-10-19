@@ -1,6 +1,18 @@
 resource "aws_s3_bucket" "site" {
-  bucket_prefix = "${var.site_name}-"
+  bucket_prefix = "${local.name_prefix}-"
   force_destroy = true
+  # Public on purpose: the bucket serves a static website.
+  tags = { Public = "true" }
+}
+
+resource "aws_s3_bucket_server_side_encryption_configuration" "site" {
+  bucket = aws_s3_bucket.site.id
+
+  rule {
+    apply_server_side_encryption_by_default {
+      sse_algorithm = "AES256"
+    }
+  }
 }
 
 resource "aws_s3_bucket_website_configuration" "site" {

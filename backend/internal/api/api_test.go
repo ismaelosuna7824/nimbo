@@ -253,10 +253,12 @@ func TestPutTerraformRoundTripKeepsLayout(t *testing.T) {
 		Files map[string]string `json:"files"`
 	}
 	e.mustCall(http.StatusOK, "GET", "/workflows/"+wf.ID+"/terraform", nil, &tf)
-	if !strings.Contains(tf.Files["main.tf"], `"`+first.Name+`"`) {
-		t.Fatalf("main.tf does not contain node %s:\n%s", first.Name, tf.Files["main.tf"])
+	// Templates get the recommended layout; NodeFiles says where each node is.
+	file := wf.NodeFiles[first.ID]
+	if file == "" || !strings.Contains(tf.Files[file], `"`+first.Name+`"`) {
+		t.Fatalf("%s does not contain node %s:\n%v", file, first.Name, tf.Files)
 	}
-	tf.Files["main.tf"] += "\nresource \"aws_s3_bucket\" \"extra\" {\n  bucket = \"extra-bucket\"\n}\n"
+	tf.Files[file] += "\nresource \"aws_s3_bucket\" \"extra\" {\n  bucket = \"extra-bucket\"\n}\n"
 
 	var next model.Workflow
 	e.mustCall(http.StatusOK, "PUT", "/workflows/"+wf.ID+"/terraform", map[string]any{"files": tf.Files}, &next)
@@ -279,13 +281,23 @@ func TestPutTerraformRoundTripKeepsLayout(t *testing.T) {
 	if extra == nil || extra.Positioned {
 		t.Fatalf("new node missing or positioned: %+v", extra)
 	}
+	// Code edits keep the automatic layout of the blocks they did not move;
+	// a block written elsewhere than Nimbo would put it stays there.
+	for _, n := range next.Nodes {
+		if n.Name != "extra" && n.File != "" {
+			t.Errorf("node %s pinned to %s by a code edit", n.ID, n.File)
+		}
+	}
+	if next.NodeFiles[extra.ID] != file {
+		t.Errorf("new node in %s, written in %s", next.NodeFiles[extra.ID], file)
+	}
 
 	var again struct {
 		Files map[string]string `json:"files"`
 	}
 	e.mustCall(http.StatusOK, "GET", "/workflows/"+wf.ID+"/terraform", nil, &again)
-	if !strings.Contains(again.Files["main.tf"], `bucket = "extra-bucket"`) {
-		t.Fatalf("re-export lost the edit:\n%s", again.Files["main.tf"])
+	if !strings.Contains(again.Files[file], `bucket = "extra-bucket"`) {
+		t.Fatalf("re-export lost the edit:\n%s", again.Files[file])
 	}
 
 	var apiErr struct {
@@ -303,6 +315,44 @@ func writeFile(t *testing.T, path, content string) {
 	}
 	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestPatchNodeFile(t *testing.T) {
+	e := newEnv(t)
+	var wf model.Workflow
+	e.mustCall(http.StatusCreated, "POST", "/workflows", map[string]string{"name": "Files"}, &wf)
+	var added struct {
+		Workflow model.Workflow `json:"workflow"`
+		NodeID   string         `json:"nodeId"`
+	}
+	e.mustCall(http.StatusCreated, "POST", "/workflows/"+wf.ID+"/nodes", map[string]string{"type": "aws_sqs_queue", "name": "jobs"}, &added)
+	id := added.NodeID
+	if got := added.Workflow.NodeFiles[id]; got != "main.tf" {
+		t.Fatalf("new node of a small project in %q, want main.tf", got)
+	}
+
+	var tf struct {
+		Files map[string]string `json:"files"`
+	}
+	e.mustCall(http.StatusOK, "PATCH", "/workflows/"+wf.ID+"/nodes/"+id, map[string]string{"file": "queues.tf"}, &wf)
+	if wf.NodeFiles[id] != "queues.tf" || nodeByID(&wf, id).File != "queues.tf" {
+		t.Fatalf("node not moved: %v", wf.NodeFiles)
+	}
+	e.mustCall(http.StatusOK, "GET", "/workflows/"+wf.ID+"/terraform", nil, &tf)
+	if !strings.Contains(tf.Files["queues.tf"], `resource "aws_sqs_queue" "jobs"`) || strings.Contains(tf.Files["main.tf"], "aws_sqs_queue") {
+		t.Fatalf("files after move: %v", tf.Files)
+	}
+
+	for _, bad := range []string{"../queues.tf", "queues.txt", "override.tf"} {
+		if got := e.call("PATCH", "/workflows/"+wf.ID+"/nodes/"+id, map[string]string{"file": bad}, nil); got != http.StatusBadRequest {
+			t.Errorf("file %q: status %d", bad, got)
+		}
+	}
+	var back model.Workflow
+	e.mustCall(http.StatusOK, "PATCH", "/workflows/"+wf.ID+"/nodes/"+id, map[string]string{"file": ""}, &back)
+	if back.NodeFiles[id] != "main.tf" || nodeByID(&back, id).File != "" {
+		t.Fatalf("node not back to the recommended layout: %v", back.NodeFiles)
 	}
 }
 
@@ -326,6 +376,7 @@ resource "aws_s3_bucket" "site" {
 	writeFile(t, filepath.Join(src, "terraform.tfstate"), "{}")
 	writeFile(t, filepath.Join(src, "terraform.tfstate.backup"), "{}")
 	writeFile(t, filepath.Join(src, ".git", "config"), "[core]")
+	writeFile(t, filepath.Join(src, "README.md"), "# My site\n")
 
 	wf := e.importOne(map[string]string{"dir": src})
 	if wf.Name != filepath.Base(src) || len(wf.Nodes) != 1 || wf.Nodes[0].Type != "aws_s3_bucket" {
@@ -348,8 +399,8 @@ resource "aws_s3_bucket" "site" {
 	})
 	// The dependency lock file is kept (it pins provider versions); working
 	// data, state and VCS metadata are not.
-	if !slices.Equal(assets, []string{".terraform.lock.hcl", "src/index.js"}) {
-		t.Fatalf("assets = %v, want .terraform.lock.hcl and src/index.js", assets)
+	if !slices.Equal(assets, []string{".terraform.lock.hcl", "README.md", "src/index.js"}) {
+		t.Fatalf("assets = %v, want .terraform.lock.hcl, README.md and src/index.js", assets)
 	}
 
 	out := filepath.Join(t.TempDir(), "exported")
@@ -358,7 +409,7 @@ resource "aws_s3_bucket" "site" {
 		Files []string `json:"files"`
 	}
 	e.mustCall(http.StatusOK, "POST", "/workflows/"+wf.ID+"/export", map[string]any{"dir": out, "environments": true}, &res)
-	for _, want := range []string{"main.tf", ".terraform.lock.hcl", "src/index.js", "environments/dev.tfvars", "environments/dev.env.example"} {
+	for _, want := range []string{"main.tf", ".terraform.lock.hcl", "src/index.js", "environments/dev.tfvars", "environments/dev.env.example", ".gitignore", "terraform.tfvars.example", "README.md"} {
 		if !slices.Contains(res.Files, want) {
 			t.Fatalf("export files %v missing %s", res.Files, want)
 		}
@@ -370,11 +421,27 @@ resource "aws_s3_bucket" "site" {
 	if !strings.Contains(string(tfvars), `"dev-site"`) {
 		t.Fatalf("dev.tfvars = %q", tfvars)
 	}
+	// The project keeps its own README; the scaffold fills in the rest.
+	if readme, _ := os.ReadFile(filepath.Join(out, "README.md")); string(readme) != "# My site\n" {
+		t.Fatalf("user README overwritten: %q", readme)
+	}
+	if sample, _ := os.ReadFile(filepath.Join(out, "terraform.tfvars.example")); !strings.Contains(string(sample), "bucket_name = \"\"\n") {
+		t.Fatalf("terraform.tfvars.example = %q", sample)
+	}
 
-	// The export re-imports into an equivalent workflow, environments included.
+	// The export re-imports into an equivalent workflow, environments
+	// included; the generated scaffold is regenerated, not kept as assets.
 	again := e.importOne(map[string]string{"dir": out, "name": "Again"})
 	if len(again.Nodes) != 1 || len(again.Environments) != 1 || !reflect.DeepEqual(again.Environments[0].EnvVars, wantVars) {
 		t.Fatalf("re-import: nodes=%d envs=%+v", len(again.Nodes), again.Environments)
+	}
+	for _, name := range []string{".gitignore", "terraform.tfvars.example"} {
+		if _, err := os.Stat(filepath.Join(e.st.AssetsDir(again.ID), name)); err == nil {
+			t.Errorf("generated %s kept as an asset on re-import", name)
+		}
+	}
+	if _, err := os.Stat(filepath.Join(e.st.AssetsDir(again.ID), "README.md")); err != nil {
+		t.Errorf("user README not kept on re-import: %v", err)
 	}
 
 	if got := e.call("POST", "/workflows/"+wf.ID+"/export", map[string]any{"dir": "relative/dir"}, nil); got != http.StatusBadRequest {

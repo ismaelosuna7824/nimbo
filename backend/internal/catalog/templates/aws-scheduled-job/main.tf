@@ -15,7 +15,7 @@ data "archive_file" "job" {
 }
 
 resource "aws_iam_role" "lambda" {
-  name = "${var.name}-job"
+  name = "${local.name_prefix}-job"
   assume_role_policy = jsonencode({
     Version = "2012-10-17"
     Statement = [{
@@ -26,13 +26,8 @@ resource "aws_iam_role" "lambda" {
   })
 }
 
-resource "aws_iam_role_policy_attachment" "lambda_logs" {
-  role       = aws_iam_role.lambda.name
-  policy_arn = "arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole"
-}
-
 resource "aws_lambda_function" "job" {
-  function_name    = "${var.name}-job"
+  function_name    = "${local.name_prefix}-job"
   role             = aws_iam_role.lambda.arn
   runtime          = "nodejs22.x"
   handler          = "index.handler"
@@ -41,8 +36,26 @@ resource "aws_lambda_function" "job" {
   timeout          = 60
 }
 
+resource "aws_cloudwatch_log_group" "job" {
+  name              = "/aws/lambda/${aws_lambda_function.job.function_name}"
+  retention_in_days = var.log_retention_days
+}
+
+resource "aws_iam_role_policy" "job_logs" {
+  name = "${local.name_prefix}-job-logs"
+  role = aws_iam_role.lambda.id
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Effect   = "Allow"
+      Action   = ["logs:CreateLogStream", "logs:PutLogEvents"]
+      Resource = ["${aws_cloudwatch_log_group.job.arn}:*"]
+    }]
+  })
+}
+
 resource "aws_iam_role" "scheduler" {
-  name = "${var.name}-scheduler"
+  name = "${local.name_prefix}-scheduler"
   assume_role_policy = jsonencode({
     Version = "2012-10-17"
     Statement = [{
@@ -54,7 +67,7 @@ resource "aws_iam_role" "scheduler" {
 }
 
 resource "aws_iam_role_policy" "invoke_job" {
-  name = "${var.name}-invoke-job"
+  name = "${local.name_prefix}-invoke-job"
   role = aws_iam_role.scheduler.id
   policy = jsonencode({
     Version = "2012-10-17"
@@ -67,7 +80,7 @@ resource "aws_iam_role_policy" "invoke_job" {
 }
 
 resource "aws_scheduler_schedule" "job" {
-  name                = "${var.name}-schedule"
+  name                = "${local.name_prefix}-schedule"
   schedule_expression = var.schedule_expression
 
   flexible_time_window {

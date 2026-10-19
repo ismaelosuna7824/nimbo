@@ -19,6 +19,7 @@ type nodeView struct {
 	Type       string            `json:"type"`
 	Name       string            `json:"name"`
 	Label      string            `json:"label,omitempty"`
+	File       string            `json:"file,omitempty"` // root .tf file export writes it to
 	Attributes map[string]string `json:"attributes,omitempty"`
 	Blocks     []blockView       `json:"blocks,omitempty"`
 }
@@ -65,6 +66,10 @@ type workflowView struct {
 	Providers    []namedView       `json:"providers,omitempty"`
 	Environments []envView         `json:"environments,omitempty"`
 	Diagnostics  []diagView        `json:"diagnostics,omitempty"`
+	// Review summarizes the best-practice findings (review_terraform lists them).
+	Review string `json:"review,omitempty"`
+	// BestPractices are the findings a mutation introduced.
+	BestPractices []bpView `json:"best_practices,omitempty"`
 }
 
 const redacted = "(redacted)"
@@ -106,9 +111,13 @@ func blocksView(blocks []model.Block) []blockView {
 	return out
 }
 
-func viewNode(n *model.Node) nodeView {
+func viewNode(wf *model.Workflow, n *model.Node) nodeView {
+	file := wf.NodeFiles[n.ID]
+	if file == "" {
+		file = n.File
+	}
 	return nodeView{
-		ID: n.ID, Address: address(n), Kind: n.Kind, Type: n.Type, Name: n.Name, Label: n.Label,
+		ID: n.ID, Address: address(n), Kind: n.Kind, Type: n.Type, Name: n.Name, Label: n.Label, File: file,
 		Attributes: attrsView(n.Body.Attrs), Blocks: blocksView(n.Body.Blocks),
 	}
 }
@@ -129,10 +138,15 @@ func addressByID(wf *model.Workflow) map[string]string {
 	return m
 }
 
+// viewDiagnostics lists diags without best-practice findings (see
+// review_terraform and bpDelta).
 func viewDiagnostics(wf *model.Workflow, diags []model.Diagnostic) []diagView {
 	addrs := addressByID(wf)
 	out := []diagView{}
 	for _, d := range diags {
+		if isBestPractice(d) {
+			continue
+		}
 		node := addrs[d.NodeID]
 		if node == "" {
 			node = d.NodeID
@@ -203,10 +217,10 @@ func viewWorkflow(wf *model.Workflow) workflowView {
 		Nodes: []nodeView{}, Edges: viewEdges(wf),
 		Variables: namedViews(wf.Variables), Outputs: namedViews(wf.Outputs),
 		Locals: attrsView(wf.Locals), Providers: namedViews(wf.Providers),
-		Environments: viewEnvironments(wf), Diagnostics: viewDiagnostics(wf, wf.Diagnostics),
+		Environments: viewEnvironments(wf), Diagnostics: viewDiagnostics(wf, wf.Diagnostics), Review: reviewSummary(wf),
 	}
 	for i := range wf.Nodes {
-		v.Nodes = append(v.Nodes, viewNode(&wf.Nodes[i]))
+		v.Nodes = append(v.Nodes, viewNode(wf, &wf.Nodes[i]))
 	}
 	return v
 }

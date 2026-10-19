@@ -112,6 +112,8 @@ export function readOnlyReason(file: WorkflowFile): string | undefined {
   if (file.binary) return "Binary file"
   if (file.kind === "tfvars") return "Generated from the environment values — edit them in Variables & Environments"
   if (file.kind === "env") return "Generated from the environment variables — edit them in Variables & Environments"
+  if (file.kind === "scaffold")
+    return "Generated on every export from the workflow (description, variables, outputs) — delete its first line in your exported copy to keep your own"
   if (baseName(file.path) === ".terraform.lock.hcl") return "Written by terraform init; kept as imported"
   return "Too large to edit here"
 }

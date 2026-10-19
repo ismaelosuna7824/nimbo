@@ -1,3 +1,3 @@
 provider "oci" {
-  region = var.region
+  region = var.oci_region
 }

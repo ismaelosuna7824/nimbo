@@ -36,6 +36,7 @@ import { EditorTabs, PathBar } from "./editor-chrome"
 import { baseName } from "./file-model"
 import { FileTree, type OpenOptions } from "./file-tree"
 import { QuickOpen } from "./quick-open"
+import { useFilesRequestFor } from "./reveal-files"
 
 // CodeMirror loads with the first file shown, not with the app.
 const CodeEditor = lazy(() => import("./code-editor").then((m) => ({ default: m.CodeEditor })))
@@ -200,6 +201,19 @@ export function FilesTab() {
       pendingReveal.current = { path, focus: opts.focusEditor, find: opts.find, line: opts.line }
     }
   }, [])
+
+  // "Open files" requests (e.g. a module's folder): open the file once the current listing has it.
+  const filesRequest = useFilesRequestFor(workflowId)
+  const openedRequest = useRef(0)
+  useEffect(() => {
+    if (!filesRequest || filesRequest.nonce === openedRequest.current || listing.isPlaceholderData || !listing.data) return
+    openedRequest.current = filesRequest.nonce
+    const target =
+      filesRequest.open && byPath.has(filesRequest.open)
+        ? filesRequest.open
+        : files.find((f) => !f.binary && f.path.startsWith(filesRequest.filter))?.path
+    if (target) openFile(target)
+  }, [filesRequest, listing.data, listing.isPlaceholderData, byPath, files, openFile])
 
   // Run focus/find/reveal once the editor shows the requested file.
   useEffect(() => {

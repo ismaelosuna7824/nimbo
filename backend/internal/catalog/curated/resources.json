@@ -1,9 +1,29 @@
 {
   "variables": {
+    "aws_region": {
+      "type": "string",
+      "default": "us-east-1",
+      "description": "AWS region to deploy into."
+    },
+    "location": {
+      "type": "string",
+      "default": "eastus",
+      "description": "Azure region of the resource groups and their resources."
+    },
     "gcp_project": {
       "type": "string",
       "default": "floci-local",
       "description": "Google Cloud project ID (floci-local is the local Floci project)."
+    },
+    "gcp_region": {
+      "type": "string",
+      "default": "us-central1",
+      "description": "Google Cloud region of the provider and regional resources."
+    },
+    "oci_region": {
+      "type": "string",
+      "default": "us-ashburn-1",
+      "description": "OCI region to deploy into."
     },
     "compartment_ocid": {
       "type": "string",
@@ -14,11 +34,21 @@
   "resources": {
     "aws_s3_bucket": {
       "label": "S3 Bucket", "icon": "hard-drive", "popular": true, "name": "bucket",
-      "description": "Object storage for files, assets and data lakes.",
+      "description": "Object storage for files, assets and data lakes. Starts encrypted (SSE-S3) with public access blocked.",
       "attrs": {
-        "bucket": {"basic": true, "init": "{{slug}}-{{rand}}"},
+        "bucket": {"basic": true, "init": "{{slug}}-{{rand}}", "naming": "${local.name_prefix}-{{slug}}-{{rand}}"},
         "force_destroy": {"basic": true, "default": true, "init": true}
-      }
+      },
+      "companions": [
+        {"type": "aws_s3_bucket_server_side_encryption_configuration", "name": "{{name}}_encryption", "init": {
+          "exprs": {"bucket": "{{self}}.id"},
+          "blocks": [{"type": "rule", "blocks": [{"type": "apply_server_side_encryption_by_default", "attrs": {"sse_algorithm": "AES256"}}]}]
+        }},
+        {"type": "aws_s3_bucket_public_access_block", "name": "{{name}}_public_access", "init": {
+          "exprs": {"bucket": "{{self}}.id"},
+          "attrs": {"block_public_acls": true, "block_public_policy": true, "ignore_public_acls": true, "restrict_public_buckets": true}
+        }}
+      ]
     },
     "aws_s3_bucket_policy": {"label": "S3 Bucket Policy", "icon": "file-lock"},
     "aws_s3_bucket_notification": {"label": "S3 Bucket Notification", "icon": "bell"},
@@ -30,7 +60,8 @@
       "label": "SQS Queue", "icon": "inbox", "popular": true, "name": "queue",
       "description": "Managed message queue to decouple producers and consumers.",
       "attrs": {
-        "name": {"basic": true, "init": "{{slug}}"},
+        "name": {"basic": true, "init": "{{slug}}", "naming": "${local.name_prefix}-{{slug}}"},
+        "sqs_managed_sse_enabled": {"init": true},
         "visibility_timeout_seconds": {"basic": true, "default": 30},
         "message_retention_seconds": {"basic": true, "default": 345600},
         "delay_seconds": {"basic": true, "default": 0},
@@ -44,7 +75,7 @@
       "label": "SNS Topic", "icon": "megaphone", "popular": true, "name": "topic",
       "description": "Pub/sub topic that fans messages out to subscribers.",
       "attrs": {
-        "name": {"basic": true, "init": "{{slug}}"},
+        "name": {"basic": true, "init": "{{slug}}", "naming": "${local.name_prefix}-{{slug}}"},
         "fifo_topic": {"basic": true, "default": false}
       }
     },
@@ -60,9 +91,9 @@
     "aws_sns_topic_policy": {"label": "SNS Topic Policy", "icon": "file-lock"},
     "aws_dynamodb_table": {
       "label": "DynamoDB Table", "icon": "table", "popular": true, "name": "table",
-      "description": "Serverless key-value and document database.",
+      "description": "Serverless key-value and document database. Starts with server-side encryption enabled.",
       "attrs": {
-        "name": {"basic": true, "init": "{{slug}}"},
+        "name": {"basic": true, "init": "{{slug}}", "naming": "${local.name_prefix}-{{slug}}"},
         "billing_mode": {"basic": true, "enum": ["PAY_PER_REQUEST", "PROVISIONED"], "default": "PAY_PER_REQUEST", "init": "PAY_PER_REQUEST"},
         "hash_key": {"basic": true, "init": "id"},
         "range_key": {"basic": true},
@@ -70,13 +101,16 @@
         "stream_view_type": {"enum": ["KEYS_ONLY", "NEW_IMAGE", "OLD_IMAGE", "NEW_AND_OLD_IMAGES"]},
         "attribute.type": {"enum": ["S", "N", "B"]}
       },
-      "blocks": [{"type": "attribute", "attrs": {"name": "id", "type": "S"}}]
+      "blocks": [
+        {"type": "attribute", "attrs": {"name": "id", "type": "S"}},
+        {"type": "server_side_encryption", "attrs": {"enabled": true}}
+      ]
     },
     "aws_lambda_function": {
       "label": "Lambda Function", "icon": "zap", "popular": true, "name": "function",
-      "description": "Run code without servers. Starts with an inline Node.js handler and an execution role.",
+      "description": "Run code without servers. Starts with an inline Node.js handler, an execution role and a log group with 14-day retention.",
       "attrs": {
-        "function_name": {"basic": true, "init": "{{slug}}"},
+        "function_name": {"basic": true, "init": "{{slug}}", "naming": "${local.name_prefix}-{{slug}}"},
         "runtime": {"basic": true, "default": "nodejs22.x", "init": "nodejs22.x", "enum": [
           "nodejs24.x", "nodejs22.x", "python3.14", "python3.13", "python3.12", "python3.11",
           "java21", "java17", "java11", "java8.al2", "dotnet8", "ruby3.4", "ruby3.3", "provided.al2023", "provided.al2"
@@ -90,6 +124,18 @@
       "needs": [
         {"kind": "data", "type": "archive_file", "new": true, "name": "{{name}}_code", "refs": {"filename": "output_path", "source_code_hash": "output_base64sha256"}},
         {"type": "aws_iam_role", "new": true, "name": "{{name}}_role", "refs": {"role": "arn"}}
+      ],
+      "companions": [
+        {"type": "aws_cloudwatch_log_group", "name": "{{name}}_logs", "init": {
+          "exprs": {"name": "\"/aws/lambda/${{{self}}.function_name}\""},
+          "attrs": {"retention_in_days": 14}
+        }},
+        {"type": "aws_iam_role_policy", "name": "{{name}}_logs", "init": {
+          "exprs": {
+            "role": "{{need:aws_iam_role}}.id",
+            "policy": "jsonencode({\n  Version = \"2012-10-17\"\n  Statement = [{\n    Effect   = \"Allow\"\n    Action   = [\"logs:CreateLogStream\", \"logs:PutLogEvents\"]\n    Resource = [\"${{{need:aws_cloudwatch_log_group}}.arn}:*\"]\n  }]\n})"
+          }
+        }}
       ]
     },
     "aws_lambda_function_url": {
@@ -118,7 +164,7 @@
       "label": "HTTP API (API Gateway v2)", "icon": "waypoints", "popular": true, "name": "http_api",
       "description": "Low-latency HTTP or WebSocket API in front of Lambda and other backends.",
       "attrs": {
-        "name": {"basic": true, "init": "{{slug}}"},
+        "name": {"basic": true, "init": "{{slug}}", "naming": "${local.name_prefix}-{{slug}}"},
         "protocol_type": {"basic": true, "enum": ["HTTP", "WEBSOCKET"], "default": "HTTP", "init": "HTTP"},
         "description": {"basic": true}
       }
@@ -141,7 +187,7 @@
     "aws_api_gateway_rest_api": {
       "label": "REST API (API Gateway)", "icon": "waypoints", "popular": true, "name": "rest_api",
       "description": "Feature-rich REST API with stages, usage plans and API keys.",
-      "attrs": {"name": {"basic": true, "init": "{{slug}}"}, "description": {"basic": true}}
+      "attrs": {"name": {"basic": true, "init": "{{slug}}", "naming": "${local.name_prefix}-{{slug}}"}, "description": {"basic": true}}
     },
     "aws_api_gateway_resource": {"label": "REST API Resource", "icon": "route"},
     "aws_api_gateway_method": {"label": "REST API Method", "icon": "route"},
@@ -152,16 +198,16 @@
       "label": "IAM Role", "icon": "key-round", "popular": true, "name": "role",
       "description": "Identity with permissions that AWS services (e.g. Lambda) can assume.",
       "attrs": {
-        "name": {"basic": true, "init": "{{slug}}"},
+        "name": {"basic": true, "init": "{{slug}}", "naming": "${local.name_prefix}-{{slug}}"},
         "assume_role_policy": {"basic": true, "expr": "jsonencode({\n  Version = \"2012-10-17\"\n  Statement = [{\n    Effect    = \"Allow\"\n    Principal = { Service = \"lambda.amazonaws.com\" }\n    Action    = \"sts:AssumeRole\"\n  }]\n})"}
       }
     },
     "aws_iam_policy": {
       "label": "IAM Policy", "icon": "file-key", "popular": true, "name": "policy",
-      "description": "Reusable managed permissions policy. Starts with CloudWatch Logs write access.",
+      "description": "Reusable managed permissions policy. Starts with write access to Lambda log groups.",
       "attrs": {
-        "name": {"basic": true, "init": "{{slug}}"},
-        "policy": {"basic": true, "expr": "jsonencode({\n  Version = \"2012-10-17\"\n  Statement = [{\n    Effect   = \"Allow\"\n    Action   = [\"logs:CreateLogGroup\", \"logs:CreateLogStream\", \"logs:PutLogEvents\"]\n    Resource = \"*\"\n  }]\n})"}
+        "name": {"basic": true, "init": "{{slug}}", "naming": "${local.name_prefix}-{{slug}}"},
+        "policy": {"basic": true, "expr": "jsonencode({\n  Version = \"2012-10-17\"\n  Statement = [{\n    Effect   = \"Allow\"\n    Action   = [\"logs:CreateLogGroup\", \"logs:CreateLogStream\", \"logs:PutLogEvents\"]\n    Resource = [\"arn:aws:logs:*:*:log-group:/aws/lambda/*\"]\n  }]\n})"}
       }
     },
     "aws_iam_role_policy": {"label": "IAM Inline Role Policy", "icon": "file-key", "name": "policy"},
@@ -173,7 +219,7 @@
       "label": "CloudWatch Log Group", "icon": "scroll-text", "popular": true, "name": "logs",
       "description": "Stores and retains log streams.",
       "attrs": {
-        "name": {"basic": true, "init": "/app/{{slug}}"},
+        "name": {"basic": true, "init": "/app/{{slug}}", "naming": "/${local.name_prefix}/{{slug}}"},
         "retention_in_days": {"basic": true, "default": 14, "init": 14, "enum": ["1", "3", "5", "7", "14", "30", "60", "90", "120", "150", "180", "365", "400", "545", "731", "1096", "1827", "2192", "2557", "2922", "3288", "3653"]}
       }
     },
@@ -189,7 +235,7 @@
       "label": "EventBridge Rule", "icon": "calendar-clock", "popular": true, "name": "rule",
       "description": "Matches events or runs on a schedule and routes them to targets.",
       "attrs": {
-        "name": {"basic": true, "init": "{{slug}}"},
+        "name": {"basic": true, "init": "{{slug}}", "naming": "${local.name_prefix}-{{slug}}"},
         "schedule_expression": {"basic": true, "default": "rate(5 minutes)", "init": "rate(5 minutes)"},
         "event_pattern": {"basic": true},
         "description": {"basic": true}
@@ -201,7 +247,7 @@
       "label": "EventBridge Schedule", "icon": "alarm-clock", "popular": true, "name": "schedule",
       "description": "Invokes a target on a cron or rate schedule. Starts as a heartbeat that calls STS; connect it to a Lambda to run your code.",
       "attrs": {
-        "name": {"basic": true, "init": "{{slug}}"},
+        "name": {"basic": true, "init": "{{slug}}", "naming": "${local.name_prefix}-{{slug}}"},
         "schedule_expression": {"basic": true, "default": "rate(5 minutes)", "init": "rate(5 minutes)"},
         "state": {"basic": true, "enum": ["ENABLED", "DISABLED"]},
         "flexible_time_window.mode": {"enum": ["OFF", "FLEXIBLE"]}
@@ -219,11 +265,13 @@
     "aws_scheduler_schedule_group": {"label": "EventBridge Schedule Group", "icon": "alarm-clock"},
     "aws_kinesis_stream": {
       "label": "Kinesis Data Stream", "icon": "waves", "popular": true, "name": "stream",
-      "description": "Real-time data stream with ordered, replayable records.",
+      "description": "Real-time data stream with ordered, replayable records, encrypted with the AWS managed key.",
       "attrs": {
-        "name": {"basic": true, "init": "{{slug}}"},
+        "name": {"basic": true, "init": "{{slug}}", "naming": "${local.name_prefix}-{{slug}}"},
         "shard_count": {"basic": true, "default": 1, "init": 1},
-        "retention_period": {"basic": true, "default": 24}
+        "retention_period": {"basic": true, "default": 24},
+        "encryption_type": {"enum": ["NONE", "KMS"], "init": "KMS"},
+        "kms_key_id": {"init": "alias/aws/kinesis"}
       }
     },
     "aws_kinesis_firehose_delivery_stream": {"label": "Data Firehose Stream", "icon": "waves"},
@@ -231,7 +279,7 @@
       "label": "Step Functions State Machine", "icon": "workflow", "popular": true, "name": "state_machine",
       "description": "Orchestrates multi-step workflows. Starts with a single Pass state.",
       "attrs": {
-        "name": {"basic": true, "init": "{{slug}}"},
+        "name": {"basic": true, "init": "{{slug}}", "naming": "${local.name_prefix}-{{slug}}"},
         "type": {"basic": true, "enum": ["STANDARD", "EXPRESS"], "default": "STANDARD"},
         "definition": {"basic": true, "expr": "jsonencode({\n  Comment = \"Starter state machine\"\n  StartAt = \"Hello\"\n  States = {\n    Hello = {\n      Type   = \"Pass\"\n      Result = { message = \"Hello from Step Functions\" }\n      End    = true\n    }\n  }\n})"}
       },
@@ -245,7 +293,7 @@
       "label": "Secrets Manager Secret", "icon": "lock", "popular": true, "name": "secret",
       "description": "Stores credentials and other secrets with rotation support.",
       "attrs": {
-        "name": {"basic": true, "init": "{{slug}}"},
+        "name": {"basic": true, "init": "{{slug}}", "naming": "${local.name_prefix}-{{slug}}"},
         "recovery_window_in_days": {"basic": true, "default": 0, "init": 0},
         "description": {"basic": true}
       }
@@ -255,7 +303,7 @@
       "label": "SSM Parameter", "icon": "sliders-horizontal", "popular": true, "name": "parameter",
       "description": "Configuration value in Parameter Store.",
       "attrs": {
-        "name": {"basic": true, "init": "/app/{{slug}}"},
+        "name": {"basic": true, "init": "/app/{{slug}}", "naming": "/${local.name_prefix}/{{slug}}"},
         "type": {"basic": true, "enum": ["String", "StringList", "SecureString"], "default": "String", "init": "String"},
         "value": {"basic": true, "init": "{}"},
         "description": {"basic": true}
@@ -294,10 +342,10 @@
       "label": "Security Group", "icon": "shield", "popular": true, "name": "security_group",
       "description": "Stateful firewall rules for instances, load balancers and functions.",
       "attrs": {
-        "name": {"basic": true, "init": "{{slug}}"},
+        "name": {"basic": true, "init": "{{slug}}", "naming": "${local.name_prefix}-{{slug}}"},
         "description": {"basic": true, "init": "{{name}} security group"}
       },
-      "blocks": [{"type": "egress", "attrs": {"from_port": 0, "to_port": 0, "protocol": "-1", "cidr_blocks": ["0.0.0.0/0"]}}],
+      "blocks": [{"type": "egress", "attrs": {"description": "All outbound traffic", "from_port": 0, "to_port": 0, "protocol": "-1", "cidr_blocks": ["0.0.0.0/0"]}}],
       "needs": [{"type": "aws_vpc", "optional": true, "refs": {"vpc_id": "id"}}]
     },
     "aws_vpc_security_group_ingress_rule": {"label": "Security Group Ingress Rule", "icon": "shield"},
@@ -316,11 +364,12 @@
     "aws_route": {"label": "Route", "icon": "route"},
     "aws_instance": {
       "label": "EC2 Instance", "icon": "server", "popular": true, "name": "instance",
-      "description": "Virtual machine. Starts from the latest Amazon Linux 2023 image.",
+      "description": "Virtual machine. Starts from the latest Amazon Linux 2023 image, with IMDSv2 required.",
       "attrs": {
         "instance_type": {"basic": true, "default": "t3.micro", "init": "t3.micro", "enum": ["t3.nano", "t3.micro", "t3.small", "t3.medium", "t3.large", "t4g.micro", "t4g.small", "m7i.large", "c7i.large"]},
         "ami": {"basic": true}
       },
+      "blocks": [{"type": "metadata_options", "attrs": {"http_tokens": "required"}}],
       "needs": [
         {"type": "aws_subnet", "optional": true, "refs": {"subnet_id": "id"}},
         {"kind": "data", "type": "aws_ami", "refs": {"ami": "id"}}
@@ -331,13 +380,13 @@
     "aws_ecs_cluster": {
       "label": "ECS Cluster", "icon": "boxes", "popular": true, "name": "cluster",
       "description": "Logical group for container services and tasks.",
-      "attrs": {"name": {"basic": true, "init": "{{slug}}"}}
+      "attrs": {"name": {"basic": true, "init": "{{slug}}", "naming": "${local.name_prefix}-{{slug}}"}}
     },
     "aws_ecs_task_definition": {
       "label": "ECS Task Definition", "icon": "container", "popular": true, "name": "task",
       "description": "Container blueprint (image, CPU, memory, ports). Starts with nginx on Fargate.",
       "attrs": {
-        "family": {"basic": true, "init": "{{slug}}"},
+        "family": {"basic": true, "init": "{{slug}}", "naming": "${local.name_prefix}-{{slug}}"},
         "network_mode": {"basic": true, "enum": ["awsvpc", "bridge", "host", "none"], "init": "awsvpc"},
         "requires_compatibilities": {"basic": true, "init": ["FARGATE"]},
         "cpu": {"basic": true, "init": "256", "enum": ["256", "512", "1024", "2048", "4096"]},
@@ -348,7 +397,7 @@
     "aws_ecs_service": {
       "label": "ECS Service", "icon": "container", "name": "service",
       "attrs": {
-        "name": {"basic": true, "init": "{{slug}}"},
+        "name": {"basic": true, "init": "{{slug}}", "naming": "${local.name_prefix}-{{slug}}"},
         "desired_count": {"basic": true, "default": 1, "init": 1},
         "launch_type": {"basic": true, "enum": ["FARGATE", "EC2", "EXTERNAL"]}
       },
@@ -359,19 +408,20 @@
     },
     "aws_ecr_repository": {
       "label": "ECR Repository", "icon": "package", "popular": true, "name": "repository",
-      "description": "Private container image registry.",
+      "description": "Private container image registry. Scans images for vulnerabilities on push.",
       "attrs": {
-        "name": {"basic": true, "init": "{{slug}}"},
+        "name": {"basic": true, "init": "{{slug}}", "naming": "${local.name_prefix}-{{slug}}"},
         "force_delete": {"basic": true, "default": true, "init": true},
         "image_tag_mutability": {"basic": true, "enum": ["MUTABLE", "IMMUTABLE"]}
-      }
+      },
+      "blocks": [{"type": "image_scanning_configuration", "attrs": {"scan_on_push": true}}]
     },
     "aws_eks_cluster": {"label": "EKS Cluster", "icon": "boxes"},
     "aws_db_instance": {
       "label": "RDS Database", "icon": "database", "popular": true, "name": "database",
-      "description": "Managed relational database (PostgreSQL by default).",
+      "description": "Managed relational database (PostgreSQL by default) with encrypted storage.",
       "attrs": {
-        "identifier": {"basic": true, "init": "{{slug}}"},
+        "identifier": {"basic": true, "init": "{{slug}}", "naming": "${local.name_prefix}-{{slug}}"},
         "engine": {"basic": true, "enum": ["postgres", "mysql", "mariadb"], "default": "postgres", "init": "postgres"},
         "engine_version": {"basic": true},
         "instance_class": {"basic": true, "enum": ["db.t3.micro", "db.t3.small", "db.t4g.micro", "db.t4g.small", "db.m7g.large"], "default": "db.t3.micro", "init": "db.t3.micro"},
@@ -379,7 +429,8 @@
         "db_name": {"basic": true, "init": "app"},
         "username": {"basic": true, "init": "app_admin"},
         "password": {"basic": true, "init": "{{password}}"},
-        "skip_final_snapshot": {"basic": true, "default": true, "init": true}
+        "skip_final_snapshot": {"basic": true, "default": true, "init": true},
+        "storage_encrypted": {"basic": true, "default": true, "init": true}
       }
     },
     "aws_rds_cluster": {"label": "Aurora Cluster", "icon": "database"},
@@ -388,7 +439,7 @@
       "label": "ElastiCache Cluster", "icon": "database-zap", "popular": true, "name": "cache",
       "description": "Managed in-memory cache (Redis, Valkey or Memcached).",
       "attrs": {
-        "cluster_id": {"basic": true, "init": "{{slug}}"},
+        "cluster_id": {"basic": true, "init": "{{slug}}", "naming": "${local.name_prefix}-{{slug}}"},
         "engine": {"basic": true, "enum": ["redis", "valkey", "memcached"], "default": "redis", "init": "redis"},
         "node_type": {"basic": true, "enum": ["cache.t3.micro", "cache.t3.small", "cache.t4g.micro", "cache.m7g.large"], "default": "cache.t3.micro", "init": "cache.t3.micro"},
         "num_cache_nodes": {"basic": true, "default": 1, "init": 1}
@@ -398,7 +449,7 @@
     "aws_cognito_user_pool": {
       "label": "Cognito User Pool", "icon": "users", "popular": true, "name": "user_pool",
       "description": "User directory with sign-up and sign-in.",
-      "attrs": {"name": {"basic": true, "init": "{{slug}}"}}
+      "attrs": {"name": {"basic": true, "init": "{{slug}}", "naming": "${local.name_prefix}-{{slug}}"}}
     },
     "aws_cognito_user_pool_client": {"label": "Cognito App Client", "icon": "users"},
     "aws_cognito_identity_pool": {"label": "Cognito Identity Pool", "icon": "users"},
@@ -433,9 +484,10 @@
       "label": "Resource Group", "icon": "folder-tree", "popular": true, "name": "rg",
       "description": "Container that holds related Azure resources.",
       "attrs": {
-        "name": {"basic": true, "init": "rg-{{slug}}"},
-        "location": {"basic": true, "default": "eastus", "init": "eastus", "enum": ["eastus", "eastus2", "westus2", "westus3", "centralus", "northeurope", "westeurope", "uksouth", "southeastasia", "japaneast", "australiaeast", "brazilsouth"]}
-      }
+        "name": {"basic": true, "init": "rg-{{slug}}", "naming": "${local.name_prefix}-{{slug}}"},
+        "location": {"basic": true, "default": "eastus", "enum": ["eastus", "eastus2", "westus2", "westus3", "centralus", "northeurope", "westeurope", "uksouth", "southeastasia", "japaneast", "australiaeast", "brazilsouth"]}
+      },
+      "needs": [{"var": "location", "refs": {"location": ""}}]
     },
     "azurerm_storage_account": {
       "label": "Storage Account", "icon": "hard-drive", "popular": true, "name": "storage",
@@ -491,7 +543,7 @@
     },
     "azurerm_servicebus_queue": {
       "label": "Service Bus Queue", "icon": "inbox", "name": "sb_queue",
-      "attrs": {"name": {"basic": true, "init": "{{slug}}"}},
+      "attrs": {"name": {"basic": true, "init": "{{slug}}", "naming": "${local.name_prefix}-{{slug}}"}},
       "needs": [{"type": "azurerm_servicebus_namespace", "refs": {"namespace_id": "id"}}]
     },
     "azurerm_servicebus_topic": {"label": "Service Bus Topic", "icon": "megaphone"},
@@ -516,7 +568,7 @@
     "azurerm_service_plan": {
       "label": "App Service Plan", "icon": "server", "name": "plan",
       "attrs": {
-        "name": {"basic": true, "init": "plan-{{slug}}"},
+        "name": {"basic": true, "init": "plan-{{slug}}", "naming": "${local.name_prefix}-{{slug}}"},
         "os_type": {"basic": true, "enum": ["Linux", "Windows", "WindowsContainer"], "init": "Linux"},
         "sku_name": {"basic": true, "enum": ["Y1", "FC1", "EP1", "B1", "S1", "P1v3"], "init": "Y1"}
       },
@@ -525,7 +577,10 @@
     "azurerm_linux_function_app": {
       "label": "Function App (Linux)", "icon": "zap", "popular": true, "name": "function_app",
       "description": "Serverless functions on Azure (Node.js by default).",
-      "attrs": {"name": {"basic": true, "init": "func-{{slug:20}}-{{rand}}"}},
+      "attrs": {
+        "name": {"basic": true, "init": "func-{{slug:20}}-{{rand}}"},
+        "https_only": {"basic": true, "default": false, "init": true}
+      },
       "blocks": [{"type": "site_config", "blocks": [{"type": "application_stack", "attrs": {"node_version": "22"}}]}],
       "needs": [
         {"type": "azurerm_resource_group", "refs": {"resource_group_name": "name", "location": "location"}},
@@ -537,7 +592,7 @@
       "label": "Virtual Network", "icon": "network", "popular": true, "name": "vnet",
       "description": "Private network for Azure resources.",
       "attrs": {
-        "name": {"basic": true, "init": "vnet-{{slug}}"},
+        "name": {"basic": true, "init": "vnet-{{slug}}", "naming": "${local.name_prefix}-{{slug}}"},
         "address_space": {"basic": true, "init": ["10.1.0.0/16"]}
       },
       "needs": [{"type": "azurerm_resource_group", "refs": {"resource_group_name": "name", "location": "location"}}]
@@ -545,7 +600,7 @@
     "azurerm_subnet": {
       "label": "Subnet", "icon": "network", "name": "subnet",
       "attrs": {
-        "name": {"basic": true, "init": "snet-{{slug}}"},
+        "name": {"basic": true, "init": "snet-{{slug}}", "naming": "${local.name_prefix}-{{slug}}"},
         "address_prefixes": {"basic": true, "init": ["10.1.{{seq}}.0/24"]}
       },
       "needs": [{"type": "azurerm_virtual_network", "refs": {"virtual_network_name": "name", "resource_group_name": "resource_group_name"}}]
@@ -572,7 +627,7 @@
       "label": "Cloud Storage Bucket", "icon": "hard-drive", "popular": true, "name": "bucket",
       "description": "Object storage for files and data.",
       "attrs": {
-        "name": {"basic": true, "init": "{{slug}}-{{rand}}"},
+        "name": {"basic": true, "init": "{{slug}}-{{rand}}", "naming": "${local.name_prefix}-{{slug}}-{{rand}}"},
         "location": {"basic": true, "default": "US", "init": "US", "enum": ["US", "EU", "ASIA", "us-central1", "us-east1", "europe-west1", "asia-east1"]},
         "storage_class": {"basic": true, "enum": ["STANDARD", "NEARLINE", "COLDLINE", "ARCHIVE"]},
         "force_destroy": {"basic": true, "default": true, "init": true},
@@ -583,13 +638,13 @@
     "google_pubsub_topic": {
       "label": "Pub/Sub Topic", "icon": "megaphone", "popular": true, "name": "topic",
       "description": "Asynchronous messaging topic.",
-      "attrs": {"name": {"basic": true, "init": "{{slug}}"}}
+      "attrs": {"name": {"basic": true, "init": "{{slug}}", "naming": "${local.name_prefix}-{{slug}}"}}
     },
     "google_pubsub_subscription": {
       "label": "Pub/Sub Subscription", "icon": "bell-ring", "popular": true, "name": "subscription",
       "description": "Pull or push subscription to a Pub/Sub topic.",
       "attrs": {
-        "name": {"basic": true, "init": "{{slug}}"},
+        "name": {"basic": true, "init": "{{slug}}", "naming": "${local.name_prefix}-{{slug}}"},
         "ack_deadline_seconds": {"basic": true, "default": 20, "init": 20}
       },
       "needs": [{"type": "google_pubsub_topic", "refs": {"topic": "id"}}]
@@ -597,7 +652,7 @@
     "google_secret_manager_secret": {
       "label": "Secret Manager Secret", "icon": "lock", "popular": true, "name": "secret",
       "description": "Stores API keys, passwords and certificates.",
-      "attrs": {"secret_id": {"basic": true, "init": "{{slug}}"}},
+      "attrs": {"secret_id": {"basic": true, "init": "{{slug}}", "naming": "${local.name_prefix}-{{slug}}"}},
       "blocks": [{"type": "replication", "blocks": [{"type": "auto"}]}]
     },
     "google_secret_manager_secret_version": {"label": "Secret Version", "icon": "lock"},
@@ -605,23 +660,25 @@
       "label": "Cloud Run Service", "icon": "container", "popular": true, "name": "service",
       "description": "Runs a container that scales with HTTP traffic.",
       "attrs": {
-        "name": {"basic": true, "init": "{{slug}}"},
-        "location": {"basic": true, "default": "us-central1", "init": "us-central1"},
+        "name": {"basic": true, "init": "{{slug}}", "naming": "${local.name_prefix}-{{slug}}"},
+        "location": {"basic": true, "default": "us-central1"},
         "deletion_protection": {"basic": true, "default": false, "init": false},
         "ingress": {"enum": ["INGRESS_TRAFFIC_ALL", "INGRESS_TRAFFIC_INTERNAL_ONLY", "INGRESS_TRAFFIC_INTERNAL_LOAD_BALANCER"]}
       },
-      "blocks": [{"type": "template", "blocks": [{"type": "containers", "attrs": {"image": "us-docker.pkg.dev/cloudrun/container/hello"}}]}]
+      "blocks": [{"type": "template", "blocks": [{"type": "containers", "attrs": {"image": "us-docker.pkg.dev/cloudrun/container/hello"}}]}],
+      "needs": [{"var": "gcp_region", "refs": {"location": ""}}]
     },
     "google_sql_database_instance": {
       "label": "Cloud SQL Instance", "icon": "database", "popular": true, "name": "sql",
       "description": "Managed PostgreSQL or MySQL instance.",
       "attrs": {
-        "name": {"basic": true, "init": "{{slug}}-{{rand}}"},
+        "name": {"basic": true, "init": "{{slug}}-{{rand}}", "naming": "${local.name_prefix}-{{slug}}-{{rand}}"},
         "database_version": {"basic": true, "enum": ["POSTGRES_17", "POSTGRES_16", "POSTGRES_15", "MYSQL_8_4", "MYSQL_8_0"], "default": "POSTGRES_16", "init": "POSTGRES_16"},
-        "region": {"basic": true, "default": "us-central1", "init": "us-central1"},
+        "region": {"basic": true, "default": "us-central1"},
         "deletion_protection": {"basic": true, "default": false, "init": false}
       },
-      "blocks": [{"type": "settings", "attrs": {"tier": "db-f1-micro"}}]
+      "blocks": [{"type": "settings", "attrs": {"tier": "db-f1-micro"}, "blocks": [{"type": "ip_configuration", "attrs": {"ssl_mode": "ENCRYPTED_ONLY"}}]}],
+      "needs": [{"var": "gcp_region", "refs": {"region": ""}}]
     },
     "google_sql_database": {"label": "Cloud SQL Database", "icon": "database"},
     "google_service_account": {
@@ -657,7 +714,7 @@
       "label": "OCI Object Storage Bucket", "icon": "hard-drive", "popular": true, "name": "bucket",
       "description": "Object storage for files and data.",
       "attrs": {
-        "name": {"basic": true, "init": "{{slug}}-{{rand}}"},
+        "name": {"basic": true, "init": "{{slug}}-{{rand}}", "naming": "${local.name_prefix}-{{slug}}-{{rand}}"},
         "access_type": {"basic": true, "enum": ["NoPublicAccess", "ObjectRead", "ObjectReadWithoutList"]},
         "storage_tier": {"basic": true, "enum": ["Standard", "Archive"]}
       },
@@ -670,14 +727,14 @@
     "oci_queue_queue": {
       "label": "OCI Queue", "icon": "inbox", "popular": true, "name": "queue",
       "description": "Serverless message queue.",
-      "attrs": {"display_name": {"basic": true, "init": "{{slug}}"}},
+      "attrs": {"display_name": {"basic": true, "init": "{{slug}}", "naming": "${local.name_prefix}-{{slug}}"}},
       "needs": [{"var": "compartment_ocid", "refs": {"compartment_id": ""}}]
     },
     "oci_streaming_stream": {
       "label": "OCI Stream", "icon": "waves", "popular": true, "name": "stream",
       "description": "Partitioned append-only log for real-time data.",
       "attrs": {
-        "name": {"basic": true, "init": "{{slug}}"},
+        "name": {"basic": true, "init": "{{slug}}", "naming": "${local.name_prefix}-{{slug}}"},
         "partitions": {"basic": true, "default": 1, "init": 1}
       },
       "needs": [{"var": "compartment_ocid", "refs": {"compartment_id": ""}}]
@@ -686,7 +743,7 @@
       "label": "OCI Vault", "icon": "key-round", "popular": true, "name": "vault",
       "description": "Holds master encryption keys and secrets.",
       "attrs": {
-        "display_name": {"basic": true, "init": "{{slug}}"},
+        "display_name": {"basic": true, "init": "{{slug}}", "naming": "${local.name_prefix}-{{slug}}"},
         "vault_type": {"basic": true, "enum": ["DEFAULT", "VIRTUAL_PRIVATE"], "default": "DEFAULT", "init": "DEFAULT"}
       },
       "needs": [{"var": "compartment_ocid", "refs": {"compartment_id": ""}}]
@@ -697,7 +754,7 @@
       "label": "OCI Compartment", "icon": "folder-tree", "popular": true, "name": "compartment",
       "description": "Organizes and isolates OCI resources.",
       "attrs": {
-        "name": {"basic": true, "init": "{{slug}}"},
+        "name": {"basic": true, "init": "{{slug}}", "naming": "${local.name_prefix}-{{slug}}"},
         "description": {"basic": true, "init": "{{name}} compartment"},
         "enable_delete": {"basic": true, "default": true, "init": true}
       },

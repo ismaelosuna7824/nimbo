@@ -2,7 +2,7 @@ resource "aws_vpc" "main" {
   cidr_block           = var.vpc_cidr
   enable_dns_support   = true
   enable_dns_hostnames = true
-  tags                 = { Name = var.name }
+  tags                 = { Name = local.name_prefix }
 }
 
 resource "aws_subnet" "public" {
@@ -11,17 +11,17 @@ resource "aws_subnet" "public" {
   cidr_block              = each.value.cidr
   availability_zone       = each.value.az
   map_public_ip_on_launch = true
-  tags                    = { Name = "${var.name}-public-${each.key}" }
+  tags                    = { Name = "${local.name_prefix}-public-${each.key}" }
 }
 
 resource "aws_internet_gateway" "main" {
   vpc_id = aws_vpc.main.id
-  tags   = { Name = var.name }
+  tags   = { Name = local.name_prefix }
 }
 
 resource "aws_route_table" "public" {
   vpc_id = aws_vpc.main.id
-  tags   = { Name = "${var.name}-public" }
+  tags   = { Name = "${local.name_prefix}-public" }
 }
 
 resource "aws_route" "internet" {
@@ -37,7 +37,7 @@ resource "aws_route_table_association" "public" {
 }
 
 resource "aws_security_group" "web" {
-  name        = "${var.name}-web"
+  name        = "${local.name_prefix}-web"
   description = "Allow HTTP and HTTPS from anywhere"
   vpc_id      = aws_vpc.main.id
 
@@ -58,6 +58,7 @@ resource "aws_security_group" "web" {
   }
 
   egress {
+    description = "All outbound traffic"
     from_port   = 0
     to_port     = 0
     protocol    = "-1"

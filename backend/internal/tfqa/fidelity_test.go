@@ -182,33 +182,49 @@ func TestEdgeDetails(t *testing.T) {
 		}
 		return string(data)
 	}
-	main := read("main.tf")
-	for _, want := range []string{
-		// Comments stay where they were.
-		"  name                       = \"${local.name}-${each.key}${each.value.fifo ? \".fifo\" : \"\"}\"\n",
-		"  visibility_timeout_seconds = 30 /* inline block comment */\n",
-		"  # Commented-out settings stay in the export:\n  # kms_master_key_id = \"alias/aws/sqs\"\n  # sqs_managed_sse_enabled = false\n}\n",
-		"# This file is intentionally commented out: the legacy bucket was removed.\n#\n# resource \"aws_s3_bucket\" \"legacy\" {\n",
-		"# Adopt queues created outside Terraform.\nimport {\n",
-		// Heredocs and template directives are untouched.
-		"      MOTD       = <<EOT\nWelcome to ${local.name}!\n%{if var.stage == \"prod\"~}\n",
-		"    command     = <<-EOT\n      echo \"queues changed\"\n",
-		// Module calls keep their provider mapping; local sources point at the copy.
-		"  source = \"./modules/app\"\n",
-		"    aws.replica = aws.west\n",
-		"  role_arn    = provider::aws::arn_parse(\"arn:aws:iam::444455556666:role/example\")\n",
+	// Every block stays in its own file, a second locals or terraform block
+	// included.
+	for file, wants := range map[string][]string{
+		"main.tf": {
+			// Comments stay where they were.
+			"  name                       = \"${local.name}-${each.key}${each.value.fifo ? \".fifo\" : \"\"}\"\n",
+			"  visibility_timeout_seconds = 30 /* inline block comment */\n",
+			"  # Commented-out settings stay in the export:\n  # kms_master_key_id = \"alias/aws/sqs\"\n  # sqs_managed_sse_enabled = false\n}\n",
+			// Heredocs and template directives are untouched.
+			"      MOTD       = <<EOT\nWelcome to ${local.name}!\n%{if var.stage == \"prod\"~}\n",
+			"    command     = <<-EOT\n      echo \"queues changed\"\n",
+			// Module calls keep their provider mapping; local sources point at the copy.
+			"  source = \"./modules/app\"\n",
+			"    aws.replica = aws.west\n",
+			// main.tf keeps its own locals block.
+			"provider::aws::arn_parse(\"arn:aws:iam::444455556666:role/example\")\n",
+			"  queue_names = [",
+		},
+		"other.tf": {"# Adopt queues created outside Terraform.\nimport {\n"},
+		// A comment-only file is kept as it is.
+		"notes.tf": {"# This file is intentionally commented out: the legacy bucket was removed.\n#\n# resource \"aws_s3_bucket\" \"legacy\" {\n"},
 	} {
-		if !strings.Contains(main, want) {
-			t.Errorf("main.tf lacks %q\n---\n%s", want, main)
+		content := read(file)
+		for _, want := range wants {
+			if !strings.Contains(content, want) {
+				t.Errorf("%s lacks %q\n---\n%s", file, want, content)
+			}
 		}
 	}
-	// Both terraform blocks merge into one; the file headers of both stay
-	// above it and the comments inside stay inside.
-	if v := read("versions.tf"); !strings.HasPrefix(v, "# A second terraform block: Terraform merges every terraform block.\n\n/*\n * Edge-case root module") ||
+	// Each terraform block keeps its file, its header and its own items: the
+	// backend in backend.tf, the toolchain pins in versions.tf.
+	if b := read("backend.tf"); !strings.HasPrefix(b, "# A second terraform block: Terraform merges every terraform block.\nterraform {\n  backend \"local\" {") ||
+		strings.Contains(b, "required_version") {
+		t.Errorf("backend.tf:\n%s", b)
+	}
+	if v := read("versions.tf"); !strings.HasPrefix(v, "/*\n * Edge-case root module") ||
 		!strings.Contains(v, "# Toolchain pins.\nterraform {\n") ||
 		!strings.Contains(v, "  required_version = \">= 1.10.0\" # ephemeral variables\n") ||
-		!strings.Contains(v, "  // the backend is configured per environment\n}\n") || !strings.Contains(v, "  backend \"local\" {") {
+		!strings.Contains(v, "  // the backend is configured per environment\n}\n") || strings.Contains(v, "backend \"local\"") {
 		t.Errorf("versions.tf:\n%s", v)
+	}
+	if l := read("locals.tf"); strings.Contains(l, "arn_parse") || !strings.Contains(l, "locals {") {
+		t.Errorf("locals.tf took main.tf's locals:\n%s", l)
 	}
 	if o := read("outputs.tf"); !strings.Contains(o, "} # end of outputs\n") {
 		t.Errorf("outputs.tf lacks the end-of-block comment:\n%s", o)

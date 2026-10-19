@@ -9,16 +9,18 @@ import (
 	"time"
 
 	"github.com/ismaelosuna7824/nimbo/backend/internal/hclcodec"
+	"github.com/ismaelosuna7824/nimbo/backend/internal/lint"
 	"github.com/ismaelosuna7824/nimbo/backend/internal/model"
 	"github.com/ismaelosuna7824/nimbo/backend/internal/store"
 )
 
-// finalize derives edges/clouds, fills value pairs and recomputes
-// diagnostics: normalization first, then schema validation, then extra
-// (e.g. import) diagnostics, deduplicated.
+// finalize derives edges/clouds/node files, fills value pairs and
+// recomputes diagnostics: normalization first, then schema validation, then
+// extra (e.g. import) diagnostics, deduplicated.
 func (s *Server) finalize(wf *model.Workflow, extra []model.Diagnostic) {
 	wf.Diagnostics = nil
 	diags := hclcodec.Normalize(wf)
+	wf.NodeFiles = hclcodec.NodeFiles(wf, s.cfg.Catalog.ResourceFile)
 	diags = append(diags, s.cfg.Catalog.Validate(wf)...)
 	diags = append(diags, extra...)
 	wf.Diagnostics = dedupe(diags)
@@ -81,14 +83,29 @@ func ensureBody(b *model.Body) {
 	}
 }
 
-// save finalizes, persists and announces wf.
+// save finalizes, adds the best-practice findings, persists and announces
+// wf.
 func (s *Server) save(wf *model.Workflow, extra []model.Diagnostic) error {
 	s.finalize(wf, extra)
+	s.review(wf)
 	if err := s.cfg.Store.Save(wf); err != nil {
 		return err
 	}
 	s.cfg.Events.Publish(model.Event{Type: model.EventWorkflowUpdated, WorkflowID: wf.ID, Data: wf})
 	return nil
+}
+
+// review replaces wf's best-practice findings (bp_*, info/warning only)
+// with fresh ones under the current settings (every rule when the server
+// has no settings store). It runs on every save and on GET, so toggling
+// rules in Settings shows up without an edit. Module views are never
+// reviewed.
+func (s *Server) review(wf *model.Workflow) {
+	var cfg model.BestPracticeSettings
+	if s.cfg.Settings != nil {
+		cfg = s.cfg.Settings.Get().BestPractices
+	}
+	wf.Diagnostics = append(lint.Strip(wf.Diagnostics), lint.Check(wf, s.cfg.Catalog, cfg)...)
 }
 
 // recentIconWindow is how many recently updated workflows a new random icon
@@ -188,6 +205,9 @@ func (s *Server) createWorkflow(w http.ResponseWriter, r *http.Request) error {
 		if err != nil {
 			return fmt.Errorf("template %s: %w", req.TemplateID, err)
 		}
+		// Templates are starters: they get the recommended layout, not
+		// the file split of their source.
+		hclcodec.UnpinFiles(wf, s.cfg.Catalog.ResourceFile)
 	} else {
 		if req.Name == "" {
 			return errorf(http.StatusBadRequest, "name is required")
@@ -211,6 +231,7 @@ func (s *Server) getWorkflow(w http.ResponseWriter, r *http.Request) error {
 	if err != nil {
 		return err
 	}
+	s.review(wf)
 	return ok(w, wf)
 }
 
@@ -342,6 +363,9 @@ type nodePatch struct {
 	Positioned *bool           `json:"positioned"`
 	Parent     *string         `json:"parent"`
 	Body       *model.Body     `json:"body"`
+	// File moves the node to another root .tf file; "" returns it to the
+	// recommended layout.
+	File *string `json:"file"`
 }
 
 func (s *Server) patchNode(w http.ResponseWriter, r *http.Request) error {
@@ -380,6 +404,16 @@ func (s *Server) patchNode(w http.ResponseWriter, r *http.Request) error {
 		if p.Name != nil && *p.Name != n.Name {
 			if err := hclcodec.RenameNode(wf, n.ID, *p.Name); err != nil {
 				return nil, errorf(http.StatusConflict, "%v", err)
+			}
+		}
+		if p.File != nil {
+			if *p.File != "" {
+				if err := hclcodec.ValidFileName(*p.File); err != nil {
+					return nil, errorf(http.StatusBadRequest, "%v", err)
+				}
+			}
+			if *p.File != n.File {
+				n.File, n.Order = *p.File, 0
 			}
 		}
 		return nil, nil

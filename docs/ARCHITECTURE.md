@@ -24,6 +24,7 @@ flowchart LR
 | `backend/internal/model` | model | Shared domain types = wire contract |
 | `backend/internal/hclcodec` | hclcodec | Workflow ⇄ HCL, value normalization, edge derivation |
 | `backend/internal/catalog` | catalog | Embedded provider schemas, curated metadata, Floci support map, connection recipes, templates, schema validation |
+| `backend/internal/lint` | lint | Best-practice checks (`bp_*` info/warning diagnostics with why + fix), run on every save after schema validation; see "Best-practice checks" below |
 | `backend/internal/sandbox` | sandbox | Per-workflow Docker sandbox, Terraform runs in containers, deployed state |
 | `backend/internal/loadtest` | loadtest | Load engine, presets, target suggestions, results persistence |
 | `backend/internal/endpoints` | endpoints | "How to use what you deployed": per-resource summaries, host URLs/identifiers, runnable snippets, "Try it" executor, Postman export |
@@ -105,23 +106,73 @@ func Address(n *model.Node) string
 // Normalize fills Value.Expr/Literal pairs (also in Environments), assigns
 // missing node IDs (from address), derives wf.Edges and wf.Clouds, and
 // returns syntax/reference diagnostics (unknown reference, duplicate address,
-// invalid expression). It does not validate against provider schemas.
+// invalid expression, invalid recorded file name). It does not validate
+// against provider schemas.
 func Normalize(wf *model.Workflow) []model.Diagnostic
 
-// Export renders wf as Terraform files: "versions.tf" (terraform block),
-// "providers.tf", "variables.tf", "main.tf" (locals, data, resources,
-// modules, other), "outputs.tf". Files with no content are omitted.
-// Comments (model.Comments) are written back where Import found them.
-// With opts.Environments, also writes each environment's values to its
-// Environment.File (the root variable file it was imported from, e.g.
-// "terraform.tfvars") or "environments/<name>.tfvars", and
-// "environments/<name>.env.example" (keys; secret values blank).
+// Export renders wf as Terraform files. Every top-level block carries an
+// optional file (Node.File, NamedBlock.File, Block.File for Other) and
+// source position (…Order). Every source `locals`/`terraform` block is a
+// model.BlockPart (Workflow.LocalsBlocks/TerraformBlocks) and each of their
+// items (Workflow.Locals, Workflow.Terraform attrs/blocks) names its part
+// with File/Order, so several such blocks stay separate:
+//   - recorded (import, or moved by the user): the block is written to that
+//     file; blocks with a position come first in source order, so an
+//     imported project keeps its own file split and block order; blocks
+//     without one (new, or moved into the file) follow, data sources/
+//     resources/modules in dependency order, then address; new locals and
+//     terraform items join the last part of the file holding most parts;
+//   - empty: Nimbo's recommended layout, recomputed on every export —
+//     versions.tf (terraform), providers.tf, variables.tf, locals.tf,
+//     outputs.tf, data.tf (data sources), one file per catalog category for
+//     resources (opts.ResourceFile: network.tf, compute.tf, containers.tf,
+//     storage.tf, database.tf, messaging.tf, api.tf, iam.tf, security.tf,
+//     monitoring.tf, analytics.tf, ai.tf, devtools.tf, cost.tf) and main.tf
+//     (module calls, other blocks, uncategorized resources). With at most 5
+//     resources, data sources and resources all go to main.tf. Next to
+//     recorded files a new block joins the file holding most recorded
+//     blocks of its class (same category, variables, …). Unrecorded data
+//     sources/resources are ordered by dependency (wf.Edges), then address.
+// Files with no content are omitted. Comments (model.Comments) are written
+// back where Import found them. With opts.Environments, also writes each
+// environment's values to its Environment.File (the root variable file it
+// was imported from, e.g. "terraform.tfvars") or
+// "environments/<name>.tfvars", and "environments/<name>.env.example"
+// (keys; secret values blank). Deterministic: same workflow, same bytes.
 func Export(wf *model.Workflow, opts ExportOptions) (map[string][]byte, error)
-type ExportOptions struct{ Environments bool }
+type ExportOptions struct {
+	Environments bool
+	ResourceFile func(resourceType string) string // catalog.ResourceFile; nil: resources in main.tf
+}
+
+// Layout / NodeFiles report where Export writes every block (api finalize
+// stores NodeFiles in the derived wf.NodeFiles). PinFiles records the
+// current placement (what re-importing the export gives); UnpinFiles clears
+// it (templates start from the recommended layout). ValidFileName accepts
+// root *.tf names Terraform loads (no folders, hidden or override files).
+func Layout(wf *model.Workflow, resourceFile func(string) string) Placement
+func NodeFiles(wf *model.Workflow, resourceFile func(string) string) map[string]string
+func PinFiles(wf *model.Workflow, resourceFile func(string) string)
+func UnpinFiles(wf *model.Workflow, resourceFile func(string) string)
+func ValidFileName(name string) error
+
+// Scaffold renders the project files next to the root Terraform: README.md
+// (terraform-docs style: description, usage, requirements, providers,
+// modules, resources with their file, inputs, outputs), .gitignore and
+// terraform.tfvars.example (every variable; sensitive ones blank). Each
+// starts with a marker line: IsScaffold recognizes them so a folder import
+// of an export skips them. The API generates them only where the workflow
+// has no file of that name (a README that came with an import wins).
+// Readme also documents local modules (ReadmeOptions.ModuleSource).
+func Scaffold(wf *model.Workflow, resourceFile func(string) string) map[string][]byte
+func Readme(wf *model.Workflow, opts ReadmeOptions) []byte
+func IsScaffold(name string, content []byte) bool
 
 // Import parses Terraform files (path -> content; only root-level *.tf and
 // *.tfvars plus environments/*.tfvars and environments/*.env.example are
-// interpreted) into a new workflow. Each *.tfvars file becomes an
+// interpreted) into a new workflow. Every block records its file and
+// position; each locals/terraform block becomes a BlockPart. Each
+// *.tfvars file becomes an
 // environment named after the file (terraform.tfvars -> "default",
 // prod.auto.tfvars / environments/prod.tfvars -> "prod"; a taken name falls
 // back to the file name); root files keep their name in Environment.File.
@@ -143,7 +194,9 @@ func ValidateExpr(expr string) error
 // MergeImported carries app-only data from prev into next (a fresh Import of
 // edited code): node IDs, positions, labels, parents matched by address;
 // environments, active environment, workflow ID/name/description/createdAt.
-func MergeImported(prev, next *model.Workflow)
+// Blocks prev laid out automatically stay automatic while they remain in
+// that file; new blocks written where the layout would put them too.
+func MergeImported(prev, next *model.Workflow, resourceFile func(string) string)
 
 // RenameNode sets a node's name and rewrites every reference to its old
 // address (bodies, depends_on, outputs, locals, providers, moved.to; not
@@ -165,6 +218,59 @@ func ResolveLocalSource(dir, source string) string
 func RewriteModuleSources(filename string, src []byte, newSource func(string) (string, bool)) ([]byte, bool, error)
 ```
 
+Module refactoring (`extract.go`, `inline.go`):
+
+```go
+// ExtractModule moves nodes (IDs or addresses) into a new local module
+// modules/<name> called from the root in their place. Inbound references
+// (moved blocks -> other root nodes, var.*, local.*) become input
+// variables passed by the call, typed from the referenced attribute's
+// provider schema, else from the attribute they feed, else from the root
+// variable, else "string"/"number"/"bool" for a root local whose value is a
+// string template or literal (local.name_prefix -> string), else `any`, and
+// described. Outbound references (root -> moved
+// blocks) become described outputs read as module.<name>.<output> (whole
+// objects for indexed/splat/for_each use; sensitive when the schema says
+// so). depends_on on a moved block becomes depends_on = [module.<name>];
+// depends_on from a moved block to the root moves to the call. Non-default
+// provider aliases are passed with providers = {} (listing every
+// configuration) and declared as configuration_aliases. One root `moved`
+// block per moved resource/module call (the whole resource, so
+// count/for_each instances move too); an existing moved block in the
+// opposite direction is dropped. path.module in moved blocks becomes
+// path.root. Import `to` addresses are prefixed. The module renders with
+// Export (recommended layout, File unset) plus Readme. The call node sits
+// at the centroid of the moved nodes. Errors (wf unchanged): invalid or
+// taken name, unknown node, lifecycle.replace_triggered_by crossing the
+// boundary, a provider configured from moved blocks that they use, and
+// depends_on rewrites that would form a cycle.
+func ExtractModule(wf *model.Workflow, refs []string, name string, opts ExtractOptions) (*Extraction, error)
+type ExtractOptions struct {
+    Schema       SchemaLookup               // Attribute(kind, type, attr) (AttrInfo, bool); HasSensitive(kind, type)
+    ResourceFile func(resourceType string) string
+}
+type Extraction struct {
+    model.ModuleExtraction           // preview: inputs, outputs, moved, providers, dependsOn, files
+    Contents map[string][]byte       // "modules/<name>/main.tf" -> bytes
+    NodeID   string                  // the module call node
+}
+// InlineModule is the reverse for a local module called once without
+// count/for_each: var.* become the call's arguments (or defaults;
+// parenthesized when needed), module.<name>.<out> the output expressions,
+// depends_on = [module.<name>] lists the inlined blocks, the call's
+// depends_on goes to each inlined block, the providers map is applied,
+// path.module becomes "${path.module}/<dir>", nested local sources are
+// re-rooted, module locals join the root's, missing required_providers are
+// added, and moved blocks go module.<name>.<addr> -> <addr>. Rejects
+// provider blocks or moved/import/removed blocks inside the module,
+// optional() variable types, address/local clashes and whole-module
+// references. files: the module directory's files.
+func InlineModule(wf *model.Workflow, nodeRef string, files map[string][]byte) (*Inlining, error)
+func ValidModuleName(name string) error                 // snake_case
+func LocalModuleDir(n *model.Node) (string, bool)       // "modules/x" for a constant local source inside the workflow
+func TypeConstraint(raw json.RawMessage) string         // provider schema cty type JSON -> "list(string)"
+```
+
 ### catalog
 
 ```go
@@ -178,6 +284,13 @@ type Query struct {
 func (c *Catalog) Categories(cloud model.Cloud) []string
 func (c *Catalog) Schema(kind model.NodeKind, typ string) (*model.ResourceSchema, bool)
 func (c *Catalog) CloudOf(typ string) (model.Cloud, bool) // by provider prefix
+// ResourceFile names the recommended file of a resource type from its
+// category: "network.tf", "compute.tf", "containers.tf", "storage.tf",
+// "database.tf", "messaging.tf", "iam.tf" (Identity), "security.tf",
+// "monitoring.tf" (Observability), "analytics.tf", "ai.tf", "devtools.tf",
+// "cost.tf"; API gateways/AppSync/API Management -> "api.tf"; "" (main.tf)
+// for "Other" and non-cloud providers. Passed as hclcodec ExportOptions.ResourceFile.
+func (c *Catalog) ResourceFile(typ string) string
 // AddNode appends a node of typ to wf (unique name derived from typ when name
 // is ""), prefilled with curated defaults for required attributes. For
 // curated starters it may also append helper nodes (e.g. Lambda adds an
@@ -190,7 +303,7 @@ func (c *Catalog) Connect(wf *model.Workflow, sourceID, targetID, recipeID strin
 func (c *Catalog) Validate(wf *model.Workflow) []model.Diagnostic
 func (c *Catalog) SetLiveServices(cloud model.Cloud, services map[string]string)
 func (c *Catalog) Templates() []model.Template
-func (c *Catalog) TemplateFiles(id string) (map[string][]byte, bool) // Terraform files for hclcodec.Import
+func (c *Catalog) TemplateFiles(id string) (map[string][]byte, bool) // Terraform files for hclcodec.Import (the API then UnpinFiles: templates get the recommended layout)
 ```
 
 Catalog notes:
@@ -216,6 +329,49 @@ Catalog notes:
   `readonly_attribute`, `missing_attribute`, `missing_block`,
   `too_many_blocks` (errors); `deprecated_attribute`, `floci_unsupported`
   (warnings).
+
+### lint (best-practice checks)
+
+```go
+func Rules() []model.BestPracticeRule // GET /best-practices/rules
+func Check(wf *model.Workflow, cat *catalog.Catalog, cfg model.BestPracticeSettings) []model.Diagnostic // normalized wf; info/warning only
+func Strip(diags []model.Diagnostic) []model.Diagnostic // without bp_* findings
+func IsFinding(d model.Diagnostic) bool
+```
+
+The API's `save` runs `Check` after `Normalize` + `Validate` (and `GET
+/workflows/{id}` re-runs it, so Settings toggles apply without an edit);
+module views are not checked. Findings carry `detail` (why) and `fix`, never
+severity `error`, so plan/apply are never refused for them. Settings:
+`bestPractices: {disabled, disabledRules}` (codes `bp_[a-z0-9_]+`, sorted,
+deduplicated). The desktop Problems tab groups Errors / Warnings / Best
+practices; node badges and tab counts ignore `info`.
+
+Rules (warnings: `bp_sensitive_not_marked`, `bp_provider_version`,
+`bp_open_ingress`, `bp_public_bucket` — public intent = website configuration
+or a `Public = "true"` tag/label —, `bp_unencrypted_storage` — S3/DynamoDB
+findings are info —, `bp_iam_wildcard`; info: `bp_variable_type`,
+`bp_variable_description`, `bp_output_description`, `bp_required_version`,
+`bp_hardcoded_region`, `bp_hardcoded_az`, `bp_hardcoded_account_id`,
+`bp_missing_tags` (AWS/GCP: one finding per provider configuration without
+`default_tags`/`default_labels`; Azure: per resource), `bp_name_prefix`
+(only when `local.name_prefix` exists, for types with a curated `naming`
+attribute), `bp_log_retention`, `bp_large_file` (> 15 resources in one file),
+`bp_module_candidate` (≥ 5 network/API/container/Kubernetes resources in a
+workflow of ≥ 12; fix suggests `extract_module`), `bp_duplicate_literal`
+(same configuration-like literal in ≥ 3 resources).
+
+Noise, measured with `go test -tags corpus ./internal/tfqa/ -run
+TestCorpusBestPractices` on the 48 public corpus roots (2026-10-18): 182
+findings, all reviewed as true positives after tuning (secret-name heuristic:
+key metadata and PGP-encrypted outputs are not secrets, −15; MIME types are
+not duplicate candidates, −1): `bp_variable_type` 59 (11 roots),
+`bp_variable_description` 46 (3), `bp_missing_tags` 23 (17),
+`bp_output_description` 20 (6), `bp_provider_version` 17 (14),
+`bp_required_version` 10 (10), `bp_sensitive_not_marked` 3 (2),
+`bp_unencrypted_storage` 2 (2), `bp_hardcoded_region` 1, `bp_open_ingress` 1,
+every other rule 0. The 10 templates and a fresh workflow with every popular
+starter of each cloud have 0 findings (`lint` tests).
 
 ### sandbox
 
@@ -302,6 +458,15 @@ Sandbox behavior notes:
   provider blocks incl. aliases, `backend "local"`),
   `zz_nimbo_floci_providers.tf` (provider blocks for clouds without one),
   `zz_nimbo.auto.tfvars` (environment values).
+- Settle step: VM-backed Docker file sharing (OrbStack, Docker Desktop on
+  macOS) can show containers a file rewritten in place with its old size
+  for a moment, so Terraform read `compute.tf` cut short ("Unclosed
+  configuration block"; reproduced on OrbStack 8/15 rewrites, fsync and
+  rename do not help; same-size, new and deleted files are seen at once).
+  `syncWorkdir` returns the rewritten files whose size changed; before
+  `terraform init`, `settleWorkdir` runs `alpine:3` (`--network none`, the
+  workdir mounted) until every one of them shows its new size (≤ 10 s; on
+  timeout the run logs a warning and continues).
 - `HostURL` resolves API Gateway host-form URLs (`<id>.execute-api.<region>.amazonaws.com`,
   as reported in state, or `<id>.execute-api.localhost.floci.io:4566`) to the
   path form with AWS stage semantics, reading the API's stages from the
@@ -714,7 +879,7 @@ Docker; the desktop onboarding wizard (`GET /setup`) and `nimbo doctor`
 | `POST /workflows/{id}/archive` | → `Workflow` with `archived: true`. Stops the sandbox keeping all state (409 while a run is active; proceeds without Docker); runs, load tests and `sandbox/start` then answer 409 `workflow is archived` |
 | `POST /workflows/{id}/unarchive` | → `Workflow` (restored; the sandbox starts again on the next deploy) |
 | `POST /workflows/{id}/nodes` | `{kind, type, name?, position}` → `{workflow, nodeId}` (new nodes whose 248×84 card, plus 24px gap, overlaps another card move to the nearest free grid slot) |
-| `PATCH /workflows/{id}/nodes/{nodeId}` | `{name?, label?, position?, positioned?, parent?, body?}` → `Workflow` |
+| `PATCH /workflows/{id}/nodes/{nodeId}` | `{name?, label?, position?, positioned?, parent?, body?, file?}` → `Workflow` (`file`: root `.tf` file to write the node to, `""` = recommended layout; invalid names → 400) |
 | `DELETE /workflows/{id}/nodes/{nodeId}` | → `Workflow` (references to it become diagnostics) |
 | `GET /workflows/{id}/connections?source=&target=` | → `ConnectionRecipe[]` |
 | `POST /workflows/{id}/connections` | `{source, target, recipeId}` → `Workflow` (helper nodes are moved off other cards the same way) |
@@ -722,13 +887,16 @@ Docker; the desktop onboarding wizard (`GET /setup`) and `nimbo doctor`
 | `PUT /workflows/{id}/terraform` | `{files}` → `Workflow` (code edit: re-import, keep positions/ids/envs by address; 400 + diagnostics and nothing saved on syntax errors) |
 | `POST /workflows/{id}/export` | `{dir, environments: bool}` → `{dir, files: string[]}` (writes files + assets) |
 | `GET /workflows/{id}/export.zip?environments=` | → zip |
-| `GET /workflows/{id}/files` | → `{files: WorkflowFile[]}`: everything an export with environments writes, sorted by path. `WorkflowFile{path, size, kind: terraform\|tfvars\|env\|module\|asset, generated, editable, binary, language: hcl\|json\|javascript\|typescript\|python\|go\|yaml\|markdown\|shell\|text}`. Generated root `*.tf` are editable (through `PUT /terraform`); generated tfvars/env files are not (edited in the app). Assets (`modules/**`, Lambda sources, templates…) are editable when they are UTF-8 text ≤ 2 MiB, except `.terraform.lock.hcl`. Symlinks are never listed |
+| `GET /workflows/{id}/files` | → `{files: WorkflowFile[]}`: everything an export with environments writes, sorted by path. `WorkflowFile{path, size, kind: terraform\|tfvars\|env\|module\|scaffold\|asset, generated, editable, binary, language: hcl\|json\|javascript\|typescript\|python\|go\|yaml\|markdown\|shell\|text}`. Generated root `*.tf` are editable (through `PUT /terraform`); generated tfvars/env files are not (edited in the app). `scaffold` files (`README.md`, `.gitignore`, `terraform.tfvars.example`) are generated read-only from the workflow, only where the workflow has no file of that name (e.g. an imported README); a folder import skips generated ones (marker line). Assets (`modules/**`, Lambda sources, templates…) are editable when they are UTF-8 text ≤ 2 MiB, except `.terraform.lock.hcl`. Symlinks are never listed |
 | `GET /workflows/{id}/files/content?path=` | → `WorkflowFileContent{…WorkflowFile, content}`. Binary → 415 `{error, code: "binary", size, download}`; text > 2 MiB → 413 `{…, code: "too_large"}`; `download` is the raw URL path. `path` must be clean, relative, slash-separated, without `.`/`..` (400); unknown or reached through a symlink → 404 |
 | `PUT /workflows/{id}/files/content?path=` | `{content}` → `{file: WorkflowFile, workflow: Workflow}`: overwrites an existing editable text asset (UTF-8, no NUL, ≤ 2 MiB, else 400/413) and bumps the workflow's `updatedAt`. Generated or read-only files → 409 |
 | `GET /workflows/{id}/files/raw?path=` | → the file's bytes as an attachment (`text/plain` or `application/octet-stream`) |
 | `POST /import/scan` | `{dir?, files?}` → `ImportScan{root, projects: ImportProject[], skipped}`. Walks the folder (skips `.terraform`, `.git`, `node_modules`, `vendor`, `.terragrunt-cache`, hidden dirs); every dir with `*.tf` is a project unless another scanned dir calls it as a local `module` (then it is listed in `skipped`). Per project: resource/data/module counts, providers, clouds, tfvars files (root + `environments/`), backend presence, parse diagnostics. `files` (relative paths; a shared top-level folder becomes the root and names it) are materialized in a temp dir. Over 5000 files or 200 Terraform dirs → 400 |
 | `POST /import` | `{dir?, files?, projects?: string[], name?, names?: {path: name}}` → 201 `{workflows: Workflow[]}`, one per project, each with a random icon (`projects` omitted = the root `"."` only; `name` applies when exactly one project is imported). Per project: root `*.tf`/`*.tfvars` and `environments/*.tfvars`/`*.env.example` are parsed; other files of the project dir (minus nested Terraform dirs, `.terraform*`, `*.tfstate*`, skipped dirs) are copied into assets; every local module it reaches (recursively) is copied flat to `modules/<name>` (dir base name, `-2`… on clashes) and its `source` rewritten (`./modules/<name>` in the workflow, `../<name>` between modules, via hclwrite so the rest of each module file stays byte-identical). Registry/git sources are untouched. All-or-nothing; 400 + diagnostics on syntax errors |
-| `GET /workflows/{id}/modules/{nodeId}?path=` | → `ModuleView{source, local, workflow?, message?}`. Local source inside the workflow files → the module parsed as a read-only `Workflow` (nodes unpositioned). Registry/remote → `message` ("Registry module terraform-aws-modules/vpc/aws 5.0.0 — contents are downloaded at deploy time"). `path=module.a.module.b` drills into nested calls |
+| `GET /workflows/{id}/modules/{nodeId}?path=` | → `ModuleView{source, local, dir?, workflow?, message?}`. Local source inside the workflow files → the module parsed as a read-only `Workflow` (nodes unpositioned) and `dir`, its folder relative to the workflow files (`modules/network`; the UI's "Open files" filters the Code tab to it). Registry/remote → `message` ("Registry module terraform-aws-modules/vpc/aws 5.0.0 — contents are downloaded at deploy time"). `path=module.a.module.b` drills into nested calls |
+| `POST /workflows/{id}/modules/extract/preview` | `{nodeIds, name}` → `ModuleExtraction{name, source, inputs: ModuleIO[], outputs: ModuleIO[], moved: {from,to}[], providers, dependsOn, files}`; nothing is saved. 400 with the reason when the selection cannot be extracted, 409 when `modules/<name>` exists |
+| `POST /workflows/{id}/modules/extract` | `{nodeIds, name}` → `Workflow` (`hclcodec.ExtractModule`; the module files are written to the workflow's assets at `modules/<name>/`; same errors as the preview) |
+| `POST /workflows/{id}/modules/{nodeId}/inline` | → `Workflow` (`hclcodec.InlineModule`; then the module's `*.tf` and `README.md` are deleted, other files stay). 400 for non-local modules, count/for_each, clashes, whole-module references; 409 when another local module also calls the directory |
 | `GET /workflows/{id}/sandbox` | → `SandboxStatus` |
 | `POST /workflows/{id}/sandbox/start` / `stop` / `reset` | → `SandboxStatus` |
 | `POST /workflows/{id}/runs` | `{action, environment?}` → `Run` (starts sandbox if needed; environment defaults to the active one, 404 if unknown; plan/apply → 400 + diagnostics while error diagnostics exist; 409 while another run is active) |

@@ -5,7 +5,8 @@ test("creates environments and switches the active one", async ({ app, api }) =>
 
   await app.bottomTab("Variables & Environments").click()
   const panel = app.bottomPanel("Variables & Environments")
-  await expect(panel.getByRole("tab", { name: "Variables 3" })).toBeVisible()
+  // project, environment, aws_region, lambda_memory_mb, log_retention_days
+  await expect(panel.getByRole("tab", { name: "Variables 5" })).toBeVisible()
   await panel.getByRole("tab", { name: "Environments 0" }).click()
   await expect(panel.getByText("No environments yet")).toBeVisible()
 

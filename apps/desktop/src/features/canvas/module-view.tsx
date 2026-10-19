@@ -8,7 +8,15 @@ import {
   useReactFlow,
 } from "@xyflow/react"
 import { useQuery } from "@tanstack/react-query"
-import { ChevronRightIcon, CloudDownloadIcon, LockIcon, PackageIcon, XIcon } from "lucide-react"
+import {
+  ChevronRightIcon,
+  CloudDownloadIcon,
+  FolderOpenIcon,
+  LockIcon,
+  PackageIcon,
+  PackageOpenIcon,
+  XIcon,
+} from "lucide-react"
 import { useTheme } from "next-themes"
 import { Fragment, useEffect, useMemo, useState } from "react"
 import { errorMessage } from "@/components/errors"
@@ -24,6 +32,8 @@ import { useModuleView } from "./module-view-store"
 import { nodeLabel, schemaKey, useNodeSchemas } from "./catalog"
 import { computeLayout } from "./layout"
 import { RefEdge, ResourceNode, type RefFlowEdge, type ResourceFlowNode } from "./nodes"
+import { revealFiles } from "../panels/terraform/reveal-files"
+import { openInlineModule } from "./module-refactor-store"
 
 const nodeTypes = { resource: ResourceNode }
 const edgeTypes = { ref: RefEdge }
@@ -46,7 +56,7 @@ export function ModuleOverlay() {
   useEffect(() => {
     if (!nodeId) return
     const onKey = (e: KeyboardEvent) => {
-      if (e.key !== "Escape" || document.querySelector("[role=dialog]:not([data-module-view])")) return
+      if (e.key !== "Escape" || document.querySelector("[role=dialog]:not([data-module-view]), [role=alertdialog]")) return
       e.preventDefault()
       close()
     }
@@ -112,6 +122,23 @@ export function ModuleOverlay() {
           <LockIcon />
           Read-only
         </Badge>
+        {view.data?.dir && (
+          <Button
+            variant="outline"
+            size="sm"
+            title={`Show ${view.data.dir}/ in the Code tab`}
+            onClick={() => revealFiles(`${view.data!.dir}/`, `${view.data!.dir}/main.tf`)}
+          >
+            <FolderOpenIcon />
+            Open files
+          </Button>
+        )}
+        {view.data?.local && path.length === 0 && (
+          <Button variant="outline" size="sm" onClick={() => void openInlineModule(node.id)}>
+            <PackageOpenIcon />
+            Inline module
+          </Button>
+        )}
         <Button variant="ghost" size="sm" onClick={close} aria-label="Close module view">
           <Kbd>Esc</Kbd>
           <XIcon />

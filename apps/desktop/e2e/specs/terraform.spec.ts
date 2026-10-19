@@ -50,6 +50,9 @@ test("applies a Pro-mode code edit back to the diagram", async ({ app, api, page
 test("shows syntax errors at their line and keeps the diagram", async ({ app, api, page }) => {
   const created = await api.createWorkflow("Terraform broken")
   await api.addNode(created.id, "aws_s3_bucket")
+  // The S3 starter also adds its encryption and public access block helpers.
+  const nodesBefore = (await api.getWorkflow(created.id)).nodes.map((n) => n.id)
+  expect(nodesBefore).toContain("aws_s3_bucket.bucket")
   await app.gotoHome()
   await app.openWorkflow("Terraform broken")
   await app.setMode("Pro")
@@ -64,7 +67,7 @@ test("shows syntax errors at their line and keeps the diagram", async ({ app, ap
   await expect(problems).toContainText("Not applied")
   await expect(problems.getByText(/^main\.tf:\d+$/)).toBeVisible()
   await expect(panel.getByLabel(/^error: Invalid expression/)).toBeVisible()
-  expect((await api.getWorkflow(created.id)).nodes.map((n) => n.id)).toEqual(["aws_s3_bucket.bucket"])
+  expect((await api.getWorkflow(created.id)).nodes.map((n) => n.id)).toEqual(nodesBefore)
 
   await panel.getByRole("button", { name: "Discard" }).click()
   await expect(panel.getByRole("tab", { name: "main.tf" }).getByLabel("modified")).toBeHidden()
@@ -81,7 +84,8 @@ test("finds, edits and saves a Lambda source next to modules and tfvars", async 
   const panel = app.bottomPanel("Code")
   const tree = panel.getByRole("tree", { name: "Files" })
   for (const name of ["modules", "network", "README.md", "src", "terraform.tfvars", ".terraform.lock.hcl"]) {
-    await expect(tree.getByRole("treeitem", { name: new RegExp(`^${name.replace(/\./g, "\\.")}`) })).toBeVisible()
+    // README.md is both the module's and the generated root one.
+    await expect(tree.getByRole("treeitem", { name: new RegExp(`^${name.replace(/\./g, "\\.")}`) }).first()).toBeVisible()
   }
 
   // ⌘P picks a file by fuzzy name.

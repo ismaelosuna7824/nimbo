@@ -15,13 +15,15 @@ import (
 // Normalize fills Value.Expr/Literal pairs (also in Environments), assigns
 // missing node IDs (from address), derives wf.Edges and wf.Clouds, and
 // returns syntax/reference diagnostics (unknown reference, duplicate address,
-// invalid expression). It does not validate against provider schemas.
+// invalid expression, invalid recorded file name). It does not validate
+// against provider schemas.
 func Normalize(wf *model.Workflow) []model.Diagnostic {
 	n := newNormalizer(wf)
 	n.checkNodes()
 	n.walkAll()
 	wf.Edges = n.sortedEdges()
 	wf.Clouds = cloudsOf(wf)
+	n.diags = append(n.diags, fileDiags(wf)...)
 	return dedupDiags(n.diags)
 }
 

@@ -545,8 +545,14 @@ func (rs *repoScan) plan(rel, name string) (*importPlan, error) {
 			if err != nil {
 				return err
 			}
+			// A .tf file with only comments has no block to remember its
+			// file: it is kept as is so the project keeps its layout.
+			if !strings.Contains(sub, "/") && strings.HasSuffix(sub, ".tf") && hclcodec.CommentOnly(data) {
+				plan.assets = append(plan.assets, sub)
+				return nil
+			}
 			tf[tfName] = data
-		} else {
+		} else if !generatedScaffold(p, sub) {
 			plan.assets = append(plan.assets, sub)
 		}
 		return nil
@@ -597,6 +603,19 @@ func (rs *repoScan) plan(rel, name string) (*importPlan, error) {
 	}
 	plan.wf = wf
 	return plan, nil
+}
+
+// generatedScaffold reports a project file a Nimbo export generated (README,
+// .gitignore, terraform.tfvars.example still carrying their marker line):
+// it is regenerated from the workflow instead of being kept as an asset.
+func generatedScaffold(p, sub string) bool {
+	switch sub {
+	case hclcodec.ReadmeFile, hclcodec.GitignoreFile, hclcodec.TfvarsSampleFile:
+	default:
+		return false
+	}
+	data, err := os.ReadFile(p)
+	return err == nil && hclcodec.IsScaffold(sub, data)
 }
 
 // walkOwn visits the regular files of directory rel that belong to it:

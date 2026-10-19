@@ -13,9 +13,18 @@ import {
   type Connection,
   type EdgeChange,
   type NodeChange,
+  type OnSelectionChangeParams,
 } from "@xyflow/react"
 import "@xyflow/react/dist/style.css"
-import { LayoutTemplateIcon, MousePointerClickIcon, WandSparklesIcon } from "lucide-react"
+import {
+  LayoutTemplateIcon,
+  MousePointerClickIcon,
+  PackageIcon,
+  PackageOpenIcon,
+  PackageSearchIcon,
+  Trash2Icon,
+  WandSparklesIcon,
+} from "lucide-react"
 import { useTheme } from "next-themes"
 import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { toast } from "sonner"
@@ -33,6 +42,13 @@ import {
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog"
 import { Button } from "@/components/ui/button"
+import {
+  ContextMenu,
+  ContextMenuContent,
+  ContextMenuItem,
+  ContextMenuSeparator,
+  ContextMenuTrigger,
+} from "@/components/ui/context-menu"
 import { Empty, EmptyContent, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from "@/components/ui/empty"
 import { api } from "@/lib/api/client"
 import type { ConnectionRecipe, NodeKind, Position, Workflow, WorkflowNode } from "@/lib/api/types"
@@ -44,6 +60,8 @@ import { computeLayout, GROUP_HEADER, GROUP_PAD, layoutUnpositioned, NODE_HEIGHT
 import { isUsable, useEndpoints } from "../panels/endpoints/use-endpoints"
 import { ModuleOverlay } from "./module-view"
 import { openModuleView } from "./module-view-store"
+import { ModuleRefactorDialogs } from "./module-refactor"
+import { openExtractModule, openInlineModule } from "./module-refactor-store"
 import { GroupNode, RefEdge, ResourceNode, type RefFlowEdge, type ResourceFlowNode } from "./nodes"
 
 const nodeTypes = { resource: ResourceNode, container: GroupNode }
@@ -245,9 +263,26 @@ function CanvasInner() {
     })
   }, [wfNodes, diagnostics, deployedIds, endpoints, parents, rects, children, schemas])
   const stableNodes = useStableItems(builtNodes, sameFlowNode)
+  // Multi-selection (Shift/Cmd/Ctrl-click, Shift-drag box) as React Flow reports it; the inspector's node wins when it is
+  // selected elsewhere (e.g. from Problems).
+  const [selection, setSelection] = useState<string[]>([])
+  const selectedIds = useMemo(
+    () => (selectedNodeId && !selection.includes(selectedNodeId) ? [selectedNodeId] : selection),
+    [selection, selectedNodeId],
+  )
   const derivedNodes = useMemo(
-    () => (selectedNodeId ? stableNodes.map((n) => (n.id === selectedNodeId ? { ...n, selected: true } : n)) : stableNodes),
-    [stableNodes, selectedNodeId],
+    () => (selectedIds.length ? stableNodes.map((n) => (selectedIds.includes(n.id) ? { ...n, selected: true } : n)) : stableNodes),
+    [stableNodes, selectedIds],
+  )
+  const onSelectionChange = useCallback(
+    ({ nodes: picked }: OnSelectionChangeParams) => {
+      const ids = picked.map((n) => n.id)
+      setSelection((prev) => (prev.length === ids.length && prev.every((id) => ids.includes(id)) ? prev : ids))
+      const current = useWorkflowStore.getState().selectedNodeId
+      if (ids.length === 1 && current !== ids[0]) select(ids[0])
+      else if (ids.length > 1 && current && !ids.includes(current)) select(null)
+    },
+    [select],
   )
 
   const builtEdges = useMemo(() => {
@@ -282,7 +317,8 @@ function CanvasInner() {
 
   const [nodes, setNodes] = useSyncedState(derivedNodes)
   const [edges, setEdges] = useSyncedState(derivedEdges)
-
+  /** What the context menu acts on: the right-clicked node (or the selection containing it); null = the pane. */
+  const [menu, setMenu] = useState<{ ids: string[]; node?: WorkflowNode } | null>(null)
   const onNodesChange = useCallback(
     (changes: NodeChange<ResourceFlowNode>[]) =>
       setNodes((ns) => applyNodeChanges(changes.filter((c) => c.type !== "remove"), ns)),
@@ -502,7 +538,23 @@ function CanvasInner() {
     return () => registerCanvas(null)
   }, [flow, tidy, requestDelete])
 
-  const onNodeClick = useCallback((_: unknown, n: ResourceFlowNode) => select(n.id), [select])
+  // Shift/Cmd/Ctrl-click toggles the node in the selection (handled here rather than through React Flow's key state,
+  // so it works whichever modifier the platform uses); a plain click selects just that node.
+  const onNodeClick = useCallback(
+    (e: React.MouseEvent, n: ResourceFlowNode) => {
+      if (!(e.shiftKey || e.metaKey || e.ctrlKey)) {
+        select(n.id)
+        return
+      }
+      setSelection((prev) => {
+        const current = useWorkflowStore.getState().selectedNodeId
+        const base = prev.filter((id) => id !== n.id)
+        if (current && current !== n.id && !base.includes(current)) base.push(current)
+        return prev.includes(n.id) && base.length > 0 ? base : [...base, n.id]
+      })
+    },
+    [select],
+  )
   const onNodeDoubleClick = useCallback(
     (_: unknown, n: ResourceFlowNode) => n.data.node.kind === "module" && void openModuleView(n.id),
     [],
@@ -511,55 +563,135 @@ function CanvasInner() {
   const onConnectEdge = useCallback((c: Connection) => void onConnect(c), [onConnect])
   const onEdgeMouseEnter = useCallback((_: unknown, e: RefFlowEdge) => setHoveredEdge(e.id), [])
   const onEdgeMouseLeave = useCallback(() => setHoveredEdge(null), [])
-
+  const onNodeContextMenu = useCallback(
+    (_: unknown, n: ResourceFlowNode) =>
+      setMenu({
+        ids: selectedIds.length > 1 && selectedIds.includes(n.id) ? selectedIds : [n.id],
+        node: n.data.node,
+      }),
+    [selectedIds],
+  )
+  const onSelectionContextMenu = useCallback(
+    (_: unknown, ns: ResourceFlowNode[]) => setMenu({ ids: ns.map((n) => n.id) }),
+    [],
+  )
+  const onPaneContextMenu = useCallback(() => setMenu(null), [])
+  const menuNode = menu?.ids.length === 1 ? menu.node : undefined
   return (
     <div ref={wrapper} className="relative h-full w-full" onDragOver={onDragOver} onDrop={onDrop}>
-      <ReactFlow<ResourceFlowNode, RefFlowEdge>
-        nodes={nodes}
-        edges={edges}
-        nodeTypes={nodeTypes}
-        edgeTypes={edgeTypes}
-        onNodesChange={onNodesChange}
-        onEdgesChange={onEdgesChange}
-        onNodeClick={onNodeClick}
-        onNodeDoubleClick={onNodeDoubleClick}
-        onPaneClick={onPaneClick}
-        onNodeDragStop={onNodeDragStop}
-        onConnect={onConnectEdge}
-        isValidConnection={isValidConnection}
-        onEdgeMouseEnter={onEdgeMouseEnter}
-        onEdgeMouseLeave={onEdgeMouseLeave}
-        deleteKeyCode={null}
-        colorMode={resolvedTheme === "light" ? "light" : "dark"}
-        snapToGrid
-        snapGrid={SNAP_GRID}
-        fitView
-        fitViewOptions={FIT_VIEW_OPTIONS}
-        minZoom={0.15}
-        maxZoom={2}
-        proOptions={PRO_OPTIONS}
-        className="bg-background"
-      >
-        <Background variant={BackgroundVariant.Dots} gap={16} size={1.2} />
-        <Controls showInteractive={false} position="bottom-left" />
-        <MiniMap
-          pannable
-          zoomable
-          nodeColor={minimapColor}
-          nodeStrokeWidth={0}
-          position="bottom-right"
-          style={MINIMAP_STYLE}
-          className="!rounded-lg !border"
-        />
-        {wfNodes.length > 0 && (
-          <Panel position="top-right">
-            <Button variant="outline" size="sm" className="bg-background/80 backdrop-blur" onClick={() => void tidy()}>
-              <WandSparklesIcon />
-              Tidy up
-            </Button>
-          </Panel>
-        )}
-      </ReactFlow>
+      <ContextMenu>
+        <ContextMenuTrigger asChild>
+          <div className="h-full w-full">
+            <ReactFlow<ResourceFlowNode, RefFlowEdge>
+              nodes={nodes}
+              edges={edges}
+              nodeTypes={nodeTypes}
+              edgeTypes={edgeTypes}
+              onNodesChange={onNodesChange}
+              onEdgesChange={onEdgesChange}
+              onNodeClick={onNodeClick}
+              onNodeDoubleClick={onNodeDoubleClick}
+              onNodeContextMenu={onNodeContextMenu}
+              onSelectionChange={onSelectionChange}
+              onSelectionContextMenu={onSelectionContextMenu}
+              onPaneContextMenu={onPaneContextMenu}
+              onPaneClick={onPaneClick}
+              onNodeDragStop={onNodeDragStop}
+              onConnect={onConnectEdge}
+              isValidConnection={isValidConnection}
+              onEdgeMouseEnter={onEdgeMouseEnter}
+              onEdgeMouseLeave={onEdgeMouseLeave}
+              deleteKeyCode={null}
+              colorMode={resolvedTheme === "light" ? "light" : "dark"}
+              snapToGrid
+              snapGrid={SNAP_GRID}
+              fitView
+              fitViewOptions={FIT_VIEW_OPTIONS}
+              minZoom={0.15}
+              maxZoom={2}
+              proOptions={PRO_OPTIONS}
+              className="bg-background"
+            >
+              <Background variant={BackgroundVariant.Dots} gap={16} size={1.2} />
+              <Controls showInteractive={false} position="bottom-left" />
+              <MiniMap
+                pannable
+                zoomable
+                nodeColor={minimapColor}
+                nodeStrokeWidth={0}
+                position="bottom-right"
+                style={MINIMAP_STYLE}
+                className="!rounded-lg !border"
+              />
+              {wfNodes.length > 0 && (
+                <Panel position="top-right">
+                  <Button variant="outline" size="sm" className="bg-background/80 backdrop-blur" onClick={() => void tidy()}>
+                    <WandSparklesIcon />
+                    Tidy up
+                  </Button>
+                </Panel>
+              )}
+              {selectedIds.length > 1 && (
+                <Panel position="top-center">
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="bg-background/80 backdrop-blur"
+                    onClick={() => void openExtractModule(selectedIds)}
+                  >
+                    <PackageIcon className="text-violet-500" />
+                    Extract {selectedIds.length} to module…
+                  </Button>
+                </Panel>
+              )}
+            </ReactFlow>
+          </div>
+        </ContextMenuTrigger>
+        <ContextMenuContent className="min-w-52">
+          {menu ? (
+            <>
+              {menuNode?.kind === "module" && (
+                <>
+                  <ContextMenuItem onSelect={() => void openModuleView(menuNode.id)}>
+                    <PackageSearchIcon />
+                    Open module
+                  </ContextMenuItem>
+                  <ContextMenuItem onSelect={() => void openInlineModule(menuNode.id)}>
+                    <PackageOpenIcon />
+                    Inline module…
+                  </ContextMenuItem>
+                </>
+              )}
+              <ContextMenuItem onSelect={() => void openExtractModule(menu.ids)}>
+                <PackageIcon />
+                {menu.ids.length > 1 ? `Extract ${menu.ids.length} to module…` : "Extract to module…"}
+              </ContextMenuItem>
+              {menuNode && (
+                <>
+                  <ContextMenuSeparator />
+                  <ContextMenuItem variant="destructive" onSelect={() => requestDelete(menuNode.id)}>
+                    <Trash2Icon />
+                    Delete
+                  </ContextMenuItem>
+                </>
+              )}
+            </>
+          ) : (
+            <>
+              <ContextMenuItem disabled={wfNodes.length === 0} onSelect={() => void tidy()}>
+                <WandSparklesIcon />
+                Tidy up
+              </ContextMenuItem>
+              {selectedIds.length > 1 && (
+                <ContextMenuItem onSelect={() => void openExtractModule(selectedIds)}>
+                  <PackageIcon />
+                  Extract {selectedIds.length} selected to module…
+                </ContextMenuItem>
+              )}
+            </>
+          )}
+        </ContextMenuContent>
+      </ContextMenu>
       {wfNodes.length === 0 && (
         <div className="pointer-events-none absolute inset-0 flex items-center justify-center">
           <Empty className="pointer-events-auto max-w-md border bg-background/90 backdrop-blur">
@@ -583,6 +715,7 @@ function CanvasInner() {
         </div>
       )}
       <ModuleOverlay />
+      <ModuleRefactorDialogs />
       <ConnectDialog
         pending={pending}
         onClose={() => setPending(null)}

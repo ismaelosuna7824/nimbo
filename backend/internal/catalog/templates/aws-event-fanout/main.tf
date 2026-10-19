@@ -1,10 +1,19 @@
+resource "aws_kms_key" "events" {
+  description             = "Encrypts messages at rest in the ${local.name_prefix}-events topic"
+  enable_key_rotation     = true
+  deletion_window_in_days = 7
+}
+
 resource "aws_sns_topic" "events" {
-  name = "${var.name}-events"
+  name = "${local.name_prefix}-events"
+  # Publishers need kms:GenerateDataKey and kms:Decrypt on this key.
+  kms_master_key_id = aws_kms_key.events.arn
 }
 
 resource "aws_sqs_queue" "consumer" {
-  for_each = toset(var.consumers)
-  name     = "${var.name}-${each.key}"
+  for_each                = toset(var.consumers)
+  name                    = "${local.name_prefix}-${each.key}"
+  sqs_managed_sse_enabled = true
 }
 
 data "aws_iam_policy_document" "allow_topic" {

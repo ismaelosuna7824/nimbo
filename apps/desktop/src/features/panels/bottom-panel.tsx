@@ -45,6 +45,8 @@ export function BottomPanel() {
   const showBottom = useWorkflowStore((s) => s.showBottom)
   const setBottomOpen = useWorkflowStore((s) => s.setBottomOpen)
   const errorCount = problems.filter((d) => d.severity === "error").length
+  // Info (mostly best-practice suggestions) is listed in the tab but not counted, like the node badges.
+  const alertCount = problems.filter((d) => d.severity !== "info").length
 
   useDeployToast()
   useEffect(() => {
@@ -80,12 +82,12 @@ export function BottomPanel() {
             >
               <Icon />
               {label}
-              {id === "problems" && problems.length > 0 && (
+              {id === "problems" && alertCount > 0 && (
                 <Badge
                   variant={errorCount > 0 ? "destructive" : "secondary"}
                   className="h-4 min-w-4 px-1 text-[10px] tabular-nums"
                 >
-                  {problems.length}
+                  {alertCount}
                 </Badge>
               )}
             </TabsTrigger>

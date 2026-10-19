@@ -1,5 +1,5 @@
 import { useEffect } from "react"
-import { ArrowLeft, BotIcon, BoxesIcon, DatabaseIcon, InfoIcon, ListChecksIcon, SlidersHorizontalIcon } from "lucide-react"
+import { ArrowLeft, BotIcon, BoxesIcon, DatabaseIcon, InfoIcon, ListChecksIcon, ShieldCheckIcon, SlidersHorizontalIcon } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Separator } from "@/components/ui/separator"
 import { openSetupChecklist } from "@/features/onboarding/store"
@@ -9,12 +9,14 @@ import { useWorkflowStore } from "@/state/workflow-store"
 import { AgentsSection } from "./agents-section"
 import { DataSection } from "./data-section"
 import { GeneralSection } from "./general-section"
+import { PracticesSection } from "./practices-section"
 import { SandboxSection } from "./sandbox-section"
 import { useSettingsView, type SettingsSection } from "./store"
 
 const SECTIONS: { id: SettingsSection; label: string; icon: typeof BotIcon }[] = [
   { id: "general", label: "General", icon: SlidersHorizontalIcon },
   { id: "sandbox", label: "Sandbox & emulators", icon: BoxesIcon },
+  { id: "practices", label: "Best-practice checks", icon: ShieldCheckIcon },
   { id: "agents", label: "AI agents (MCP)", icon: BotIcon },
   { id: "data", label: "Data", icon: DatabaseIcon },
   { id: "about", label: "About", icon: InfoIcon },
@@ -75,6 +77,7 @@ export function SettingsView() {
           <div className="mx-auto max-w-4xl px-8 py-8">
             {section === "general" && <GeneralSection />}
             {section === "sandbox" && <SandboxSection />}
+            {section === "practices" && <PracticesSection />}
             {section === "agents" && <AgentsSection />}
             {section === "data" && <DataSection />}
             {section === "about" && <AboutSection />}

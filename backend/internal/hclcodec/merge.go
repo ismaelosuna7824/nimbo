@@ -13,8 +13,12 @@ import (
 // MergeImported carries app-only data from prev into next (a fresh Import of
 // edited code): node IDs, positions, labels, parents matched by address;
 // environments, active environment, workflow ID/name/description/icon/
-// createdAt and the archived flag.
-func MergeImported(prev, next *model.Workflow) {
+// createdAt and the archived flag. Blocks that had no recorded file in prev
+// and are still in the file the recommended layout gave them stay
+// unrecorded, and so do new blocks written where that layout puts them;
+// every other block keeps the file it was written in. resourceFile is the
+// one given to Export.
+func MergeImported(prev, next *model.Workflow, resourceFile func(string) string) {
 	if prev == nil || next == nil {
 		return
 	}
@@ -75,7 +79,57 @@ func MergeImported(prev, next *model.Workflow) {
 	if prev.ActiveEnvironment != "" {
 		next.ActiveEnvironment = prev.ActiveEnvironment
 	}
+	keepAutoFiles(prev, next, resourceFile)
 	deriveEdges(next)
+}
+
+// keepAutoFiles clears the recorded files of next that only repeat prev's
+// recommended layout, so the layout keeps adapting to later changes.
+func keepAutoFiles(prev, next *model.Workflow, resourceFile func(string) string) {
+	before := map[string]*placed{}
+	for _, p := range layout(prev, resourceFile) {
+		before[p.key] = p
+	}
+	// A locals or terraform block prev laid out itself, still alone in that
+	// file, stays automatic.
+	if len(prev.LocalsBlocks) == 0 && before["locals"] != nil && len(next.LocalsBlocks) == 1 && next.LocalsBlocks[0].File == before["locals"].place {
+		unpinBlocks(&next.LocalsBlocks, &next.LocalsComments, next.Locals, nil)
+	}
+	if prev.Terraform != nil && next.Terraform != nil && len(prev.TerraformBlocks) == 0 && before["terraform"] != nil &&
+		len(next.TerraformBlocks) == 1 && next.TerraformBlocks[0].File == before["terraform"].place {
+		unpinBlocks(&next.TerraformBlocks, &next.Terraform.Comments, next.Terraform.Attrs, next.Terraform.Blocks)
+	}
+	var added []*placed
+	for _, p := range layout(next, resourceFile) {
+		if p.merged {
+			continue
+		}
+		old, ok := before[p.key]
+		switch {
+		case !ok:
+			added = append(added, p)
+		case *old.file == "" && old.place == *p.file:
+			*p.file, *p.order = "", 0
+		}
+	}
+	if len(added) == 0 {
+		return
+	}
+	written := make([]string, len(added))
+	orders := make([]int, len(added))
+	for i, p := range added {
+		written[i], orders[i] = *p.file, *p.order
+		*p.file, *p.order = "", 0
+	}
+	auto := map[string]string{}
+	for _, p := range layout(next, resourceFile) {
+		auto[p.key] = p.place
+	}
+	for i, p := range added {
+		if auto[p.key] != written[i] {
+			*p.file, *p.order = written[i], orders[i]
+		}
+	}
 }
 
 // RenameNode sets the name of a node and rewrites every reference to its old

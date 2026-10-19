@@ -25,6 +25,12 @@ export function DiagnosticRow({ diagnostic: d, nodeLabel, onSelect }: Diagnostic
           <span className="ml-auto font-mono text-[10px] text-muted-foreground/70">{d.code}</span>
         </div>
         {d.detail && <p className="mt-0.5 whitespace-pre-wrap text-muted-foreground">{d.detail}</p>}
+        {d.fix && (
+          <p className="mt-0.5 whitespace-pre-wrap text-foreground/80">
+            <span className="font-medium">Fix: </span>
+            {d.fix}
+          </p>
+        )}
       </div>
     </>
   )

@@ -2,8 +2,11 @@ import type {
   ImportRequest,
   ImportScan,
   ImportSource,
+  ModuleExtraction,
+  ModuleExtractRequest,
   ModuleView,
   AgentClient,
+  BestPracticeRule,
   ApiErrorBody,
   Connection,
   ConnectionCheck,
@@ -100,6 +103,8 @@ export interface NodePatch {
   positioned?: boolean
   parent?: string
   body?: WorkflowNode["body"]
+  /** Root .tf file to write the node to; "" returns it to the recommended layout. */
+  file?: string
 }
 
 export const api = {
@@ -151,6 +156,15 @@ export const api = {
   /** Read-only view of a module call; `path` drills into nested calls ("module.a.module.b"). */
   moduleView: (id: string, nodeId: string, path?: string) =>
     request<ModuleView>("GET", `/workflows/${id}/modules/${encodeURIComponent(nodeId)}${qs({ path })}`),
+  /** What extracting nodes into a local module would create; changes nothing. */
+  previewExtractModule: (id: string, body: ModuleExtractRequest) =>
+    request<ModuleExtraction>("POST", `/workflows/${id}/modules/extract/preview`, body),
+  /** Moves nodes into a new local module modules/<name> and calls it in their place (moved blocks keep state). */
+  extractModule: (id: string, body: ModuleExtractRequest) =>
+    request<Workflow>("POST", `/workflows/${id}/modules/extract`, body),
+  /** Brings a local module's blocks back to the root (called once, no count/for_each). */
+  inlineModule: (id: string, nodeId: string) =>
+    request<Workflow>("POST", `/workflows/${id}/modules/${encodeURIComponent(nodeId)}/inline`),
   /** Everything an export (with environments) writes: generated Terraform and the workflow's assets. */
   files: (id: string) => request<{ files: WorkflowFile[] }>("GET", `/workflows/${id}/files`),
   /** A text file; binary files fail with ApiError 415 (code "binary"), files over 2 MiB with 413 ("too_large"). */
@@ -208,6 +222,7 @@ export const api = {
   settings: () => request<Settings>("GET", "/settings"),
   settingsDefaults: () => request<Settings>("GET", "/settings/defaults"),
   saveSettings: (s: Settings) => request<Settings>("PUT", "/settings", s),
+  bestPracticeRules: () => request<BestPracticeRule[]>("GET", "/best-practices/rules"),
   agents: () => request<AgentClient[]>("GET", "/agents"),
   installAgent: (id: string) => request<AgentClient>("POST", `/agents/${id}/install`),
   uninstallAgent: (id: string) => request<AgentClient>("DELETE", `/agents/${id}`),

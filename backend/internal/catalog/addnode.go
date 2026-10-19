@@ -131,18 +131,21 @@ func (b *builder) useProvider(name string) {
 }
 
 func (b *builder) commit() {
-	for _, n := range b.pending {
-		b.wf.Nodes = append(b.wf.Nodes, *n)
-	}
-	b.pending = nil
 	for _, name := range b.providers {
 		b.ensureProvider(name)
 	}
+	for _, n := range b.pending {
+		b.applyTags(n)
+		b.wf.Nodes = append(b.wf.Nodes, *n)
+	}
+	b.pending = nil
 }
 
-// ensureProvider adds the required_providers entry and a provider block.
-// Floci endpoints are never written here; the sandbox injects them at run
-// time so exported code stays cloud-ready.
+// ensureProvider adds the required_providers entry and a provider block
+// (region from a variable; AWS default_tags from local.common_tags). A fresh
+// terraform block also gets required_version. Floci endpoints are never
+// written here; the sandbox injects them at run time so exported code stays
+// cloud-ready.
 func (b *builder) ensureProvider(name string) {
 	p, ok := b.c.byName[name]
 	if !ok {
@@ -153,48 +156,59 @@ func (b *builder) ensureProvider(name string) {
 		body := emptyBody()
 		wf.Terraform = &body
 	}
+	if getBlock(wf.Terraform, "required_providers") == nil {
+		setDefault(wf.Terraform, "required_version", lit(requiredVersion))
+	}
 	rp := ensureBlock(wf.Terraform, "required_providers")
 	if getAttr(&rp.Body, name) == nil {
 		major, _, _ := strings.Cut(p.info.Version, ".")
 		setAttr(&rp.Body, name, lit(map[string]string{"source": p.info.Source, "version": "~> " + major + ".0"}))
 	}
-	if p.cloud == "" {
+	if p.cloud == "" || b.hasProvider(name) {
 		return
-	}
-	for _, pb := range wf.Providers {
-		if pb.Name == name {
-			return
-		}
 	}
 	body := emptyBody()
 	switch p.cloud {
 	case model.CloudAWS:
-		setAttr(&body, "region", lit(b.c.defaultAWSRegion()))
+		b.ensureVariable("aws_region")
+		setAttr(&body, "region", expr("var.aws_region"))
+		if b.hasLocal(localCommonTags) {
+			tags := model.Block{Type: "default_tags", Body: emptyBody()}
+			setAttr(&tags.Body, "tags", expr("local."+localCommonTags))
+			body.Blocks = append(body.Blocks, tags)
+		}
 	case model.CloudAzure:
 		body.Blocks = append(body.Blocks, model.Block{Type: "features", Body: emptyBody()})
 	case model.CloudGCP:
 		b.ensureVariable("gcp_project")
+		b.ensureVariable("gcp_region")
 		setAttr(&body, "project", expr("var.gcp_project"))
-		setAttr(&body, "region", lit("us-central1"))
+		setAttr(&body, "region", expr("var.gcp_region"))
 	case model.CloudOCI:
-		setAttr(&body, "region", lit("us-ashburn-1"))
+		b.ensureVariable("oci_region")
+		setAttr(&body, "region", expr("var.oci_region"))
 	}
 	wf.Providers = append(wf.Providers, model.NamedBlock{Name: name, Body: body})
 }
 
+// ensureVariable adds a curated variable (curated/resources.json
+// "variables") unless the workflow declares it; aws_region defaults to the
+// settings' AWS region.
 func (b *builder) ensureVariable(name string) {
-	for _, v := range b.wf.Variables {
-		if v.Name == name {
-			return
-		}
+	if b.hasVariable(name) {
+		return
 	}
 	cv, ok := b.c.cur.Variables[name]
 	if !ok {
 		return
 	}
+	def := litRaw(cv.Default)
+	if name == "aws_region" {
+		def = lit(b.c.defaultAWSRegion())
+	}
 	body := emptyBody()
 	setAttr(&body, "type", expr(cv.Type))
-	setAttr(&body, "default", litRaw(cv.Default))
+	setAttr(&body, "default", def)
 	setAttr(&body, "description", lit(cv.Description))
 	b.wf.Variables = append(b.wf.Variables, model.NamedBlock{Name: name, Body: body})
 }
@@ -229,6 +243,7 @@ func (c *Catalog) AddNode(wf *model.Workflow, kind model.NodeKind, typ, name str
 		if name != "" && b.nameTaken(kind, typ, name) {
 			return "", fmt.Errorf("catalog: %s %s.%s already exists", kind, typ, name)
 		}
+		b.prepare(typ)
 		n = b.addCurated(kind, typ, name, pos, nil, "")
 	default:
 		return "", fmt.Errorf("catalog: unknown node kind %q", kind)
@@ -255,9 +270,10 @@ func defaultHint(typ string) string {
 	return typ[strings.LastIndex(typ, "_")+1:]
 }
 
-// addCurated creates a node with its curated starter body and needs. name
-// is exact when set; otherwise hint (or the curated/default hint) is made
-// unique.
+// addCurated creates a node with its curated starter body, needs and
+// companions. name is exact when set; otherwise hint (or the curated/default
+// hint) is made unique. override (a need's or companion's init) replaces
+// curated attributes and blocks.
 func (b *builder) addCurated(kind model.NodeKind, typ, name string, pos model.Position, override *initOverride, hint string) *model.Node {
 	cr := b.c.cur.lookup(kind, typ)
 	if name == "" {
@@ -269,93 +285,103 @@ func (b *builder) addCurated(kind model.NodeKind, typ, name string, pos model.Po
 		}
 		name = b.uniqueName(kind, typ, hint)
 	}
+	if cr == nil {
+		cr = &curatedType{}
+	}
 	n := b.bare(kind, typ, name, pos)
 	schema, _ := b.c.Schema(kind, typ)
 
-	ph := placeholders{name: n.Name, suffix: b.suffix, needs: map[string]string{}}
+	ph := placeholders{name: n.Name, self: address(n), suffix: b.suffix, needs: map[string]string{}}
 	for _, other := range b.all() {
 		if other.Kind == kind && other.Type == typ {
 			ph.seq++
 		}
 	}
+	prefixed := b.hasLocal(localNamePrefix)
 
 	var refs []model.Attr
-	if cr != nil {
-		helpers := 0
-		for _, nd := range cr.Needs {
-			if nd.Var != "" {
-				b.ensureVariable(nd.Var)
-				nd.Refs.each(func(attr, _ string) {
-					refs = append(refs, model.Attr{Name: attr, Value: expr("var." + nd.Var)})
-				})
+	helpers := 0
+	for _, nd := range cr.Needs {
+		if nd.Var != "" {
+			b.ensureVariable(nd.Var)
+			nd.Refs.each(func(attr, _ string) {
+				refs = append(refs, model.Attr{Name: attr, Value: expr("var." + nd.Var)})
+			})
+			continue
+		}
+		var dep *model.Node
+		if !nd.New {
+			dep = b.latest(nd.kind(), nd.Type)
+		}
+		if dep == nil {
+			if nd.Optional {
 				continue
 			}
-			var dep *model.Node
-			if !nd.New {
-				dep = b.latest(nd.kind(), nd.Type)
+			depHint := ""
+			if nd.Name != "" {
+				depHint = ph.render(nd.Name)
 			}
-			if dep == nil {
-				if nd.Optional {
-					continue
-				}
-				depHint := ""
-				if nd.Name != "" {
-					depHint = ph.render(nd.Name)
-				}
-				depPos := model.Position{X: pos.X - 320, Y: pos.Y + float64(helpers)*150}
-				dep = b.addCurated(nd.kind(), nd.Type, "", depPos, nd.Init, depHint)
-				helpers++
-			}
-			ph.needs[nd.Type] = address(dep)
-			nd.Refs.each(func(attr, srcAttr string) {
-				refs = append(refs, model.Attr{Name: attr, Value: expr(ref(dep, srcAttr))})
-			})
+			depPos := model.Position{X: pos.X - 320, Y: pos.Y + float64(helpers)*150}
+			dep = b.addCurated(nd.kind(), nd.Type, "", depPos, nd.Init, depHint)
+			helpers++
 		}
+		ph.needs[nd.Type] = address(dep)
+		nd.Refs.each(func(attr, srcAttr string) {
+			refs = append(refs, model.Attr{Name: attr, Value: expr(ref(dep, srcAttr))})
+		})
+	}
 
-		cr.Attrs.each(func(key string, m attrMeta) {
-			if strings.Contains(key, ".") {
+	cr.Attrs.each(func(key string, m attrMeta) {
+		if strings.Contains(key, ".") {
+			return
+		}
+		if override != nil {
+			if src, ok := override.Exprs.get(key); ok {
+				setAttr(&n.Body, key, expr(ph.render(src)))
 				return
 			}
-			if override != nil {
-				if src, ok := override.Exprs.get(key); ok {
-					setAttr(&n.Body, key, expr(ph.render(src)))
-					return
-				}
-				if raw, ok := override.Attrs.get(key); ok {
-					setAttr(&n.Body, key, litRaw(ph.renderJSON(raw)))
-					return
-				}
+			if raw, ok := override.Attrs.get(key); ok {
+				setAttr(&n.Body, key, litRaw(ph.renderJSON(raw)))
+				return
 			}
-			switch {
-			case m.Expr != "":
-				setAttr(&n.Body, key, expr(ph.render(m.Expr)))
-			case m.Init != nil:
-				setAttr(&n.Body, key, litRaw(ph.renderJSON(m.Init)))
-			case m.Default != nil && schema != nil && attrRequired(&schema.Block, key):
-				setAttr(&n.Body, key, litRaw(m.Default))
-			}
+		}
+		switch {
+		case m.Naming != "" && prefixed:
+			setAttr(&n.Body, key, expr(`"`+ph.render(m.Naming)+`"`))
+		case m.Expr != "":
+			setAttr(&n.Body, key, expr(ph.render(m.Expr)))
+		case m.Init != nil:
+			setAttr(&n.Body, key, litRaw(ph.renderJSON(m.Init)))
+		case m.Default != nil && schema != nil && attrRequired(&schema.Block, key):
+			setAttr(&n.Body, key, litRaw(m.Default))
+		}
+	})
+	if override != nil {
+		override.Exprs.each(func(key, src string) {
+			setDefault(&n.Body, key, expr(ph.render(src)))
 		})
-		if override != nil {
-			override.Attrs.each(func(key string, raw json.RawMessage) {
-				setDefault(&n.Body, key, litRaw(ph.renderJSON(raw)))
-			})
-			override.Exprs.each(func(key, src string) {
-				setDefault(&n.Body, key, expr(ph.render(src)))
-			})
-		}
-		for _, r := range refs {
-			setAttr(&n.Body, r.Name, r.Value)
-		}
-		blocks := cr.Blocks
-		if override != nil && override.Blocks != nil {
-			blocks = override.Blocks
-		}
-		for _, ib := range blocks {
-			n.Body.Blocks = append(n.Body.Blocks, ph.buildBlock(ib))
-		}
+		override.Attrs.each(func(key string, raw json.RawMessage) {
+			setDefault(&n.Body, key, litRaw(ph.renderJSON(raw)))
+		})
+	}
+	for _, r := range refs {
+		setAttr(&n.Body, r.Name, r.Value)
+	}
+	blocks := cr.Blocks
+	if override != nil && override.Blocks != nil {
+		blocks = override.Blocks
+	}
+	for _, ib := range blocks {
+		n.Body.Blocks = append(n.Body.Blocks, ph.buildBlock(ib))
 	}
 	if schema != nil {
 		addRequiredBlocks(&n.Body, &schema.Block)
+	}
+
+	for i, comp := range cr.Companions {
+		compPos := model.Position{X: pos.X + 320, Y: pos.Y + float64(i)*150}
+		dep := b.addCurated(comp.kind(), comp.Type, "", compPos, comp.Init.render(ph), ph.render(comp.Name))
+		ph.needs[comp.Type] = address(dep)
 	}
 	return n
 }
@@ -392,10 +418,11 @@ func addRequiredBlocks(body *model.Body, sb *model.SchemaBlock) {
 }
 
 // placeholders renders {{name}}, {{slug}}, {{slug:N}}, {{alnum}},
-// {{alnum:N}}, {{rand}}, {{seq}}, {{password}} and {{need:<type>}} in
-// curated strings.
+// {{alnum:N}}, {{rand}}, {{seq}}, {{password}}, {{self}} (the node's
+// address) and {{need:<type>}} in curated strings.
 type placeholders struct {
 	name   string
+	self   string
 	suffix string
 	seq    int
 	needs  map[string]string
@@ -426,6 +453,8 @@ func (p placeholders) render(s string) string {
 			return strconv.Itoa(p.seq)
 		case "password":
 			return randString(24, passwordChars)
+		case "self":
+			return p.self
 		case "need":
 			if addr, ok := p.needs[arg]; ok {
 				return addr

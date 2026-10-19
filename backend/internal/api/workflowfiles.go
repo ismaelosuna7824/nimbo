@@ -240,18 +240,25 @@ func (s *Server) lookupFile(wf *model.Workflow, rel string) (model.WorkflowFile,
 	return f, nil, err
 }
 
+// exportGenerated renders the files an export with environments generates
+// (Terraform, variable files, project scaffold).
 func (s *Server) exportGenerated(wf *model.Workflow) (map[string][]byte, error) {
-	return hclcodec.Export(wf, hclcodec.ExportOptions{Environments: true})
+	generated, _, err := s.exportFiles(wf, true)
+	return generated, err
 }
 
 func generatedFile(name string, data []byte) model.WorkflowFile {
 	kind := fileKind(name)
+	if !strings.Contains(name, "/") && hclcodec.IsScaffold(name, data) {
+		kind = model.FileScaffold
+	}
 	return model.WorkflowFile{
 		Path:      name,
 		Size:      int64(len(data)),
 		Kind:      kind,
 		Generated: true,
-		// Only Terraform code re-imports; values and env vars are edited in the app.
+		// Only Terraform code re-imports; values and env vars are edited in
+		// the app, the scaffold is rendered from the workflow.
 		Editable: kind == model.FileTerraform,
 		Language: fileLanguage(name),
 	}

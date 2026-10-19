@@ -102,11 +102,12 @@ func TestImportExportRoundTrip(t *testing.T) {
 	}{
 		{
 			fixture: "serverless",
-			files:   []string{"main.tf", "outputs.tf", "providers.tf", "variables.tf", "versions.tf"},
+			// The project keeps its own files; nodes keep source order.
+			files: []string{"api.tf", "lambda.tf", "outputs.tf", "providers.tf", "variables.tf", "versions.tf"},
 			nodes: []string{
-				"data.archive_file.handler", "data.aws_iam_policy_document.assume",
 				"aws_dynamodb_table.orders", "aws_apigatewayv2_api.http", "aws_apigatewayv2_integration.lambda",
 				"aws_apigatewayv2_route.orders", "aws_apigatewayv2_stage.default", "aws_lambda_permission.apigw",
+				"data.archive_file.handler", "data.aws_iam_policy_document.assume",
 				"aws_iam_role.lambda", "aws_iam_role_policy.table_access", "aws_lambda_function.api",
 			},
 			providers: []string{"aws"},
@@ -115,11 +116,11 @@ func TestImportExportRoundTrip(t *testing.T) {
 		},
 		{
 			fixture: "network",
-			files:   []string{"main.tf", "outputs.tf", "providers.tf", "variables.tf", "versions.tf"},
+			files:   []string{"main.tf"},
 			nodes: []string{
-				"aws_security_group.web", "aws_instance.web", "aws_eip.web", "aws_lb_target_group_attachment.web",
+				"module.vpc", "aws_security_group.web", "aws_instance.web", "aws_eip.web", "aws_lb_target_group_attachment.web",
 				"aws_lb_target_group.web", "aws_cloudwatch_log_group.flow", "aws_iam_role.logs", "aws_iam_role_policy.logs",
-				"aws_route53_record.web", "module.vpc",
+				"aws_route53_record.web",
 			},
 			providers: []string{"aws"},
 			clouds:    []model.Cloud{model.CloudAWS},
@@ -127,7 +128,7 @@ func TestImportExportRoundTrip(t *testing.T) {
 		},
 		{
 			fixture: "multicloud",
-			files:   []string{"main.tf", "providers.tf", "variables.tf", "versions.tf"},
+			files:   []string{"main.tf", "providers.tf"},
 			nodes: []string{
 				"aws_s3_bucket.east", "aws_s3_bucket.west", "aws_s3_bucket_replication_configuration.east_to_west",
 				"google_storage_bucket.archive", "oci_objectstorage_bucket.backup",
@@ -684,13 +685,13 @@ func TestMergeImported(t *testing.T) {
 	// Code edit: rename the stage and add a queue whose fresh ID collides
 	// with nothing, plus one whose address equals a carried ID.
 	files := mustExport(t, prev, ExportOptions{})
-	main := string(files["main.tf"])
-	main = strings.Replace(main, `resource "aws_apigatewayv2_stage" "default"`, `resource "aws_apigatewayv2_stage" "live"`, 1)
-	main += "\nresource \"aws_sqs_queue\" \"dlq\" {}\n"
-	files["main.tf"] = []byte(main)
+	api := string(files["api.tf"])
+	api = strings.Replace(api, `resource "aws_apigatewayv2_stage" "default"`, `resource "aws_apigatewayv2_stage" "live"`, 1)
+	api += "\nresource \"aws_sqs_queue\" \"dlq\" {}\n"
+	files["api.tf"] = []byte(api)
 	next, _ := mustImport(t, files)
 	next.Nodes = append(next.Nodes, model.Node{ID: table.ID, Kind: model.KindResource, Type: "na", Name: "x"})
-	MergeImported(prev, next)
+	MergeImported(prev, next, nil)
 
 	if next.ID != prev.ID || next.Name != prev.Name || next.Description != prev.Description || !next.CreatedAt.Equal(prev.CreatedAt) {
 		t.Errorf("workflow metadata not carried: %+v", next)

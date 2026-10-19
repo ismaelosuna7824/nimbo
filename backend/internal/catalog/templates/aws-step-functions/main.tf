@@ -14,7 +14,7 @@ data "archive_file" "check" {
 }
 
 resource "aws_iam_role" "lambda" {
-  name = "${var.name}-check"
+  name = "${local.name_prefix}-check"
   assume_role_policy = jsonencode({
     Version = "2012-10-17"
     Statement = [{
@@ -25,13 +25,8 @@ resource "aws_iam_role" "lambda" {
   })
 }
 
-resource "aws_iam_role_policy_attachment" "lambda_logs" {
-  role       = aws_iam_role.lambda.name
-  policy_arn = "arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole"
-}
-
 resource "aws_lambda_function" "check" {
-  function_name    = "${var.name}-check"
+  function_name    = "${local.name_prefix}-check"
   role             = aws_iam_role.lambda.arn
   runtime          = "nodejs22.x"
   handler          = "index.handler"
@@ -40,8 +35,26 @@ resource "aws_lambda_function" "check" {
   timeout          = 10
 }
 
+resource "aws_cloudwatch_log_group" "check" {
+  name              = "/aws/lambda/${aws_lambda_function.check.function_name}"
+  retention_in_days = var.log_retention_days
+}
+
+resource "aws_iam_role_policy" "check_logs" {
+  name = "${local.name_prefix}-check-logs"
+  role = aws_iam_role.lambda.id
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Effect   = "Allow"
+      Action   = ["logs:CreateLogStream", "logs:PutLogEvents"]
+      Resource = ["${aws_cloudwatch_log_group.check.arn}:*"]
+    }]
+  })
+}
+
 resource "aws_iam_role" "states" {
-  name = "${var.name}-states"
+  name = "${local.name_prefix}-states"
   assume_role_policy = jsonencode({
     Version = "2012-10-17"
     Statement = [{
@@ -53,7 +66,7 @@ resource "aws_iam_role" "states" {
 }
 
 resource "aws_iam_role_policy" "invoke_check" {
-  name = "${var.name}-invoke-check"
+  name = "${local.name_prefix}-invoke-check"
   role = aws_iam_role.states.id
   policy = jsonencode({
     Version = "2012-10-17"
@@ -66,7 +79,7 @@ resource "aws_iam_role_policy" "invoke_check" {
 }
 
 resource "aws_sfn_state_machine" "flow" {
-  name     = var.name
+  name     = local.name_prefix
   role_arn = aws_iam_role.states.arn
   definition = jsonencode({
     Comment = "Checks an order and branches on approval"

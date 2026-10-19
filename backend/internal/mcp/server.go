@@ -18,10 +18,20 @@ Recommended loop:
 2. search_resources (prefer floci_supported=true) and describe_resource to learn required attributes.
 3. add_node for each resource; set attributes as HCL expressions (strings must be quoted: "\"my-bucket\"").
 4. list_connection_options + connect to wire nodes (curated recipes add IAM policies, event source mappings, permissions). References between nodes are what create edges.
-5. Check diagnostics returned by every edit (get_workflow shows all); fix errors with update_node.
+5. Check diagnostics returned by every edit (get_workflow shows all); fix errors with update_node. Fix the best_practices findings an edit returns right away.
 6. validate, then deploy (terraform apply into the local sandbox). Read the log tail on failure, fix, and retry.
 7. list_load_targets, then run_load_test (start with preset smoke, then load/stress) and report latency, throughput, error rate and threshold results.
 8. export_terraform to a directory when the user wants the code. get_terraform shows it inline; apply_terraform_code edits by code.
+
+Code quality: the Terraform you write is handed to the user as production code, so follow the practices Nimbo's starters already use.
+- Configurable values (sizes, counts, CIDRs, retention, region) are variables with type and description, or locals for values used in several places; no hardcoded regions, zones or account IDs (use var.aws_region, data.aws_availability_zones, data.aws_caller_identity).
+- Names come from local.name_prefix (project + environment): "${local.name_prefix}-orders". The first resource of a cloud adds variables project/environment, locals name_prefix/common_tags, region variables and AWS default_tags; keep using them. Azure resources take tags = local.common_tags, GCP resources labels = local.common_labels.
+- Every variable and output has a description; secrets are sensitive = true; providers stay pinned in required_providers.
+- Secure defaults: encryption on, no public buckets unless the user wants a public website, no 0.0.0.0/0 to SSH/RDP/database ports, IAM scoped to the ARNs used (never "*" on "*"), Lambda log groups with retention.
+- Group related resources into modules (below).
+- Before you finish, call review_terraform and fix its findings (warnings first) or tell the user which ones you leave and why. Findings never block deploys.
+
+Modules: group related resources into a local module with extract_module when one concern has many resources or is repeated — a network (VPC + subnets + route tables + gateways), a service (function + IAM role + policies + log group + permissions), a queue with its dead-letter queue and alarms. Pick a snake_case name for the concern (network, orders_api). The root then calls module.<name> with clear inputs (typed, described variables) and reads its outputs; moved blocks keep anything already deployed (the next plan only moves, 0 to add/change/destroy). Use dry_run=true to review the inputs/outputs first; inline_module undoes it. Keep shared plumbing (providers, variables, locals) in the root.
 
 Existing code: scan_terraform_folder lists the Terraform projects in a folder or repository, import_terraform imports the chosen ones (one workflow each; local modules are kept).
 Already-deployed services outside the sandbox (connections tools) receive real traffic: always get the user's explicit confirmation first.

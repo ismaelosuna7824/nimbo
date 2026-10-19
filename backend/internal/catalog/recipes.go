@@ -322,7 +322,7 @@ func buildRecipes() []recipe {
 				}
 				if role == nil {
 					role = x.helper(model.KindResource, "aws_iam_role", sched.Name+"_role")
-					setAttr(&role.Body, "name", lit(strings.ReplaceAll(role.Name, "_", "-")))
+					setAttr(&role.Body, "name", x.b.nameValue("aws_iam_role", strings.ReplaceAll(role.Name, "_", "-")))
 					setAttr(&role.Body, "assume_role_policy", expr(assumeRolePolicy("scheduler.amazonaws.com")))
 					setAttr(&target.Body, "role_arn", expr(ref(role, "arn")))
 				}

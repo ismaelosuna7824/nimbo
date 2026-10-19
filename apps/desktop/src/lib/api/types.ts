@@ -15,12 +15,28 @@ export interface Attr {
   name: string
   value: Value
   comments?: Comments
+  /** Items of `workflow.locals` / `workflow.terraform` only: the source block (BlockPart) they are written in. */
+  file?: string
+  order?: number
 }
 
 export interface Block {
   type: string
   labels?: string[]
   body: Body
+  /** `workflow.other` blocks: see WorkflowNode.file/order. Items of `workflow.terraform`: their source block (BlockPart). */
+  file?: string
+  order?: number
+}
+
+/**
+ * One imported `locals` or `terraform` block. Export writes one block per part with the items whose
+ * file/order match; items without a part go to the recommended layout.
+ */
+export interface BlockPart {
+  file: string
+  order?: number
+  comments?: Comments
 }
 
 /** `comments` belong to the block that owns the body (resource, variable, nested block, ...). */
@@ -62,6 +78,13 @@ export interface WorkflowNode {
   position: Position
   positioned: boolean
   body: Body
+  /**
+   * Root .tf file the block is written to: recorded by import (the project keeps its layout) or chosen
+   * by the user. Absent: Nimbo's recommended layout (`workflow.nodeFiles` has the resulting file).
+   */
+  file?: string
+  /** 1-based position in `file` as imported; clear it when changing `file`. */
+  order?: number
 }
 
 export type EdgeKind = "reference" | "depends_on"
@@ -78,6 +101,9 @@ export interface WorkflowEdge {
 export interface NamedBlock {
   name: string
   body: Body
+  /** See WorkflowNode.file/order. */
+  file?: string
+  order?: number
 }
 
 export interface EnvVar {
@@ -96,16 +122,30 @@ export interface Environment {
 
 export type Severity = "error" | "warning" | "info"
 
+/**
+ * A problem found by import, normalization, schema validation, the best-practice checks
+ * (codes "bp_*", info/warning only, never block deploys) or a Terraform run.
+ */
 export interface Diagnostic {
   severity: Severity
   code: string
   message: string
+  /** Explanation; for best-practice findings, why it matters. */
   detail?: string
+  /** Suggested change (best-practice findings). */
+  fix?: string
   nodeId?: string
   attribute?: string
   /** Code diagnostics (Terraform syntax errors): the file and 1-based line they point at. */
   file?: string
   line?: number
+}
+
+/** Best-practice findings carry codes with this prefix. */
+export const BEST_PRACTICE_PREFIX = "bp_"
+
+export function isBestPractice(d: Diagnostic): boolean {
+  return d.code.startsWith(BEST_PRACTICE_PREFIX)
 }
 
 export interface Workflow {
@@ -122,10 +162,15 @@ export interface Workflow {
   variables: NamedBlock[]
   outputs: NamedBlock[]
   locals: Attr[]
-  /** Comments of the exported `locals` block (imported locals blocks are merged). */
+  /** Comments of the `locals` block of the items without a part (new content). */
   localsComments?: Comments
+  /** Imported `locals` blocks. */
+  localsBlocks?: BlockPart[]
   providers: NamedBlock[]
+  /** Items of every terraform block; `comments` belong to the block of the items without a part. */
   terraform?: Body
+  /** Imported `terraform` blocks. */
+  terraformBlocks?: BlockPart[]
   other: Block[]
   environments: Environment[]
   activeEnvironment?: string
@@ -133,6 +178,8 @@ export interface Workflow {
   edges: WorkflowEdge[]
   clouds: Cloud[]
   diagnostics: Diagnostic[]
+  /** Node ID -> root .tf file the export writes it to (its `file`, or the recommended layout). */
+  nodeFiles?: Record<string, string>
 }
 
 export interface WorkflowSummary {
@@ -721,6 +768,24 @@ export interface Settings {
   terraformImage: string
   /** Region of new AWS provider blocks and of Terraform runs in the sandbox. */
   defaultAWSRegion: string
+  /** Best-practice checks (bp_* diagnostics): on by default, off as a whole or per rule. */
+  bestPractices: BestPracticeSettings
+}
+
+export interface BestPracticeSettings {
+  disabled?: boolean
+  /** Rule codes turned off, e.g. "bp_missing_tags". */
+  disabledRules: string[]
+}
+
+/** One best-practice check (GET /best-practices/rules). */
+export interface BestPracticeRule {
+  code: string
+  title: string
+  category: "inputs" | "versions" | "hardcoding" | "tagging" | "naming" | "security" | "structure"
+  /** Default severity (a few findings of a rule may be lower). */
+  severity: Severity
+  description: string
 }
 
 /** An AI agent app Nimbo can register its MCP server with (GET /agents). */
@@ -818,13 +883,58 @@ export type ImportRequest = ImportSource & {
 export interface ModuleView {
   source: string
   local: boolean
+  /** Local modules inside the workflow files: their folder, e.g. "modules/network". */
+  dir?: string
   /** Local modules: the module as a workflow (nodes unpositioned). */
   workflow?: Workflow
   /** Registry/remote modules or unreadable sources: why there is no diagram. */
   message?: string
 }
 
-export type WorkflowFileKind = "terraform" | "tfvars" | "env" | "module" | "asset"
+/** Body of POST /workflows/{id}/modules/extract (and .../extract/preview). */
+export interface ModuleExtractRequest {
+  /** Node IDs or addresses to move into the module. */
+  nodeIds: string[]
+  /** snake_case: module.<name> and modules/<name>. */
+  name: string
+}
+
+/** One input variable or output of a module. */
+export interface ModuleIO {
+  name: string
+  /** Inputs: Terraform type constraint. */
+  type?: string
+  description: string
+  /** Inputs: the expression the call passes; outputs: the expression inside the module. */
+  value: string
+  sensitive?: boolean
+}
+
+/** A `moved { from = … to = … }` block. */
+export interface MovedAddress {
+  from: string
+  to: string
+}
+
+/** What extracting nodes into a local module creates (POST …/modules/extract/preview). */
+export interface ModuleExtraction {
+  name: string
+  /** "./modules/<name>" */
+  source: string
+  inputs: ModuleIO[]
+  outputs: ModuleIO[]
+  /** Root moved blocks so deployed resources move into the module instead of being recreated. */
+  moved: MovedAddress[]
+  /** Provider configurations passed through `providers` (only with non-default aliases). */
+  providers: string[]
+  /** Root addresses the module call depends on. */
+  dependsOn: string[]
+  /** Created files, relative to the workflow root. */
+  files: string[]
+}
+
+/** "scaffold": README.md, .gitignore, terraform.tfvars.example generated next to the Terraform (unless the workflow has its own). */
+export type WorkflowFileKind = "terraform" | "tfvars" | "env" | "module" | "scaffold" | "asset"
 export type FileLanguage =
   | "hcl"
   | "json"

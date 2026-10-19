@@ -128,6 +128,9 @@ func (c *converter) body(blk *hclsyntax.Block) model.Body {
 	// first one has no blank line to keep above its comments.
 	if len(out.Attrs) > 0 && out.Attrs[0].Comments != nil {
 		out.Attrs[0].Comments.Lead = normalizeLead(out.Attrs[0].Comments.Lead)
+		if emptyComments(out.Attrs[0].Comments) {
+			out.Attrs[0].Comments = nil
+		}
 	}
 	return out
 }
@@ -179,6 +182,11 @@ func (c *converter) attach(slots []slot, from, to, openLine int) (line string, r
 			cms := s.comments()
 			cms.Lead = append(cms.Lead, pending...)
 			pending = nil
+		} else if !s.block && prev != nil && s.startLine > prev.endLine+1 {
+			// A blank line grouping attributes (`source` apart from the
+			// inputs of a module call) is kept like one above comments.
+			cms := s.comments()
+			cms.Lead = append(cms.Lead, "")
 		}
 		for ; k < len(c.comments) && c.comments[k].start < s.end; k++ {
 			// Inside the item: nested bodies attach their own comments;
@@ -203,17 +211,19 @@ func joinLine(a, b string) string {
 // a file (model.Comments.After) to the last block of the file Export writes
 // them to, which is where importing the export finds them. Export itself
 // writes every After at the end of its file.
-func gatherAfter(wf *model.Workflow) {
-	for _, slots := range topLevelComments(wf) {
+func gatherAfter(wf *model.Workflow, resourceFile func(string) string) {
+	byFile := groupFiles(wf, layout(wf, resourceFile))
+	for _, name := range keysOf(byFile) {
+		blocks := byFile[name]
 		var after []string
-		for _, s := range slots {
-			if *s != nil && len((*s).After) > 0 {
+		for _, p := range blocks {
+			if s := p.cms; *s != nil && len((*s).After) > 0 {
 				after = joinAfter(after, (*s).After)
 				(*s).After = nil
 			}
 		}
 		if len(after) > 0 {
-			last := slots[len(slots)-1]
+			last := blocks[len(blocks)-1].cms
 			if *last == nil {
 				*last = &model.Comments{}
 			}
@@ -231,38 +241,6 @@ func joinAfter(a, b []string) []string {
 		a = append(a, l)
 	}
 	return a
-}
-
-// topLevelComments lists the comment slots of the top-level blocks of each
-// file Export writes, in Export's order.
-func topLevelComments(wf *model.Workflow) [][]**model.Comments {
-	var versions, providers, variables, main, outputs []**model.Comments
-	if wf.Terraform != nil {
-		versions = append(versions, &wf.Terraform.Comments)
-	}
-	for i := range wf.Providers {
-		providers = append(providers, &wf.Providers[i].Body.Comments)
-	}
-	for i := range wf.Variables {
-		variables = append(variables, &wf.Variables[i].Body.Comments)
-	}
-	if len(wf.Locals) > 0 || !emptyComments(wf.LocalsComments) {
-		main = append(main, &wf.LocalsComments)
-	}
-	for _, kind := range []model.NodeKind{model.KindData, model.KindResource, model.KindModule} {
-		for i := range wf.Nodes {
-			if wf.Nodes[i].Kind == kind {
-				main = append(main, &wf.Nodes[i].Body.Comments)
-			}
-		}
-	}
-	for i := range wf.Other {
-		main = append(main, &wf.Other[i].Body.Comments)
-	}
-	for i := range wf.Outputs {
-		outputs = append(outputs, &wf.Outputs[i].Body.Comments)
-	}
-	return [][]**model.Comments{versions, providers, variables, main, outputs}
 }
 
 // topBlock is a converted top-level block.
@@ -295,34 +273,6 @@ func (c *converter) file(body *hclsyntax.Body, carry []string) (blocks []topBloc
 	return blocks, nil
 }
 
-// mergeBlockComments folds the comments of a block merged into an earlier
-// one (a second `terraform` or `locals` block): the lines above it join the
-// merged block's Lead (file headers stay outside the block); the comment
-// after its "{" and the lines carried from earlier merged blocks lead its
-// first item, or are carried further when it has none. It returns the
-// lines still to carry: the comments after its content.
-func mergeBlockComments(merged func() *model.Comments, cms *model.Comments, carry []string, first func() *model.Comments) []string {
-	if cms != nil {
-		if len(cms.Lead) > 0 {
-			m := merged()
-			if n := len(m.Lead); n > 0 && m.Lead[n-1] != "" {
-				m.Lead = append(m.Lead, "")
-			}
-			m.Lead = normalizeLead(append(m.Lead, cms.Lead...))
-		}
-		if cms.Line != "" {
-			carry = append(carry, cms.Line)
-		}
-	}
-	if len(carry) > 0 {
-		if dst := first(); dst != nil {
-			dst.Lead = normalizeLead(append(carry, dst.Lead...))
-			carry = nil
-		}
-	}
-	return appendTrailing(carry, cms)
-}
-
 // normalizeLead drops leading and repeated blank lines, as Import reads
 // comment lines back.
 func normalizeLead(lines []string) []string {
@@ -334,34 +284,6 @@ func normalizeLead(lines []string) []string {
 		out = append(out, l)
 	}
 	return out
-}
-
-// appendTrailing adds the comments after a block's content (Tail, End,
-// After) to lines.
-func appendTrailing(lines []string, cms *model.Comments) []string {
-	if cms == nil {
-		return lines
-	}
-	lines = append(lines, cms.Tail...)
-	if cms.End != "" {
-		lines = append(lines, cms.End)
-	}
-	return append(lines, cms.After...)
-}
-
-// firstItemComments returns the Comments of the first attribute or nested
-// block of b, or nil when b is empty.
-func firstItemComments(b *model.Body) *model.Comments {
-	switch {
-	case len(b.Attrs) > 0:
-		if b.Attrs[0].Comments == nil {
-			b.Attrs[0].Comments = &model.Comments{}
-		}
-		return b.Attrs[0].Comments
-	case len(b.Blocks) > 0:
-		return bodyComments(&b.Blocks[0].Body)
-	}
-	return nil
 }
 
 // emptyComments reports whether c holds nothing.

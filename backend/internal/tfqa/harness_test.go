@@ -17,9 +17,13 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/hashicorp/hcl/v2"
+	"github.com/hashicorp/hcl/v2/hclsyntax"
+
 	"github.com/ismaelosuna7824/nimbo/backend/internal/api"
 	"github.com/ismaelosuna7824/nimbo/backend/internal/catalog"
 	"github.com/ismaelosuna7824/nimbo/backend/internal/events"
+	"github.com/ismaelosuna7824/nimbo/backend/internal/hclcodec"
 	"github.com/ismaelosuna7824/nimbo/backend/internal/model"
 	"github.com/ismaelosuna7824/nimbo/backend/internal/store"
 )
@@ -41,6 +45,7 @@ const (
 	checkModel    = "reimport"
 	checkStable   = "stable"
 	checkFiles    = "files"
+	checkLayout   = "layout"
 	checkVars     = "tfvars"
 	checkFmt      = "fmt"
 	checkValidate = "validate"
@@ -50,7 +55,7 @@ const (
 	statusOrigFail = "orig-fails"
 )
 
-var checkOrder = []string{checkSemantic, checkComments, checkModel, checkStable, checkFiles, checkVars, checkFmt, checkValidate}
+var checkOrder = []string{checkSemantic, checkComments, checkModel, checkStable, checkFiles, checkLayout, checkVars, checkFmt, checkValidate}
 
 // report collects the outcome of every check for one root.
 type report struct {
@@ -77,6 +82,7 @@ var (
 	serverURL  string
 	serverErr  error
 	serverHome string
+	serverCat  *catalog.Catalog
 )
 
 // nimbo starts one in-process API server (own temp home) per test binary.
@@ -97,6 +103,7 @@ func nimbo(t *testing.T) string {
 			serverErr = err
 			return
 		}
+		serverCat = cat
 		srv := api.New(api.Config{Version: "tfqa", Home: serverHome, Store: st, Catalog: cat, Events: events.NewHub()})
 		serverURL = httptest.NewServer(srv.Handler()).URL + "/api/v1"
 	})
@@ -258,9 +265,11 @@ func checkRoot(t *testing.T, r root, opts options) (*report, string, string) {
 
 	if r.Template == "" {
 		rep.set(checkFiles, checkAssets(orig, exp, cmp)...)
+		rep.set(checkLayout, checkFileLayout(orig, exp)...)
 		rep.set(checkVars, checkVarFiles(orig, exp)...)
 	} else {
 		rep.set(checkFiles)
+		rep.set(checkLayout, checkRecommendedLayout(exp)...)
 		rep.set(checkVars)
 	}
 
@@ -286,13 +295,23 @@ func checkRoot(t *testing.T, r root, opts options) (*report, string, string) {
 	return rep, orig, exp
 }
 
-// diffModels compares the Terraform content of two workflows.
+// diffModels compares the Terraform content of two workflows. Blocks of a
+// that have no recorded file (templates) are compared at the file and
+// position the export gave them.
 func diffModels(a, b *model.Workflow) []string {
+	var pinned model.Workflow
+	data, _ := json.Marshal(a)
+	if err := json.Unmarshal(data, &pinned); err != nil {
+		return []string{err.Error()}
+	}
+	hclcodec.PinFiles(&pinned, serverCat.ResourceFile)
+	a = &pinned
 	pick := func(wf *model.Workflow) map[string]any {
 		return map[string]any{
 			"nodes": wf.Nodes, "variables": wf.Variables, "outputs": wf.Outputs, "locals": wf.Locals,
 			"localsComments": wf.LocalsComments, "providers": wf.Providers, "terraform": wf.Terraform,
 			"other": wf.Other, "environments": wf.Environments, "edges": wf.Edges, "clouds": wf.Clouds,
+			"blocks": []any{wf.LocalsBlocks, wf.TerraformBlocks},
 		}
 	}
 	var out []string
@@ -309,6 +328,103 @@ func diffModels(a, b *model.Workflow) []string {
 			out = append(out, fmt.Sprintf("re-imported %s differ:\n%s", k, lineDiff(string(ja), string(jb))))
 		}
 	}
+	return out
+}
+
+// topLevelBlocks lists the top-level blocks of every root *.tf file Nimbo
+// interprets, in source order ("resource aws_s3_bucket b"). locals and
+// terraform blocks also list their items ("locals: a b", "terraform:
+// required_version required_providers"), so a block merged into another
+// file, or items moved between blocks, show up.
+func topLevelBlocks(dir string) (map[string][]string, error) {
+	names, _ := filepath.Glob(filepath.Join(dir, "*.tf"))
+	slices.Sort(names)
+	out := map[string][]string{}
+	for _, p := range names {
+		name := filepath.Base(p)
+		if hclcodec.IsOverrideFile(name) {
+			continue
+		}
+		src, err := os.ReadFile(p)
+		if err != nil {
+			return nil, err
+		}
+		f, diags := hclsyntax.ParseConfig(NormalizeNewlines(src), name, hcl.InitialPos)
+		if diags.HasErrors() {
+			return nil, fmt.Errorf("%s: %s", name, diags.Error())
+		}
+		for _, b := range f.Body.(*hclsyntax.Body).Blocks {
+			id := strings.Join(append([]string{b.Type}, b.Labels...), " ")
+			if b.Type == "locals" || b.Type == "terraform" {
+				var items []string
+				for _, a := range b.Body.Attributes {
+					items = append(items, a.Name)
+				}
+				slices.Sort(items) // attribute order is not part of the layout
+				for _, nb := range b.Body.Blocks {
+					items = append(items, nb.Type)
+				}
+				id += ": " + strings.Join(items, " ")
+			}
+			out[name] = append(out[name], id)
+		}
+	}
+	return out, nil
+}
+
+// checkFileLayout verifies that an imported root keeps its file layout:
+// every top-level block is exported to the file it came from, in the same
+// order, and no file is added.
+func checkFileLayout(orig, exp string) []string {
+	want, err := topLevelBlocks(orig)
+	if err != nil {
+		return []string{"original: " + err.Error()}
+	}
+	got, err := topLevelBlocks(exp)
+	if err != nil {
+		return []string{"export: " + err.Error()}
+	}
+	var out []string
+	for name, blocks := range want {
+		if !slices.Equal(got[name], blocks) {
+			out = append(out, fmt.Sprintf("%s: exported blocks %v, original %v", name, got[name], blocks))
+		}
+	}
+	for name := range got {
+		if _, ok := want[name]; !ok {
+			out = append(out, name+": file added by the export")
+		}
+	}
+	slices.Sort(out)
+	return out
+}
+
+// recommendedFiles are the root files of Nimbo's recommended layout.
+var recommendedFiles = []string{
+	"versions.tf", "providers.tf", "variables.tf", "locals.tf", "outputs.tf", "data.tf", "main.tf",
+	"network.tf", "compute.tf", "containers.tf", "storage.tf", "database.tf", "messaging.tf", "api.tf",
+	"iam.tf", "security.tf", "monitoring.tf", "analytics.tf", "ai.tf", "devtools.tf", "cost.tf",
+}
+
+// checkRecommendedLayout verifies that a template's export uses only the
+// recommended file names and ships the project scaffold.
+func checkRecommendedLayout(exp string) []string {
+	got, err := topLevelBlocks(exp)
+	if err != nil {
+		return []string{"export: " + err.Error()}
+	}
+	var out []string
+	for name := range got {
+		if !slices.Contains(recommendedFiles, name) {
+			out = append(out, name+": not a recommended file name")
+		}
+	}
+	for _, name := range []string{hclcodec.ReadmeFile, hclcodec.GitignoreFile} {
+		if _, err := os.Stat(filepath.Join(exp, name)); err != nil {
+			out = append(out, name+" missing")
+		}
+	}
+	slices.Sort(out)
 	return out
 }
 

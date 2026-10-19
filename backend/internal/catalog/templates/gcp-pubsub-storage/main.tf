@@ -1,15 +1,18 @@
 resource "google_pubsub_topic" "events" {
-  name = var.name
+  name   = "${local.name_prefix}-events"
+  labels = local.common_labels
 }
 
 resource "google_pubsub_topic" "dead_letter" {
-  name = "${var.name}-dead-letter"
+  name   = "${local.name_prefix}-dead-letter"
+  labels = local.common_labels
 }
 
 resource "google_pubsub_subscription" "worker" {
-  name                 = "${var.name}-worker"
+  name                 = "${local.name_prefix}-worker"
   topic                = google_pubsub_topic.events.id
   ack_deadline_seconds = var.ack_deadline_seconds
+  labels               = local.common_labels
 
   dead_letter_policy {
     dead_letter_topic     = google_pubsub_topic.dead_letter.id
@@ -23,10 +26,11 @@ resource "google_pubsub_subscription" "worker" {
 }
 
 resource "google_storage_bucket" "archive" {
-  name                        = "${var.gcp_project}-${var.name}-archive"
+  name                        = "${var.gcp_project}-${local.name_prefix}-archive"
   location                    = "US"
   force_destroy               = true
   uniform_bucket_level_access = true
+  labels                      = local.common_labels
 
   lifecycle_rule {
     condition {

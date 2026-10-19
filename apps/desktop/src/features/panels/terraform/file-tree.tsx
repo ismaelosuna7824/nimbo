@@ -24,6 +24,7 @@ import {
   SEARCH_MAX_BYTES,
   type TreeRow,
 } from "./file-model"
+import { useFilesRequestFor } from "./reveal-files"
 
 const ROW_HEIGHT = 24
 /** Trees up to this many files start with every folder open; bigger ones with the top level only. */
@@ -74,6 +75,16 @@ export function FileTree({
   const [cursor, setCursor] = useState<string | null>(null)
   const treeRef = useRef<HTMLDivElement>(null)
   const filterRef = useRef<HTMLInputElement>(null)
+
+  // "Open files" elsewhere in the app (e.g. a module's folder) filters the tree.
+  const request = useFilesRequestFor(workflowId)
+  const applied = useRef(0)
+  useEffect(() => {
+    if (!request || request.nonce === applied.current) return
+    applied.current = request.nonce
+    setFilter(request.filter)
+    setSearchContents(false)
+  }, [request])
 
   const q = filter.trim()
   const contentMode = canSearchContents && searchContents && q.length >= 2

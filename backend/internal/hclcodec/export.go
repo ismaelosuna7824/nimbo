@@ -15,16 +15,23 @@ import (
 )
 
 // ExportOptions controls optional Export output.
-type ExportOptions struct{ Environments bool }
+type ExportOptions struct {
+	Environments bool
+	// ResourceFile names the recommended file of a resource type's
+	// category ("network.tf", see catalog.ResourceFile); nil or "" puts
+	// resources without a recorded file in main.tf.
+	ResourceFile func(resourceType string) string
+}
 
-// Export renders wf as Terraform files: "versions.tf" (terraform block),
-// "providers.tf", "variables.tf", "main.tf" (locals, data, resources,
-// modules, other), "outputs.tf". Files with no content are omitted.
-// Comments are written back where Import found them (see model.Comments).
-// With opts.Environments, also writes each environment's values to its
-// Environment.File (a root variable file such as "terraform.tfvars") or
-// "environments/<name>.tfvars", and "environments/<name>.env.example"
-// (keys; secret values blank).
+// Export renders wf as Terraform files. Every top-level block goes to its
+// recorded file (Node.File, ...; an import keeps the project's layout) or to
+// Nimbo's recommended layout: versions.tf, providers.tf, variables.tf,
+// locals.tf, outputs.tf, data.tf, one file per resource category and main.tf
+// (see Layout). Files with no content are omitted. Comments are written back
+// where Import found them (see model.Comments). With opts.Environments, also
+// writes each environment's values to its Environment.File (a root variable
+// file such as "terraform.tfvars") or "environments/<name>.tfvars", and
+// "environments/<name>.env.example" (keys; secret values blank).
 func Export(wf *model.Workflow, opts ExportOptions) (map[string][]byte, error) {
 	files := map[string][]byte{}
 	add := func(name string, w *writer) error {
@@ -51,56 +58,21 @@ func Export(wf *model.Workflow, opts ExportOptions) (map[string][]byte, error) {
 		}
 	}
 
-	versions := &writer{}
-	if wf.Terraform != nil {
-		versions.block("terraform", "terraform", nil, wf.Terraform)
-	}
-	providers := &writer{}
-	for i := range wf.Providers {
-		p := &wf.Providers[i]
-		providers.block("provider "+p.Name, "provider", []string{p.Name}, &p.Body)
-	}
-	variables := &writer{}
-	for i := range wf.Variables {
-		v := &wf.Variables[i]
-		variables.block("variable "+v.Name, "variable", []string{v.Name}, &v.Body)
-	}
-	main := &writer{}
-	if len(wf.Locals) > 0 || !emptyComments(wf.LocalsComments) {
-		main.block("locals", "locals", nil, &model.Body{Attrs: wf.Locals, Comments: wf.LocalsComments})
-	}
-	for _, kind := range []model.NodeKind{model.KindData, model.KindResource, model.KindModule} {
-		for i := range wf.Nodes {
-			n := &wf.Nodes[i]
-			if n.Kind != kind {
-				continue
-			}
-			switch kind {
-			case model.KindModule:
-				main.block(Address(n), "module", []string{n.Name}, &n.Body)
-			default:
-				main.block(Address(n), string(kind), []string{n.Type, n.Name}, &n.Body)
+	blocks := layout(wf, opts.ResourceFile)
+	for _, p := range blocks {
+		if *p.file != "" {
+			if err := ValidFileName(*p.file); err != nil {
+				return nil, fmt.Errorf("%s: %w", p.owner, err)
 			}
 		}
 	}
-	for i := range wf.Other {
-		b := &wf.Other[i]
-		main.block(b.Type, b.Type, b.Labels, &b.Body)
-	}
-	outputs := &writer{}
-	for i := range wf.Outputs {
-		o := &wf.Outputs[i]
-		outputs.block("output "+o.Name, "output", []string{o.Name}, &o.Body)
-	}
-
-	for _, f := range []struct {
-		name string
-		w    *writer
-	}{
-		{"versions.tf", versions}, {"providers.tf", providers}, {"variables.tf", variables},
-		{"main.tf", main}, {"outputs.tf", outputs},
-	} {
-		if err := add(f.name, f.w); err != nil {
+	byFile := groupFiles(wf, blocks)
+	for _, name := range keysOf(byFile) {
+		w := &writer{}
+		for _, p := range byFile[name] {
+			w.block(p.owner, p.typ, p.labels, p.body)
+		}
+		if err := add(name, w); err != nil {
 			return nil, err
 		}
 	}

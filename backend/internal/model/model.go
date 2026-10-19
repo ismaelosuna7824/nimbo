@@ -48,6 +48,11 @@ type Attr struct {
 	Name     string    `json:"name"`
 	Value    Value     `json:"value"`
 	Comments *Comments `json:"comments,omitempty"`
+	// File and Order name the source block an item of Workflow.Locals or of
+	// Workflow.Terraform's body was written in (see BlockPart). Unused
+	// elsewhere.
+	File  string `json:"file,omitempty"`
+	Order int    `json:"order,omitempty"`
 }
 
 // Block is a nested HCL block (e.g. `attribute { ... }`, `lifecycle { ... }`,
@@ -56,6 +61,23 @@ type Block struct {
 	Type   string   `json:"type"`
 	Labels []string `json:"labels,omitempty"`
 	Body   Body     `json:"body"`
+	// File and Order place a top-level block (Workflow.Other) like
+	// Node.File and Node.Order, and name the source block of an item of
+	// Workflow.Terraform's body (required_providers, backend, ...) like
+	// Attr.File/Order. Unused on other nested blocks.
+	File  string `json:"file,omitempty"`
+	Order int    `json:"order,omitempty"`
+}
+
+// BlockPart is one source `locals` or `terraform` block. The workflow keeps
+// the items of every such block in one list (Workflow.Locals, the body of
+// Workflow.Terraform); export writes one block per part with the items
+// whose File and Order match, in their list order, and Comments as the
+// block's own comments.
+type BlockPart struct {
+	File     string    `json:"file"`
+	Order    int       `json:"order,omitempty"`
+	Comments *Comments `json:"comments,omitempty"`
 }
 
 // Body is an ordered HCL body. Meta-arguments (count, for_each, provider,
@@ -108,6 +130,15 @@ type Node struct {
 	// import); the UI auto-lays them out and saves positions back.
 	Positioned bool `json:"positioned"`
 	Body       Body `json:"body"`
+	// File is the root .tf file the block is written to ("network.tf"):
+	// recorded by import so a project keeps its own layout, or chosen by
+	// the user. Empty: export places it in Nimbo's recommended layout
+	// (hclcodec.Layout), recomputed on every export.
+	File string `json:"file,omitempty"`
+	// Order is the block's position in File as imported (1-based; 0 =
+	// none): export writes those blocks of a file in their source order,
+	// whatever their kind, and the others after them.
+	Order int `json:"order,omitempty"`
 }
 
 // EdgeKind distinguishes attribute references from explicit depends_on.
@@ -132,8 +163,10 @@ type Edge struct {
 // NamedBlock is a top-level labelled block such as `variable "x"`,
 // `output "y"` or `provider "aws"`.
 type NamedBlock struct {
-	Name string `json:"name"`
-	Body Body   `json:"body"`
+	Name  string `json:"name"`
+	Body  Body   `json:"body"`
+	File  string `json:"file,omitempty"`  // see Node.File
+	Order int    `json:"order,omitempty"` // see Node.Order
 }
 
 // Workflow is the unit the user designs, tests and exports. It maps 1:1 to a
@@ -156,11 +189,17 @@ type Workflow struct {
 	Variables []NamedBlock `json:"variables"`
 	Outputs   []NamedBlock `json:"outputs"`
 	Locals    []Attr       `json:"locals"`
-	// LocalsComments are the comments of the `locals` block that export
-	// writes (every imported locals block is merged into one).
+	// LocalsComments are the comments of the `locals` block holding the
+	// items without a recorded part (new content); LocalsBlocks are the
+	// imported locals blocks (see BlockPart).
 	LocalsComments *Comments    `json:"localsComments,omitempty"`
+	LocalsBlocks   []BlockPart  `json:"localsBlocks,omitempty"`
 	Providers      []NamedBlock `json:"providers"` // Name = provider local name ("aws"); alias lives in Body
-	Terraform      *Body        `json:"terraform,omitempty"`
+	// Terraform holds the items of every terraform block; its Comments
+	// belong to the block of the items without a recorded part, and
+	// TerraformBlocks are the imported terraform blocks (see BlockPart).
+	Terraform       *Body       `json:"terraform,omitempty"`
+	TerraformBlocks []BlockPart `json:"terraformBlocks,omitempty"`
 	// Other keeps top-level blocks with no dedicated field (moved, import,
 	// check, removed, ...) so import/export is lossless.
 	Other []Block `json:"other"`
@@ -172,6 +211,9 @@ type Workflow struct {
 	Edges       []Edge       `json:"edges"`
 	Clouds      []Cloud      `json:"clouds"`
 	Diagnostics []Diagnostic `json:"diagnostics"`
+	// NodeFiles maps node ID -> the root .tf file export writes it to
+	// (Node.File, or the recommended layout when it is empty).
+	NodeFiles map[string]string `json:"nodeFiles,omitempty"`
 }
 
 // WorkflowSummary is the list view of a workflow.
@@ -288,15 +330,19 @@ const (
 	SeverityInfo    Severity = "info"
 )
 
-// Diagnostic is a problem found by import, normalization, schema validation
-// or a Terraform run.
+// Diagnostic is a problem found by import, normalization, schema validation,
+// the best-practice checks (codes "bp_*", info/warning only) or a Terraform
+// run.
 type Diagnostic struct {
-	Severity  Severity `json:"severity"`
-	Code      string   `json:"code"`
-	Message   string   `json:"message"`
-	Detail    string   `json:"detail,omitempty"`
-	NodeID    string   `json:"nodeId,omitempty"`
-	Attribute string   `json:"attribute,omitempty"`
+	Severity Severity `json:"severity"`
+	Code     string   `json:"code"`
+	Message  string   `json:"message"`
+	// Detail explains the problem (best-practice findings: why it matters).
+	Detail string `json:"detail,omitempty"`
+	// Fix is a suggested change (best-practice findings).
+	Fix       string `json:"fix,omitempty"`
+	NodeID    string `json:"nodeId,omitempty"`
+	Attribute string `json:"attribute,omitempty"`
 	// File and Line locate code diagnostics (Terraform syntax errors) in
 	// the file that was imported; Line is 1-based.
 	File string `json:"file,omitempty"`
@@ -899,6 +945,24 @@ type Settings struct {
 	Images           map[Cloud]string `json:"images"`           // emulator image per cloud
 	TerraformImage   string           `json:"terraformImage"`   // image running terraform
 	DefaultAWSRegion string           `json:"defaultAWSRegion"` // new AWS provider blocks, sandbox AWS_REGION
+	// BestPractices configures the best-practice checks (bp_* diagnostics).
+	BestPractices BestPracticeSettings `json:"bestPractices"`
+}
+
+// BestPracticeSettings turns the best-practice checks off as a whole or per
+// rule. The zero value runs every rule.
+type BestPracticeSettings struct {
+	Disabled      bool     `json:"disabled,omitempty"`
+	DisabledRules []string `json:"disabledRules"` // rule codes, e.g. "bp_missing_tags"
+}
+
+// BestPracticeRule describes one best-practice check (GET /best-practices/rules).
+type BestPracticeRule struct {
+	Code        string   `json:"code"` // "bp_*"
+	Title       string   `json:"title"`
+	Category    string   `json:"category"` // inputs | versions | hardcoding | tagging | naming | security | structure
+	Severity    Severity `json:"severity"` // default severity (some findings of a rule may be lower)
+	Description string   `json:"description"`
 }
 
 // AgentClient is an AI agent application Nimbo can register its MCP server
@@ -1056,10 +1120,61 @@ type ImportResult struct {
 // workflow files) carry Workflow with unpositioned nodes; registry and
 // remote modules carry only Message.
 type ModuleView struct {
-	Source   string    `json:"source"`
-	Local    bool      `json:"local"`
+	Source string `json:"source"`
+	Local  bool   `json:"local"`
+	// Dir is the module's directory relative to the workflow files
+	// ("modules/network") when it is a local module inside them.
+	Dir      string    `json:"dir,omitempty"`
 	Workflow *Workflow `json:"workflow,omitempty"`
 	Message  string    `json:"message,omitempty"`
+}
+
+// ModuleExtractRequest is the body of POST /workflows/{id}/modules/extract
+// (and .../extract/preview): the nodes (IDs or addresses) to move into a new
+// local module named Name (snake_case) at modules/<name>.
+type ModuleExtractRequest struct {
+	NodeIDs []string `json:"nodeIds"`
+	Name    string   `json:"name"`
+}
+
+// ModuleExtraction describes what extracting nodes into a local module
+// creates (POST /workflows/{id}/modules/extract/preview).
+type ModuleExtraction struct {
+	Name   string `json:"name"`
+	Source string `json:"source"` // "./modules/<name>"
+	// Inputs are the module's variables: values the moved blocks read from
+	// the root (Value = the expression the module call passes).
+	Inputs []ModuleIO `json:"inputs"`
+	// Outputs are what the root still reads from the moved blocks (Value =
+	// the expression inside the module); the root references become
+	// module.<name>.<output>.
+	Outputs []ModuleIO `json:"outputs"`
+	// Moved are the `moved` blocks added to the root so existing state moves
+	// into the module instead of being destroyed and recreated.
+	Moved []MovedAddress `json:"moved"`
+	// Providers are the provider configurations passed through `providers`
+	// (only when a non-default alias is used; otherwise defaults inherit).
+	Providers []string `json:"providers"`
+	// DependsOn are root addresses the module call depends on (from
+	// depends_on of moved blocks).
+	DependsOn []string `json:"dependsOn"`
+	// Files are the created module files, relative to the workflow root.
+	Files []string `json:"files"`
+}
+
+// ModuleIO is one input variable or output of a module.
+type ModuleIO struct {
+	Name        string `json:"name"`
+	Type        string `json:"type,omitempty"` // inputs: Terraform type constraint
+	Description string `json:"description"`
+	Value       string `json:"value"`
+	Sensitive   bool   `json:"sensitive,omitempty"`
+}
+
+// MovedAddress is one `moved { from = From  to = To }` block.
+type MovedAddress struct {
+	From string `json:"from"`
+	To   string `json:"to"`
 }
 
 // FileKind groups the files of a workflow's export.
@@ -1070,7 +1185,11 @@ const (
 	FileTfvars    FileKind = "tfvars"    // environment values
 	FileEnv       FileKind = "env"       // *.env.example
 	FileModule    FileKind = "module"    // local modules (modules/**)
-	FileAsset     FileKind = "asset"     // everything else: Lambda sources, templates, the lock file
+	// FileScaffold are the project files export generates next to the
+	// Terraform (README.md, .gitignore, terraform.tfvars.example) unless the
+	// workflow has its own file of that name.
+	FileScaffold FileKind = "scaffold"
+	FileAsset    FileKind = "asset" // everything else: Lambda sources, templates, the lock file
 )
 
 // WorkflowFile is one file an export writes (GET /workflows/{id}/files).

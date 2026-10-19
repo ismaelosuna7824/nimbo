@@ -41,6 +41,7 @@ import { AttrField } from "./attr-field"
 import { BlockForm } from "./block-form"
 import { getAttr, setAttr } from "./body"
 import { InspectorContext, type InspectorContextValue } from "./context"
+import { FileField } from "./file-field"
 import { LiveValues } from "./live-values"
 import { FreeformAttrs, META_ATTRS, MetaArguments } from "./meta-arguments"
 
@@ -215,6 +216,12 @@ function NodeInspector({ node }: { node: WorkflowNode }) {
           {pro && (
             <Section title="Meta-arguments">
               <MetaArguments node={node} providers={providers ?? []} onChange={setBody} />
+            </Section>
+          )}
+
+          {pro && (
+            <Section title="Code">
+              <FileField node={node} />
             </Section>
           )}
         </div>

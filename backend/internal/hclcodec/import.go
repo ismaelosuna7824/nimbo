@@ -81,11 +81,9 @@ func Import(name string, files map[string][]byte) (*model.Workflow, []model.Diag
 		return nil, diags, errors.New("no root-level .tf files to import")
 	}
 
-	var nodes [3][]model.Node       // data, resources, modules
-	var carry []string              // comments of comment-only files
-	var lastBody func() *model.Body // the last top-level block, for trailing comments
-	var localsCarry, terraformCarry []string
-	localsSeen := false
+	var nodes []model.Node              // data sources, resources and module calls in source order
+	var carry []string                  // comments of comment-only files
+	var lastCms func() **model.Comments // the last top-level block's comments, for trailing comments
 	for _, p := range tfFiles {
 		src := hclwrite.Format(normalizeNewlines(files[p]))
 		f, hd := hclsyntax.ParseConfig(src, path.Base(p), hcl.InitialPos)
@@ -97,6 +95,22 @@ func Import(name string, files map[string][]byte) (*model.Workflow, []model.Diag
 		if !ok {
 			continue
 		}
+		// Every block remembers its file and position so export keeps the
+		// project's layout; a name export could not write leaves the block
+		// to the recommended layout. Every locals and terraform block is a
+		// part of the workflow's locals/terraform (see model.BlockPart).
+		file := path.Base(path.Clean(strings.ReplaceAll(p, "\\", "/")))
+		if ValidFileName(file) != nil {
+			file = ""
+		}
+		pos := 0
+		next := func() int {
+			if file == "" {
+				return 0
+			}
+			pos++
+			return pos
+		}
 		var blocks []topBlock
 		blocks, carry = newConverter(src).file(body, carry)
 		for i := range blocks {
@@ -104,55 +118,46 @@ func Import(name string, files map[string][]byte) (*model.Workflow, []model.Diag
 			labels := b.Labels
 			switch {
 			case b.Type == "resource" && len(labels) == 2:
-				nodes[1] = append(nodes[1], model.Node{Kind: model.KindResource, Type: labels[0], Name: labels[1], Body: mb})
+				nodes = append(nodes, model.Node{Kind: model.KindResource, Type: labels[0], Name: labels[1], Body: mb, File: file, Order: next()})
 			case b.Type == "data" && len(labels) == 2:
-				nodes[0] = append(nodes[0], model.Node{Kind: model.KindData, Type: labels[0], Name: labels[1], Body: mb})
+				nodes = append(nodes, model.Node{Kind: model.KindData, Type: labels[0], Name: labels[1], Body: mb, File: file, Order: next()})
 			case b.Type == "module" && len(labels) == 1:
-				nodes[2] = append(nodes[2], model.Node{Kind: model.KindModule, Type: "module", Name: labels[0], Body: mb})
+				nodes = append(nodes, model.Node{Kind: model.KindModule, Type: "module", Name: labels[0], Body: mb, File: file, Order: next()})
 			case b.Type == "variable" && len(labels) == 1:
-				wf.Variables = append(wf.Variables, model.NamedBlock{Name: labels[0], Body: mb})
+				wf.Variables = append(wf.Variables, model.NamedBlock{Name: labels[0], Body: mb, File: file, Order: next()})
 			case b.Type == "output" && len(labels) == 1:
-				wf.Outputs = append(wf.Outputs, model.NamedBlock{Name: labels[0], Body: mb})
+				wf.Outputs = append(wf.Outputs, model.NamedBlock{Name: labels[0], Body: mb, File: file, Order: next()})
 			case b.Type == "provider" && len(labels) == 1:
-				wf.Providers = append(wf.Providers, model.NamedBlock{Name: labels[0], Body: mb})
+				wf.Providers = append(wf.Providers, model.NamedBlock{Name: labels[0], Body: mb, File: file, Order: next()})
 			case b.Type == "locals" && len(labels) == 0:
-				// Every locals block merges into one; its comments stay
-				// next to the same attributes.
-				first := len(wf.Locals)
-				wf.Locals = append(wf.Locals, mb.Attrs...)
-				if !localsSeen {
-					localsSeen = true
-					if mb.Comments != nil {
-						wf.LocalsComments = &model.Comments{Lead: mb.Comments.Lead, Line: mb.Comments.Line, End: mb.Comments.End, After: mb.Comments.After}
-						localsCarry = mb.Comments.Tail
-					}
-					continue
+				order := next()
+				for _, a := range mb.Attrs {
+					a.File, a.Order = file, order
+					wf.Locals = append(wf.Locals, a)
 				}
-				merged := func() *model.Comments {
-					if wf.LocalsComments == nil {
-						wf.LocalsComments = &model.Comments{}
-					}
-					return wf.LocalsComments
+				if file == "" {
+					foldComments(&wf.LocalsComments, mb.Comments)
+				} else {
+					wf.LocalsBlocks = append(wf.LocalsBlocks, model.BlockPart{File: file, Order: order, Comments: mb.Comments})
 				}
-				localsCarry = mergeBlockComments(merged, mb.Comments, localsCarry, func() *model.Comments {
-					if first == len(wf.Locals) {
-						return nil
-					}
-					return firstItemComments(&model.Body{Attrs: wf.Locals[first:]})
-				})
 			case b.Type == "terraform" && len(labels) == 0:
 				if wf.Terraform == nil {
-					wf.Terraform = &model.Body{Attrs: mb.Attrs, Blocks: mb.Blocks}
-					if mb.Comments != nil {
-						wf.Terraform.Comments = &model.Comments{Lead: mb.Comments.Lead, Line: mb.Comments.Line, End: mb.Comments.End, After: mb.Comments.After}
-						terraformCarry = mb.Comments.Tail
-					}
-					continue
+					wf.Terraform = &model.Body{Attrs: []model.Attr{}, Blocks: []model.Block{}}
 				}
-				merged := func() *model.Comments { return bodyComments(wf.Terraform) }
-				terraformCarry = mergeBlockComments(merged, mb.Comments, terraformCarry, func() *model.Comments { return firstItemComments(&mb) })
-				wf.Terraform.Attrs = append(wf.Terraform.Attrs, mb.Attrs...)
-				wf.Terraform.Blocks = append(wf.Terraform.Blocks, mb.Blocks...)
+				order := next()
+				for _, a := range mb.Attrs {
+					a.File, a.Order = file, order
+					wf.Terraform.Attrs = append(wf.Terraform.Attrs, a)
+				}
+				for _, blk := range mb.Blocks {
+					blk.File, blk.Order = file, order
+					wf.Terraform.Blocks = append(wf.Terraform.Blocks, blk)
+				}
+				if file == "" {
+					foldComments(&wf.Terraform.Comments, mb.Comments)
+				} else {
+					wf.TerraformBlocks = append(wf.TerraformBlocks, model.BlockPart{File: file, Order: order, Comments: mb.Comments})
+				}
 			default:
 				switch b.Type {
 				case "resource", "data", "module", "variable", "output", "provider", "locals", "terraform":
@@ -163,48 +168,25 @@ func Import(name string, files map[string][]byte) (*model.Workflow, []model.Diag
 						Detail:   fmt.Sprintf("%s:%d: kept as an unrecognized block", b.TypeRange.Filename, b.TypeRange.Start.Line),
 					})
 				}
-				wf.Other = append(wf.Other, model.Block{Type: b.Type, Labels: labelsOrNil(labels), Body: mb})
+				wf.Other = append(wf.Other, model.Block{Type: b.Type, Labels: labelsOrNil(labels), Body: mb, File: file, Order: next()})
 			}
 		}
 		if len(blocks) > 0 {
-			if loc := lastImported(wf, &nodes, blocks[len(blocks)-1].hb); loc != nil {
-				lastBody = loc
-			}
+			lastCms = lastImported(wf, &nodes, blocks[len(blocks)-1].hb, file)
 		}
 	}
-	if len(localsCarry) > 0 {
-		if wf.LocalsComments == nil {
-			wf.LocalsComments = &model.Comments{}
+	if len(carry) > 0 && lastCms != nil { // trailing comment-only files
+		p := lastCms()
+		if *p == nil {
+			*p = &model.Comments{}
 		}
-		wf.LocalsComments.Tail = localsCarry
+		(*p).After = joinAfter(append((*p).After, ""), carry)
 	}
-	if len(terraformCarry) > 0 {
-		bodyComments(wf.Terraform).Tail = terraformCarry
+	for _, nd := range nodes {
+		nd.ID = Address(&nd)
+		wf.Nodes = append(wf.Nodes, nd)
 	}
-	if len(carry) > 0 { // trailing comment-only files
-		var cms *model.Comments
-		switch {
-		case lastBody != nil:
-			cms = bodyComments(lastBody())
-		case localsSeen:
-			if wf.LocalsComments == nil {
-				wf.LocalsComments = &model.Comments{}
-			}
-			cms = wf.LocalsComments
-		}
-		if cms != nil {
-			cms.After = joinAfter(append(cms.After, ""), carry)
-		}
-	}
-	// main.tf groups data sources, resources and module calls; ordering the
-	// imported nodes the same way keeps Import(Export(wf)) stable.
-	for _, group := range nodes {
-		for _, nd := range group {
-			nd.ID = Address(&nd)
-			wf.Nodes = append(wf.Nodes, nd)
-		}
-	}
-	gatherAfter(wf)
+	gatherAfter(wf, nil)
 
 	// Plain files claim environment names first: terraform.tfvars is
 	// "default" even next to terraform.auto.tfvars.
@@ -281,39 +263,71 @@ func UnsupportedFile(name string) (d model.Diagnostic, ok bool) {
 	}, true
 }
 
+// CommentOnly reports whether a .tf file parses and holds no block or
+// attribute (only comments and whitespace). Such a file has nothing to
+// import; the folder import keeps it as a file so the project keeps it.
+func CommentOnly(src []byte) bool {
+	f, diags := hclsyntax.ParseConfig(normalizeNewlines(src), "x.tf", hcl.InitialPos)
+	if diags.HasErrors() || f == nil {
+		return false
+	}
+	body, ok := f.Body.(*hclsyntax.Body)
+	return ok && len(body.Blocks) == 0 && len(body.Attributes) == 0
+}
+
 // normalizeNewlines converts CRLF line endings to LF.
 func normalizeNewlines(src []byte) []byte {
 	return bytes.ReplaceAll(src, []byte("\r\n"), []byte("\n"))
 }
 
-// lastImported locates the body that holds the comments of hb, the block
-// just imported (nil for locals blocks, whose comments live elsewhere). The
-// locator is evaluated later, after the slices may have grown.
-func lastImported(wf *model.Workflow, nodes *[3][]model.Node, hb *hclsyntax.Block) func() *model.Body {
-	at := func(group, i int) func() *model.Body { return func() *model.Body { return &nodes[group][i].Body } }
+// lastImported locates the comments of hb, the block just imported from
+// file. The locator is evaluated later, after the slices may have grown.
+func lastImported(wf *model.Workflow, nodes *[]model.Node, hb *hclsyntax.Block, file string) func() **model.Comments {
 	switch {
-	case hb.Type == "resource" && len(hb.Labels) == 2:
-		return at(1, len(nodes[1])-1)
-	case hb.Type == "data" && len(hb.Labels) == 2:
-		return at(0, len(nodes[0])-1)
-	case hb.Type == "module" && len(hb.Labels) == 1:
-		return at(2, len(nodes[2])-1)
+	case (hb.Type == "resource" || hb.Type == "data") && len(hb.Labels) == 2, hb.Type == "module" && len(hb.Labels) == 1:
+		i := len(*nodes) - 1
+		return func() **model.Comments { return &(*nodes)[i].Body.Comments }
 	case hb.Type == "variable" && len(hb.Labels) == 1:
 		i := len(wf.Variables) - 1
-		return func() *model.Body { return &wf.Variables[i].Body }
+		return func() **model.Comments { return &wf.Variables[i].Body.Comments }
 	case hb.Type == "output" && len(hb.Labels) == 1:
 		i := len(wf.Outputs) - 1
-		return func() *model.Body { return &wf.Outputs[i].Body }
+		return func() **model.Comments { return &wf.Outputs[i].Body.Comments }
 	case hb.Type == "provider" && len(hb.Labels) == 1:
 		i := len(wf.Providers) - 1
-		return func() *model.Body { return &wf.Providers[i].Body }
+		return func() **model.Comments { return &wf.Providers[i].Body.Comments }
 	case hb.Type == "terraform" && len(hb.Labels) == 0:
-		return func() *model.Body { return wf.Terraform }
+		if file == "" {
+			return func() **model.Comments { return &wf.Terraform.Comments }
+		}
+		i := len(wf.TerraformBlocks) - 1
+		return func() **model.Comments { return &wf.TerraformBlocks[i].Comments }
 	case hb.Type == "locals" && len(hb.Labels) == 0:
-		return nil
+		if file == "" {
+			return func() **model.Comments { return &wf.LocalsComments }
+		}
+		i := len(wf.LocalsBlocks) - 1
+		return func() **model.Comments { return &wf.LocalsBlocks[i].Comments }
 	}
 	i := len(wf.Other) - 1
-	return func() *model.Body { return &wf.Other[i].Body }
+	return func() **model.Comments { return &wf.Other[i].Body.Comments }
+}
+
+// foldComments adds the comments of a block to the comments of the block it
+// is merged into.
+func foldComments(dst **model.Comments, c *model.Comments) {
+	if emptyComments(c) {
+		return
+	}
+	if *dst == nil {
+		*dst = &model.Comments{}
+	}
+	d := *dst
+	d.Lead = joinAfter(d.Lead, c.Lead)
+	d.Line = joinLine(d.Line, c.Line)
+	d.Tail = joinAfter(d.Tail, c.Tail)
+	d.End = joinLine(d.End, c.End)
+	d.After = joinAfter(d.After, c.After)
 }
 
 func envIndex(envs []model.Environment, name string) int {

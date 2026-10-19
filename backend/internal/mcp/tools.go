@@ -47,10 +47,12 @@ func registerTools(r *registry, t *tools) {
 
 	r.group = groupEditing
 	addTool(r, "add_node", "Add node", "Add a resource, data source or module node. Curated starters prefill required attributes and may add helper nodes (e.g. a Lambda adds its IAM role and archive). Optional attributes are HCL expressions keyed by attribute path, e.g. {\"bucket\": \"\\\"my-bucket\\\"\", \"tags\": \"{ env = var.env }\", \"versioning.enabled\": \"true\"}. Strings must be quoted HCL strings.", t.addNode)
-	addTool(r, "update_node", "Update node", "Edit a node: set attributes (attribute path -> HCL expression; nested block paths like \"versioning.enabled\" or \"rule[0].id\" create blocks as needed), unset attributes or blocks, and/or rename it (references elsewhere are rewritten). Returns the node and current diagnostics.", t.updateNode)
+	addTool(r, "update_node", "Update node", "Edit a node: set attributes (attribute path -> HCL expression; nested block paths like \"versioning.enabled\" or \"rule[0].id\" create blocks as needed), unset attributes or blocks, rename it (references elsewhere are rewritten) and/or move it to another root .tf file (file: \"network.tf\"; \"auto\" returns it to Nimbo's recommended layout). Returns the node and current diagnostics.", t.updateNode)
 	addTool(r, "remove_node", "Remove node", "Remove a node. References to it in other nodes become diagnostics that should be fixed.", t.removeNode)
 	addTool(r, "list_connection_options", "List connection options", "List the ways two nodes can be connected (recipes). Source is the upstream node being referenced (e.g. a queue), target the node that will reference it (e.g. a Lambda). Curated recipes also add helper resources such as event source mappings, permissions or IAM policies.", t.listConnectionOptions)
 	addTool(r, "connect", "Connect nodes", "Connect two nodes with a recipe ID from list_connection_options. Returns nodes that were added or changed and diagnostics.", t.connect)
+	addTool(r, "extract_module", "Extract to module", "Move a group of related nodes into a new local module modules/<name> and call it from the root in their place (module.<name>). References from the group to the rest of the root become typed, described input variables passed by the call; root references to the group become described module outputs (module.<name>.<output>); depends_on is rewritten (depends_on = [module.<name>]); non-default provider aliases are passed with providers = {}; and root moved blocks keep deployed resources (count/for_each instances included) without destroy/recreate. The module gets versions.tf, variables.tf, outputs.tf, main.tf/category files and README.md. Use it when one concern has many resources or is repeated: a network (VPC + subnets + route tables + gateways), a service (function + role + policies + log group + permissions), a queue with its DLQ and alarms. dry_run=true only reports what would be created. Rejected with an explanation when the move would form a dependency cycle or a lifecycle.replace_triggered_by crosses the module boundary.", t.extractModule)
+	addTool(r, "inline_module", "Inline module", "Reverse of extract_module for a local module (created by Nimbo or imported): its blocks come back to the root in place of the call, inputs are replaced by the call's arguments, module outputs by their expressions, and root moved blocks keep deployed resources. Only for modules called once without count/for_each; the module's .tf files are deleted.", t.inlineModule)
 	addTool(r, "set_variable", "Set variable", "Create or update an input variable. type and default are HCL expressions (e.g. type \"list(string)\", default \"[\\\"a\\\"]\").", t.setVariable)
 	addTool(r, "remove_variable", "Remove variable", "Remove an input variable.", t.removeVariable)
 	addTool(r, "set_output", "Set output", "Create or update an output; value is an HCL expression such as \"aws_sqs_queue.jobs.url\".", t.setOutput)
@@ -58,7 +60,8 @@ func registerTools(r *registry, t *tools) {
 	addTool(r, "set_environment", "Set environment", "Create or update an environment: variable values (HCL expressions), process environment variables for Terraform runs, which env vars are secret, and optionally make it the active environment used by runs.", t.setEnvironment)
 
 	r.group = groupTerraform
-	addTool(r, "get_terraform", "Get Terraform code", "Render the workflow as Terraform files (versions.tf, providers.tf, variables.tf, main.tf, outputs.tf).", t.getTerraform)
+	addTool(r, "get_terraform", "Get Terraform code", "Render the workflow as Terraform files. Imported projects keep their own files; new content follows Nimbo's layout: versions.tf, providers.tf, variables.tf, locals.tf, outputs.tf, data.tf, one file per service category (network.tf, compute.tf, storage.tf, messaging.tf, api.tf, iam.tf, ...) and main.tf for module calls (small projects: one main.tf). Move a node with update_node file.", t.getTerraform)
+	addTool(r, "review_terraform", "Review Terraform", "Check the workflow against Terraform best practices and return the findings grouped by severity (warnings: security; info: documentation, versions, hardcoded values, tags, naming, structure), each with why it matters and how to fix it. Call it before finishing any change; mutating tools already return the findings their change introduced as best_practices. Findings never block deploys.", t.reviewTerraform)
 	addTool(r, "apply_terraform_code", "Apply Terraform code", "Edit the workflow by writing Terraform code. files maps file name -> full content and is merged over the current files from get_terraform; an empty string deletes that file. The code is re-imported; node IDs, positions and environments are kept by address. Use for complex blocks that are awkward with update_node.", t.applyTerraformCode)
 	addTool(r, "scan_terraform_folder", "Scan Terraform folder", "Scan a local folder (e.g. a repository) for Terraform projects without importing: every directory with *.tf files, with resource/data/module counts, providers, clouds, tfvars files, backend and parse diagnostics. Directories used only as local modules are not separate projects. Pass the chosen paths to import_terraform as projects.", t.scanTerraformFolder)
 	addTool(r, "import_terraform", "Import Terraform", "Import existing Terraform as new workflows, from a local directory or from files (relative path -> content). Local modules (source = \"./modules/x\") are kept as assets and can be opened in the app. By default only the root folder is imported; pass projects (paths from scan_terraform_folder, \".\" = root) to import several projects, one workflow each.", t.importTerraform)
@@ -177,7 +180,9 @@ func (t *tools) createWorkflow(ctx context.Context, in createWorkflowIn) (any, e
 	if err := t.c.do(ctx, http.MethodPost, "/workflows", body, &wf); err != nil {
 		return nil, err
 	}
-	return viewWorkflow(&wf), nil
+	v := viewWorkflow(&wf)
+	v.BestPractices = bpDelta(nil, &wf)
+	return v, nil
 }
 
 func (t *tools) getWorkflow(ctx context.Context, in workflowArg) (any, error) {
@@ -277,12 +282,23 @@ func findNode(wf *model.Workflow, ref string) (*model.Node, error) {
 }
 
 type nodeResult struct {
-	Node        nodeView   `json:"node"`
-	Added       []nodeView `json:"added_nodes,omitempty"`
-	Diagnostics []diagView `json:"diagnostics"`
+	Node          nodeView   `json:"node"`
+	Added         []nodeView `json:"added_nodes,omitempty"`
+	Diagnostics   []diagView `json:"diagnostics"`
+	BestPractices []bpView   `json:"best_practices,omitempty"`
 }
 
 func nodeDiagnostics(wf *model.Workflow) []diagView { return viewDiagnostics(wf, wf.Diagnostics) }
+
+// mutationResult is the result map of a mutating tool: fields, the
+// diagnostics of after and the best-practice findings the change introduced.
+func mutationResult(before, after *model.Workflow, fields map[string]any) map[string]any {
+	fields["diagnostics"] = nodeDiagnostics(after)
+	if bp := bpDelta(before, after); len(bp) > 0 {
+		fields["best_practices"] = bp
+	}
+	return fields
+}
 
 type addNodeIn struct {
 	Workflow   string            `json:"workflow,omitempty" jsonschema:"workflow ID or name; omit or \"current\" for the workflow open in the Nimbo app"`
@@ -328,7 +344,7 @@ func (t *tools) addNode(ctx context.Context, in addNodeIn) (any, error) {
 		if err != nil {
 			return nil, err
 		}
-		if out, err = t.patchBody(ctx, out, node, in.Attributes, nil, ""); err != nil {
+		if out, err = t.patchBody(ctx, out, node, in.Attributes, nil, "", ""); err != nil {
 			return nil, fmt.Errorf("node %s was added but setting attributes failed: %w", address(node), err)
 		}
 	}
@@ -336,10 +352,10 @@ func (t *tools) addNode(ctx context.Context, in addNodeIn) (any, error) {
 	if err != nil {
 		return nil, err
 	}
-	result := nodeResult{Node: viewNode(node), Diagnostics: nodeDiagnostics(out)}
+	result := nodeResult{Node: viewNode(out, node), Diagnostics: nodeDiagnostics(out), BestPractices: bpDelta(wf, out)}
 	for i := range out.Nodes {
 		if n := &out.Nodes[i]; !before[n.ID] && n.ID != res.NodeID {
-			result.Added = append(result.Added, viewNode(n))
+			result.Added = append(result.Added, viewNode(out, n))
 		}
 	}
 	return result, nil
@@ -347,7 +363,7 @@ func (t *tools) addNode(ctx context.Context, in addNodeIn) (any, error) {
 
 // patchBody applies set/unset/rename to node and saves it through
 // PATCH /workflows/{id}/nodes/{nodeId}.
-func (t *tools) patchBody(ctx context.Context, wf *model.Workflow, node *model.Node, set map[string]string, unset []string, rename string) (*model.Workflow, error) {
+func (t *tools) patchBody(ctx context.Context, wf *model.Workflow, node *model.Node, set map[string]string, unset []string, rename, file string) (*model.Workflow, error) {
 	patch := map[string]any{}
 	if len(set) > 0 || len(unset) > 0 {
 		body := node.Body
@@ -371,6 +387,13 @@ func (t *tools) patchBody(ctx context.Context, wf *model.Workflow, node *model.N
 	if rename != "" {
 		patch["name"] = rename
 	}
+	switch file {
+	case "":
+	case "auto":
+		patch["file"] = ""
+	default:
+		patch["file"] = file
+	}
 	if len(patch) == 0 {
 		return wf, nil
 	}
@@ -387,6 +410,7 @@ type updateNodeIn struct {
 	Set      map[string]string `json:"set,omitempty" jsonschema:"attribute path -> HCL expression"`
 	Unset    []string          `json:"unset,omitempty" jsonschema:"attribute or block paths to remove"`
 	Rename   string            `json:"rename,omitempty" jsonschema:"new Terraform local name"`
+	File     string            `json:"file,omitempty" jsonschema:"root .tf file to write the node to, e.g. network.tf; \"auto\" = Nimbo's recommended layout (by category; one main.tf for small projects)"`
 }
 
 func (t *tools) updateNode(ctx context.Context, in updateNodeIn) (any, error) {
@@ -399,17 +423,17 @@ func (t *tools) updateNode(ctx context.Context, in updateNodeIn) (any, error) {
 		return nil, err
 	}
 	id := node.ID
-	if len(in.Set) == 0 && len(in.Unset) == 0 && in.Rename == "" {
-		return nil, errors.New("nothing to do: pass set, unset or rename")
+	if len(in.Set) == 0 && len(in.Unset) == 0 && in.Rename == "" && in.File == "" {
+		return nil, errors.New("nothing to do: pass set, unset, rename or file")
 	}
-	out, err := t.patchBody(ctx, wf, node, in.Set, in.Unset, in.Rename)
+	out, err := t.patchBody(ctx, wf, node, in.Set, in.Unset, in.Rename, in.File)
 	if err != nil {
 		return nil, err
 	}
 	if node, err = findNode(out, id); err != nil {
 		return nil, err
 	}
-	return nodeResult{Node: viewNode(node), Diagnostics: nodeDiagnostics(out)}, nil
+	return nodeResult{Node: viewNode(out, node), Diagnostics: nodeDiagnostics(out), BestPractices: bpDelta(wf, out)}, nil
 }
 
 type nodeRefIn struct {
@@ -430,7 +454,7 @@ func (t *tools) removeNode(ctx context.Context, in nodeRefIn) (any, error) {
 	if err := t.c.do(ctx, http.MethodDelete, "/workflows/"+pathEscape(wf.ID)+"/nodes/"+pathEscape(node.ID), nil, &out); err != nil {
 		return nil, err
 	}
-	return map[string]any{"removed": address(node), "diagnostics": nodeDiagnostics(&out)}, nil
+	return mutationResult(wf, &out, map[string]any{"removed": address(node)}), nil
 }
 
 type connectionIn struct {
@@ -498,12 +522,12 @@ func (t *tools) connect(ctx context.Context, in connectIn) (any, error) {
 		data, _ := json.Marshal(n.Body)
 		switch {
 		case !ok:
-			added = append(added, viewNode(n))
+			added = append(added, viewNode(&out, n))
 		case prev != string(data):
-			changed = append(changed, viewNode(n))
+			changed = append(changed, viewNode(&out, n))
 		}
 	}
-	return map[string]any{"added_nodes": added, "changed_nodes": changed, "edges": viewEdges(&out), "diagnostics": nodeDiagnostics(&out)}, nil
+	return mutationResult(wf, &out, map[string]any{"added_nodes": added, "changed_nodes": changed, "edges": viewEdges(&out)}), nil
 }
 
 // ---------------------------------------------------------------------------
@@ -691,7 +715,8 @@ func (t *tools) saveAndReport(ctx context.Context, wf *model.Workflow, view func
 	if err != nil {
 		return nil, err
 	}
-	return map[string]any{"result": view(out), "diagnostics": nodeDiagnostics(out)}, nil
+	// wf still carries the diagnostics from before the edit.
+	return mutationResult(wf, out, map[string]any{"result": view(out)}), nil
 }
 
 // ---------------------------------------------------------------------------
@@ -764,7 +789,9 @@ func (t *tools) applyTerraformCode(ctx context.Context, in applyCodeIn) (any, er
 	if err := t.c.do(ctx, http.MethodPut, "/workflows/"+pathEscape(wf.ID)+"/terraform", map[string]any{"files": files}, &out); err != nil {
 		return nil, err
 	}
-	return viewWorkflow(&out), nil
+	v := viewWorkflow(&out)
+	v.BestPractices = bpDelta(wf, &out)
+	return v, nil
 }
 
 type scanIn struct {
@@ -796,6 +823,7 @@ type importedView struct {
 	Nodes       int           `json:"nodes"`
 	Clouds      []model.Cloud `json:"clouds,omitempty"`
 	Diagnostics []diagView    `json:"diagnostics,omitempty"`
+	Review      string        `json:"review,omitempty"`
 }
 
 func (t *tools) importTerraform(ctx context.Context, in importIn) (any, error) {
@@ -820,7 +848,7 @@ func (t *tools) importTerraform(ctx context.Context, in importIn) (any, error) {
 	out := make([]importedView, len(res.Workflows))
 	for i := range res.Workflows {
 		wf := &res.Workflows[i]
-		out[i] = importedView{ID: wf.ID, Name: wf.Name, Nodes: len(wf.Nodes), Clouds: wf.Clouds, Diagnostics: nodeDiagnostics(wf)}
+		out[i] = importedView{ID: wf.ID, Name: wf.Name, Nodes: len(wf.Nodes), Clouds: wf.Clouds, Diagnostics: nodeDiagnostics(wf), Review: reviewSummary(wf)}
 	}
 	return map[string]any{"workflows": out, "hint": "call get_workflow with an id for the full graph"}, nil
 }

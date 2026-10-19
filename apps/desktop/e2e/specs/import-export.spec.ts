@@ -5,8 +5,9 @@ test("exports a workflow to a folder and imports it back", async ({ app, api, pa
   const original = await api.createWorkflow("Export source", "aws-queue-worker")
   const dir = testInfo.outputPath("exported")
   const written = await api.exportTo(original.id, dir)
-  expect(written.files).toEqual(expect.arrayContaining(["main.tf", "variables.tf"]))
-  expect(await readdir(dir)).toContain("main.tf")
+  // Recommended layout plus the generated project files.
+  expect(written.files).toEqual(expect.arrayContaining(["versions.tf", "variables.tf", "README.md", ".gitignore"]))
+  expect(await readdir(dir)).toContain("README.md")
 
   await app.gotoHome()
   await page.getByRole("button", { name: "Import Terraform" }).click()

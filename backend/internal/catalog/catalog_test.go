@@ -42,6 +42,36 @@ func types(rs []model.ResourceSummary) []string {
 	return out
 }
 
+func TestResourceFile(t *testing.T) {
+	c := mustLoad(t)
+	for typ, want := range map[string]string{
+		"aws_vpc":                     "network.tf",
+		"aws_subnet":                  "network.tf",
+		"aws_lambda_function":         "compute.tf",
+		"aws_ecs_service":             "containers.tf",
+		"aws_s3_bucket":               "storage.tf",
+		"aws_dynamodb_table":          "database.tf",
+		"aws_sqs_queue":               "messaging.tf",
+		"aws_apigatewayv2_api":        "api.tf",
+		"aws_api_gateway_rest_api":    "api.tf",
+		"aws_iam_role":                "iam.tf",
+		"aws_kms_key":                 "security.tf",
+		"aws_cloudwatch_log_group":    "monitoring.tf",
+		"google_pubsub_topic":         "messaging.tf",
+		"google_storage_bucket":       "storage.tf",
+		"azurerm_storage_account":     "storage.tf",
+		"azurerm_api_management":      "api.tf",
+		"oci_objectstorage_bucket":    "storage.tf",
+		"random_id":                   "",
+		"terraform_data":              "",
+		"aws_not_a_real_thing_at_all": "",
+	} {
+		if got := c.ResourceFile(typ); got != want {
+			t.Errorf("ResourceFile(%s) = %q, want %q", typ, got, want)
+		}
+	}
+}
+
 func TestSearchRanking(t *testing.T) {
 	c := mustLoad(t)
 	cases := []struct {
@@ -130,6 +160,10 @@ func TestFlociSupport(t *testing.T) {
 		{model.KindResource, "azurerm_storage_queue", "queue", true},
 		{model.KindResource, "azurerm_storage_share", "files", false},
 		{model.KindResource, "azurerm_cosmosdb_account", "cosmosdb", true},
+		// floci-az answers 404 to App Service Plan creation (2026-10-18), so
+		// Function Apps, which need a plan, are export only.
+		{model.KindResource, "azurerm_service_plan", "functions", false},
+		{model.KindResource, "azurerm_linux_function_app", "functions", false},
 		{model.KindResource, "azurerm_spring_cloud_service", "spring", false},
 		{model.KindResource, "google_pubsub_topic", "pubsub", true},
 		{model.KindResource, "google_compute_instance", "compute", true},
@@ -259,8 +293,23 @@ func TestAddNodeLambdaStarter(t *testing.T) {
 			t.Errorf("required_providers missing %s", p)
 		}
 	}
-	if len(wf.Providers) != 1 || attrExpr(t, &model.Node{Body: wf.Providers[0].Body}, "region") != `"us-east-1"` {
+	if len(wf.Providers) != 1 || attrExpr(t, &model.Node{Body: wf.Providers[0].Body}, "region") != "var.aws_region" {
 		t.Errorf("providers = %+v", wf.Providers)
+	}
+	if got := variableDefault(t, wf, "aws_region"); got != `"us-east-1"` {
+		t.Errorf("aws_region default = %s", got)
+	}
+	logs := nodeByAddr(t, wf, "aws_cloudwatch_log_group.function_logs")
+	if got := attrExpr(t, logs, "name"); got != `"/aws/lambda/${aws_lambda_function.function.function_name}"` {
+		t.Errorf("log group name = %s", got)
+	}
+	if got := attrExpr(t, logs, "retention_in_days"); got != "14" {
+		t.Errorf("log retention = %s", got)
+	}
+	logPolicy := nodeByAddr(t, wf, "aws_iam_role_policy.function_logs")
+	if got := attrExpr(t, logPolicy, "role"); got != "aws_iam_role.function_role.id" ||
+		!strings.Contains(attrExpr(t, logPolicy, "policy"), `"${aws_cloudwatch_log_group.function_logs.arn}:*"`) {
+		t.Errorf("log policy role = %s policy = %s", got, attrExpr(t, logPolicy, "policy"))
 	}
 
 	// A second function gets its own role and code; names stay unique.
@@ -322,9 +371,35 @@ func TestAddNodeUsesDefaultAWSRegion(t *testing.T) {
 	c.SetDefaultAWSRegion("eu-west-1")
 	wf := newWorkflow()
 	addNode(t, c, wf, "aws_sqs_queue", 0)
-	if len(wf.Providers) != 1 || attrExpr(t, &model.Node{Body: wf.Providers[0].Body}, "region") != `"eu-west-1"` {
+	if len(wf.Providers) != 1 || attrExpr(t, &model.Node{Body: wf.Providers[0].Body}, "region") != "var.aws_region" {
 		t.Errorf("providers = %+v", wf.Providers)
 	}
+	if got := variableDefault(t, wf, "aws_region"); got != `"eu-west-1"` {
+		t.Errorf("aws_region default = %s", got)
+	}
+}
+
+func variableDefault(t *testing.T, wf *model.Workflow, name string) string {
+	t.Helper()
+	for _, v := range wf.Variables {
+		if v.Name == name {
+			return attrExpr(t, &model.Node{Body: v.Body}, "default")
+		}
+	}
+	t.Fatalf("variable %s missing", name)
+	return ""
+}
+
+// recipePolicies are the aws_iam_role_policy nodes recipes added (not the
+// Lambda starter's log policies).
+func recipePolicies(wf *model.Workflow) []*model.Node {
+	var out []*model.Node
+	for _, n := range nodesOfType(wf, model.KindResource, "aws_iam_role_policy") {
+		if !strings.HasSuffix(n.Name, "_logs") {
+			out = append(out, n)
+		}
+	}
+	return out
 }
 
 func TestConnectSQSToLambda(t *testing.T) {
@@ -347,7 +422,7 @@ func TestConnectSQSToLambda(t *testing.T) {
 	if esm[0].Position.X <= 0 || esm[0].Position.X >= 600 {
 		t.Errorf("helper position %v not between source and target", esm[0].Position)
 	}
-	pol := nodesOfType(wf, model.KindResource, "aws_iam_role_policy")
+	pol := recipePolicies(wf)
 	if len(pol) != 1 || attrExpr(t, pol[0], "role") != "aws_iam_role.function_role.id" ||
 		!strings.Contains(attrExpr(t, pol[0], "policy"), "sqs:ReceiveMessage") {
 		t.Fatalf("role policy = %+v", pol)
@@ -464,7 +539,7 @@ func TestConnectLambdaToDynamoDB(t *testing.T) {
 			t.Errorf("environment.variables = %s, missing %s", vars, want)
 		}
 	}
-	pols := nodesOfType(wf, model.KindResource, "aws_iam_role_policy")
+	pols := recipePolicies(wf)
 	if len(pols) != 2 {
 		t.Fatalf("%d role policies", len(pols))
 	}

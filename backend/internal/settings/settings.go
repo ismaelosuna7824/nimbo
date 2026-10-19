@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 	"sync"
 
@@ -35,6 +36,7 @@ func Defaults() model.Settings {
 		Images:           sandbox.DefaultImages(),
 		TerraformImage:   sandbox.DefaultTerraformImage,
 		DefaultAWSRegion: sandbox.DefaultAWSRegion,
+		BestPractices:    model.BestPracticeSettings{DisabledRules: []string{}},
 	}
 }
 
@@ -42,6 +44,7 @@ var (
 	// imageRef accepts [registry[:port]/]path[:tag][@digest] in lower case.
 	imageRef  = regexp.MustCompile(`^[a-z0-9]+(?:[._-][a-z0-9]+)*(?::[0-9]+)?(?:/[a-z0-9]+(?:(?:[._]|__|-+)[a-z0-9]+)*)*(?::[A-Za-z0-9_][A-Za-z0-9_.-]{0,127})?(?:@sha256:[a-f0-9]{64})?$`)
 	awsRegion = regexp.MustCompile(`^[a-z]{2}(?:-[a-z]+)+-[0-9]$`)
+	ruleCode  = regexp.MustCompile(`^bp_[a-z0-9_]+$`)
 )
 
 // Normalize returns s with empty fields set to their defaults, surrounding
@@ -96,6 +99,18 @@ func Normalize(s model.Settings) (model.Settings, error) {
 	if !awsRegion.MatchString(out.DefaultAWSRegion) {
 		return model.Settings{}, fmt.Errorf("%w: defaultAWSRegion %q is not an AWS region (e.g. us-east-1)", ErrInvalid, out.DefaultAWSRegion)
 	}
+	out.BestPractices.Disabled = s.BestPractices.Disabled
+	out.BestPractices.DisabledRules = []string{}
+	for _, code := range s.BestPractices.DisabledRules {
+		code = strings.TrimSpace(code)
+		if !ruleCode.MatchString(code) {
+			return model.Settings{}, fmt.Errorf("%w: best-practice rule %q is not a rule code (bp_*)", ErrInvalid, code)
+		}
+		if !slices.Contains(out.BestPractices.DisabledRules, code) {
+			out.BestPractices.DisabledRules = append(out.BestPractices.DisabledRules, code)
+		}
+	}
+	slices.Sort(out.BestPractices.DisabledRules)
 	return out, nil
 }
 
@@ -142,6 +157,7 @@ func lenient(s model.Settings) model.Settings {
 	try(func(p *model.Settings) { p.Docker = s.Docker })
 	try(func(p *model.Settings) { p.TerraformImage = s.TerraformImage })
 	try(func(p *model.Settings) { p.DefaultAWSRegion = s.DefaultAWSRegion })
+	try(func(p *model.Settings) { p.BestPractices = s.BestPractices })
 	for c, img := range s.Images {
 		try(func(p *model.Settings) { p.Images[c] = img })
 	}
@@ -180,6 +196,7 @@ func clone(s model.Settings) model.Settings {
 		images[c] = img
 	}
 	s.Images = images
+	s.BestPractices.DisabledRules = slices.Clone(s.BestPractices.DisabledRules)
 	return s
 }
 

@@ -5,6 +5,7 @@ import (
 	"net/http"
 
 	"github.com/ismaelosuna7824/nimbo/backend/internal/agents"
+	"github.com/ismaelosuna7824/nimbo/backend/internal/lint"
 	"github.com/ismaelosuna7824/nimbo/backend/internal/model"
 	"github.com/ismaelosuna7824/nimbo/backend/internal/settings"
 )
@@ -20,6 +21,12 @@ func (s *Server) getSettings(w http.ResponseWriter, r *http.Request) error {
 // falls back to (the UI's "reset to default").
 func (s *Server) settingsDefaults(w http.ResponseWriter, r *http.Request) error {
 	return ok(w, settings.Defaults())
+}
+
+// bestPracticeRules is GET /best-practices/rules: every best-practice check
+// (Settings → Best-practice checks lists them with a toggle each).
+func (s *Server) bestPracticeRules(w http.ResponseWriter, r *http.Request) error {
+	return ok(w, lint.Rules())
 }
 
 // putSettings validates and stores the settings, then applies them: sandbox

@@ -22,7 +22,7 @@ func (s *Server) getTerraform(w http.ResponseWriter, r *http.Request) error {
 	if err != nil {
 		return err
 	}
-	files, err := hclcodec.Export(wf, hclcodec.ExportOptions{})
+	files, err := s.exportTerraform(wf, false)
 	if err != nil {
 		return err
 	}
@@ -52,7 +52,7 @@ func (s *Server) putTerraform(w http.ResponseWriter, r *http.Request) error {
 		if err != nil {
 			return nil, &httpError{status: http.StatusBadRequest, msg: err.Error(), diagnostics: diags}
 		}
-		hclcodec.MergeImported(cur, next)
+		hclcodec.MergeImported(cur, next, s.cfg.Catalog.ResourceFile)
 		*cur = *next
 		return diags, nil
 	})
@@ -74,12 +74,22 @@ func syntaxError(diags []model.Diagnostic) error {
 	return nil
 }
 
-// exportFiles renders wf plus its assets (generated files win on clashes).
+// exportTerraform renders wf's Terraform with the catalog's recommended
+// layout (and its environment files with environments).
+func (s *Server) exportTerraform(wf *model.Workflow, environments bool) (map[string][]byte, error) {
+	return hclcodec.Export(wf, hclcodec.ExportOptions{Environments: environments, ResourceFile: s.cfg.Catalog.ResourceFile})
+}
+
+// exportFiles renders wf plus its assets. Generated Terraform wins over an
+// asset of the same name; the project scaffold (README.md, .gitignore,
+// terraform.tfvars.example) is only generated where the workflow has no
+// file of its own (e.g. a README that came with an import).
 func (s *Server) exportFiles(wf *model.Workflow, environments bool) (generated map[string][]byte, assets []string, err error) {
-	generated, err = hclcodec.Export(wf, hclcodec.ExportOptions{Environments: environments})
+	generated, err = s.exportTerraform(wf, environments)
 	if err != nil {
 		return nil, nil, err
 	}
+	own := map[string]bool{}
 	root := s.cfg.Store.AssetsDir(wf.ID)
 	err = filepath.WalkDir(root, func(p string, d fs.DirEntry, err error) error {
 		if err != nil {
@@ -90,13 +100,23 @@ func (s *Server) exportFiles(wf *model.Workflow, environments bool) (generated m
 		}
 		if d.Type().IsRegular() {
 			rel, _ := filepath.Rel(root, p)
-			if _, clash := generated[filepath.ToSlash(rel)]; !clash {
-				assets = append(assets, filepath.ToSlash(rel))
+			rel = filepath.ToSlash(rel)
+			own[rel] = true
+			if _, clash := generated[rel]; !clash {
+				assets = append(assets, rel)
 			}
 		}
 		return nil
 	})
-	return generated, assets, err
+	if err != nil {
+		return nil, nil, err
+	}
+	for name, data := range hclcodec.Scaffold(wf, s.cfg.Catalog.ResourceFile) {
+		if _, taken := generated[name]; !taken && !own[name] {
+			generated[name] = data
+		}
+	}
+	return generated, assets, nil
 }
 
 func (s *Server) exportDir(w http.ResponseWriter, r *http.Request) error {

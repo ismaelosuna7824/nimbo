@@ -4,6 +4,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/ismaelosuna7824/nimbo/backend/internal/model"
@@ -33,12 +34,78 @@ func TestSettingsEndpoints(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// The region applies to provider blocks AddNode creates from now on.
+	// The region applies to the region variable AddNode creates from now on.
 	wf := e.createEmpty("regions")
 	wf, _ = e.addNode(wf.ID, "aws_sqs_queue")
-	if len(wf.Providers) != 1 || wf.Providers[0].Body.Attrs[0].Value.Expr != `"eu-central-1"` {
+	if len(wf.Providers) != 1 || wf.Providers[0].Body.Attrs[0].Value.Expr != "var.aws_region" {
 		t.Errorf("providers = %+v", wf.Providers)
 	}
+	for _, v := range wf.Variables {
+		if v.Name == "aws_region" && v.Body.Attrs[1].Value.Expr != `"eu-central-1"` {
+			t.Errorf("aws_region = %+v", v.Body)
+		}
+	}
+}
+
+func bpCodes(t *testing.T, wf *model.Workflow) map[string]int {
+	t.Helper()
+	out := map[string]int{}
+	for _, d := range wf.Diagnostics {
+		if strings.HasPrefix(d.Code, "bp_") {
+			out[d.Code]++
+			if d.Severity == model.SeverityError {
+				t.Errorf("error-severity best-practice finding %+v", d)
+			}
+		}
+	}
+	return out
+}
+
+func TestBestPracticeSettings(t *testing.T) {
+	e := newEnv(t)
+	var rules []model.BestPracticeRule
+	e.mustCall(http.StatusOK, "GET", "/best-practices/rules", nil, &rules)
+	if len(rules) < 15 || rules[0].Code != "bp_variable_type" || rules[0].Title == "" {
+		t.Fatalf("rules = %+v", rules)
+	}
+
+	// A queue with a fixed name and an undocumented variable.
+	created := e.createEmpty("bp")
+	wf := &created
+	wf.Locals = []model.Attr{{Name: "name_prefix", Value: model.Value{Expr: `"demo"`}}}
+	wf.Variables = []model.NamedBlock{{Name: "size", Body: model.Body{Attrs: []model.Attr{{Name: "type", Value: model.Value{Expr: "number"}}}}}}
+	wf.Nodes = []model.Node{{Kind: model.KindResource, Type: "aws_sqs_queue", Name: "q", Body: model.Body{Attrs: []model.Attr{{Name: "name", Value: model.Value{Expr: `"jobs"`}}}}}}
+	e.mustCall(http.StatusOK, "PUT", "/workflows/"+wf.ID, wf, wf)
+	codes := bpCodes(t, wf)
+	if codes["bp_variable_description"] != 1 || codes["bp_name_prefix"] != 1 {
+		t.Fatalf("findings = %v (%+v)", codes, wf.Diagnostics)
+	}
+
+	var st model.Settings
+	e.mustCall(http.StatusOK, "GET", "/settings", nil, &st)
+	if st.BestPractices.Disabled || st.BestPractices.DisabledRules == nil {
+		t.Fatalf("default best practices = %+v", st.BestPractices)
+	}
+	st.BestPractices.DisabledRules = []string{"bp_name_prefix", "bp_name_prefix"}
+	e.mustCall(http.StatusOK, "PUT", "/settings", st, &st)
+	if len(st.BestPractices.DisabledRules) != 1 {
+		t.Errorf("disabled rules not deduplicated: %v", st.BestPractices.DisabledRules)
+	}
+	// GET reflects the toggle without an edit.
+	wf = &model.Workflow{}
+	e.mustCall(http.StatusOK, "GET", "/workflows/"+created.ID, nil, wf)
+	if codes := bpCodes(t, wf); codes["bp_name_prefix"] != 0 || codes["bp_variable_description"] != 1 {
+		t.Errorf("after disabling bp_name_prefix: %v", codes)
+	}
+	st.BestPractices.Disabled = true
+	e.mustCall(http.StatusOK, "PUT", "/settings", st, &st)
+	wf = &model.Workflow{}
+	e.mustCall(http.StatusOK, "GET", "/workflows/"+created.ID, nil, wf)
+	if codes := bpCodes(t, wf); len(codes) != 0 {
+		t.Errorf("checks off but findings %v", codes)
+	}
+	st.BestPractices.DisabledRules = []string{"not a rule"}
+	e.mustCall(http.StatusBadRequest, "PUT", "/settings", st, nil)
 }
 
 func TestAgentsEndpoints(t *testing.T) {

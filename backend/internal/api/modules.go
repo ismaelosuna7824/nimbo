@@ -79,6 +79,9 @@ func (s *Server) moduleView(w http.ResponseWriter, r *http.Request) error {
 	if dir == "" {
 		return ok(w, view)
 	}
+	if rel, err := filepath.Rel(root, dir); err == nil {
+		view.Dir = filepath.ToSlash(rel)
+	}
 	files, err := readModuleFiles(dir)
 	if err != nil {
 		return err

@@ -33,12 +33,12 @@ Cloud: %s.
 Steps:
 1. list_templates; if one is close, create_workflow from it, otherwise create_workflow empty with a short descriptive name.
 2. For each service needed: search_resources (prefer floci_supported=true so it runs in the local sandbox) and describe_resource for required attributes.
-3. add_node for each resource (string attributes are quoted HCL: "\"my-name\"").
+3. add_node for each resource (string attributes are quoted HCL: "\"my-name\""). Keep the conventions the starters add: names "${local.name_prefix}-<role>", configurable values as typed, described variables (set_variable with description) or locals, no hardcoded regions/zones/account IDs, outputs with descriptions (set_output), sensitive = true for secrets.
 4. Wire nodes: list_connection_options, then connect with the best recipe (it adds IAM policies, permissions, event mappings).
-5. Fix every error diagnostic (update_node), then validate.
+5. Fix every error diagnostic (update_node) and every best_practices finding an edit returns. Organize before deploying: a concern with many resources or one that repeats (a network, a service = function + role + policies + log group + permissions) goes into a local module with extract_module (dry_run=true first; snake_case name after the concern), referenced from the root through its inputs and outputs. Then call review_terraform, fix what it reports (warnings first), and validate.
 6. deploy into the local sandbox; on failure read the log tail, fix and redeploy.
 7. list_load_targets and run_load_test with preset smoke to prove it works.
-8. Summarize for the user: what was built (nodes and how they connect), deployed endpoints/outputs, smoke-test latency and error rate, and next steps (e.g. a load test or export_terraform).
+8. Summarize for the user: what was built (nodes and how they connect), deployed endpoints/outputs, smoke-test latency and error rate, best-practice findings you deliberately left (and why), and next steps (e.g. a load test or export_terraform).
 
 Nothing touches a real cloud: everything runs in the local Floci emulator. Tell the user they can watch the graph live in the Nimbo app.`, req, cloud), nil
 	})
@@ -62,10 +62,10 @@ Nothing touches a real cloud: everything runs in the local Floci emulator. Tell 
 Steps:
 1. get_workflow (workflow %q) to understand the current nodes, edges and diagnostics. If it fails because nothing is open, ask the user which workflow to use (list_workflows).
 2. search_resources / describe_resource for each new service (prefer floci_supported=true).
-3. add_node for each new resource, then list_connection_options + connect to wire it to the existing nodes the request mentions.
-4. Fix error diagnostics with update_node, then validate.
+3. add_node for each new resource, then list_connection_options + connect to wire it to the existing nodes the request mentions. Follow the workflow's conventions: names from local.name_prefix when it exists, configurable values as described variables or locals, descriptions on new variables/outputs, sensitive secrets, no hardcoded regions/zones/account IDs.
+4. Fix error diagnostics with update_node and the best_practices findings your edits return. If the addition makes one concern large (many resources for a network or service) or repeats an existing group, extract it into a module with extract_module (dry_run=true first); an existing local module grows by inline_module + extract_module or by editing its files. Call review_terraform and fix what your change introduced (findings that were there before are the user's call), then validate.
 5. plan and report what Terraform would add, change or destroy. Deploy only if the user asks.
-6. Summarize the changes (new nodes, new connections) for the user.
+6. Summarize the changes (new nodes, new connections, best-practice findings left open) for the user.
 
 Pass workflow %q to every tool so the edits land in the same workflow.`, wf, req, wf, wf), nil
 	})

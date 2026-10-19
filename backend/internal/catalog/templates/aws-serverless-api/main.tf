@@ -1,11 +1,15 @@
 resource "aws_dynamodb_table" "items" {
-  name         = "${var.name}-items"
+  name         = "${local.name_prefix}-items"
   billing_mode = "PAY_PER_REQUEST"
   hash_key     = "id"
 
   attribute {
     name = "id"
     type = "S"
+  }
+
+  server_side_encryption {
+    enabled = true
   }
 }
 
@@ -59,7 +63,7 @@ data "archive_file" "api" {
 }
 
 resource "aws_iam_role" "lambda" {
-  name = "${var.name}-lambda"
+  name = "${local.name_prefix}-lambda"
   assume_role_policy = jsonencode({
     Version = "2012-10-17"
     Statement = [{
@@ -70,13 +74,8 @@ resource "aws_iam_role" "lambda" {
   })
 }
 
-resource "aws_iam_role_policy_attachment" "lambda_logs" {
-  role       = aws_iam_role.lambda.name
-  policy_arn = "arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole"
-}
-
 resource "aws_iam_role_policy" "items_access" {
-  name = "${var.name}-items-access"
+  name = "${local.name_prefix}-items-access"
   role = aws_iam_role.lambda.id
   policy = jsonencode({
     Version = "2012-10-17"
@@ -89,7 +88,7 @@ resource "aws_iam_role_policy" "items_access" {
 }
 
 resource "aws_lambda_function" "api" {
-  function_name    = "${var.name}-handler"
+  function_name    = "${local.name_prefix}-handler"
   role             = aws_iam_role.lambda.arn
   runtime          = "nodejs22.x"
   handler          = "index.handler"
@@ -105,8 +104,26 @@ resource "aws_lambda_function" "api" {
   }
 }
 
+resource "aws_cloudwatch_log_group" "api" {
+  name              = "/aws/lambda/${aws_lambda_function.api.function_name}"
+  retention_in_days = var.log_retention_days
+}
+
+resource "aws_iam_role_policy" "api_logs" {
+  name = "${local.name_prefix}-api-logs"
+  role = aws_iam_role.lambda.id
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Effect   = "Allow"
+      Action   = ["logs:CreateLogStream", "logs:PutLogEvents"]
+      Resource = ["${aws_cloudwatch_log_group.api.arn}:*"]
+    }]
+  })
+}
+
 resource "aws_apigatewayv2_api" "http" {
-  name          = var.name
+  name          = local.name_prefix
   protocol_type = "HTTP"
 }
 

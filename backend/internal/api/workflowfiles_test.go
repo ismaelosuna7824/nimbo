@@ -57,6 +57,9 @@ func TestWorkflowFilesListsEverythingExported(t *testing.T) {
 		"modules/subnets/main.tf":   {Kind: model.FileModule, Editable: true, Language: "hcl"},
 		"src/handler.py":            {Kind: model.FileAsset, Editable: true, Language: "python"},
 		"src/layer.zip":             {Kind: model.FileAsset, Binary: true, Language: "text"},
+		"README.md":                 {Kind: model.FileScaffold, Generated: true, Language: "markdown"},
+		".gitignore":                {Kind: model.FileScaffold, Generated: true, Language: "text"},
+		"terraform.tfvars.example":  {Kind: model.FileScaffold, Generated: true, Language: "text"},
 	}
 	for path, w := range want {
 		got, found := files[path]
