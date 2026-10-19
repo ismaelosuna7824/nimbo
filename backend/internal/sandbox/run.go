@@ -200,8 +200,12 @@ func (m *Manager) runSteps(ctx context.Context, rs *runState, req RunRequest) er
 
 	work := m.workDir(wf.ID)
 	versions := readLockVersions(work)
-	if err := syncWorkdir(work, runFiles(req, versions), req.AssetsDir); err != nil {
+	resized, err := syncWorkdir(work, runFiles(req, versions), req.AssetsDir)
+	if err != nil {
 		return fmt.Errorf("prepare workdir: %w", err)
+	}
+	if err := m.settleWorkdir(ctx, work, resized); err != nil {
+		m.logLine(rs, "system", "Warning: "+err.Error())
 	}
 	if slices.Contains(clouds, model.CloudAzure) {
 		if err := m.writeAzureCert(ctx, wf.ID, work); err != nil {

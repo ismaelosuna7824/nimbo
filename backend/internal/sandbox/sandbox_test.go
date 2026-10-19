@@ -1,6 +1,7 @@
 package sandbox
 
 import (
+	"maps"
 	"os"
 	"path/filepath"
 	"slices"
@@ -101,8 +102,12 @@ func TestSyncWorkdirKeepsStateAndReplacesConfig(t *testing.T) {
 		"environments/dev.tfvars":      []byte("a = 1"),
 		"environments/dev.env.example": []byte("K="),
 	}
-	if err := syncWorkdir(work, files, assets); err != nil {
+	resized, err := syncWorkdir(work, files, assets)
+	if err != nil {
 		t.Fatal(err)
+	}
+	if len(resized) != 0 {
+		t.Errorf("first sync resized %v, want none (every file is new)", resized)
 	}
 	want := []string{
 		".nimbo/manifest.json", ".terraform.lock.hcl", ".terraform/providers/p", "build/fn.zip",
@@ -117,8 +122,13 @@ func TestSyncWorkdirKeepsStateAndReplacesConfig(t *testing.T) {
 		t.Fatal(err)
 	}
 	mustWrite(t, filepath.Join(assets, "src", "index.mjs"), "v2")
-	if err := syncWorkdir(work, map[string][]byte{"main.tf": []byte("changed")}, assets); err != nil {
+	resized, err = syncWorkdir(work, map[string][]byte{"main.tf": []byte("changed")}, assets)
+	if err != nil {
 		t.Fatal(err)
+	}
+	// index.mjs keeps its size (v1 -> v2): only main.tf needs settling.
+	if !maps.Equal(resized, map[string]int64{"main.tf": 7}) {
+		t.Errorf("second sync resized %v, want main.tf: 7", resized)
 	}
 	want = []string{
 		".nimbo/manifest.json", ".terraform.lock.hcl", ".terraform/providers/p", "build/fn.zip",
@@ -132,7 +142,7 @@ func TestSyncWorkdirKeepsStateAndReplacesConfig(t *testing.T) {
 			t.Errorf("%s = %q, want %q", p, b, content)
 		}
 	}
-	if err := syncWorkdir(work, map[string][]byte{"../escape.tf": nil}, ""); err == nil {
+	if _, err := syncWorkdir(work, map[string][]byte{"../escape.tf": nil}, ""); err == nil {
 		t.Errorf("path escaping the workdir accepted")
 	}
 }
