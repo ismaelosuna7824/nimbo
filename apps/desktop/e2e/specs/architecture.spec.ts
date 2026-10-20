@@ -29,11 +29,12 @@ test("draws the read-only architecture diagram and exports a 2× PNG", async ({ 
   await expect(app.inspector.getByText("aws_lambda_function.api", { exact: true })).toBeVisible()
 
   // The diagram is a view: dragging a card pans the whole diagram (the card keeps its place in it),
-  // double-clicking edits nothing, nothing is saved.
+  // double-clicking edits nothing, nothing is saved. The card's place is measured relative to the
+  // diagram header in card widths, so panning and zooming (the first fit, double-click zoom) don't count.
   const header = diagram.getByTestId("arch-header")
   const offset = async () => {
     const [c, h] = [(await lambda.boundingBox())!, (await header.boundingBox())!]
-    return { x: Math.round(c.x - h.x), y: Math.round(c.y - h.y) }
+    return { x: (c.x - h.x) / c.width, y: (c.y - h.y) / c.width }
   }
   const before = await offset()
   const box = (await lambda.boundingBox())!
@@ -44,8 +45,13 @@ test("draws the read-only architecture diagram and exports a 2× PNG", async ({ 
   await page.mouse.up()
   await lambda.dblclick()
   await expect(page.getByRole("dialog")).toHaveCount(0)
-  const after = await offset()
-  expect(Math.abs(after.x - before.x) + Math.abs(after.y - before.y)).toBeLessThanOrEqual(2) // sub-pixel rounding
+  // Double-click zoom animates; poll until the card settles where it was in the diagram.
+  await expect
+    .poll(async () => {
+      const after = await offset()
+      return Math.abs(after.x - before.x) + Math.abs(after.y - before.y)
+    })
+    .toBeLessThanOrEqual(0.02)
   await expect(diagram.getByRole("button", { name: "Reset layout" })).toHaveCount(0)
   await page.waitForTimeout(1200) // longer than the save debounce
   expect((await api.getWorkflow(wf.id)).updatedAt).toBe(updatedAt)
