@@ -57,7 +57,7 @@ test("draws the read-only architecture diagram and exports a 2× PNG", async ({ 
   expect((await api.getWorkflow(wf.id)).updatedAt).toBe(updatedAt)
 
   // The view is remembered per workflow across reloads.
-  await page.reload()
+  await app.reload()
   await expect(page.getByTestId("architecture-view").locator('[data-testid="arch-card"][aria-label="Lambda function"]')).toBeVisible()
 
   // Export: PNG at 2× of the whole diagram.

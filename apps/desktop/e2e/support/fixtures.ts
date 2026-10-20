@@ -53,17 +53,26 @@ export class App {
   /** Opens Home with the first-run wizard already dismissed (and the setup checklist closed if setup is incomplete). */
   async gotoHome() {
     await this.page.addInitScript(() => localStorage.setItem("nimbo.onboarded", "1"))
+    await this.settleSetup(() => this.page.goto("/"))
+    await expect(this.page.getByRole("heading", { name: "Nimbo", level: 1 })).toBeVisible()
+  }
+
+  /** Reloads the page, closing the setup checklist again if it reopens. */
+  async reload() {
+    await this.settleSetup(() => this.page.reload())
+  }
+
+  // The app opens the setup checklist (a modal that hides the rest of the page from assistive tech) on every
+  // load where GET /setup reports something missing, e.g. on CI where the sandbox images aren't pulled.
+  private async settleSetup(load: () => Promise<unknown>) {
     const setup = this.page.waitForResponse((r) => r.request().method() === "GET" && new URL(r.url()).pathname === "/api/v1/setup")
-    await this.page.goto("/")
-    // The app opens the setup checklist (a modal that hides the rest of the page from assistive tech) as soon
-    // as GET /setup reports something missing, e.g. on CI where the sandbox images aren't pulled. Settle it first.
+    await load()
     const status = (await (await setup).json()) as SetupStatus
     if (!status.ready) {
       const wizard = this.page.getByRole("dialog", { name: "Set up Nimbo" })
       await wizard.getByRole("button", { name: "I'll do this later" }).click()
       await expect(wizard).toBeHidden()
     }
-    await expect(this.page.getByRole("heading", { name: "Nimbo", level: 1 })).toBeVisible()
   }
 
   workflowCard(name: string) {

@@ -4,6 +4,7 @@ import (
 	"net/http"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/ismaelosuna7824/nimbo/backend/internal/hclcodec"
 	"github.com/ismaelosuna7824/nimbo/backend/internal/model"
@@ -122,8 +123,18 @@ resource "aws_db_subnet_group" "g" {
 	if !found {
 		t.Fatalf("want net_single_az, got %+v", wf.Diagnostics)
 	}
-	var body map[string]any
-	if got := e.call("POST", "/workflows/"+wf.ID+"/runs", map[string]string{"action": "plan"}, &body); got == http.StatusBadRequest {
-		t.Errorf("plan refused for a network finding: %v", body)
+	var run model.Run
+	if got := e.call("POST", "/workflows/"+wf.ID+"/runs", map[string]string{"action": "plan"}, &run); got == http.StatusBadRequest {
+		t.Fatalf("plan refused for a network finding: %+v", run)
+	}
+	// The run fails later (no Docker) and writes into the workflow's
+	// directory; wait for it so the temp home can be removed.
+	deadline := time.Now().Add(10 * time.Second)
+	for run.Status == model.RunQueued || run.Status == model.RunRunning {
+		if time.Now().After(deadline) {
+			t.Fatalf("run %s still %s", run.ID, run.Status)
+		}
+		time.Sleep(50 * time.Millisecond)
+		e.mustCall(http.StatusOK, "GET", "/runs/"+run.ID, nil, &run)
 	}
 }
