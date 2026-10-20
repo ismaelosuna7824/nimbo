@@ -4,6 +4,7 @@
  * view. `titleKey` indexes `demoStrings(lang).titles`.
  */
 import AgentMCP from "./AgentMCP.astro";
+import ArchitectureViews from "./ArchitectureViews.astro";
 import ConnectRecipe from "./ConnectRecipe.astro";
 import Connections from "./Connections.astro";
 import EndpointsTry from "./EndpointsTry.astro";
@@ -19,6 +20,7 @@ export const demos = [
   { id: "flow", component: FlowSteps, titleKey: "flow" },
   { id: "design", component: ConnectRecipe, titleKey: "design" },
   { id: "terraform", component: TerraformBothWays, titleKey: "terraform" },
+  { id: "architecture", component: ArchitectureViews, titleKey: "architecture" },
   { id: "sandbox", component: LocalCloud, titleKey: "sandbox" },
   { id: "endpoints", component: EndpointsTry, titleKey: "endpoints" },
   { id: "loadtest", component: LoadTestLive, titleKey: "loadtest" },

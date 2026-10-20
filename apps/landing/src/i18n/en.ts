@@ -71,6 +71,17 @@ export const en = {
           "Import a repo folder and finally see its architecture",
         ],
       },
+      architecture: {
+        eyebrow: "Architecture view",
+        title: "The same design, as an architecture diagram.",
+        body: "Switch from Build to Architecture and Nimbo draws your design as a reference architecture diagram: official icons, cloud → region → VPC → subnets nested, and arrows that follow the data. It comes from the same Terraform, so it never goes stale.",
+        bullets: [
+          "Official AWS, Azure, Google Cloud and Oracle Cloud icons",
+          "Security groups, route tables and gateways folded into the cards that use them",
+          "Modules expanded into their services, imported projects included",
+          "Export to PNG (up to 4×) or SVG for docs, reviews and slides",
+        ],
+      },
       sandbox: {
         eyebrow: "Private local cloud",
         title: "Deploy to a cloud that lives on your laptop.",

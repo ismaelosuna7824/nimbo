@@ -73,6 +73,17 @@ export const es: Strings = {
           "Importa la carpeta de un repo y, por fin, ve su arquitectura",
         ],
       },
+      architecture: {
+        eyebrow: "Vista Architecture",
+        title: "El mismo diseño, como un diagrama de arquitectura.",
+        body: "Cambia de Build a Architecture y Nimbo dibuja tu diseño como un diagrama de arquitectura de referencia: iconos oficiales, nube → región → VPC → subredes anidadas, y flechas que siguen el flujo de datos. Sale del mismo Terraform, así que nunca queda desactualizado.",
+        bullets: [
+          "Iconos oficiales de AWS, Azure, Google Cloud y Oracle Cloud",
+          "Security groups, tablas de rutas y gateways integrados en las tarjetas que los usan",
+          "Los módulos se expanden en sus servicios, también en proyectos importados",
+          "Exporta a PNG (hasta 4×) o SVG para tus docs, revisiones y presentaciones",
+        ],
+      },
       sandbox: {
         eyebrow: "Nube local privada",
         title: "Despliega en una nube que vive en tu laptop.",

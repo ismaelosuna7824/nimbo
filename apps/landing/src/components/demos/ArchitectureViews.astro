@@ -1,0 +1,93 @@
+---
+/** The same workflow in Build, then in Architecture: real app captures that cross-fade on a loop. */
+import { Image } from "astro:assets";
+import type { Lang } from "../../i18n";
+import architectureShot from "../../assets/screens/orders-architecture.png";
+import buildShot from "../../assets/screens/orders-build.png";
+import { demoStrings } from "./lib/strings";
+import DemoFrame from "./ui/DemoFrame.astro";
+
+interface Props {
+  lang: Lang;
+  class?: string;
+}
+
+const { lang, class: className } = Astro.props;
+const s = demoStrings(lang).architecture;
+const sizes = "(min-width: 1280px) 600px, (min-width: 1024px) 46vw, 92vw";
+const widths = [640, 960, 1280, 1800];
+---
+
+<DemoFrame id="architecture" lang={lang} label={s.label} title={s.windowTitle} class={className}>
+  <span slot="chrome-end" class="seg" data-state="architecture" data-state0="build">
+    <span class="seg-build">{s.build}</span>
+    <span class="seg-arch">{s.architecture}</span>
+  </span>
+  <div class="shots" data-state="architecture" data-state0="build">
+    <Image src={buildShot} alt="" widths={widths} sizes={sizes} format="webp" quality={82} loading="lazy" class="shot shot-build" />
+    <Image
+      src={architectureShot}
+      alt=""
+      widths={widths}
+      sizes={sizes}
+      format="webp"
+      quality={82}
+      loading="lazy"
+      class="shot shot-arch"
+    />
+  </div>
+</DemoFrame>
+
+<style>
+  .seg {
+    display: inline-flex;
+    margin-left: auto;
+    padding: 2px;
+    border: 1px solid var(--color-border-strong);
+    border-radius: 7px;
+    font-size: 10.5px;
+  }
+  .seg span {
+    padding: 1px 8px;
+    border-radius: 5px;
+    color: var(--color-muted);
+    transition:
+      background 0.35s,
+      color 0.35s;
+  }
+  .seg[data-state="build"] .seg-build,
+  .seg[data-state="architecture"] .seg-arch {
+    background: var(--color-primary-strong);
+    color: #fff;
+  }
+  .shots {
+    display: grid;
+    background: #0a0a0b;
+  }
+  .shots :global(.shot) {
+    grid-area: 1 / 1;
+    display: block;
+    width: 100%;
+    height: auto;
+    transition: opacity 0.6s ease;
+  }
+  .shots[data-state="build"] :global(.shot-arch),
+  .shots[data-state="architecture"] :global(.shot-build) {
+    opacity: 0;
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .seg span,
+    .shots :global(.shot) {
+      transition: none;
+    }
+  }
+</style>
+
+<script>
+  import { mountDemo } from "./lib/timeline";
+
+  mountDemo("architecture", (tl) => {
+    tl.state(2600, ".seg, .shots", "architecture");
+    return { length: 7600 };
+  });
+</script>

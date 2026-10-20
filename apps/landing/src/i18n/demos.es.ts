@@ -13,6 +13,7 @@ export const demosEs: DemoStrings = {
     mcp: "Agentes de IA vía MCP",
     connections: "Conexiones a servicios desplegados",
     modes: "Modos Guiado y Pro",
+    architecture: "Vistas Build y Architecture",
   },
   common: {
     local: "Local",
@@ -149,6 +150,13 @@ export const demosEs: DemoStrings = {
     target: "Destino",
     traffic: "Tráfico",
     trafficValue: "≈ 600 peticiones en 1 min",
+  },
+  architecture: {
+    label:
+      "El mismo pipeline de pedidos en las dos vistas de Nimbo. Build muestra el lienzo editable con los recursos de Terraform; Architecture lo dibuja como un diagrama de arquitectura cloud con iconos oficiales de AWS: los usuarios llegan a un API Gateway y dos funciones Lambda leen y escriben en DynamoDB, S3, SQS y SNS, dentro de AWS Cloud y la región us-east-1, con leyenda.",
+    windowTitle: "Orders pipeline",
+    build: "Build",
+    architecture: "Architecture",
   },
   modes: {
     label:
