@@ -32,7 +32,7 @@ func (m *Manager) State(ctx context.Context, wf *model.Workflow) (*model.Deploye
 	if err := checkID(wf.ID); err != nil {
 		return nil, err
 	}
-	work := m.workDir(wf.ID)
+	work := m.WorkDir(wf.ID)
 	info, err := os.Stat(filepath.Join(work, "terraform.tfstate"))
 	if os.IsNotExist(err) {
 		return emptyState(wf.ID), nil

@@ -1107,6 +1107,25 @@ export interface ModuleView {
   message?: string
 }
 
+/** Every module call of a workflow with its content, nested calls included (GET /workflows/{id}/modules). */
+export interface ModuleTree {
+  /** Call path ("module.app", "module.app.module.db") → where its content comes from. */
+  calls: Record<string, ModuleCallSource>
+  /** Module directories read, as workflows (nodes unpositioned), by ModuleCallSource.dir. */
+  modules: Record<string, Workflow>
+}
+
+export interface ModuleCallSource {
+  source: string
+  version?: string
+  local: boolean
+  /**
+   * Set when the content is readable: a local module in the workflow files ("modules/network") or a
+   * registry/remote module `terraform init` downloaded into the sandbox (".terraform/modules/vpc").
+   */
+  dir?: string
+}
+
 /** Body of POST /workflows/{id}/modules/extract (and .../extract/preview). */
 export interface ModuleExtractRequest {
   /** Node IDs or addresses to move into the module. */

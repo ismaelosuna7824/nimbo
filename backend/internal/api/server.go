@@ -142,6 +142,7 @@ func (s *Server) routes() {
 	h("GET "+p+"/workflows/{id}/files/raw", s.getFileRaw)
 	h("POST "+p+"/import", s.importWorkflow)
 	h("POST "+p+"/import/scan", s.scanImport)
+	h("GET "+p+"/workflows/{id}/modules", s.moduleTree)
 	h("GET "+p+"/workflows/{id}/modules/{nodeId}", s.moduleView)
 	h("POST "+p+"/workflows/{id}/modules/extract", s.extractModule)
 	h("POST "+p+"/workflows/{id}/modules/extract/preview", s.previewExtract)

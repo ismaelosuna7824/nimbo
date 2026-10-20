@@ -195,8 +195,10 @@ func ValidateExpr(expr string) error
 // MergeImported carries app-only data from prev into next (a fresh Import of
 // edited code): node IDs, positions, labels, parents matched by address;
 // environments, active environment, workflow ID/name/description/createdAt.
-// Blocks prev laid out automatically stay automatic while they remain in
-// that file; new blocks written where the layout would put them too.
+// Every block stays in the file it was written in. Blocks prev laid out
+// automatically stay automatic while they remain in that file, and new
+// blocks written where the layout would put them too, unless the layout
+// of next would then move them or their file keeps recorded blocks.
 func MergeImported(prev, next *model.Workflow, resourceFile func(string) string)
 
 // RenameNode sets a node's name and rewrites every reference to its old
@@ -952,6 +954,265 @@ func (c *Connections) Draft(in model.Connection) (model.Connection, error) // un
 func Mask(c model.Connection) model.Connection
 ```
 
+## Architecture diagram view
+
+The canvas has two views, switched with the *Build | Architecture* control
+at its top-left, ⌘K ("Show architecture diagram") or ⌘⇧A, remembered per
+workflow in `localStorage` (`nimbo.view.<workflowId>`). *Build* is the
+editing canvas, unchanged. *Architecture* (`apps/desktop/src/features/architecture`)
+is a read-only, shareable cloud diagram drawn on a white surface whatever
+the app theme; official service icons appear only there
+(`architecture/icons`: `archIconFor`, `archCategoryOf`, `isPlumbing`,
+`providerLogo`, `groupIcon`, `actorIcon`). It is a view only: nothing in it
+is dragged, resized, renamed, annotated or hidden, and it stores nothing —
+the layout is always the automatic one and only Build edits. Pan, zoom, fit
+and "Export image…" work; selecting a card (or a VPC/subnet) opens its
+resource — for a card drawn from a module, the module call — in the
+inspector.
+
+- **Derivation** (`derive.ts`, pure, unit-tested in `derive.test.ts` and,
+  per provider, `providers.test.ts`): containers per provider —
+  AWS region → VPC → AZ → subnet; Azure resource group → region (the
+  resource's `location`, else its parent's or resource group's; Front Door,
+  DNS and Traffic Manager stay in the resource group) → VNet → subnet; GCP
+  project → region → VPC network (drawn in its subnets' region, or the
+  region of what it holds) → subnet, with global load balancing, DNS, Cloud
+  Armor, certificates and IAM in a *Global* group listed first; OCI
+  compartment (a `oci_identity_compartment`, else "Compartment"/"Tenancy"
+  from `compartment_id`) → region → VCN → availability domain (subnets with
+  a literal AD) → subnet. AWS IAM/CloudFront/Route 53/WAF classic/… are
+  global. Resources land in their
+  subnet through `subnet_id`/`subnet_ids`/`vpc_config`/… references, directly
+  or through a helper (DB subnet group); subnets referenced together by one
+  resource form one tier group. Tiers come from routes (route table with a
+  route to an internet gateway = public, to a NAT gateway = private),
+  `map_public_ip_on_launch`, then the name. Other services go to logical
+  groups by category: Edge & DNS, Edge security, Compute, Messaging &
+  integration, Data, Identity & security, Observability, AI & ML,
+  Networking, Platform services, Modules. Helpers (`isPlumbing`: policies,
+  attachments, permissions, routes, integrations, …) fold into the card
+  they belong to (named by attributes such as `function_name`, `role`,
+  `bucket`, `api_id`) as "+ 2 IAM role policies". Values resolve through a
+  small Terraform evaluator (`expr.ts`, `resolve.ts`): literals, `var.*`
+  (active environment, then default, with the defaults of `optional()`
+  attributes of object types), `local.*`, templates, operators,
+  conditionals, `for` expressions and common functions (`length`, `merge`,
+  `lookup`, `try`, `coalesce`, `toset`, `format`, …); resource attributes and
+  anything else are unknown, so a count that cannot be resolved prints
+  nothing and unresolved expressions never become placeholders. Blocks whose
+  count is 0 (or that sit in a module call with none) are not drawn — with
+  environments but none active, a block is drawn when any environment
+  creates it — and a reference only in the branch of a conditional Terraform
+  does not take (`var.private ? rt.nat.id : rt.igw.id`) is not one. A
+  reference through locals counts like a direct one (`image = local.image`
+  whose local names an Artifact Registry repository; `localEdges` in
+  `resolve.ts`, since the workflow's edges stop at locals).
+  `azapi_resource`s take the azurerm type of their ARM `type` (`azapi.ts`:
+  `Microsoft.Web/sites` → web or function app, child types fold into their
+  parent, AVM telemetry and update/action resources are not drawn). Tags,
+  enabled APIs, locks, telemetry, SSH keys and provider lookups (images,
+  ADs, OCI services) are never drawn, nor are data sources that only look a
+  value up for what uses them (`LOOKUP`: the ELB service account, managed
+  prefix lists, IP ranges, caller identity, AMIs, …); utility-provider
+  helpers (random, time, template, http, …) that belong to nothing are
+  dropped.
+- **Modules** (`modules.ts`, pure, unit-tested in `modules.test.ts`):
+  `GET /workflows/{id}/modules` returns every module call's content, nested
+  calls included — local modules from the workflow files and registry/remote
+  ones `terraform init` downloaded into the sandbox working directory
+  (`.terraform/modules/modules.json`). `expandModules` replaces each readable
+  call with its resources, one copy per call (`module.<call>.<address>`):
+  inputs are bound to the call's arguments (each instance's `var.*`/`local.*`
+  are renamed so one resolver serves them all), a call's `count`/`for_each`
+  multiplies its resources' ×N, and references are re-derived across module
+  boundaries; module outputs become locals of their instance, so
+  `for_each = module.interfaces.private_endpoints` or a count read through
+  another module resolves, and an argument reading `each.value` of the
+  call's for_each is known when every instance gets the same value — a call argument `module.lb.target_group_arns["x"]` follows
+  the output into the target group inside module.lb, a resource's
+  `var.subnet_ids` follows the argument back out. Each call is then drawn as
+  the services it creates: its heaviest resource by `serviceWeight`
+  (running services, then data/messaging/front doors; identity, keys and
+  telemetry only support them; ties go to the most connected) is its card,
+  the heaviest resource of each other main service family keeps a card
+  (static site → CloudFront + S3), and everything else folds into the card
+  of its family or the call's card; network fabric (gateways, endpoints)
+  keeps its VPC placement, and a machine or node pool in a subnet of its own
+  (a bastion, OKE workers) keeps its own card there. Module cards are titled
+  from the call name without the words it shares with the module and
+  without source noise ("ecs_service_billing" → "Billing", "oci-arch-tomcat"
+  → "Tomcat", "avm_res_web_site" → "Web site") and select the call; a VPC
+  of a module named generically (`this`, `vcn`, `main`) is titled after its
+  call, with ×N for a call with for_each. A call whose content is
+  unavailable is one card typed from its source (`moduleServiceType`,
+  per provider: …/vpc/aws → VPC, Azure Verified Modules' `avm-res-*` names,
+  terraform-google-modules `cloud-nat`/`vm//modules/mig`/`memorystore`,
+  oracle-terraform-modules `vcn`/`drg`/`oke`, …) described "module ·
+  <source>"; naming, region, interface and project-services helpers are not
+  drawn.
+- **Sub-groups**: three or more cards of one kind in a container form a
+  labelled, packed sub-group ("ECS services (6)") laid out as a grid of at
+  most three rows; two or more of its cards with the same flow to (or from)
+  one item share one arrow from (or to) the sub-group. More than three
+  dashed (control) lines into one card become "used by N" on it, and a role
+  shared by more than two cards adds no IAM-derived flows.
+- **Folding that keeps large designs readable**:
+  - *Security groups* are never cards (`network.ts`): each is a line with
+    its allowed inbound ports and sources on what it protects, e.g. "SG alb:
+    in 443 from anywhere". AWS security groups (`ingress` blocks and rule
+    resources) go on every card using them; Azure NSGs (`security_rule`
+    blocks and `azurerm_network_security_rule`) on the subnets of their
+    subnet associations and on the VMs of their NIC associations ("NSG web:
+    in 443 from anywhere"); GCP firewall rules on the cards whose network
+    tags (`tags`, an instance template's) or service accounts they target,
+    else on their VPC ("firewall allow-hc: in 80 from health checks", with
+    IAP and health-check ranges named); OCI security lists on the subnets
+    listing them ("SL web: …", the VCN's default list on the subnets using
+    it) and NSGs on the cards naming them (`nsg_ids`,
+    `network_security_group_ids`; "NSG app: in 8080 from NSG lb"). Groups
+    nothing uses are listed on their VPC ("unused security groups: …"), and
+    the VPC's `aws_default_security_group` is a line on it ("default SG:
+    deny all" without rules).
+  - *Route tables* (with their routes and associations) fold into the
+    subnets associated with them as a "routes: 0.0.0.0/0 → IGW" (or "→ NAT",
+    "→ TGW", …) sublabel line; one associated with no subnet goes to its VPC.
+    A subnet whose only route tables have no route at all is an "Isolated
+    subnet". Azure route tables read next hops ("→ NVA 10.0.0.4", "→ VNet", "→ VPN
+    gateway") and a subnet's NAT gateway association adds "0.0.0.0/0 → NAT";
+    OCI route tables (subnets' `route_table_id`, attachments, the VCN's
+    default table) read `network_entity_id` ("→ IGW", "→ NAT", "Oracle
+    services → Service gateway", "→ DRG"); GCP routes go on their VPC
+    ("0.0.0.0/0 → internet gateway"). Single subnets with the same title
+    side by side are told apart by their names, without the words all their
+    names share ("Private subnet · App", "Private subnet · Data").
+  - *Absorbed resources*: an Elastic IP folds into the NAT gateway or
+    instance using it ("Elastic IP"), a target group into the load balancer
+    whose listener forwards to it, a task definition into its ECS service
+    (its CPU/memory join the service's facts). Their references count as the
+    absorbing card's, so the load balancer → ECS service and service →
+    database/queue flows remain. Likewise (`ABSORB`): Azure public IPs into
+    the VM (through its NIC), load balancer, gateway or NAT gateway using
+    them; NICs into their VM; private endpoints (and the private DNS zones
+    of their zone groups) into the service they expose ("private endpoint ·
+    private DNS"); an App Service plan or Container Apps environment hosting
+    one app into it (sizing it: "Linux · P1v3"); queues, topics, event hubs,
+    containers, Cosmos and SQL databases into their namespace, account or
+    server; Front Door endpoints, origins and routes into the profile. GCP:
+    node pools into their cluster, subscriptions into their topic ("push
+    subscription"), instance templates and autoscalers into their managed
+    instance group, NAT into its Cloud Router ("Cloud NAT"), the reserved
+    range into private service access ("/16 reserved range"), and a load
+    balancer's proxies, URL maps, backend services, NEGs, health checks,
+    managed certificates and address into its forwarding rule — one card,
+    forwarding rules sharing parts (HTTP and HTTPS) merged and named after
+    the rule serving traffic (HTTPS), not the HTTP redirect. OCI: keys and
+    secrets into their vault, instance configurations into their pool, a
+    functions application hosting one function into it, DRG attachments
+    into the (opaque) DRG; node pools with a subnet of their own stay
+    cards.
+  - *Parts* (`PART_OF`) fold into the resource they belong to, and a
+    reference to one is a reference to it: a certificate's validation (and
+    its DNS validation records: "DNS validated"), a secret's version, a Key
+    Vault's secrets, keys and certificates, a KMS alias — CloudFront using a
+    validation uses the certificate, a web app reading
+    `azurerm_key_vault_secret.x.versionless_id` reads the vault, a GCP
+    secret version storing Redis' auth string stays in its secret. Azure
+    sub-resources without a location naming their parent through
+    `<parent type>_id` (a Redis access policy assignment, a storage
+    account's static website) are parts the same way. A helper made with
+    `for_each` over several cards (one ECR lifecycle policy per repository)
+    folds into each of them. A certificate a helper uses is its owner's
+    (an HTTPS listener's → its load balancer → the certificate).
+  - *Private endpoints*: a service reached through private endpoints (and
+    in no subnet of its own) is drawn in their subnet, so every
+    private-endpoint service sits in the endpoints subnet, never outside.
+  - *Internet gateways* are small cards on their VPC's top border, past the
+    VPC and region labels, above the public subnet they feed; the Internet
+    actor sits above the outermost container, straight over the gateway.
+    Both are placed after the automatic layout (`onBorder`, `above`). OCI
+    internet gateways sit the same way; NAT and service gateways, Cloud
+    Routers, private service access and Serverless VPC Access connectors
+    are cards inside their VPC.
+- **Card text**: icon, title (service name, or the resource type's label
+  when several types share one service: "Pub/Sub Topic", "Pub/Sub
+  Subscription"), then the description — name · facts · security groups ·
+  folded helpers — wrapped over two lines, breaking between parts first
+  (`wrapParts`); an ellipsis only when two lines are not enough, with the
+  full text in the card's tooltip. Cards are 260 × 80.
+- **Edges** are data flow, de-duplicated, never containment: helper links
+  (event source mapping SQS → Lambda, API integration API → Lambda, SNS
+  subscription, S3 notification, EventBridge target, listener → target
+  group, Route 53 record) win over direct references (referrer → referenced;
+  inbound attributes such as `topic`/`target_group_arn` reversed; monitoring
+  receives), which win over IAM (a role's users → what its policies grant).
+  A DNS record another card reaches its target by (a CloudFront origin at
+  `aws_route53_record.origin.fqdn`) is that card's arrow to what the record
+  points at (CloudFront → ALB), not the zone's. Identity, keys and telemetry
+  are *control* (dashed). Internet gateways
+  reach the public subnets routing to them; private subnets show their way
+  out as their routes line, not as an arrow. Other clouds' links: Front Door
+  origin → its app, App Gateway/LB backend pools → their VMs, diagnostic
+  settings, VPN gateway connections, OCI load balancer backends → their
+  instances, API Gateway deployments → their functions, notification
+  subscriptions → their endpoints. Access grants (`GRANTS`: role
+  assignments, Key Vault and Redis access policies) are drawn like AWS IAM:
+  the principal's workloads → the scope (a managed identity stands for the
+  apps using it, which keep their dashed line to it). Between containers:
+  VNet and VPC peerings (VNet → VNet), a DRG → the VCNs it attaches,
+  serverless services reaching into a subnet (App Service VNet
+  integration, Cloud Run Direct VPC egress: an arrow to the subnet, not a
+  placement there), private service access → the databases on its VPC,
+  and Azure NAT gateways or GCP Cloud NAT → Internet.
+- **Actors**: *Users* when there is a public entry (API Gateway, CloudFront,
+  internet-facing load balancer, Function URL, S3/GCS/Azure static website,
+  App Gateway/Front Door/web apps and function apps (unless public network
+  access is off), Container Apps with external ingress, public Azure/OCI
+  load balancers, Cloud Run without internal ingress, OCI public API
+  gateways, …; through Route 53 when a record points
+  at it), *Internet* for internet gateways, and the saved Connections the
+  workflow's load tests use as third-party services. Users get one arrow per
+  way in: an entry point fed by another one (Route 53 → CloudFront → load
+  balancer) is reached through it, not directly.
+- **Layout** (`layout.ts`, container links unit-tested in `layout.test.ts`, routing in `geometry.test.ts`): bottom-up with elkjs layered, left → right:
+  every container is laid out on its own (children placed, unconnected
+  ones packed in rows by component, groups as the boxes their own layout
+  made), so each group reads as a compact block. An edge reaching inside a
+  child group stands in as an edge to that group while its container is
+  laid out (`containerLinks`); a pair of groups joined by data one way and
+  only by dashed lines the other is laid out along the data, and the
+  child holding what Users enter through comes first (GCP's Global group
+  between Users and the region). ELK's route is kept for edges between
+  direct children, and every other edge (and one crossed by a border card)
+  is routed by `routeOrthogonal` (`geometry.ts`): a shortest path with bend
+  costs over the grid of card/actor sides and group labels (12 px
+  clearance), leaving each end through the side facing the other, its
+  middle segments centered in their corridors — lines stay orthogonal and
+  never cross a card or a group label. Routes are drawn beside each other
+  (`Lanes`): twice, each time beside every other route, they take another
+  lane of a shared corridor (10 px apart, 5 px in a narrow one) and another
+  point of a shared box side, so two arrows never merge into one line.
+  Re-run only when the structure changes. Group IDs are
+  `group:<kind>:…`, actors `actor:users`/`actor:internet`/
+  `conn:<connectionId>`, edges `flow:<source>-><target>`. A provider's
+  global logical group with the same title as a regional one says what it
+  holds ("IAM") or that it is global.
+- **Export** ("Export image…" in the view, ⌘K "Export architecture
+  diagram…"): the whole diagram is serialized from the same SVG shapes the
+  canvas draws (`svg.tsx`, `scene-svg.tsx`) into a standalone SVG with the
+  Geist font (Latin + Latin Extended) and every icon embedded as data URLs;
+  PNG rasterizes that SVG on a canvas at 1×–4× (default 2×; lowered when the
+  image would exceed 16384 px per side or 140 MP), white or transparent,
+  with or without title and legend. The Build canvas exports as PNG through
+  the same dialog (html-to-image of the React Flow viewport). Files are
+  saved with the native save dialog in the desktop app, as downloads in a
+  browser. Since the desktop app is a WKWebView on macOS, the architecture
+  e2e spec also runs in Playwright's `webkit` project (part of
+  `bun run test:e2e`), switching views, checking the diagram stays
+  read-only and exporting the 2× PNG.
+- **MCP**: there is no export tool. Rendering needs the browser (elkjs
+  layout, text measurement, icon assets); the daemon cannot draw the
+  diagram without duplicating the view in Go.
+
 ## Connections (already-deployed services)
 
 The Connections library is global (not per workflow): saved services that
@@ -1078,6 +1339,7 @@ Docker; the desktop onboarding wizard (`GET /setup`) and `nimbo doctor`
 | `GET /workflows/{id}/files/raw?path=` | → the file's bytes as an attachment (`text/plain` or `application/octet-stream`) |
 | `POST /import/scan` | `{dir?, files?}` → `ImportScan{root, projects: ImportProject[], skipped}`. Walks the folder (skips `.terraform`, `.git`, `node_modules`, `vendor`, `.terragrunt-cache`, hidden dirs); every dir with `*.tf` is a project unless another scanned dir calls it as a local `module` (then it is listed in `skipped`). Per project: resource/data/module counts, providers, clouds, tfvars files (root + `environments/`), backend presence, parse diagnostics. `files` (relative paths; a shared top-level folder becomes the root and names it) are materialized in a temp dir. Over 5000 files or 200 Terraform dirs → 400 |
 | `POST /import` | `{dir?, files?, projects?: string[], name?, names?: {path: name}}` → 201 `{workflows: Workflow[]}`, one per project, each with a random icon (`projects` omitted = the root `"."` only; `name` applies when exactly one project is imported). Per project: root `*.tf`/`*.tfvars` and `environments/*.tfvars`/`*.env.example` are parsed; other files of the project dir (minus nested Terraform dirs, `.terraform*`, `*.tfstate*`, skipped dirs) are copied into assets; every local module it reaches (recursively) is copied flat to `modules/<name>` (dir base name, `-2`… on clashes) and its `source` rewritten (`./modules/<name>` in the workflow, `../<name>` between modules, via hclwrite so the rest of each module file stays byte-identical). Registry/git sources are untouched. All-or-nothing; 400 + diagnostics on syntax errors |
+| `GET /workflows/{id}/modules` | → `ModuleTree{calls: {"module.a[.module.b]": ModuleCallSource{source, version?, local, dir?}}, modules: {dir: Workflow}}`: every module call, nested ones included, with the content of local modules (inside the workflow files) and of registry/remote modules found in the sandbox working directory's `.terraform/modules/modules.json`; each directory parsed once. Used by the Architecture view |
 | `GET /workflows/{id}/modules/{nodeId}?path=` | → `ModuleView{source, local, dir?, workflow?, message?}`. Local source inside the workflow files → the module parsed as a read-only `Workflow` (nodes unpositioned) and `dir`, its folder relative to the workflow files (`modules/network`; the UI's "Open files" filters the Code tab to it). Registry/remote → `message` ("Registry module terraform-aws-modules/vpc/aws 5.0.0 — contents are downloaded at deploy time"). `path=module.a.module.b` drills into nested calls |
 | `POST /workflows/{id}/modules/extract/preview` | `{nodeIds, name}` → `ModuleExtraction{name, source, inputs: ModuleIO[], outputs: ModuleIO[], moved: {from,to}[], providers, dependsOn, files}`; nothing is saved. 400 with the reason when the selection cannot be extracted, 409 when `modules/<name>` exists |
 | `POST /workflows/{id}/modules/extract` | `{nodeIds, name}` → `Workflow` (`hclcodec.ExtractModule`; the module files are written to the workflow's assets at `modules/<name>/`; same errors as the preview) |

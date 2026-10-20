@@ -4,6 +4,7 @@ import type {
   ImportSource,
   ModuleExtraction,
   ModuleExtractRequest,
+  ModuleTree,
   ModuleView,
   AgentClient,
   BestPracticeRule,
@@ -159,6 +160,8 @@ export const api = {
   /** Read-only view of a module call; `path` drills into nested calls ("module.a.module.b"). */
   moduleView: (id: string, nodeId: string, path?: string) =>
     request<ModuleView>("GET", `/workflows/${id}/modules/${encodeURIComponent(nodeId)}${qs({ path })}`),
+  /** Every module call with its content (local modules, and downloaded registry/remote ones), nested calls included. */
+  moduleTree: (id: string) => request<ModuleTree>("GET", `/workflows/${id}/modules`),
   /** What extracting nodes into a local module would create; changes nothing. */
   previewExtractModule: (id: string, body: ModuleExtractRequest) =>
     request<ModuleExtraction>("POST", `/workflows/${id}/modules/extract/preview`, body),

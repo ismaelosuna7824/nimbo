@@ -1,6 +1,8 @@
 import { useQuery } from "@tanstack/react-query"
 import {
   ActivityIcon,
+  ImageDownIcon,
+  NetworkIcon,
   BotIcon,
   ArchiveIcon,
   CloudUploadIcon,
@@ -51,6 +53,7 @@ import { api } from "@/lib/api/client"
 import type { BottomTab } from "@/state/workflow-store"
 import { useWorkflowStore } from "@/state/workflow-store"
 import { addResource, canvasHandle } from "../canvas/actions"
+import { switchView, useArchUi, useCanvasView, VIEW_SHORTCUT } from "../architecture/store"
 import { MOD_KEY, openWorkflow, runAction, sandboxAction } from "../toolbar/actions"
 import { useUiStore } from "../toolbar/ui-store"
 import { archiveWorkflow, closeWorkflow } from "../toolbar/workflow-actions"
@@ -119,6 +122,7 @@ function PaletteBody() {
   const arcade = useArcadeStore((s) => s.arcade)
   const [search, setSearch] = useState("")
   const q = search.trim()
+  const view = useCanvasView()
 
   const resources = useQuery({
     queryKey: ["resources", { q, limit: 15 }],
@@ -194,6 +198,35 @@ function PaletteBody() {
                 <WandSparklesIcon />
                 Tidy up layout
               </CommandItem>
+            </CommandGroup>
+            <CommandSeparator />
+            <CommandGroup heading="View">
+              <CommandItem
+                value="architecture diagram view build canvas switch"
+                onSelect={() => run(() => switchView(view === "build" ? "architecture" : "build"))}
+              >
+                <NetworkIcon />
+                {view === "build" ? "Show architecture diagram" : "Back to Build canvas"}
+                <Shortcut keys={VIEW_SHORTCUT} />
+              </CommandItem>
+              <CommandItem
+                value="export architecture diagram image png svg share"
+                onSelect={() =>
+                  run(() => {
+                    switchView("architecture")
+                    useArchUi.getState().openExport("architecture")
+                  })
+                }
+              >
+                <ImageDownIcon />
+                Export architecture diagram…
+              </CommandItem>
+              {view === "build" && (
+                <CommandItem value="export canvas image png build screenshot" onSelect={() => run(() => useArchUi.getState().openExport("build"))}>
+                  <ImageDownIcon />
+                  Export Build canvas as PNG…
+                </CommandItem>
+              )}
             </CommandGroup>
             <CommandSeparator />
             <CommandGroup heading="Panels">

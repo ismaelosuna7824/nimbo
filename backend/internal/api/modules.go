@@ -47,19 +47,7 @@ func (s *Server) moduleView(w http.ResponseWriter, r *http.Request) error {
 		}
 	}
 
-	source, version := "", ""
-	for _, a := range nd.Body.Attrs {
-		var v string
-		if json.Unmarshal(a.Value.Literal, &v) != nil {
-			continue
-		}
-		switch a.Name {
-		case "source":
-			source = v
-		case "version":
-			version = v
-		}
-	}
+	source, version := callSource(nd)
 	root := s.cfg.Store.AssetsDir(wf.ID)
 	view, dir := describeModule(source, version, root, root)
 	for _, name := range nested {
@@ -102,6 +90,137 @@ func (s *Server) moduleView(w http.ResponseWriter, r *http.Request) error {
 	s.finalize(mod, diags)
 	view.Workflow = mod
 	return ok(w, view)
+}
+
+// callSource returns the constant source and version of a module call.
+func callSource(nd *model.Node) (source, version string) {
+	for _, a := range nd.Body.Attrs {
+		var v string
+		if json.Unmarshal(a.Value.Literal, &v) != nil {
+			continue
+		}
+		switch a.Name {
+		case "source":
+			source = v
+		case "version":
+			version = v
+		}
+	}
+	return source, version
+}
+
+// maxModuleDepth bounds nested module calls (local modules calling each
+// other in a cycle would never end).
+const maxModuleDepth = 8
+
+// moduleTree returns the content of every module call of a workflow, nested
+// calls included: local modules from the workflow files, registry and remote
+// modules from Terraform's module cache in the sandbox working directory
+// (when `terraform init` downloaded them). Each directory is read once.
+func (s *Server) moduleTree(w http.ResponseWriter, r *http.Request) error {
+	wf, err := s.cfg.Store.Get(r.PathValue("id"))
+	if err != nil {
+		return err
+	}
+	root := s.cfg.Store.AssetsDir(wf.ID)
+	work := s.cfg.Sandbox.WorkDir(wf.ID)
+	cache := downloadedModules(work)
+	tree := model.ModuleTree{Calls: map[string]model.ModuleCallSource{}, Modules: map[string]*model.Workflow{}}
+	parsed := map[string]bool{} // directory key -> read (with or without .tf files)
+
+	// walk visits the calls among nodes, declared in directory from (inside
+	// base: the workflow files or the working directory).
+	var walk func(nodes []model.Node, path, key, from, base string, depth int) error
+	walk = func(nodes []model.Node, path, key, from, base string, depth int) error {
+		for i := range nodes {
+			nd := &nodes[i]
+			if nd.Kind != model.KindModule {
+				continue
+			}
+			source, version := callSource(nd)
+			call := model.ModuleCallSource{Source: source, Version: version, Local: hclcodec.IsLocalModuleSource(source)}
+			callPath, callKey := path+"module."+nd.Name, key+nd.Name
+			dir, dirBase := "", ""
+			if call.Local {
+				d := filepath.Join(from, filepath.FromSlash(strings.ReplaceAll(source, `\`, "/")))
+				if rel, err := filepath.Rel(base, d); err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+					dir, dirBase = d, base
+				}
+			} else if d, ok := cache[callKey]; ok {
+				dir, dirBase = d, work
+			}
+			var mod *model.Workflow
+			if dir != "" {
+				rel, err := filepath.Rel(dirBase, dir)
+				if err != nil {
+					return err
+				}
+				dirKey := filepath.ToSlash(rel)
+				if !parsed[dirKey] {
+					parsed[dirKey] = true
+					files, err := readModuleFiles(dir)
+					if err != nil {
+						return err
+					}
+					if len(files) > 0 {
+						m, diags, err := hclcodec.Import(callPath, files)
+						if err != nil {
+							return err
+						}
+						m.ID = wf.ID
+						s.finalize(m, diags)
+						tree.Modules[dirKey] = m
+					}
+				}
+				if mod = tree.Modules[dirKey]; mod != nil {
+					call.Dir = dirKey
+				}
+			}
+			tree.Calls[callPath] = call
+			if mod != nil && depth < maxModuleDepth {
+				if err := walk(mod.Nodes, callPath+".", callKey+".", dir, dirBase, depth+1); err != nil {
+					return err
+				}
+			}
+		}
+		return nil
+	}
+	if err := walk(wf.Nodes, "", "", root, root, 1); err != nil {
+		return err
+	}
+	return ok(w, tree)
+}
+
+// downloadedModules reads the module manifest `terraform init` writes
+// (.terraform/modules/modules.json in the working directory): module key
+// ("vpc", "app.db") -> absolute directory. Missing or unreadable manifests
+// give none.
+func downloadedModules(work string) map[string]string {
+	data, err := os.ReadFile(filepath.Join(work, ".terraform", "modules", "modules.json"))
+	if err != nil {
+		return nil
+	}
+	var manifest struct {
+		Modules []struct {
+			Key string `json:"Key"`
+			Dir string `json:"Dir"`
+		} `json:"Modules"`
+	}
+	if json.Unmarshal(data, &manifest) != nil {
+		return nil
+	}
+	out := map[string]string{}
+	for _, m := range manifest.Modules {
+		if m.Key == "" || m.Dir == "" {
+			continue
+		}
+		d := filepath.Join(work, filepath.FromSlash(m.Dir))
+		if rel, err := filepath.Rel(work, d); err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+			continue
+		}
+		out[m.Key] = d
+	}
+	return out
 }
 
 // describeModule classifies a module source called from directory from.

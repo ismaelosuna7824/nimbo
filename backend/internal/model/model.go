@@ -1371,6 +1371,28 @@ type ModuleView struct {
 	Message  string    `json:"message,omitempty"`
 }
 
+// ModuleTree is the content of every module call of a workflow, nested calls
+// included (GET /workflows/{id}/modules), for the Architecture diagram.
+type ModuleTree struct {
+	// Calls maps a call path ("module.app", "module.app.module.db") to where
+	// its content comes from.
+	Calls map[string]ModuleCallSource `json:"calls"`
+	// Modules are the module directories read, as workflows (nodes
+	// unpositioned), by ModuleCallSource.Dir.
+	Modules map[string]*Workflow `json:"modules"`
+}
+
+// ModuleCallSource is the source of one module call. Dir is set when the
+// content is readable: a local module inside the workflow files
+// ("modules/network"), or a registry/remote module that `terraform init`
+// downloaded into the sandbox working directory (".terraform/modules/vpc").
+type ModuleCallSource struct {
+	Source  string `json:"source"`
+	Version string `json:"version,omitempty"`
+	Local   bool   `json:"local"`
+	Dir     string `json:"dir,omitempty"`
+}
+
 // ModuleExtractRequest is the body of POST /workflows/{id}/modules/extract
 // (and .../extract/preview): the nodes (IDs or addresses) to move into a new
 // local module named Name (snake_case) at modules/<name>.

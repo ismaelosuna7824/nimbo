@@ -83,7 +83,7 @@ func cleanupSandbox(t *testing.T, m *Manager, wfID string) {
 			t.Errorf("leftovers after Remove (docker %s): %s", args[0], s)
 		}
 	}
-	if _, err := os.Stat(m.workDir(wfID)); !os.IsNotExist(err) {
+	if _, err := os.Stat(m.WorkDir(wfID)); !os.IsNotExist(err) {
 		t.Errorf("workdir still exists after Remove")
 	}
 }

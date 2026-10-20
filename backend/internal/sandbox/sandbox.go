@@ -106,7 +106,10 @@ func checkID(wfID string) error {
 }
 
 func (m *Manager) wfDir(wfID string) string { return filepath.Join(m.cfg.Home, "workflows", wfID) }
-func (m *Manager) workDir(wfID string) string {
+
+// WorkDir is where Terraform runs for a workflow (its .terraform cache,
+// downloaded modules and state live there).
+func (m *Manager) WorkDir(wfID string) string {
 	return filepath.Join(m.wfDir(wfID), "work")
 }
 func (m *Manager) emulatorDir(wfID string, c model.Cloud) string {
@@ -688,7 +691,7 @@ func (m *Manager) reset(ctx context.Context, sb *sandbox) error {
 	if err := m.removeSpawned(ctx, wfID); err != nil {
 		return err
 	}
-	work := m.workDir(wfID)
+	work := m.WorkDir(wfID)
 	for _, name := range []string{"terraform.tfstate", "terraform.tfstate.backup", "terraform.tfstate.d"} {
 		if err := os.RemoveAll(filepath.Join(work, name)); err != nil {
 			return err
@@ -874,7 +877,7 @@ func (m *Manager) remove(ctx context.Context, sb *sandbox) error {
 	if err := m.wipeDir(ctx, filepath.Join(m.wfDir(wfID), "emulators"), false); err != nil {
 		return err
 	}
-	return m.wipeDir(ctx, m.workDir(wfID), false)
+	return m.wipeDir(ctx, m.WorkDir(wfID), false)
 }
 
 // removeNetwork deletes a network, retrying while endpoints of just-removed

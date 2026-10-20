@@ -29,7 +29,17 @@ export default defineConfig({
     trace: "retain-on-failure",
     screenshot: "only-on-failure",
   },
-  projects: [{ name: "app", testDir: "./e2e/specs" }, ...(docker ? [{ name: "docker", testDir: "./e2e/docker" }] : [])],
+  projects: [
+    { name: "app", testDir: "./e2e/specs" },
+    // The desktop app is a WKWebView on macOS: the diagram and its image export also run in WebKit.
+    {
+      name: "webkit",
+      testDir: "./e2e/specs",
+      testMatch: /architecture\.spec\.ts$/,
+      use: { ...devices["Desktop Safari"], viewport: { width: 1440, height: 900 } },
+    },
+    ...(docker ? [{ name: "docker", testDir: "./e2e/docker" }] : []),
+  ],
   webServer: {
     command: `bunx vite --port ${vitePort} --strictPort`,
     url: appURL,

@@ -16,6 +16,14 @@ account. AI agents can do the same through the built-in MCP server.
 - **Terraform both ways**: export a workflow as idiomatic, `terraform fmt`
   clean files (plus per-environment `.tfvars`); import a Terraform folder and
   get the diagram back, edges derived from references.
+- **Architecture diagram**: switch the canvas from *Build* to *Architecture*
+  (⌘⇧A) for a read-only, shareable cloud diagram: official AWS/Azure/Google
+  Cloud/OCI icons, nested cloud → region → VPC → AZ → subnet containers,
+  logical service groups, users/internet actors, data-flow arrows, title and
+  legend. Helpers stay out of the way: security groups, route tables, target
+  groups and the like fold into the cards and subnets using them. Module
+  calls are drawn as the services they create (one card per ECS service
+  call, "ECS services (6)" groups), then export PNG (1–4×) or SVG.
 - **Environments**: per-workflow variable values and process env vars
   (secrets masked), applied to runs and exported as tfvars.
 - **Test locally**: each workflow gets its own Docker sandbox running the
@@ -179,6 +187,8 @@ go generate ./internal/catalog/...             # regenerate provider schemas
 
 cd apps/desktop
 bun run build                                  # tsc + vite
+bun run test                                   # unit tests (bun test)
+bun run test:e2e                               # Playwright end-to-end tests
 bun run tauri:build                            # desktop bundle
 ```
 
@@ -212,3 +222,11 @@ Hosting, Google Analytics for Firebase only after cookie consent.
 cd apps/landing && bun install && bun run dev   # http://localhost:4321
 bun run deploy                                  # build + firebase deploy (see apps/landing/README.md)
 ```
+
+## License
+
+Nimbo is [MIT](LICENSE) licensed. Third-party cloud icons (AWS, Microsoft
+Azure, Google Cloud, Oracle Cloud Infrastructure) bundled for the Architecture
+diagram view are not covered by the MIT license; they stay under their owners'
+terms — see
+[`apps/desktop/src/features/architecture/icons/NOTICE.md`](apps/desktop/src/features/architecture/icons/NOTICE.md).

@@ -277,6 +277,35 @@ func TestModuleViewLocalNestedAndRegistry(t *testing.T) {
 	}
 }
 
+func TestModuleTreeLocalNestedAndDownloaded(t *testing.T) {
+	e := newEnv(t)
+	wf := e.importOne(map[string]any{"dir": fixtureRepo(t), "projects": []string{"envs/dev"}})
+
+	var tree model.ModuleTree
+	e.mustCall(http.StatusOK, "GET", "/workflows/"+wf.ID+"/modules", nil, &tree)
+	network, subnets, logs := tree.Calls["module.network"], tree.Calls["module.network.module.subnets"], tree.Calls["module.logs"]
+	if !network.Local || network.Dir != "modules/network" || !subnets.Local || subnets.Source != "../subnets" || subnets.Dir != "modules/subnets" {
+		t.Fatalf("local calls = %+v / %+v", network, subnets)
+	}
+	if logs.Local || logs.Dir != "" || logs.Source != "terraform-aws-modules/s3-bucket/aws" || logs.Version != "4.1.2" {
+		t.Fatalf("registry call before init = %+v", logs)
+	}
+	if m := tree.Modules["modules/subnets"]; m == nil || len(m.Nodes) != 1 || m.Nodes[0].ID != "aws_subnet.this" || len(tree.Modules) != 2 {
+		t.Fatalf("modules = %v", tree.Modules)
+	}
+
+	// After `terraform init` the registry module is read from the module cache.
+	work := filepath.Join(e.home, "workflows", wf.ID, "work")
+	writeFile(t, filepath.Join(work, ".terraform", "modules", "modules.json"),
+		`{"Modules":[{"Key":"","Source":"","Dir":"."},{"Key":"logs","Source":"registry.terraform.io/terraform-aws-modules/s3-bucket/aws","Version":"4.1.2","Dir":".terraform/modules/logs"},{"Key":"evil","Dir":"../../x"}]}`)
+	writeFile(t, filepath.Join(work, ".terraform", "modules", "logs", "main.tf"), `resource "aws_s3_bucket" "this" {}`)
+	e.mustCall(http.StatusOK, "GET", "/workflows/"+wf.ID+"/modules", nil, &tree)
+	logs = tree.Calls["module.logs"]
+	if m := tree.Modules[logs.Dir]; logs.Dir != ".terraform/modules/logs" || m == nil || len(m.Nodes) != 1 || m.Nodes[0].ID != "aws_s3_bucket.this" {
+		t.Fatalf("downloaded call = %+v", logs)
+	}
+}
+
 func TestDescribeRemoteModuleSources(t *testing.T) {
 	for source, want := range map[string]string{
 		"git::https://example.com/vpc.git?ref=v1":       "Remote module git::https://example.com/vpc.git?ref=v1 — contents are downloaded at deploy time",

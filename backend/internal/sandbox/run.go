@@ -198,7 +198,7 @@ func (m *Manager) runSteps(ctx context.Context, rs *runState, req RunRequest) er
 		return err
 	}
 
-	work := m.workDir(wf.ID)
+	work := m.WorkDir(wf.ID)
 	versions := readLockVersions(work)
 	resized, err := syncWorkdir(work, runFiles(req, versions), req.AssetsDir)
 	if err != nil {
@@ -361,7 +361,7 @@ func (m *Manager) terraformArgs(name, wfID, network string) []string {
 	args := []string{"run", "--rm", "--name", name,
 		"--label", labelWorkflow + "=" + wfID, "--label", labelRole + "=" + roleTerraform,
 		"--network", network,
-		"-v", m.workDir(wfID) + ":/work", "-w", "/work",
+		"-v", m.WorkDir(wfID) + ":/work", "-w", "/work",
 		"-v", pluginCacheVolume + ":/plugins",
 		"-e", "TF_PLUGIN_CACHE_DIR=/plugins",
 		"-e", "TF_PLUGIN_CACHE_MAY_BREAK_DEPENDENCY_LOCK_FILE=true",

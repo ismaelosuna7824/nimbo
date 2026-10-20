@@ -3,7 +3,7 @@ import { usePanelRef } from "react-resizable-panels"
 import { ResizableHandle, ResizablePanel, ResizablePanelGroup } from "@/components/ui/resizable"
 import { Sidebar, SidebarContent, SidebarHeader, SidebarInset, SidebarProvider } from "@/components/ui/sidebar"
 import { BottomPanel } from "@/features/panels"
-import { Canvas } from "@/features/canvas/canvas"
+import { CanvasArea } from "@/features/architecture/canvas-area"
 import { Inspector } from "@/features/inspector/inspector"
 import { ReachabilityDialog } from "@/features/network/reachability-dialog"
 import { Palette } from "@/features/palette/palette"
@@ -56,7 +56,7 @@ export function EditorShell() {
           <ResizablePanel id="editor-main" minSize="40%">
             <ResizablePanelGroup orientation="vertical">
               <ResizablePanel id="editor-canvas" minSize="20%">
-                <Canvas />
+                <CanvasArea />
               </ResizablePanel>
               <ResizableHandle />
               <ResizablePanel
