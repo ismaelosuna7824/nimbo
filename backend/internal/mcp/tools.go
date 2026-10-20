@@ -39,6 +39,7 @@ func registerTools(r *registry, t *tools) {
 	addTool(r, "list_templates", "List templates", "List starter templates that can seed create_workflow (e.g. aws-queue-worker, aws-serverless-api).", t.listTemplates)
 	addTool(r, "create_workflow", "Create workflow", "Create a workflow, optionally from a template ID (see list_templates). Returns the compact workflow; use its id in every other tool.", t.createWorkflow)
 	addTool(r, "get_workflow", "Get workflow", "Get a compact view of a workflow: nodes (address, type, attributes as HCL expressions, nested blocks), derived edges (source.attr -> target.attribute), variables, outputs, locals, providers, environments (secret values redacted) and diagnostics. Call this before editing.", t.getWorkflow)
+	addTool(r, "update_workflow", "Update workflow", "Rename a workflow and/or change its description after creation; pass only the fields that change (description \"\" clears it). Its Terraform is unchanged. Returns the compact workflow.", t.updateWorkflow)
 	addTool(r, "archive_workflow", "Archive workflow", "Archive (close) a workflow: its sandbox is stopped keeping state, it is hidden from list_workflows and runs/load tests are refused until unarchive_workflow.", t.archiveWorkflow)
 	addTool(r, "unarchive_workflow", "Unarchive workflow", "Restore an archived workflow so it can be edited, deployed and load-tested again.", t.unarchiveWorkflow)
 
@@ -84,7 +85,7 @@ func registerTools(r *registry, t *tools) {
 
 	r.group = groupNetwork
 	addTool(r, "check_network", "Check network", "Review the workflow's networks: VPCs/VNets, subnets classified public/private/isolated with the reason, route tables, gateways, security group summaries, where each workload sits (subnet, AZ, public or not), and the net_* findings (subnet outside its VPC, overlapping CIDRs, public subnet without internet gateway route, private subnet without egress, NAT in a private subnet, unassociated route tables, cross-VPC routes/security groups, NACLs dropping replies, single-AZ load balancers/DB subnet groups) with why and fix. Uses the deployed sandbox's exact values when everything is deployed (basis \"deployed\"), else the design (basis \"design\"); unknown values are skipped, never guessed. Call it after designing or changing a network.", t.checkNetwork)
-	addTool(r, "check_reachability", "Check reachability", "Answer \"can traffic get from A to B?\" like AWS Reachability Analyzer: from internet or a node to a node or internet, protocol and port. Returns reachable, the path hop by hop (internet gateway, route table, network ACL both ways with ephemeral ports, security groups, listeners, targets) each allow/deny/unknown with the reason, blockers and suggested fixes. live=true also runs real connections in the deployed sandbox for EC2 instances and labels each hop verified live or analysis-only (the local emulator doesn't enforce security groups between instances, NACLs or route tables).", t.checkReachability)
+	addTool(r, "check_reachability", "Check reachability", "AWS only today: Azure and GCP endpoints are rejected. Answer \"can traffic get from A to B?\" like AWS Reachability Analyzer: from internet or a node to a node or internet, protocol and port. Returns reachable, the path hop by hop (internet gateway, route table, network ACL both ways with ephemeral ports, security groups, listeners, targets) each allow/deny/unknown with the reason, blockers and suggested fixes. live=true also runs real connections in the deployed sandbox for EC2 instances and labels each hop verified live or analysis-only (the local emulator doesn't enforce security groups between instances, NACLs or route tables).", t.checkReachability)
 	addTool(r, "add_test_instance", "Add test instance", "Add a small, clearly labelled EC2 test instance (Amazon Linux 2023, t3.micro, user_data web server on port 80 with a friendly page) and its security group (port 80 open to 0.0.0.0/0, commented) into a subnet, so traffic can be tested for real after deploying: get_endpoints then shows its host URL and check_reachability live=true connects to it. subnet is an aws_subnet address; for count/for_each subnets name one instance (aws_subnet.public[\"a\"]).", t.addTestInstance)
 
 	r.group = groupLoadTests
@@ -189,6 +190,37 @@ func (t *tools) createWorkflow(ctx context.Context, in createWorkflowIn) (any, e
 	v := viewWorkflow(&wf)
 	v.BestPractices = bpDelta(nil, &wf)
 	return v, nil
+}
+
+type updateWorkflowIn struct {
+	Workflow    string  `json:"workflow,omitempty" jsonschema:"workflow ID or exact name; omit or pass \"current\" for the workflow open in the Nimbo app"`
+	Name        *string `json:"name,omitempty" jsonschema:"new human readable name"`
+	Description *string `json:"description,omitempty" jsonschema:"new description; \"\" clears it"`
+}
+
+func (t *tools) updateWorkflow(ctx context.Context, in updateWorkflowIn) (any, error) {
+	if in.Name == nil && in.Description == nil {
+		return nil, errors.New("pass name and/or description")
+	}
+	wf, err := t.c.workflow(ctx, in.Workflow)
+	if err != nil {
+		return nil, err
+	}
+	if in.Name != nil {
+		name := strings.TrimSpace(*in.Name)
+		if name == "" {
+			return nil, errors.New("name must not be empty")
+		}
+		wf.Name = name
+	}
+	if in.Description != nil {
+		wf.Description = strings.TrimSpace(*in.Description)
+	}
+	out, err := t.c.saveWorkflow(ctx, wf)
+	if err != nil {
+		return nil, err
+	}
+	return viewWorkflow(out), nil
 }
 
 func (t *tools) getWorkflow(ctx context.Context, in workflowArg) (any, error) {

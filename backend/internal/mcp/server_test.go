@@ -189,6 +189,38 @@ func TestApplyTerraformCodeMergesFiles(t *testing.T) {
 	}
 }
 
+func TestUpdateWorkflowNameAndDescription(t *testing.T) {
+	cs, _ := session(t)
+	var wf workflowView
+	mustTool(t, cs, "create_workflow", map[string]any{"name": "Shop", "description": "First draft."}, &wf)
+	mustTool(t, cs, "add_node", map[string]any{"workflow": wf.ID, "type": "aws_sqs_queue", "name": "q"}, nil)
+
+	var out workflowView
+	mustTool(t, cs, "update_workflow", map[string]any{"workflow": wf.ID, "description": "  Takes orders and queues them.  "}, &out)
+	if out.ID != wf.ID || out.Name != "Shop" || out.Description != "Takes orders and queues them." || len(out.Nodes) != 1 {
+		t.Fatalf("description update: %+v", out)
+	}
+	mustTool(t, cs, "update_workflow", map[string]any{"workflow": "Shop", "name": "Online shop"}, &out)
+	if out.Name != "Online shop" || out.Description != "Takes orders and queues them." {
+		t.Fatalf("rename: %+v", out)
+	}
+	var got workflowView
+	mustTool(t, cs, "get_workflow", map[string]any{"workflow": wf.ID}, &got)
+	if got.Name != "Online shop" || got.Description != "Takes orders and queues them." || len(got.Nodes) != 1 {
+		t.Fatalf("not saved: %+v", got)
+	}
+	var cleared workflowView
+	mustTool(t, cs, "update_workflow", map[string]any{"workflow": wf.ID, "description": ""}, &cleared)
+	if cleared.Description != "" || cleared.Name != "Online shop" {
+		t.Fatalf("clear description: %+v", cleared)
+	}
+	for _, args := range []map[string]any{{"workflow": wf.ID}, {"workflow": wf.ID, "name": "  "}} {
+		if text, isErr := callTool(t, cs, "update_workflow", args); !isErr {
+			t.Errorf("update_workflow %v accepted: %s", args, text)
+		}
+	}
+}
+
 func TestUpdateNodeMovesFile(t *testing.T) {
 	cs, _ := session(t)
 	var wf workflowView

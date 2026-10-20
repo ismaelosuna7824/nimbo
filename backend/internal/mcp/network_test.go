@@ -46,3 +46,29 @@ func TestNetworkTools(t *testing.T) {
 		t.Errorf("internet -> internet: %s", text)
 	}
 }
+
+// check_reachability says it covers AWS only, for GCP/Azure endpoints both
+// in a workflow with an AWS network and in one without.
+func TestCheckReachabilityAWSOnly(t *testing.T) {
+	cs, _ := session(t)
+	var wf struct {
+		ID string `json:"id"`
+	}
+	mustTool(t, cs, "create_workflow", map[string]any{"name": "mixed", "template": "aws-vpc-basics"}, &wf)
+	mustTool(t, cs, "apply_terraform_code", map[string]any{"workflow": wf.ID, "files": map[string]string{
+		"gcp.tf": "resource \"google_cloud_run_v2_service\" \"api\" {\n  name     = \"api\"\n  location = \"us-central1\"\n}\n",
+	}}, nil)
+	var az struct {
+		ID string `json:"id"`
+	}
+	mustTool(t, cs, "create_workflow", map[string]any{"name": "azure"}, &az)
+	mustTool(t, cs, "apply_terraform_code", map[string]any{"workflow": az.ID, "files": map[string]string{
+		"main.tf": "resource \"azurerm_linux_web_app\" \"api\" {\n  name = \"api\"\n}\n",
+	}}, nil)
+	for _, c := range []struct{ workflow, to string }{{wf.ID, "google_cloud_run_v2_service.api"}, {az.ID, "azurerm_linux_web_app.api"}} {
+		text, isErr := callTool(t, cs, "check_reachability", map[string]any{"workflow": c.workflow, "from": "internet", "to": c.to, "port": 443})
+		if !isErr || !strings.Contains(text, "AWS only today") || !strings.Contains(text, c.to) {
+			t.Errorf("%s: %s", c.to, text)
+		}
+	}
+}

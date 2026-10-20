@@ -105,7 +105,8 @@ commands (e.g. `/mcp__nimbo__extend_workflow` in Claude Code).
 
 Networks: after designing or changing VPCs, subnets, route tables, gateways
 or security groups, call `check_network` and fix its `net_*` findings
-(errors first), then `check_reachability` for the paths that matter
+(errors first), then `check_reachability` (AWS only today: Azure and GCP
+endpoints are rejected) for the paths that matter
 (internet → load balancer:443 ✓, app → database:5432 ✓, database →
 internet ✗). To show real traffic, `add_test_instance` into a public
 subnet, `deploy`, then `check_reachability` with `live: true`: each hop says
@@ -244,6 +245,7 @@ Conventions).
 | `list_templates` | — | Starter templates |
 | `create_workflow` | `name`, `description?`, `template?` | New workflow, optionally from a template |
 | `get_workflow` | `workflow` | Compact workflow: nodes, edges, variables, outputs, environments, diagnostics |
+| `update_workflow` | `workflow`, `name?`, `description?` | Rename a workflow or change its description (only the given fields change; `description: ""` clears it); the Terraform is unchanged |
 | `archive_workflow` / `unarchive_workflow` | `workflow` | Close a workflow (sandbox stopped keeping state, hidden, runs refused) or restore it |
 | `search_resources` | `query`, `cloud?`, `kind?`, `supported_only?`, `limit?` | Search the resource catalog |
 | `describe_resource` | `type`, `kind?` | Required/optional attributes, nested blocks, exported attributes, Floci support |
@@ -261,7 +263,7 @@ Conventions).
 | `set_environment` | `workflow`, `name`, `values?`, `env_vars?`, `secret_keys?`, `activate?` | Create/update an environment |
 | `get_terraform` | `workflow` | Rendered Terraform files |
 | `review_terraform` | `workflow` | Best-practice findings grouped by severity, with why and fix (see Code quality) |
-| `apply_terraform_code` | `workflow`, `files` | Edit by code (merged over current files; `""` deletes a file) |
+| `apply_terraform_code` | `workflow`, `files` | Edit by code (merged over current files; `""` deletes a file, and its blocks are gone unless the same call writes them to another file). Every block stays in the file it is written in; applying the same files again changes nothing |
 | `scan_terraform_folder` | `dir` | Terraform projects in a folder/repo (counts, providers, clouds, tfvars, backend, diagnostics) without importing |
 | `import_terraform` | `dir?` \| `files?`, `projects?`, `name?` | Import Terraform as new workflows (default: the root only; `projects` from the scan, `"."` = root) |
 | `export_terraform` | `workflow`, `dir`, `environments?` | Write Terraform + assets to a directory |
@@ -272,7 +274,7 @@ Conventions).
 | `get_endpoints` | `workflow` | How to use what is deployed: sandbox address/env, and per resource a plain summary, host URLs, identifiers, the first ready-to-run snippet and its `try_endpoint` actions |
 | `try_endpoint` | `workflow`, `node`, `action`, `input?`, `method?`, `path?`, `headers?` | Call a deployed resource in the sandbox (HTTP request to a route, invoke, send/peek messages, publish, list/put/get files, scan/put items, …); returns status, latency and body |
 | `check_network` | `workflow` | Network review: basis (`deployed` sandbox values or `design`), VPCs, subnets classified public/private/isolated with why, route tables, gateways, security group summaries, placements (subnet, AZ, public or not), `net_*` findings with why and fix, notes on what was skipped (unknown values) |
-| `check_reachability` | `workflow`, `from`, `to` (`"internet"` or a node), `protocol?` (tcp/udp/icmp), `port`, `live?` | Can traffic get from A to B? `reachable`, `verdict`, the path hop by hop (allow/deny/unknown + reason), blockers, suggestions; `live` adds real probes for EC2 instances with per-hop `enforcement` |
+| `check_reachability` | `workflow`, `from`, `to` (`"internet"` or a node), `protocol?` (tcp/udp/icmp), `port`, `live?` | AWS only today. Can traffic get from A to B? `reachable`, `verdict`, the path hop by hop (allow/deny/unknown + reason), blockers, suggestions; `live` adds real probes for EC2 instances with per-hop `enforcement` |
 | `add_test_instance` | `workflow`, `subnet` | Add a labelled EC2 test web server (port 80 page) and its security group into a subnet, to test traffic for real after deploying |
 | `list_load_targets` | `workflow` | Suggested load-test targets (indexed) |
 | `run_load_test` | `workflow`, `target`, `preset?`, `stages?`, `mode?`, `thresholds?`, `confirm_external?`, `wait?` | Run a load test; returns summary and threshold results. Target objects may use `connectionId` (needs `confirm_external`) |

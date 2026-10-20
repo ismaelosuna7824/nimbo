@@ -194,8 +194,11 @@ func (a *Analysis) resolveEnd(ep model.NetEndpoint, role string) (end, error) {
 	if node == nil {
 		return end{}, badRequest("%s %q is not a node of the workflow", role, ep.NodeID)
 	}
+	if node.Kind != model.KindModule && !strings.HasPrefix(node.Type, "aws_") {
+		return end{}, badRequest("%s %s is not an AWS resource: reachability analysis supports AWS only today (Azure and GCP aren't supported yet)", role, addrOf(node))
+	}
 	if a.aws == nil {
-		return end{}, badRequest("reachability analysis covers AWS networks")
+		return end{}, badRequest("reachability analysis supports AWS only today, and the workflow has no AWS network")
 	}
 	var candidates []*workload
 	for _, wl := range a.aws.works {

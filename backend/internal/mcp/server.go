@@ -21,9 +21,11 @@ Recommended loop:
 5. Check diagnostics returned by every edit (get_workflow shows all); fix errors with update_node. Fix the best_practices findings an edit returns right away.
 6. validate, then deploy (terraform apply into the local sandbox). Read the log tail on failure, fix, and retry.
 7. list_load_targets, then run_load_test (start with preset smoke, then load/stress) and report latency, throughput, error rate and threshold results.
-8. export_terraform to a directory when the user wants the code. get_terraform shows it inline; apply_terraform_code edits by code.
+8. export_terraform to a directory when the user wants the code. get_terraform shows it inline; apply_terraform_code edits by code (every block stays in the file you write it in).
 
-Networks: use check_network after designing or changing networks (VPCs, subnets, route tables, gateways, security groups) and fix its net_* findings; then check_reachability for the paths that matter (internet → load balancer:443, app → database:5432, database → internet should be blocked). To show traffic really flowing, add_test_instance into a public subnet, deploy, then check_reachability with live=true.
+update_workflow renames a workflow or changes its description; keep the description in step with what the workflow does.
+
+Networks: use check_network after designing or changing networks (VPCs, subnets, route tables, gateways, security groups) and fix its net_* findings; then check_reachability (AWS only today) for the paths that matter (internet → load balancer:443, app → database:5432, database → internet should be blocked). To show traffic really flowing, add_test_instance into a public subnet, deploy, then check_reachability with live=true.
 
 Code quality: the Terraform you write is handed to the user as production code, so follow the practices Nimbo's starters already use.
 - Configurable values (sizes, counts, CIDRs, retention, region) are variables with type and description, or locals for values used in several places; no hardcoded regions, zones or account IDs (use var.aws_region, data.aws_availability_zones, data.aws_caller_identity).
