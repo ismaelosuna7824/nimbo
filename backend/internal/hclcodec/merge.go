@@ -13,11 +13,13 @@ import (
 // MergeImported carries app-only data from prev into next (a fresh Import of
 // edited code): node IDs, positions, labels, parents matched by address;
 // environments, active environment, workflow ID/name/description/icon/
-// createdAt and the archived flag. Blocks that had no recorded file in prev
-// and are still in the file the recommended layout gave them stay
-// unrecorded, and so do new blocks written where that layout puts them;
-// every other block keeps the file it was written in. resourceFile is the
-// one given to Export.
+// createdAt and the archived flag. Every block stays in the file it was
+// written in. Blocks that had no recorded file in prev and are still in the
+// file the recommended layout gave them stay unrecorded, and so do new
+// blocks written where that layout puts them, unless the layout of next
+// would then move them (or other blocks of their file keep a recorded
+// file); every other block records its file. resourceFile is the one given
+// to Export.
 func MergeImported(prev, next *model.Workflow, resourceFile func(string) string) {
 	if prev == nil || next == nil {
 		return
@@ -84,8 +86,23 @@ func MergeImported(prev, next *model.Workflow, resourceFile func(string) string)
 }
 
 // keepAutoFiles clears the recorded files of next that only repeat prev's
-// recommended layout, so the layout keeps adapting to later changes.
+// recommended layout (and of new blocks written where that layout puts
+// them), so the layout keeps adapting to later changes, as long as every
+// block still lands in the file it was written in: a block the layout would
+// put elsewhere (e.g. next to the blocks of its class written to another
+// file) keeps its file, and so does every block of a file that keeps
+// recorded blocks, so that file keeps its source order.
 func keepAutoFiles(prev, next *model.Workflow, resourceFile func(string) string) {
+	type filePos struct {
+		file  string
+		order int
+	}
+	written := map[string]filePos{}
+	for _, p := range layout(next, resourceFile) {
+		if !p.merged {
+			written[p.key] = filePos{*p.file, *p.order}
+		}
+	}
 	before := map[string]*placed{}
 	for _, p := range layout(prev, resourceFile) {
 		before[p.key] = p
@@ -99,35 +116,29 @@ func keepAutoFiles(prev, next *model.Workflow, resourceFile func(string) string)
 		len(next.TerraformBlocks) == 1 && next.TerraformBlocks[0].File == before["terraform"].place {
 		unpinBlocks(&next.TerraformBlocks, &next.Terraform.Comments, next.Terraform.Attrs, next.Terraform.Blocks)
 	}
-	var added []*placed
 	for _, p := range layout(next, resourceFile) {
-		if p.merged {
-			continue
-		}
-		old, ok := before[p.key]
-		switch {
-		case !ok:
-			added = append(added, p)
-		case *old.file == "" && old.place == *p.file:
+		if old, ok := before[p.key]; !p.merged && (!ok || *old.file == "" && old.place == *p.file) {
 			*p.file, *p.order = "", 0
 		}
 	}
-	if len(added) == 0 {
-		return
-	}
-	written := make([]string, len(added))
-	orders := make([]int, len(added))
-	for i, p := range added {
-		written[i], orders[i] = *p.file, *p.order
-		*p.file, *p.order = "", 0
-	}
-	auto := map[string]string{}
-	for _, p := range layout(next, resourceFile) {
-		auto[p.key] = p.place
-	}
-	for i, p := range added {
-		if auto[p.key] != written[i] {
-			*p.file, *p.order = written[i], orders[i]
+	// Record the written file again where the layout disagrees, until it
+	// agrees everywhere: every record changes the layout of the rest.
+	for changed := true; changed; {
+		changed = false
+		placed := layout(next, resourceFile)
+		recorded := map[string]bool{}
+		for _, p := range placed {
+			if *p.file != "" {
+				recorded[*p.file] = true
+			}
+		}
+		for _, p := range placed {
+			w, ok := written[p.key]
+			if p.merged || !ok || w.file == "" || *p.file != "" || p.place == w.file && !recorded[w.file] {
+				continue
+			}
+			*p.file, *p.order = w.file, w.order
+			changed = true
 		}
 	}
 }

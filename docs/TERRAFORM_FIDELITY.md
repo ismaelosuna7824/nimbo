@@ -82,7 +82,14 @@ calls and the rest; a workflow with at most 5 resources keeps its data
 sources and resources in a single `main.tf`. Inside those files data sources
 and resources follow their dependencies, then their address. In Pro mode the
 inspector's **File** field (or MCP `update_node` with `file`) moves a node to
-another file; the node then stays there.
+another file; the node then stays there. A code edit (the Code tab, MCP
+`apply_terraform_code`, `PUT /workflows/{id}/terraform`) keeps every block
+in the file it was written in: blocks written where the recommended layout
+puts them stay automatic only while that layout still agrees; otherwise
+(e.g. other blocks of their category were written to another file) they
+record their file, as does every block of a file holding a recorded block,
+so the file keeps its written order. Applying the same code again changes
+nothing.
 
 ## What Nimbo reports instead of guessing
 

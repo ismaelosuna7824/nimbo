@@ -233,17 +233,27 @@ func TestLayoutImportedKeepsFilesAndPlacesNewBlocks(t *testing.T) {
 func TestMergeImportedKeepsAutomaticFiles(t *testing.T) {
 	prev := largeProject()
 	files := mustExport(t, prev, ExportOptions{ResourceFile: testResourceFile})
+	if _, ok := files["custom.tf"]; ok {
+		t.Fatal("custom.tf in the recommended layout")
+	}
 
-	// Code edit: one block written where Nimbo would put it, one elsewhere.
-	files["messaging.tf"] = append(files["messaging.tf"], []byte("\nresource \"aws_sqs_queue\" \"extra\" {}\n")...)
+	// Code edit: blocks written where Nimbo would put them, one elsewhere.
+	files["storage.tf"] = append(files["storage.tf"], []byte("\nresource \"aws_s3_bucket\" \"extra\" {}\n")...)
 	files["custom.tf"] = []byte("resource \"aws_sqs_queue\" \"custom\" {}\n")
 	next, _ := mustImport(t, files)
 	MergeImported(prev, next, testResourceFile)
 
+	// The queue written to custom.tf keeps that file; the queues written to
+	// messaging.tf keep theirs instead of following it; the rest stays
+	// automatic.
 	for _, n := range next.Nodes {
 		want := ""
-		if n.Name == "custom" {
-			want = "custom.tf"
+		switch n.Type {
+		case "aws_sqs_queue":
+			want = "messaging.tf"
+			if n.Name == "custom" {
+				want = "custom.tf"
+			}
 		}
 		if n.File != want {
 			t.Errorf("node %s file = %q, want %q", n.ID, n.File, want)
@@ -251,6 +261,65 @@ func TestMergeImportedKeepsAutomaticFiles(t *testing.T) {
 	}
 	if len(next.TerraformBlocks) != 0 || len(next.LocalsBlocks) != 0 || next.Variables[0].File != "" {
 		t.Error("unchanged blocks kept a recorded file")
+	}
+	if got := mustExport(t, next, ExportOptions{ResourceFile: testResourceFile}); !reflect.DeepEqual(keysOf(got), keysOf(files)) {
+		t.Errorf("files = %v, written %v", keysOf(got), keysOf(files))
+	} else {
+		for name := range files {
+			if a, b := blockSet(t, got[name]), blockSet(t, files[name]); !slices.Equal(a, b) {
+				t.Errorf("%s holds %v, written %v", name, a, b)
+			}
+		}
+	}
+}
+
+// blockSet lists the blocks of a file, sorted.
+func blockSet(t *testing.T, src []byte) []string {
+	t.Helper()
+	return slices.Sorted(slices.Values(blockOrder(t, src)))
+}
+
+// A first code edit of a small project that splits it into files (and
+// deletes main.tf) keeps every block in its file, although blocks of one
+// category are written to several files; applying it again changes nothing.
+func TestMergeImportedKeepsWrittenFiles(t *testing.T) {
+	prev := newProject(lxNode("aws_vpc", "main"), lxNode("aws_s3_bucket", "site"))
+	written := mustExport(t, prev, ExportOptions{ResourceFile: testResourceFile})
+	delete(written, "main.tf")
+	written["network.tf"] = []byte("resource \"aws_vpc\" \"main\" {}\n\nresource \"aws_subnet\" \"public\" {}\n\nresource \"aws_subnet\" \"app\" {}\n\nresource \"aws_security_group\" \"app\" {}\n")
+	written["alb.tf"] = []byte("resource \"aws_security_group\" \"alb\" {}\n\nresource \"aws_lb\" \"main\" {}\n")
+	written["dns.tf"] = []byte("resource \"aws_subnet\" \"dns\" {}\n")
+	written["storage.tf"] = []byte("resource \"aws_s3_bucket\" \"site\" {}\n\nresource \"aws_s3_bucket\" \"logs\" {}\n")
+	written["iam.tf"] = []byte("resource \"aws_iam_role\" \"api\" {}\n\nresource \"aws_sqs_queue_policy\" \"orders\" {}\n")
+	written["messaging.tf"] = []byte("resource \"aws_sqs_queue\" \"orders\" {}\n")
+
+	apply := func(prev *model.Workflow) (*model.Workflow, map[string][]byte) {
+		t.Helper()
+		next, _ := mustImport(t, written)
+		MergeImported(prev, next, testResourceFile)
+		got := mustExport(t, next, ExportOptions{ResourceFile: testResourceFile})
+		if !reflect.DeepEqual(keysOf(got), keysOf(written)) {
+			t.Fatalf("files = %v, written %v", keysOf(got), keysOf(written))
+		}
+		for name := range written {
+			if a, b := blockSet(t, got[name]), blockSet(t, written[name]); !slices.Equal(a, b) {
+				t.Errorf("%s holds %v, written %v", name, a, b)
+			}
+		}
+		return next, got
+	}
+	first, files := apply(prev)
+	if node(t, first, "aws_vpc.main").ID != node(t, prev, "aws_vpc.main").ID {
+		t.Error("the VPC moved out of the deleted main.tf lost its node")
+	}
+	second, again := apply(first)
+	if !reflect.DeepEqual(files, again) {
+		t.Error("applying the same code again changed the export")
+	}
+	for i := range first.Nodes {
+		if a, b := first.Nodes[i], second.Nodes[i]; a.ID != b.ID || a.File != b.File || a.Order != b.Order {
+			t.Errorf("node %s changed on re-apply: %q#%d -> %q#%d", a.ID, a.File, a.Order, b.File, b.Order)
+		}
 	}
 }
 

@@ -282,10 +282,15 @@ func TestPutTerraformRoundTripKeepsLayout(t *testing.T) {
 		t.Fatalf("new node missing or positioned: %+v", extra)
 	}
 	// Code edits keep the automatic layout of the blocks they did not move;
-	// a block written elsewhere than Nimbo would put it stays there.
+	// a block written elsewhere than Nimbo would put it stays there, and so
+	// do the blocks around it, so the file keeps the order it was written in.
 	for _, n := range next.Nodes {
-		if n.Name != "extra" && n.File != "" {
-			t.Errorf("node %s pinned to %s by a code edit", n.ID, n.File)
+		want := ""
+		if wf.NodeFiles[n.ID] == file || n.Name == "extra" {
+			want = file
+		}
+		if n.File != want {
+			t.Errorf("node %s recorded in %q, want %q", n.ID, n.File, want)
 		}
 	}
 	if next.NodeFiles[extra.ID] != file {
@@ -296,8 +301,8 @@ func TestPutTerraformRoundTripKeepsLayout(t *testing.T) {
 		Files map[string]string `json:"files"`
 	}
 	e.mustCall(http.StatusOK, "GET", "/workflows/"+wf.ID+"/terraform", nil, &again)
-	if !strings.Contains(again.Files[file], `bucket = "extra-bucket"`) {
-		t.Fatalf("re-export lost the edit:\n%s", again.Files[file])
+	if again.Files[file] != tf.Files[file] {
+		t.Fatalf("re-export of %s differs from the code written:\n%s\nwant\n%s", file, again.Files[file], tf.Files[file])
 	}
 
 	var apiErr struct {
