@@ -75,7 +75,8 @@ export function Palette() {
           </p>
         )}
       </div>
-      <div ref={setScroller} className="min-h-0 flex-1 overflow-y-auto px-2 pb-4">
+      {/* No scroll anchoring: expanding a category must leave its header where it was, not shift the list. */}
+      <div ref={setScroller} className="min-h-0 flex-1 [overflow-anchor:none] overflow-y-auto px-2 pb-4">
         <ScrollParent value={scroller}>
           {q ? <SearchResults q={q} cloud={cloud} supported={supported} /> : <Browse cloud={cloud} supported={supported} />}
         </ScrollParent>
@@ -195,6 +196,10 @@ const ResourceList = memo(function ResourceList({ items }: { items: ResourceSumm
   const virtualizer = useVirtualizer({
     count: items.length,
     getScrollElement: () => scroller,
+    // Several lists share the palette's scroller. A virtualizer scrolls its
+    // element to initialOffset when it attaches, so a list mounting (a
+    // category being expanded) would jump the palette to the top.
+    initialOffset: () => scroller?.scrollTop ?? 0,
     estimateSize: () => 48,
     gap: 2,
     overscan: 6,
