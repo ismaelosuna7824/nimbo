@@ -82,15 +82,16 @@ commands (e.g. `/mcp__nimbo__extend_workflow` in Claude Code).
 
 | Prompt | Arguments | What it guides |
 |---|---|---|
-| `create_infrastructure` | `request`, `cloud?` | `list_templates` → `create_workflow` → `search_resources`/`describe_resource` → `add_node` → `connect` → group large/repeated concerns with `extract_module` → `validate` → `deploy` → smoke test → summary |
-| `extend_workflow` | `request`, `workflow?` (default `current`) | Inspect the graph, add and connect services, extract a concern that grew large into a module, `validate`, `plan` |
+| `create_infrastructure` | `request`, `cloud?` | Plan the structure (layers, modules, environments) → `list_templates` → `create_workflow` → `search_resources`/`describe_resource` → `add_node` → `connect` → one module per logical group with `extract_module` → environments → `review_terraform` (structure + findings) → `validate` → `deploy` → smoke test → summary |
+| `plan_structure` | `request` | Design before building: inventory per logical group, states by size (one workflow; modules; one workflow per layer past ~100 resources), environments and their inputs, modules per workflow; present a tree + table and wait for the user's OK, then build it |
+| `extend_workflow` | `request`, `workflow?` (default `current`) | Inspect the graph and its structure, place the addition in its logical group (or a new layer workflow past ~100 resources), add and connect services, extract a group that grew large into a module, `review_terraform`, `validate`, `plan` |
 | `import_terraform_folder` | `dir` | `scan_terraform_folder` → `import_terraform` → summary of projects, diagnostics and Floci support |
 | `load_test` | `workflow?` (default `current`), `goal?` | Deploy if needed, choose targets, smoke test, then the profile that answers the goal; interpret the results |
 | `test_deployed_service` | `connection?` | Connections flow with explicit user confirmation before any traffic |
 
 ## Recommended loop
 
-1. `get_open_workflow`, or `list_templates` → `create_workflow` (or `get_workflow` on an existing one).
+1. `get_open_workflow`, or `list_templates` → `create_workflow` (or `get_workflow` on an existing one). New or growing designs: plan the structure first (`plan_structure`, see "Structure").
 2. `search_resources` (prefer `floci_supported`) → `describe_resource`.
 3. `add_node` with attributes as HCL expressions (strings quoted: `"\"my-bucket\""`).
 4. `list_connection_options` → `connect`.
@@ -156,6 +157,86 @@ Already-deployed services (no workflow): `create_connection` →
 `test_connection` → `list_connection_targets` → ask the user →
 `run_connection_load_test` with `confirm_external: true`.
 
+## Structure
+
+Agents decide the structure before adding resources (prompt
+`plan_structure`) and follow the same rules in `create_infrastructure` and
+`extend_workflow`. Sources: the [HashiCorp style
+guide](https://developer.hashicorp.com/terraform/language/style), Google
+Cloud's [root module best
+practices](https://cloud.google.com/docs/terraform/best-practices/root-modules)
+and [AWS Prescriptive Guidance: Terraform AWS provider best
+practices — code
+structure](https://docs.aws.amazon.com/prescriptive-guidance/latest/terraform-aws-provider-best-practices/structure.html).
+
+One workflow is one root module with one state per environment. Its export
+layout (`update_workflow` `layout`; `structure.layout` and
+`structure.layout_setting` in `get_workflow`) is `auto` by default:
+`environments` from two environments up, else `single`. Auto falls back to
+`single` when the workflow can't be split into environments (an environment
+name that can't name a directory, a provider configuration that reads a
+resource); `structure.layout_note` says why.
+
+```
+<workflow>/                    # layout "environments"
+├── README.md  .gitignore      # .gitignore keeps .terraform.lock.hcl
+├── modules/
+│   ├── <service>/             # the workflow's resources: one service module
+│   │   ├── main.tf | <category>.tf  variables.tf  outputs.tf
+│   │   ├── versions.tf        # required_providers with >= minimums, no provider blocks
+│   │   └── README.md
+│   └── network/  data/  …     # the workflow's local modules (logical groups)
+└── environments/
+    ├── dev/                   # one root = one state
+    │   ├── backend.tf         # remote backend, partial config (+ backend.hcl.example)
+    │   ├── main.tf            # module "<service>" { source = "../../modules/<service>" … }
+    │   ├── providers.tf  versions.tf (~> pins)  variables.tf  outputs.tf
+    │   ├── terraform.tfvars   # this environment's non-secret values
+    │   └── .env.example       # env vars (secrets left blank)
+    └── prod/
+```
+
+Rules the agents follow (and the `bp_*` rule that checks each):
+
+- **Size.** A small design (a few dozen resources, one environment) stays a
+  single root. At most ~100 resources per state, ideally a few dozen
+  (Google): past that, one workflow per layer (network, data, app), created
+  bottom-up; upper layers find lower ones with data sources by tags or IDs
+  (`data.aws_vpc`, `data.aws_subnets`), never by sharing state
+  (`bp_state_too_large`: info from 50 instances, warning from 100).
+- **Environments.** One state per environment, never CLI workspaces
+  (`bp_workspace_branching`); with two or more environments, the
+  environments layout, or a backend with a key per environment in the
+  single layout (`bp_no_remote_backend`). Values per environment with
+  `set_environment` (each environment's `terraform.tfvars`); secrets are
+  sensitive variables fed from secret env vars (`TF_VAR_<name>`), never
+  tfvars values.
+- **Modules.** One per logical group — network foundation, data tier,
+  security controls, an application (`bp_module_candidate`) — never around a
+  single resource (`bp_module_thin_wrapper`); no provider blocks inside
+  (`bp_provider_in_module`); at most 2 levels of nesting below a root, the
+  environments layout's service module being the first
+  (`bp_module_nesting_depth`); every resource reachable from an output
+  (`bp_module_output_missing`); environment-specific inputs without
+  defaults, environment-independent ones with defaults; units in names
+  (`ram_size_gb`) and positive booleans (`enable_x`).
+- **Versions.** `~>` pins in roots (`required_version`, providers;
+  `bp_required_version`, `bp_provider_version`), `>=` minimums in modules;
+  registry modules with `version`, git modules with `?ref=<tag>`
+  (`bp_module_version_unpinned`).
+- **Attachments.** Prefer standalone rule/attachment resources
+  (`aws_vpc_security_group_ingress_rule`, `aws_iam_role_policy_attachment`)
+  over inline blocks; mixing both styles is flagged (`bp_inline_sg_rules`,
+  a warning when both target the same group).
+
+`get_workflow`, `get_open_workflow`, `update_workflow` and
+`review_terraform` return a `structure` summary: `layout`, `states`,
+`resources_per_state` (root + local modules, constant count/for_each
+expanded, feature-flagged blocks counted as absent), `root_resources`,
+`modules` (call → directory or source, kind, resources, depth),
+`max_nesting`, `backend` and where `state` lives
+(`GET /workflows/{id}/structure`).
+
 ## Safety: real services
 
 Connections point at services outside the local sandbox — production or
@@ -175,10 +256,12 @@ only.
 
 Terraform written through Nimbo is meant to be handed over as production
 code. The server instructions and the `create_infrastructure` /
-`extend_workflow` prompts tell agents to use typed, described variables and
-locals for configurable values, derive names from `local.name_prefix`,
-describe outputs, mark secrets `sensitive`, group related resources into
-modules (`extract_module`) and call `review_terraform` before finishing.
+`extend_workflow` / `plan_structure` prompts tell agents to use typed,
+described variables and locals for configurable values, derive names from
+`local.name_prefix`, describe outputs, mark secrets `sensitive`, follow the
+structure rules above (modules per logical group with `extract_module`, a
+state per environment, a workflow per layer for large designs) and call
+`review_terraform` before finishing.
 
 - **Generated defaults.** The first resource of a cloud adds variables
   `project` (default: workflow name slug) and `environment` (default `dev`),
@@ -195,9 +278,10 @@ modules (`extract_module`) and call `review_terraform` before finishing.
   codes `bp_*`, severity `info` or `warning` (never `error`, so they never
   block a deploy), a why (`detail`) and a `fix`. They are kept out of tool
   `diagnostics`; `get_workflow` shows a one-line `review` summary.
-- **`review_terraform`** returns the findings grouped into `warnings` and
-  `info`, each with `why` and `fix`, plus `disabled_rules` and what to do
-  next.
+- **`review_terraform`** returns the `structure` summary and the findings
+  grouped into `warnings` and `info`, each with `why` and `fix`, plus
+  `disabled_rules` and what to do next. Module rules read the local modules
+  the workflow calls (never registry or remote module code).
 - **Mutating tools** (`create_workflow`, `add_node`, `update_node`,
   `remove_node`, `connect`, `set_*`, `remove_*`, `apply_terraform_code`)
   return `best_practices`: only the findings their change introduced, in a
@@ -241,11 +325,11 @@ Conventions).
 | Tool | Arguments | Purpose |
 |---|---|---|
 | `list_workflows` | `include_archived?` | Workflows, most recent first; the open one is flagged |
-| `get_open_workflow` | — | The workflow open in the desktop app (or a message when none is) |
+| `get_open_workflow` | — | The workflow open in the desktop app, like `get_workflow` (or a message when none is) |
 | `list_templates` | — | Starter templates |
 | `create_workflow` | `name`, `description?`, `template?` | New workflow, optionally from a template |
-| `get_workflow` | `workflow` | Compact workflow: nodes, edges, variables, outputs, environments, diagnostics |
-| `update_workflow` | `workflow`, `name?`, `description?` | Rename a workflow or change its description (only the given fields change; `description: ""` clears it); the Terraform is unchanged |
+| `get_workflow` | `workflow` | Compact workflow: nodes, edges, variables, outputs, environments, diagnostics, and `structure` (layout, states, resources per state, modules, nesting, backend) |
+| `update_workflow` | `workflow`, `name?`, `description?`, `layout?` (`auto`/`single`/`environments`) | Rename a workflow, change its description or its export layout (only the given fields change; `description: ""` clears it); the Terraform is unchanged; returns the workflow with its `structure` |
 | `archive_workflow` / `unarchive_workflow` | `workflow` | Close a workflow (sandbox stopped keeping state, hidden, runs refused) or restore it |
 | `search_resources` | `query`, `cloud?`, `kind?`, `supported_only?`, `limit?` | Search the resource catalog |
 | `describe_resource` | `type`, `kind?` | Required/optional attributes, nested blocks, exported attributes, Floci support |
@@ -262,11 +346,11 @@ Conventions).
 | `remove_output` | `workflow`, `name` | Remove an output |
 | `set_environment` | `workflow`, `name`, `values?`, `env_vars?`, `secret_keys?`, `activate?` | Create/update an environment |
 | `get_terraform` | `workflow` | Rendered Terraform files |
-| `review_terraform` | `workflow` | Best-practice findings grouped by severity, with why and fix (see Code quality) |
+| `review_terraform` | `workflow` | `structure` summary plus best-practice findings grouped by severity, with why and fix (see Code quality and Structure) |
 | `apply_terraform_code` | `workflow`, `files` | Edit by code (merged over current files; `""` deletes a file, and its blocks are gone unless the same call writes them to another file). Every block stays in the file it is written in; applying the same files again changes nothing |
-| `scan_terraform_folder` | `dir` | Terraform projects in a folder/repo (counts, providers, clouds, tfvars, backend, diagnostics) without importing |
-| `import_terraform` | `dir?` \| `files?`, `projects?`, `name?` | Import Terraform as new workflows (default: the root only; `projects` from the scan, `"."` = root) |
-| `export_terraform` | `workflow`, `dir`, `environments?` | Write Terraform + assets to a directory |
+| `scan_terraform_folder` | `dir` | Terraform projects in a folder/repo (counts, providers, clouds, tfvars, backend, layout, environments, diagnostics) without importing; an `environments/<env>/` + `modules/<service>` tree is one project |
+| `import_terraform` | `dir?` \| `files?`, `projects?`, `name?` | Import Terraform as new workflows (default: the root only; `projects` from the scan, `"."` = root); an environments tree becomes one workflow with its environments |
+| `export_terraform` | `workflow`, `dir`, `environments?` | Write Terraform + assets to a directory in the workflow's layout (single root, or `modules/<service>` + `environments/<env>/` roots; see Structure); `environments` adds each environment's values and `.env.example` |
 | `sandbox_status` / `sandbox_start` / `sandbox_stop` / `sandbox_reset` | `workflow` | Manage the local Floci sandbox |
 | `validate` / `plan` / `deploy` / `destroy` | `workflow`, `environment?`, `wait_seconds?` | Terraform runs in the sandbox; status, plan summary, last 60 log lines, deployed resources after `deploy` |
 | `get_run` | `run` | Status and log tail of a run |

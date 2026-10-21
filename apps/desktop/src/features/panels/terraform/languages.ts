@@ -2,6 +2,7 @@ import { HighlightStyle, StreamLanguage, type StreamParser } from "@codemirror/l
 import type { Extension } from "@codemirror/state"
 import { tags as t } from "@lezer/highlight"
 import type { FileLanguage } from "@/lib/api/types"
+import { hclIndentation } from "./hcl-indent"
 import { hclLanguage } from "./hcl-language"
 
 /** Headings, emphasis, code, links, lists and quotes: enough to read a README. */
@@ -35,7 +36,7 @@ const markdownParser: StreamParser<{ fence: boolean }> = {
   },
 }
 
-const loaded: Partial<Record<FileLanguage, Extension>> = { hcl: hclLanguage, text: [] }
+const loaded: Partial<Record<FileLanguage, Extension>> = { hcl: [hclLanguage, hclIndentation], text: [] }
 
 /** The language extension for a file; modes load on first use, each in its own chunk. */
 export async function loadLanguage(lang: FileLanguage): Promise<Extension> {

@@ -165,7 +165,7 @@ func TestPrompts(t *testing.T) {
 		t.Fatal(err)
 	}
 	cat := PromptCatalog()
-	if len(res.Prompts) != len(cat) || len(cat) != 5 {
+	if len(res.Prompts) != len(cat) || len(cat) != 6 {
 		t.Fatalf("server lists %d prompts, catalog %d", len(res.Prompts), len(cat))
 	}
 	for i, p := range res.Prompts {
@@ -194,6 +194,9 @@ func TestPrompts(t *testing.T) {
 	}
 	if got := text("create_infrastructure", map[string]string{"request": "an HTTP API", "cloud": "gcp"}); !strings.Contains(got, "Cloud: gcp") {
 		t.Fatalf("create_infrastructure: %s", got)
+	}
+	if got := text("plan_structure", map[string]string{"request": "an online shop with dev and prod"}); !strings.Contains(got, "an online shop with dev and prod") || !strings.Contains(got, "one workflow per layer") || !strings.Contains(got, "Do not add resources yet") {
+		t.Fatalf("plan_structure: %s", got)
 	}
 	if got := text("test_deployed_service", nil); !strings.Contains(got, "confirm") {
 		t.Fatalf("test_deployed_service lacks confirmation: %s", got)

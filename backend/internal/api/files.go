@@ -22,7 +22,7 @@ func (s *Server) getTerraform(w http.ResponseWriter, r *http.Request) error {
 	if err != nil {
 		return err
 	}
-	files, err := s.exportTerraform(wf, false)
+	files, err := s.exportLayout(wf, false)
 	if err != nil {
 		return err
 	}
@@ -33,28 +33,41 @@ func (s *Server) getTerraform(w http.ResponseWriter, r *http.Request) error {
 	return ok(w, map[string]any{"files": out})
 }
 
+// putTerraform edits the workflow's code: either the complete Terraform
+// (files: root files of the single layout, or the service module and
+// environment roots of the environments layout, as GET returns them) or
+// changes and moves of any of its files (see codeRequest).
 func (s *Server) putTerraform(w http.ResponseWriter, r *http.Request) error {
-	var req struct {
-		Files map[string]string `json:"files"`
-	}
+	var req codeRequest
 	if err := decode(w, r, maxImportBody, &req); err != nil {
 		return err
 	}
-	files := make(map[string][]byte, len(req.Files))
-	for name, content := range req.Files {
-		files[name] = []byte(content)
+	if req.Files != nil && (req.Changes != nil || req.Moves != nil) {
+		return errorf(http.StatusBadRequest, "send either files or changes/moves")
+	}
+	if req.Files == nil && req.Changes == nil && req.Moves == nil {
+		return errorf(http.StatusBadRequest, "files or changes are required")
 	}
 	wf, err := s.mutate(r.PathValue("id"), func(cur *model.Workflow) ([]model.Diagnostic, error) {
-		next, diags, err := hclcodec.Import(cur.Name, files)
-		if err == nil {
-			err = syntaxError(diags)
+		if req.Files == nil {
+			return s.applyFileChanges(cur, req)
 		}
-		if err != nil {
-			return nil, &httpError{status: http.StatusBadRequest, msg: err.Error(), diagnostics: diags}
+		files := make(map[string][]byte, len(req.Files))
+		var syntax []model.Diagnostic
+		for name, content := range req.Files {
+			files[name] = []byte(content)
+			if req.Format {
+				out, d := hclcodec.Format(name, files[name])
+				if d == nil {
+					files[name] = out
+				}
+				syntax = append(syntax, d...)
+			}
 		}
-		hclcodec.MergeImported(cur, next, s.cfg.Catalog.ResourceFile)
-		*cur = *next
-		return diags, nil
+		if len(syntax) > 0 {
+			return nil, &httpError{status: http.StatusBadRequest, msg: "the code has syntax errors; nothing was saved", diagnostics: syntax}
+		}
+		return s.importCode(cur, files)
 	})
 	if err != nil {
 		return err
@@ -74,22 +87,37 @@ func syntaxError(diags []model.Diagnostic) error {
 	return nil
 }
 
-// exportTerraform renders wf's Terraform with the catalog's recommended
-// layout (and its environment files with environments).
+// exportTerraform renders wf's Terraform as one root module (the sandbox
+// runs it whatever the export layout) with the catalog's recommended file
+// layout, and its environment files with environments.
 func (s *Server) exportTerraform(wf *model.Workflow, environments bool) (map[string][]byte, error) {
 	return hclcodec.Export(wf, hclcodec.ExportOptions{Environments: environments, ResourceFile: s.cfg.Catalog.ResourceFile})
 }
 
-// exportFiles renders wf plus its assets. Generated Terraform wins over an
-// asset of the same name; the project scaffold (README.md, .gitignore,
-// terraform.tfvars.example) is only generated where the workflow has no
-// file of its own (e.g. a README that came with an import).
-func (s *Server) exportFiles(wf *model.Workflow, environments bool) (generated map[string][]byte, assets []string, err error) {
-	generated, err = s.exportTerraform(wf, environments)
+// exportLayout renders wf's Terraform in its export layout
+// (hclcodec.ResolveLayout).
+func (s *Server) exportLayout(wf *model.Workflow, environments bool) (map[string][]byte, error) {
+	files, err := hclcodec.ExportLayout(wf, hclcodec.ExportOptions{Environments: environments, ResourceFile: s.cfg.Catalog.ResourceFile})
+	if err != nil {
+		return nil, &httpError{status: http.StatusBadRequest, msg: err.Error()}
+	}
+	return files, nil
+}
+
+// exportFiles renders wf in its layout plus its assets: generated maps
+// export paths to content, assets maps export paths to asset paths
+// (relative to the workflow's assets directory; hclcodec.AssetPlacement).
+// Generated Terraform wins over an asset with the same export path; the
+// project scaffold (README.md, .gitignore, ...) is only generated where the
+// workflow has no file of its own (e.g. a README that came with an import).
+func (s *Server) exportFiles(wf *model.Workflow, environments bool) (generated map[string][]byte, assets map[string]string, err error) {
+	generated, err = s.exportLayout(wf, environments)
 	if err != nil {
 		return nil, nil, err
 	}
+	place := hclcodec.AssetPlacement(wf)
 	own := map[string]bool{}
+	assets = map[string]string{}
 	root := s.cfg.Store.AssetsDir(wf.ID)
 	err = filepath.WalkDir(root, func(p string, d fs.DirEntry, err error) error {
 		if err != nil {
@@ -101,9 +129,11 @@ func (s *Server) exportFiles(wf *model.Workflow, environments bool) (generated m
 		if d.Type().IsRegular() {
 			rel, _ := filepath.Rel(root, p)
 			rel = filepath.ToSlash(rel)
-			own[rel] = true
-			if _, clash := generated[rel]; !clash {
-				assets = append(assets, rel)
+			for _, dst := range place(rel) {
+				own[dst] = true
+				if _, clash := generated[dst]; !clash {
+					assets[dst] = rel
+				}
 			}
 		}
 		return nil
@@ -141,11 +171,11 @@ func (s *Server) exportDir(w http.ResponseWriter, r *http.Request) error {
 	}
 	assetsRoot := s.cfg.Store.AssetsDir(wf.ID)
 	var written []string
-	for _, rel := range assets {
-		if err := copyFile(filepath.Join(assetsRoot, filepath.FromSlash(rel)), filepath.Join(dir, filepath.FromSlash(rel))); err != nil {
+	for dst, src := range assets {
+		if err := copyFile(filepath.Join(assetsRoot, filepath.FromSlash(src)), filepath.Join(dir, filepath.FromSlash(dst))); err != nil {
 			return err
 		}
-		written = append(written, rel)
+		written = append(written, dst)
 	}
 	for rel, data := range generated {
 		dst := filepath.Join(dir, filepath.FromSlash(rel))
@@ -189,9 +219,14 @@ func (s *Server) exportZip(w http.ResponseWriter, r *http.Request) error {
 		}
 	}
 	root := s.cfg.Store.AssetsDir(wf.ID)
-	for _, rel := range assets {
-		if err := zipFile(zw, filepath.Join(root, filepath.FromSlash(rel)), rel); err != nil {
-			s.log.Error("zip asset", "file", rel, "err", err)
+	dsts := make([]string, 0, len(assets))
+	for dst := range assets {
+		dsts = append(dsts, dst)
+	}
+	sort.Strings(dsts)
+	for _, dst := range dsts {
+		if err := zipFile(zw, filepath.Join(root, filepath.FromSlash(assets[dst])), dst); err != nil {
+			s.log.Error("zip asset", "file", dst, "err", err)
 			return nil
 		}
 	}

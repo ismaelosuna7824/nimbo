@@ -12,6 +12,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -83,7 +84,7 @@ func runTerraform(t *testing.T, network, dir string, env []string, args ...strin
 	// init retries: the shared plugin cache volume may be busy while another
 	// terraform process installs or executes the same provider binary.
 	attempts := 1
-	if args[0] == "init" {
+	if slices.Contains(args, "init") {
 		attempts = 6
 	}
 	var out []byte
@@ -214,10 +215,12 @@ func TestPopularAWSStartersApplyOnFloci(t *testing.T) {
 	runTerraform(t, pod, dir, env, "destroy", "-auto-approve", "-input=false", "-no-color")
 }
 
-// planNoChanges fails when a plan right after apply wants changes.
-func planNoChanges(t *testing.T, pod, dir string, env []string) {
+// planNoChanges fails when a plan right after apply wants changes. global
+// are terraform options placed before the subcommand (-chdir=...).
+func planNoChanges(t *testing.T, pod, dir string, env []string, global ...string) {
 	t.Helper()
-	out, err := exec.Command("docker", terraformArgs(pod, dir, env, "plan", "-detailed-exitcode", "-input=false", "-no-color")...).CombinedOutput()
+	args := append(global, "plan", "-detailed-exitcode", "-input=false", "-no-color")
+	out, err := exec.Command("docker", terraformArgs(pod, dir, env, args...)...).CombinedOutput()
 	if err != nil {
 		t.Errorf("plan after apply is not empty: %v\n%s", err, out)
 	}

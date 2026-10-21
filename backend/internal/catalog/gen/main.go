@@ -37,26 +37,59 @@ var providers = []provider{
 
 func main() {
 	out := flag.String("out", "data", "output directory")
+	pin := flag.Bool("pin", false, "keep the provider versions of the existing index (regenerate without upgrading)")
 	flag.Parse()
 	log.SetFlags(0)
-	if err := run(*out); err != nil {
+	if err := run(*out, *pin); err != nil {
 		log.Fatal(err)
 	}
 }
 
-func run(out string) error {
+// pinnedVersions reads the provider versions of the index in out.
+func pinnedVersions(out string) (map[string]string, error) {
+	raw, err := os.ReadFile(filepath.Join(out, "index.json.gz"))
+	if err != nil {
+		return nil, err
+	}
+	zr, err := gzip.NewReader(bytes.NewReader(raw))
+	if err != nil {
+		return nil, err
+	}
+	defer zr.Close()
+	var idx schemafile.Index
+	if err := json.NewDecoder(zr).Decode(&idx); err != nil {
+		return nil, err
+	}
+	versions := map[string]string{}
+	for _, p := range idx.Providers {
+		versions[p.Name] = p.Version
+	}
+	return versions, nil
+}
+
+func run(out string, pin bool) error {
 	work, err := os.MkdirTemp("", "nimbo-catalog-gen-")
 	if err != nil {
 		return err
 	}
 	defer os.RemoveAll(work)
 
+	var pinned map[string]string
+	if pin {
+		if pinned, err = pinnedVersions(out); err != nil {
+			return fmt.Errorf("pin: %w", err)
+		}
+	}
 	var tf strings.Builder
 	tf.WriteString("terraform {\n  required_providers {\n")
 	for _, p := range providers {
 		fmt.Fprintf(&tf, "    %s = {\n      source = %q\n", p.name, p.source)
-		if p.constraint != "" {
-			fmt.Fprintf(&tf, "      version = %q\n", p.constraint)
+		constraint := p.constraint
+		if v := pinned[p.name]; v != "" {
+			constraint = "= " + v
+		}
+		if constraint != "" {
+			fmt.Fprintf(&tf, "      version = %q\n", constraint)
 		}
 		tf.WriteString("    }\n")
 	}
@@ -82,17 +115,28 @@ func run(out string) error {
 	if err != nil {
 		return err
 	}
+	log.Print("terraform metadata functions -json")
+	functionsJSON, err := tfx.run("metadata", "functions", "-json")
+	if err != nil {
+		return err
+	}
 
 	var schemas tfSchemas
 	if err := json.Unmarshal(schemaJSON, &schemas); err != nil {
 		return fmt.Errorf("decode schema: %w", err)
 	}
 	var ver struct {
+		TerraformVersion   string            `json:"terraform_version"`
 		ProviderSelections map[string]string `json:"provider_selections"`
 	}
 	if err := json.Unmarshal(versionJSON, &ver); err != nil {
 		return fmt.Errorf("decode version: %w", err)
 	}
+	functions, err := trimFunctions(functionsJSON)
+	if err != nil {
+		return err
+	}
+	functions.Terraform = ver.TerraformVersion
 
 	if err := os.MkdirAll(out, 0o755); err != nil {
 		return err
@@ -104,10 +148,12 @@ func run(out string) error {
 		if !ok {
 			return fmt.Errorf("provider %s missing from schema output", addr)
 		}
+		provider := trim(ps.Provider)
 		f := schemafile.File{
 			Name:      p.name,
 			Source:    p.source,
 			Version:   ver.ProviderSelections[addr],
+			Provider:  &provider,
 			Resources: map[string]schemafile.Entry{},
 			Data:      map[string]schemafile.Entry{},
 		}
@@ -136,7 +182,60 @@ func run(out string) error {
 		return err
 	}
 	log.Printf("index %7.1f KiB", float64(size)/1024)
+	size, err = writeGzip(filepath.Join(out, "functions.json.gz"), functions)
+	if err != nil {
+		return err
+	}
+	log.Printf("functions %d  %7.1f KiB", len(functions.Functions), float64(size)/1024)
 	return nil
+}
+
+// trimFunctions converts `terraform metadata functions -json` into the
+// embedded list: core functions under their plain names ("core::abs" is
+// the same function as "abs"), descriptions shortened like attributes'.
+func trimFunctions(raw []byte) (schemafile.Functions, error) {
+	type param struct {
+		Name        string          `json:"name"`
+		Type        json.RawMessage `json:"type"`
+		Description string          `json:"description"`
+		IsNullable  bool            `json:"is_nullable"`
+	}
+	var meta struct {
+		Signatures map[string]struct {
+			Description       string          `json:"description"`
+			ReturnType        json.RawMessage `json:"return_type"`
+			Parameters        []param         `json:"parameters"`
+			VariadicParameter *param          `json:"variadic_parameter"`
+		} `json:"function_signatures"`
+	}
+	if err := json.Unmarshal(raw, &meta); err != nil {
+		return schemafile.Functions{}, fmt.Errorf("decode functions: %w", err)
+	}
+	conv := func(p param) model.FunctionParameter {
+		return model.FunctionParameter{Name: p.Name, Type: p.Type, Description: cleanDescription(p.Description), Nullable: p.IsNullable}
+	}
+	var out schemafile.Functions
+	for name, s := range meta.Signatures {
+		if strings.Contains(name, "::") {
+			continue
+		}
+		fn := model.FunctionSignature{
+			Name:        name,
+			Description: cleanDescription(s.Description),
+			ReturnType:  s.ReturnType,
+			Parameters:  []model.FunctionParameter{},
+		}
+		for _, p := range s.Parameters {
+			fn.Parameters = append(fn.Parameters, conv(p))
+		}
+		if s.VariadicParameter != nil {
+			v := conv(*s.VariadicParameter)
+			fn.VariadicParameter = &v
+		}
+		out.Functions = append(out.Functions, fn)
+	}
+	sort.Slice(out.Functions, func(i, j int) bool { return out.Functions[i].Name < out.Functions[j].Name })
+	return out, nil
 }
 
 func writeGzip(path string, v any) (int, error) {
@@ -210,6 +309,7 @@ func (t *terraform) run(args ...string) ([]byte, error) {
 
 type tfSchemas struct {
 	ProviderSchemas map[string]struct {
+		Provider          tfSchema            `json:"provider"`
 		ResourceSchemas   map[string]tfSchema `json:"resource_schemas"`
 		DataSourceSchemas map[string]tfSchema `json:"data_source_schemas"`
 	} `json:"provider_schemas"`

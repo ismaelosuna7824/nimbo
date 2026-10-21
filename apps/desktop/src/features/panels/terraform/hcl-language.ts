@@ -165,7 +165,12 @@ const hclParser: StreamParser<HclState> = {
   blankLine(state) {
     state.lineStart = true
   },
-  languageData: { commentTokens: { line: "#", block: { open: "/*", close: "*/" } } },
+  languageData: {
+    commentTokens: { line: "#", block: { open: "/*", close: "*/" } },
+    // No single quote: it isn't HCL syntax and comments use apostrophes.
+    closeBrackets: { brackets: ["(", "[", "{", '"'] },
+    indentOnInput: /^\s*[}\])]$/,
+  },
 }
 
 export const hclLanguage = StreamLanguage.define(hclParser)

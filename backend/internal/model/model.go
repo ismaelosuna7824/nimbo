@@ -206,6 +206,17 @@ type Workflow struct {
 
 	Environments      []Environment `json:"environments"`
 	ActiveEnvironment string        `json:"activeEnvironment,omitempty"`
+	// Layout is the directory structure export writes: LayoutSingle (one
+	// root module; environments as variable files), LayoutEnvironments (a
+	// service module plus one root, and so one state, per environment) or
+	// LayoutAuto (see EffectiveLayout).
+	Layout string `json:"layout,omitempty"`
+	// Service names the service module (modules/<service>, module
+	// "<service>") of the environments layout, which every resource
+	// address in the environments' states starts with. An import of that
+	// layout sets it so the names survive a rename; empty: derived from
+	// Name (snake_case).
+	Service string `json:"service,omitempty"`
 
 	// Derived on every save (read-only for clients).
 	Edges       []Edge       `json:"edges"`
@@ -214,6 +225,34 @@ type Workflow struct {
 	// NodeFiles maps node ID -> the root .tf file export writes it to
 	// (Node.File, or the recommended layout when it is empty).
 	NodeFiles map[string]string `json:"nodeFiles,omitempty"`
+}
+
+// Export layouts (Workflow.Layout).
+const (
+	LayoutAuto         = ""
+	LayoutSingle       = "single"
+	LayoutEnvironments = "environments"
+)
+
+// ValidLayout reports an unknown Workflow.Layout.
+func ValidLayout(layout string) error {
+	switch layout {
+	case LayoutAuto, LayoutSingle, LayoutEnvironments:
+		return nil
+	}
+	return fmt.Errorf("invalid layout %q: use %q, %q or \"\" (auto)", layout, LayoutSingle, LayoutEnvironments)
+}
+
+// EffectiveLayout resolves LayoutAuto: LayoutEnvironments when the workflow
+// has two or more environments (each gets its own state), else LayoutSingle.
+func (w *Workflow) EffectiveLayout() string {
+	if w.Layout != LayoutAuto {
+		return w.Layout
+	}
+	if len(w.Environments) >= 2 {
+		return LayoutEnvironments
+	}
+	return LayoutSingle
 }
 
 // WorkflowSummary is the list view of a workflow.
@@ -416,6 +455,76 @@ type SchemaNestedBlock struct {
 	MinItems int         `json:"minItems,omitempty"`
 	MaxItems int         `json:"maxItems,omitempty"`
 	Block    SchemaBlock `json:"block"`
+}
+
+// TypeInfo is one entry of the compact index of every resource and data
+// source type (GET /catalog/types) the code editor completes types from.
+type TypeInfo struct {
+	Kind  NodeKind `json:"kind"`
+	Type  string   `json:"type"`
+	Cloud Cloud    `json:"cloud,omitempty"` // "" for utility providers (archive, random)
+	Label string   `json:"label"`
+	Local bool     `json:"local,omitempty"` // runs in the local emulator (or needs none)
+}
+
+// FunctionSignature describes one Terraform built-in function
+// (GET /catalog/functions). Types are cty type JSON ("string",
+// ["list","string"], "dynamic").
+type FunctionSignature struct {
+	Name              string              `json:"name"`
+	Description       string              `json:"description,omitempty"`
+	ReturnType        json.RawMessage     `json:"returnType"`
+	Parameters        []FunctionParameter `json:"parameters"`
+	VariadicParameter *FunctionParameter  `json:"variadicParameter,omitempty"`
+}
+
+// FunctionParameter is one parameter of a FunctionSignature.
+type FunctionParameter struct {
+	Name        string          `json:"name"`
+	Type        json.RawMessage `json:"type"`
+	Description string          `json:"description,omitempty"`
+	Nullable    bool            `json:"nullable,omitempty"`
+}
+
+// CodeWorkspace is every Terraform source the code editor resolves names
+// in (GET /workflows/{id}/terraform/workspace): the workflow's .tf files
+// (generated and asset files, by workflow path) and the registry/remote
+// modules `terraform init` downloaded into the sandbox working directory.
+type CodeWorkspace struct {
+	Files   map[string]string  `json:"files"`
+	Modules []DownloadedModule `json:"modules"`
+}
+
+// DownloadedModule is one module Terraform downloaded: its manifest key
+// ("vpc", "app.db": call names from the root), source, version and
+// top-level .tf files.
+type DownloadedModule struct {
+	Key     string            `json:"key"`
+	Source  string            `json:"source"`
+	Version string            `json:"version,omitempty"`
+	Files   map[string]string `json:"files"`
+}
+
+// CodeCheckRequest asks for the problems of one file while it is edited
+// (POST /workflows/{id}/terraform/check): Path is the workflow path of the
+// file, Files its unsaved content plus any other unsaved files (path ->
+// content); saved files fill in the rest of its directory.
+type CodeCheckRequest struct {
+	Path  string            `json:"path"`
+	Files map[string]string `json:"files"`
+}
+
+// CodeProblem is a located problem in a file being edited. Lines and
+// columns are 1-based; columns count characters; End is exclusive.
+type CodeProblem struct {
+	Severity  Severity `json:"severity"`
+	Code      string   `json:"code"`
+	Message   string   `json:"message"`
+	Detail    string   `json:"detail,omitempty"`
+	Line      int      `json:"line"`
+	Column    int      `json:"column"`
+	EndLine   int      `json:"endLine"`
+	EndColumn int      `json:"endColumn"`
 }
 
 // ConnectionRecipe is one way to connect two node types. Generic recipes set
@@ -1350,6 +1459,12 @@ type ImportProject struct {
 	TfvarsFiles []string     `json:"tfvarsFiles"` // relative to Path; each becomes an environment
 	HasBackend  bool         `json:"hasBackend"`  // runs with local state in the sandbox
 	Diagnostics []Diagnostic `json:"diagnostics"`
+	// Layout is LayoutEnvironments for an environments-layout tree
+	// (environments/<env>/ roots that only call modules/<service>), imported
+	// as one workflow with one environment per root (Environments); Path is
+	// the folder holding environments/ and modules/. Else LayoutSingle.
+	Layout       string   `json:"layout"`
+	Environments []string `json:"environments,omitempty"`
 }
 
 // ImportResult is the response of POST /import: one workflow per project.
@@ -1391,6 +1506,58 @@ type ModuleCallSource struct {
 	Version string `json:"version,omitempty"`
 	Local   bool   `json:"local"`
 	Dir     string `json:"dir,omitempty"`
+}
+
+// StructureSummary describes how a workflow's Terraform is organized
+// (GET /workflows/{id}/structure): export layout, states, module tree and
+// backend. The best-practice rules on state size, nesting and backends read
+// the same numbers.
+type StructureSummary struct {
+	// Layout is the layout export writes (LayoutSingle or
+	// LayoutEnvironments); LayoutSetting the stored choice ("" = auto).
+	// LayoutNote says why they differ (auto falls back to the single layout
+	// when the workflow can't be split into environments) or why an
+	// explicit environments layout can't be exported yet.
+	Layout        string   `json:"layout"`
+	LayoutSetting string   `json:"layoutSetting"`
+	LayoutNote    string   `json:"layoutNote,omitempty"`
+	Environments  []string `json:"environments"`
+	// Service is the service module (modules/<service>) the environments
+	// layout wraps the workflow in ("" in the single layout).
+	Service string `json:"service,omitempty"`
+	// States is how many Terraform states the exported code has: one per
+	// environment in the environments layout, else one.
+	States int `json:"states"`
+	// ResourcesPerState counts the managed resource instances of one state:
+	// the root's plus those of local modules, constant count/for_each
+	// expanded, feature-flagged ones (count = var.x ? 1 : 0) as absent,
+	// other unknown ones once. Registry and remote modules are listed in
+	// Modules but their content is not counted.
+	ResourcesPerState int `json:"resourcesPerState"`
+	RootResources     int `json:"rootResources"`
+	// Modules are every module call, nested local calls included.
+	Modules []StructureModule `json:"modules"`
+	// MaxNesting is the deepest local module call (1 = called from the
+	// root, 0 = no local modules).
+	MaxNesting int `json:"maxNesting"`
+	// Backend is the backend type in the root's terraform block ("s3",
+	// "cloud" for HCP Terraform); "" = none.
+	Backend string `json:"backend,omitempty"`
+	// State says where state lives once exported.
+	State string `json:"state"`
+}
+
+// StructureModule is one module call of a StructureSummary.
+type StructureModule struct {
+	Call    string `json:"call"` // "module.app", "module.app.module.db"
+	Source  string `json:"source"`
+	Version string `json:"version,omitempty"`
+	Kind    string `json:"kind"`          // "local", "registry" or "remote"
+	Dir     string `json:"dir,omitempty"` // local modules: "modules/app"
+	// Resources are the managed resource instances inside one call of a
+	// local module (nested local calls included).
+	Resources int `json:"resources"`
+	Depth     int `json:"depth"` // 1 = called from the root
 }
 
 // ModuleExtractRequest is the body of POST /workflows/{id}/modules/extract
@@ -1458,19 +1625,22 @@ const (
 
 // WorkflowFile is one file an export writes (GET /workflows/{id}/files).
 // Generated files are rendered from the workflow; the others are assets
-// stored with it. Editable generated files change through
-// PUT /workflows/{id}/terraform, editable assets through
-// PUT /workflows/{id}/files/content. Language names the syntax: "hcl",
-// "json", "javascript", "typescript", "python", "go", "yaml", "markdown",
-// "shell" or "text".
+// stored with it. Editable files change through
+// PUT /workflows/{id}/terraform (code and assets; editable assets also
+// through PUT /workflows/{id}/files/content); ReadOnlyReason says why a
+// file is not editable. Movable files can be renamed, moved or deleted
+// there. Language names the syntax: "hcl", "json", "javascript",
+// "typescript", "python", "go", "yaml", "markdown", "shell" or "text".
 type WorkflowFile struct {
-	Path      string   `json:"path"` // slash-separated, relative to the export root
-	Size      int64    `json:"size"`
-	Kind      FileKind `json:"kind"`
-	Generated bool     `json:"generated"`
-	Editable  bool     `json:"editable"`
-	Binary    bool     `json:"binary"`
-	Language  string   `json:"language"`
+	Path           string   `json:"path"` // slash-separated, relative to the export root
+	Size           int64    `json:"size"`
+	Kind           FileKind `json:"kind"`
+	Generated      bool     `json:"generated"`
+	Editable       bool     `json:"editable"`
+	ReadOnlyReason string   `json:"readOnlyReason,omitempty"`
+	Movable        bool     `json:"movable"`
+	Binary         bool     `json:"binary"`
+	Language       string   `json:"language"`
 }
 
 // WorkflowFileContent is a text file with its content
@@ -1478,4 +1648,21 @@ type WorkflowFile struct {
 type WorkflowFileContent struct {
 	WorkflowFile
 	Content string `json:"content"`
+}
+
+// ModuleScaffold is a new local module, not saved yet
+// (POST /workflows/{id}/modules/scaffold): Files maps export paths
+// (modules/<name>/versions.tf, ...) to content; Call is the module block
+// that calls it and the code file it belongs in (main.tf, or the service
+// module's main.tf in the environments layout).
+type ModuleScaffold struct {
+	Name  string             `json:"name"`
+	Dir   string             `json:"dir"`
+	Files map[string]string  `json:"files"`
+	Call  ModuleScaffoldCall `json:"call"`
+}
+
+type ModuleScaffoldCall struct {
+	Path  string `json:"path"`
+	Block string `json:"block"`
 }

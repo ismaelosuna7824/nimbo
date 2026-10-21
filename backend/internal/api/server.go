@@ -117,6 +117,9 @@ func (s *Server) routes() {
 	h("GET "+p+"/catalog/resources/{kind}/{type}", s.resourceSchema)
 	h("GET "+p+"/catalog/templates", s.templates)
 	h("GET "+p+"/catalog/load-presets", s.loadPresets)
+	h("GET "+p+"/catalog/types", s.catalogTypes)
+	h("GET "+p+"/catalog/schemas", s.catalogSchemas)
+	h("GET "+p+"/catalog/functions", s.catalogFunctions)
 
 	h("GET "+p+"/workflows", s.listWorkflows)
 	h("POST "+p+"/workflows", s.createWorkflow)
@@ -134,6 +137,8 @@ func (s *Server) routes() {
 
 	h("GET "+p+"/workflows/{id}/terraform", s.getTerraform)
 	h("PUT "+p+"/workflows/{id}/terraform", s.putTerraform)
+	h("GET "+p+"/workflows/{id}/terraform/workspace", s.codeWorkspace)
+	h("POST "+p+"/workflows/{id}/terraform/check", s.checkCode)
 	h("POST "+p+"/workflows/{id}/export", s.exportDir)
 	h("GET "+p+"/workflows/{id}/export.zip", s.exportZip)
 	h("GET "+p+"/workflows/{id}/files", s.listFiles)
@@ -147,6 +152,9 @@ func (s *Server) routes() {
 	h("POST "+p+"/workflows/{id}/modules/extract", s.extractModule)
 	h("POST "+p+"/workflows/{id}/modules/extract/preview", s.previewExtract)
 	h("POST "+p+"/workflows/{id}/modules/{nodeId}/inline", s.inlineModule)
+	h("GET "+p+"/workflows/{id}/structure", s.structure)
+	h("POST "+p+"/workflows/{id}/modules/scaffold", s.moduleScaffold)
+	h("POST "+p+"/terraform/format", s.formatCode)
 
 	h("GET "+p+"/workflows/{id}/sandbox", s.sandboxStatus)
 	h("POST "+p+"/workflows/{id}/sandbox/{action}", s.sandboxAction)

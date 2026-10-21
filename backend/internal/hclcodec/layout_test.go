@@ -363,9 +363,13 @@ func TestValidFileName(t *testing.T) {
 func TestScaffold(t *testing.T) {
 	wf := largeProject()
 	wf.Environments = []model.Environment{{Name: "dev"}, {Name: "default", File: "terraform.tfvars"}}
+	wf.Layout = model.LayoutSingle
 	out := Scaffold(wf, testResourceFile)
-	if got := keysOf(out); !slices.Equal(got, []string{GitignoreFile, ReadmeFile, TfvarsSampleFile}) {
+	if got := keysOf(out); !slices.Equal(got, []string{GitignoreFile, ReadmeFile, BackendTfExampleFile, TfvarsSampleFile}) {
 		t.Fatalf("scaffold files = %v", got)
+	}
+	if be := string(out[BackendTfExampleFile]); !strings.Contains(be, `backend "s3"`) || !strings.Contains(be, `key          = "orders/terraform.tfstate"`) || !strings.Contains(be, "use_lockfile = true") {
+		t.Errorf("backend.tf.example:\n%s", be)
 	}
 	readme := string(out[ReadmeFile])
 	for _, want := range []string{
@@ -381,6 +385,9 @@ func TestScaffold(t *testing.T) {
 		"| environment | Deployment environment (dev, prod) | `string` | n/a | yes |",
 		"| region | AWS region | `string` | `\"us-east-1\"` | no |",
 		"| queue_url | URL of the orders queue | no |",
+		"## State & environments\n",
+		"copy `backend.tf.example` to `backend.tf`",
+		"they share that state",
 	} {
 		if !strings.Contains(readme, want) {
 			t.Errorf("README lacks %q:\n%s", want, readme)

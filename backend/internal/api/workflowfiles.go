@@ -21,8 +21,9 @@ import (
 )
 
 // The file viewer: everything an export writes (generated Terraform with
-// environments, plus the workflow's assets), readable one file at a time,
-// with text assets editable in place.
+// environments in the workflow's layout, plus the workflow's assets at the
+// place that layout gives them), readable one file at a time, with text
+// assets editable in place.
 
 const (
 	// maxTextFile is the largest file served as text and the largest text
@@ -39,13 +40,17 @@ func (s *Server) listFiles(w http.ResponseWriter, r *http.Request) error {
 	if err != nil {
 		return err
 	}
+	rules, err := newFileRules(wf)
+	if err != nil {
+		return err
+	}
 	generated, assets, err := s.exportFiles(wf, true)
 	if err != nil {
 		return err
 	}
 	files := make([]model.WorkflowFile, 0, len(generated)+len(assets))
 	for name, data := range generated {
-		files = append(files, generatedFile(name, data))
+		files = append(files, generatedFile(rules, name, data))
 	}
 	if len(assets) > 0 {
 		root, err := os.OpenRoot(s.cfg.Store.AssetsDir(wf.ID))
@@ -53,8 +58,9 @@ func (s *Server) listFiles(w http.ResponseWriter, r *http.Request) error {
 			return err
 		}
 		defer root.Close()
-		for _, rel := range assets {
-			f, err := assetFile(root, rel)
+		placed := placements(assets)
+		for dst, src := range assets {
+			f, err := assetFile(root, src, dst, placed[src])
 			if err != nil {
 				return err
 			}
@@ -74,7 +80,7 @@ func (s *Server) getFileContent(w http.ResponseWriter, r *http.Request) error {
 	if err != nil {
 		return err
 	}
-	f, data, err := s.lookupFile(wf, rel)
+	f, data, src, err := s.lookupFile(wf, rel)
 	if err != nil {
 		return err
 	}
@@ -96,7 +102,7 @@ func (s *Server) getFileContent(w http.ResponseWriter, r *http.Request) error {
 			return err
 		}
 		defer root.Close()
-		if data, err = root.ReadFile(filepath.FromSlash(rel)); err != nil {
+		if data, err = root.ReadFile(filepath.FromSlash(src)); err != nil {
 			return err
 		}
 	}
@@ -113,7 +119,7 @@ func (s *Server) getFileRaw(w http.ResponseWriter, r *http.Request) error {
 	if err != nil {
 		return err
 	}
-	f, data, err := s.lookupFile(wf, rel)
+	f, data, src, err := s.lookupFile(wf, rel)
 	if err != nil {
 		return err
 	}
@@ -124,7 +130,7 @@ func (s *Server) getFileRaw(w http.ResponseWriter, r *http.Request) error {
 			return err
 		}
 		defer root.Close()
-		in, err := root.Open(filepath.FromSlash(rel))
+		in, err := root.Open(filepath.FromSlash(src))
 		if err != nil {
 			return err
 		}
@@ -168,7 +174,7 @@ func (s *Server) putFileContent(w http.ResponseWriter, r *http.Request) error {
 	}
 	var saved model.WorkflowFile
 	wf, err := s.mutate(r.PathValue("id"), func(cur *model.Workflow) ([]model.Diagnostic, error) {
-		f, generated, err := s.lookupFile(cur, rel)
+		f, generated, src, err := s.lookupFile(cur, rel)
 		if err != nil {
 			return nil, err
 		}
@@ -183,7 +189,7 @@ func (s *Server) putFileContent(w http.ResponseWriter, r *http.Request) error {
 			return nil, err
 		}
 		defer root.Close()
-		name := filepath.FromSlash(rel)
+		name := filepath.FromSlash(src)
 		fi, err := root.Lstat(name)
 		if err != nil {
 			return nil, err
@@ -191,7 +197,7 @@ func (s *Server) putFileContent(w http.ResponseWriter, r *http.Request) error {
 		if err := root.WriteFile(name, data, fi.Mode().Perm()); err != nil {
 			return nil, err
 		}
-		saved, err = assetFile(root, rel)
+		saved, err = assetFile(root, src, rel, 1)
 		return nil, err
 	})
 	if err != nil {
@@ -201,72 +207,102 @@ func (s *Server) putFileContent(w http.ResponseWriter, r *http.Request) error {
 }
 
 // lookupFile describes the export file rel. For generated files it also
-// returns their content; assets are read by the caller. Files an export
-// does not write are 404: assets hidden by a generated file of the same
-// name, and anything reached through a symbolic link.
-func (s *Server) lookupFile(wf *model.Workflow, rel string) (model.WorkflowFile, []byte, error) {
-	generated, err := s.exportGenerated(wf)
+// returns their content; for assets their path in the assets directory
+// (src), which the caller reads. Files an export does not write are 404:
+// assets hidden by a generated file of the same name, and anything reached
+// through a symbolic link.
+func (s *Server) lookupFile(wf *model.Workflow, rel string) (f model.WorkflowFile, data []byte, src string, err error) {
+	rules, err := newFileRules(wf)
 	if err != nil {
-		return model.WorkflowFile{}, nil, err
+		return model.WorkflowFile{}, nil, "", err
+	}
+	generated, assets, err := s.exportFiles(wf, true)
+	if err != nil {
+		return model.WorkflowFile{}, nil, "", err
 	}
 	if data, found := generated[rel]; found {
-		return generatedFile(rel, data), data, nil
+		return generatedFile(rules, rel, data), data, "", nil
 	}
 	notFound := errorf(http.StatusNotFound, "file %s not found", rel)
+	src, found := assets[rel]
+	if !found {
+		return model.WorkflowFile{}, nil, "", notFound
+	}
 	root, err := os.OpenRoot(s.cfg.Store.AssetsDir(wf.ID))
 	if errors.Is(err, fs.ErrNotExist) {
-		return model.WorkflowFile{}, nil, notFound
+		return model.WorkflowFile{}, nil, "", notFound
 	}
 	if err != nil {
-		return model.WorkflowFile{}, nil, err
+		return model.WorkflowFile{}, nil, "", err
 	}
 	defer root.Close()
 	// Export walks the assets without following links; so does this.
-	parts := strings.Split(rel, "/")
+	parts := strings.Split(src, "/")
 	for i := range parts {
 		fi, err := root.Lstat(filepath.Join(parts[:i+1]...))
 		if errors.Is(err, fs.ErrNotExist) {
-			return model.WorkflowFile{}, nil, notFound
+			return model.WorkflowFile{}, nil, "", notFound
 		}
 		if err != nil {
-			return model.WorkflowFile{}, nil, err
+			return model.WorkflowFile{}, nil, "", err
 		}
 		last := i == len(parts)-1
 		if (last && !fi.Mode().IsRegular()) || (!last && !fi.IsDir()) {
-			return model.WorkflowFile{}, nil, notFound
+			return model.WorkflowFile{}, nil, "", notFound
 		}
 	}
-	f, err := assetFile(root, rel)
-	return f, nil, err
+	f, err = assetFile(root, src, rel, placements(assets)[src])
+	return f, nil, src, err
 }
 
-// exportGenerated renders the files an export with environments generates
-// (Terraform, variable files, project scaffold).
-func (s *Server) exportGenerated(wf *model.Workflow) (map[string][]byte, error) {
-	generated, _, err := s.exportFiles(wf, true)
-	return generated, err
-}
-
-func generatedFile(name string, data []byte) model.WorkflowFile {
-	kind := fileKind(name)
-	if !strings.Contains(name, "/") && hclcodec.IsScaffold(name, data) {
-		kind = model.FileScaffold
+// placements counts the export paths of every stored asset (assets: export
+// path -> stored path).
+func placements(assets map[string]string) map[string]int {
+	n := map[string]int{}
+	for _, src := range assets {
+		n[src]++
 	}
-	return model.WorkflowFile{
+	return n
+}
+
+// generatedFile describes a file rendered from the workflow. Only Terraform
+// code re-imports (see fileRules.codeReadOnly for the environment roots);
+// values and env vars are edited in the app, the scaffold is rendered from
+// the workflow.
+func generatedFile(rules fileRules, name string, data []byte) model.WorkflowFile {
+	f := model.WorkflowFile{
 		Path:      name,
 		Size:      int64(len(data)),
-		Kind:      kind,
+		Kind:      fileKind(name),
 		Generated: true,
-		// Only Terraform code re-imports; values and env vars are edited in
-		// the app, the scaffold is rendered from the workflow.
-		Editable: kind == model.FileTerraform,
-		Language: fileLanguage(name),
+		Language:  fileLanguage(name),
 	}
+	switch {
+	case hclcodec.IsScaffold(name, data):
+		f.Kind = model.FileScaffold
+		f.ReadOnlyReason = "Generated on every export from the workflow — delete its first line in your exported copy to keep your own"
+	case strings.HasSuffix(name, ".tf"):
+		// Generated *.tf files are the workflow's code in either layout
+		// (root files, or service module and environment roots).
+		f.Kind = model.FileTerraform
+		f.ReadOnlyReason = rules.codeReadOnly(name)
+		f.Movable = rules.fixed(name) == ""
+	case f.Kind == model.FileTfvars:
+		f.ReadOnlyReason = "Generated from the environment values — edit them in Variables & Environments"
+	case f.Kind == model.FileEnv:
+		f.ReadOnlyReason = "Generated from the environment variables — edit them in Variables & Environments"
+	default:
+		f.ReadOnlyReason = "Generated from the workflow"
+	}
+	f.Editable = f.ReadOnlyReason == ""
+	return f
 }
 
-// assetFile describes the asset rel, sniffing its first bytes.
-func assetFile(root *os.Root, rel string) (model.WorkflowFile, error) {
-	in, err := root.Open(filepath.FromSlash(rel))
+// assetFile describes the asset src (path in the assets directory) exported
+// as rel, sniffing its first bytes. placed is how many export paths the
+// asset has (the lock file goes to every environment root).
+func assetFile(root *os.Root, src, rel string, placed int) (model.WorkflowFile, error) {
+	in, err := root.Open(filepath.FromSlash(src))
 	if err != nil {
 		return model.WorkflowFile{}, err
 	}
@@ -281,14 +317,24 @@ func assetFile(root *os.Root, rel string) (model.WorkflowFile, error) {
 		return model.WorkflowFile{}, err
 	}
 	binary := isBinary(head[:n], int64(n) == fi.Size())
-	return model.WorkflowFile{
+	f := model.WorkflowFile{
 		Path:     rel,
 		Size:     fi.Size(),
 		Kind:     fileKind(rel),
 		Binary:   binary,
-		Editable: !binary && fi.Size() <= maxTextFile && path.Base(rel) != lockFile,
 		Language: fileLanguage(rel),
-	}, nil
+		Movable:  placed == 1,
+	}
+	switch {
+	case binary:
+		f.ReadOnlyReason = "Binary file"
+	case fi.Size() > maxTextFile:
+		f.ReadOnlyReason = "Too large to edit here"
+	case path.Base(rel) == lockFile:
+		f.ReadOnlyReason = "Written by terraform init; kept as imported"
+	}
+	f.Editable = f.ReadOnlyReason == ""
+	return f, nil
 }
 
 // isBinary reports whether b is not UTF-8 text or holds a NUL byte. When b

@@ -3,9 +3,11 @@
 // so they never block a deploy), a short why (Detail) and a suggested fix
 // (Fix). Rules can be turned off as a whole or one by one in Settings.
 //
-// Rules only read the root workflow (never module sources) and are tuned to
-// stay quiet on the catalog templates and on code written the recommended
-// way; docs/ARCHITECTURE.md ("lint") lists them with their corpus noise counts.
+// Rules read the root workflow and, for the module rules, the local modules
+// it calls (LocalModules; never registry or remote module code). They are
+// tuned to stay quiet on the catalog templates and on code written the
+// recommended way; docs/ARCHITECTURE.md ("lint") lists them with their
+// corpus noise counts.
 package lint
 
 import (
@@ -48,6 +50,8 @@ var rules = []rule{
 		"The terraform block sets required_version so everyone runs a compatible Terraform."), checkRequiredVersion},
 	{warning("bp_provider_version", "Provider versions are pinned", CategoryVersions,
 		"Every provider the configuration uses is listed in required_providers with a version constraint."), checkProviderVersion},
+	{warning("bp_module_version_unpinned", "Module versions are pinned", CategoryVersions,
+		"Registry modules set version and git modules pin ?ref= to a tag or commit, so init always downloads the code you tested."), checkModuleVersionUnpinned},
 	{info("bp_hardcoded_region", "No hardcoded regions", CategoryHardcoding,
 		"Resource attributes don't hardcode a region or Azure location; use a variable or the provider's region."), checkHardcodedRegion},
 	{info("bp_hardcoded_az", "No hardcoded availability zones", CategoryHardcoding,
@@ -71,9 +75,25 @@ var rules = []rule{
 	{info("bp_large_file", "Files stay small", CategoryStructure,
 		"No Terraform file holds more than 15 resources; split by concern or extract a module."), checkLargeFile},
 	{info("bp_module_candidate", "Related resources form modules", CategoryStructure,
-		"A large group of related resources (network, API, containers) in a big workflow is a good module candidate."), checkModuleCandidate},
+		"A large logical group (network foundation, data tier, API, container service, cluster) in a big workflow is a good module candidate."), checkModuleCandidate},
 	{info("bp_duplicate_literal", "Repeated values live in locals", CategoryStructure,
 		"The same literal value (CIDR, ARN, ID, …) in three or more resources is defined once in locals."), checkDuplicateLiteral},
+	{warning("bp_provider_in_module", "Modules don't configure providers", CategoryStructure,
+		"Local modules declare required_providers (with configuration_aliases for aliases) but leave provider blocks to the root."), checkProviderInModule},
+	{info("bp_module_thin_wrapper", "Modules group more than one resource", CategoryStructure,
+		"A local module wraps a logical group of resources, not a single resource."), checkModuleThinWrapper},
+	{info("bp_module_nesting_depth", "Module trees stay shallow", CategoryStructure,
+		"Local modules are nested at most 2 levels deep; deeper trees are composed from the root."), checkModuleNestingDepth},
+	{info("bp_module_output_missing", "Module resources are exposed", CategoryStructure,
+		"Every resource of a local module that exports attributes (ID, ARN, URL) is referenced by at least one module output."), checkModuleOutputMissing},
+	{info("bp_inline_sg_rules", "Security group rules use one style", CategoryStructure,
+		"Where standalone security group rule resources are used, security groups don't also define inline ingress/egress rules (a warning when both target the same group)."), checkInlineSGRules},
+	{info("bp_no_remote_backend", "Environments don't share a state", CategoryStructure,
+		"A workflow with two or more environments in the single layout has a backend; otherwise every environment shares one local state (use the environments layout)."), checkNoRemoteBackend},
+	{info("bp_state_too_large", "States stay small", CategoryStructure,
+		"One state manages fewer than 50 resource instances (a warning from 100); larger designs split into workflows per layer (network, data, app)."), checkStateTooLarge},
+	{info("bp_workspace_branching", "No terraform.workspace branching", CategoryStructure,
+		"Expressions don't depend on terraform.workspace; environments get their own values and state instead of CLI workspaces."), checkWorkspaceBranching},
 }
 
 func info(code, title, category, desc string) model.BestPracticeRule {
@@ -99,12 +119,14 @@ func Rules() []model.BestPracticeRule {
 func IsFinding(d model.Diagnostic) bool { return strings.HasPrefix(d.Code, Prefix) }
 
 // Check runs the enabled rules over wf, which must be normalized (value
-// pairs filled, edges derived). It never returns error-severity findings.
-func Check(wf *model.Workflow, cat *catalog.Catalog, cfg model.BestPracticeSettings) []model.Diagnostic {
+// pairs filled, edges derived). mods are the local modules wf calls
+// (LocalModules; nil when it calls none or they can't be read). It never
+// returns error-severity findings.
+func Check(wf *model.Workflow, cat *catalog.Catalog, cfg model.BestPracticeSettings, mods *model.ModuleTree) []model.Diagnostic {
 	if cfg.Disabled {
 		return nil
 	}
-	p := newPass(wf, cat)
+	p := newPass(wf, cat, mods)
 	for i := range rules {
 		r := &rules[i]
 		if slices.Contains(cfg.DisabledRules, r.Code) {

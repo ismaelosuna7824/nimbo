@@ -23,7 +23,7 @@ Recommended loop:
 7. list_load_targets, then run_load_test (start with preset smoke, then load/stress) and report latency, throughput, error rate and threshold results.
 8. export_terraform to a directory when the user wants the code. get_terraform shows it inline; apply_terraform_code edits by code (every block stays in the file you write it in).
 
-update_workflow renames a workflow or changes its description; keep the description in step with what the workflow does.
+update_workflow renames a workflow, changes its description or its export layout; keep the description in step with what the workflow does.
 
 Networks: use check_network after designing or changing networks (VPCs, subnets, route tables, gateways, security groups) and fix its net_* findings; then check_reachability (AWS only today) for the paths that matter (internet → load balancer:443, app → database:5432, database → internet should be blocked). To show traffic really flowing, add_test_instance into a public subnet, deploy, then check_reachability with live=true.
 
@@ -32,16 +32,24 @@ Code quality: the Terraform you write is handed to the user as production code, 
 - Names come from local.name_prefix (project + environment): "${local.name_prefix}-orders". The first resource of a cloud adds variables project/environment, locals name_prefix/common_tags, region variables and AWS default_tags; keep using them. Azure resources take tags = local.common_tags, GCP resources labels = local.common_labels.
 - Every variable and output has a description; secrets are sensitive = true; providers stay pinned in required_providers.
 - Secure defaults: encryption on, no public buckets unless the user wants a public website, no 0.0.0.0/0 to SSH/RDP/database ports, IAM scoped to the ARNs used (never "*" on "*"), Lambda log groups with retention.
-- Group related resources into modules (below).
+- Group related resources into modules (below) and follow the structure rules (below).
 - Before you finish, call review_terraform and fix its findings (warnings first) or tell the user which ones you leave and why. Findings never block deploys.
 
 Modules: group related resources into a local module with extract_module when one concern has many resources or is repeated — a network (VPC + subnets + route tables + gateways), a service (function + IAM role + policies + log group + permissions), a queue with its dead-letter queue and alarms. Pick a snake_case name for the concern (network, orders_api). The root then calls module.<name> with clear inputs (typed, described variables) and reads its outputs; moved blocks keep anything already deployed (the next plan only moves, 0 to add/change/destroy). Use dry_run=true to review the inputs/outputs first; inline_module undoes it. Keep shared plumbing (providers, variables, locals) in the root.
+
+Structure (HashiCorp style guide, Google Cloud root modules, AWS Prescriptive Guidance). One workflow = one root module = one state per environment. Decide the structure before adding resources (prompt plan_structure):
+- Size: a small design (a few dozen resources, one environment) stays one root. With two or more environments use the environments layout (update_workflow layout "environments"; "auto" picks it from two environments): export writes modules/<service>/ plus environments/<env>/ roots, each with its own backend.tf and state. When a design passes ~100 resources (Google: at most 100 per state, ideally a few dozen), split it into one workflow per layer (network, data, app); upper layers find lower ones with data sources by tags or IDs (data.aws_vpc, data.aws_subnets), never by sharing state.
+- Modules: one per logical group (network foundation, data tier, security controls, an app/service), never a wrapper around a single resource; no provider blocks inside modules (required_providers with >= minimums only); at most 2 levels of nesting below a root (the environments layout's service module counts as the first, so call your modules from the workflow's root and don't nest them); every resource reachable from an output (IDs/ARNs callers need); environment-specific inputs without defaults, environment-independent ones with defaults; units in names (ram_size_gb, retention_days) and positive booleans (enable_x, not disable_x).
+- Environments: one state each, no CLI workspaces or terraform.workspace; per-environment values with set_environment (exported as each environment's terraform.tfvars); secrets never in tfvars: sensitive variables whose values come from secret env vars (env_vars TF_VAR_<name> + secret_keys).
+- Versions: ~> pins in roots (required_version, providers), >= minimums in modules; registry modules with version, git modules with ?ref=<tag>.
+- Prefer attachment resources (aws_vpc_security_group_ingress_rule/_egress_rule, aws_iam_role_policy_attachment) over inline blocks.
+get_workflow and review_terraform report the layout and a structure summary (states, resources per state, modules, nesting, backend).
 
 Existing code: scan_terraform_folder lists the Terraform projects in a folder or repository, import_terraform imports the chosen ones (one workflow each; local modules are kept).
 Already-deployed services outside the sandbox (connections tools) receive real traffic: always get the user's explicit confirmation first.
 Finished work can be closed with archive_workflow (hidden from list_workflows unless include_archived=true; runs are refused until unarchive_workflow).
 
-Prompts: create_infrastructure, extend_workflow, import_terraform_folder, load_test and test_deployed_service are step-by-step recipes for the common tasks.
+Prompts: create_infrastructure, plan_structure, extend_workflow, import_terraform_folder, load_test and test_deployed_service are step-by-step recipes for the common tasks.
 
 Nodes are referenced by address (aws_sqs_queue.jobs) or ID. Workflows by ID, exact name or "current". Runs and load tests wait for completion by default.`
 

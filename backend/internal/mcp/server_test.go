@@ -221,6 +221,44 @@ func TestUpdateWorkflowNameAndDescription(t *testing.T) {
 	}
 }
 
+func TestWorkflowLayoutAndStructure(t *testing.T) {
+	cs, _ := session(t)
+	var wf workflowView
+	mustTool(t, cs, "create_workflow", map[string]any{"name": "Layered"}, &wf)
+	mustTool(t, cs, "add_node", map[string]any{"workflow": wf.ID, "type": "aws_sqs_queue", "name": "q"}, nil)
+	for _, env := range []string{"dev", "prod"} {
+		mustTool(t, cs, "set_environment", map[string]any{"workflow": wf.ID, "name": env}, nil)
+	}
+
+	var got workflowView
+	mustTool(t, cs, "get_workflow", map[string]any{"workflow": wf.ID}, &got)
+	s := got.Structure
+	if s == nil || s.Layout != model.LayoutEnvironments || s.LayoutSetting != "auto" || s.States != 2 || s.ResourcesPerState < 1 || s.Service != "layered" || !strings.Contains(s.State, "one state per environment") {
+		t.Fatalf("auto layout with two environments: %+v", s)
+	}
+
+	mustTool(t, cs, "update_workflow", map[string]any{"workflow": wf.ID, "layout": "single"}, &got)
+	if s := got.Structure; s.Layout != model.LayoutSingle || s.LayoutSetting != model.LayoutSingle || s.States != 1 {
+		t.Fatalf("single layout: %+v", s)
+	}
+	var review struct {
+		Structure *structureView `json:"structure"`
+		Info      []findingView  `json:"info"`
+	}
+	mustTool(t, cs, "review_terraform", map[string]any{"workflow": wf.ID}, &review)
+	if review.Structure == nil || review.Structure.Layout != model.LayoutSingle || !slices.ContainsFunc(review.Info, func(f findingView) bool { return f.Code == "bp_no_remote_backend" }) {
+		t.Fatalf("review in the single layout: %+v", review)
+	}
+
+	mustTool(t, cs, "update_workflow", map[string]any{"workflow": wf.ID, "layout": "auto"}, &got)
+	if s := got.Structure; s.LayoutSetting != "auto" || s.Layout != model.LayoutEnvironments {
+		t.Fatalf("back to auto: %+v", s)
+	}
+	if text, isErr := callTool(t, cs, "update_workflow", map[string]any{"workflow": wf.ID, "layout": "monorepo"}); !isErr {
+		t.Errorf("invalid layout accepted: %s", text)
+	}
+}
+
 func TestUpdateNodeMovesFile(t *testing.T) {
 	cs, _ := session(t)
 	var wf workflowView

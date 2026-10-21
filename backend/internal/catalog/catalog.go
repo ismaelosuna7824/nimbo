@@ -53,6 +53,7 @@ type provider struct {
 }
 
 type rawFile struct {
+	Provider  *schemafile.Entry          `json:"provider"`
 	Resources map[string]json.RawMessage `json:"resources"`
 	Data      map[string]json.RawMessage `json:"data"`
 }

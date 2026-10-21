@@ -2,6 +2,8 @@ package hclcodec
 
 import (
 	"fmt"
+	"maps"
+	"slices"
 	"sort"
 
 	"github.com/hashicorp/hcl/v2"
@@ -12,8 +14,9 @@ import (
 
 // MergeImported carries app-only data from prev into next (a fresh Import of
 // edited code): node IDs, positions, labels, parents matched by address;
-// environments, active environment, workflow ID/name/description/icon/
-// createdAt and the archived flag. Every block stays in the file it was
+// environments, active environment, export layout and service name,
+// workflow ID/name/description/icon/createdAt and the archived flag.
+// Every block stays in the file it was
 // written in. Blocks that had no recorded file in prev and are still in the
 // file the recommended layout gave them stay unrecorded, and so do new
 // blocks written where that layout puts them, unless the layout of next
@@ -81,8 +84,55 @@ func MergeImported(prev, next *model.Workflow, resourceFile func(string) string)
 	if prev.ActiveEnvironment != "" {
 		next.ActiveEnvironment = prev.ActiveEnvironment
 	}
+	next.Layout, next.Service = prev.Layout, prev.Service
 	keepAutoFiles(prev, next, resourceFile)
 	deriveEdges(next)
+}
+
+// MergeEnvironmentsTree completes MergeImported(prev, next) when next is an
+// ImportEnvironments of code edited in the environments layout (service
+// module and environment roots without their variable files): prev's
+// environments stay, with the values the roots' module calls set directly
+// (fromTree, next's environments before the merge) on top; environment
+// roots prev does not have are ignored (environments are managed in the
+// app). The defaults export removed from environment-specific inputs are
+// restored, in place.
+func MergeEnvironmentsTree(prev, next *model.Workflow, fromTree []model.Environment) {
+	envs := make([]model.Environment, len(prev.Environments))
+	for i, e := range prev.Environments {
+		e.Values = maps.Clone(e.Values)
+		if e.Values == nil {
+			e.Values = map[string]model.Value{}
+		}
+		if j := envIndex(fromTree, e.Name); j >= 0 {
+			maps.Copy(e.Values, fromTree[j].Values)
+		}
+		envs[i] = e
+	}
+	next.Environments = envs
+	l, err := newEnvLayout(prev)
+	if err != nil {
+		return
+	}
+	for _, v := range l.vars {
+		if !v.specific || v.def == "" {
+			continue
+		}
+		for i := range next.Variables {
+			nv := &next.Variables[i]
+			if nv.Name != v.block.Name || attrExpr(&nv.Body, "default") != "" {
+				continue
+			}
+			at := len(nv.Body.Attrs)
+			for j, a := range v.block.Body.Attrs {
+				if a.Name == "default" {
+					at = min(j, at)
+					nv.Body.Attrs = slices.Insert(nv.Body.Attrs, at, model.Attr{Name: "default", Value: a.Value, Comments: a.Comments})
+					break
+				}
+			}
+		}
+	}
 }
 
 // keepAutoFiles clears the recorded files of next that only repeat prev's

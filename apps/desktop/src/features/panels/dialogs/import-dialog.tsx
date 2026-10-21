@@ -383,7 +383,10 @@ function ProjectRow({
   const problems = p.diagnostics.filter((d) => d.severity !== "info")
   const unusedModule = p.diagnostics.find((d) => d.code === "unused_module")
   const errors = problems.filter((d) => d.severity === "error").length
-  const envs = p.tfvarsFiles.map((f) => f.replace(/^.*\//, "").replace(/(\.auto)?\.tfvars$/, "").replace(/^terraform$/, "default"))
+  const layered = p.layout === "environments"
+  const envs = layered
+    ? (p.environments ?? [])
+    : p.tfvarsFiles.map((f) => f.replace(/^.*\//, "").replace(/(\.auto)?\.tfvars$/, "").replace(/^terraform$/, "default"))
   return (
     <Collapsible className={cn("flex flex-col gap-2 px-3 py-2.5", !checked && "opacity-60")}>
       <div className="flex items-center gap-3">
@@ -409,8 +412,20 @@ function ProjectRow({
           </Stat>
           {p.modules > 0 && <Stat icon={PackageIcon}>{plural(p.modules, "module")}</Stat>}
           {envs.length > 0 && (
-            <Stat icon={FileCode2Icon} tip={<>Each .tfvars file becomes an environment: {p.tfvarsFiles.join(", ")}</>}>
-              {envs.length === 1 ? `env ${envs[0]}` : plural(envs.length, "environment")}
+            <Stat
+              icon={FileCode2Icon}
+              tip={
+                layered ? (
+                  <>
+                    One root per environment calling one service module: imported as one workflow with the environments{" "}
+                    {envs.join(", ")} (values from each root's terraform.tfvars); exported in the same layout.
+                  </>
+                ) : (
+                  <>Each .tfvars file becomes an environment: {p.tfvarsFiles.join(", ")}</>
+                )
+              }
+            >
+              {layered ? `${plural(envs.length, "environment")} · one state each` : envs.length === 1 ? `env ${envs[0]}` : plural(envs.length, "environment")}
             </Stat>
           )}
           {unusedModule && (

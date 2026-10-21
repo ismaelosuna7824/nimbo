@@ -48,8 +48,35 @@ func importHCL(t *testing.T, src string) *model.Workflow {
 
 func findings(t *testing.T, src, code string) []model.Diagnostic {
 	t.Helper()
+	return caseFindings(t, structureCase{src: src}, code)
+}
+
+// caseFindings runs the rules over tc.src (main.tf of the root) with its
+// local modules (tc.modules: directory -> main.tf), environments and layout,
+// and returns the findings of code.
+func caseFindings(t *testing.T, tc structureCase, code string) []model.Diagnostic {
+	t.Helper()
+	wf := importHCL(t, tc.src)
+	for _, e := range tc.envs {
+		wf.Environments = append(wf.Environments, model.Environment{Name: e})
+	}
+	wf.Layout = tc.layout
+	var mods *model.ModuleTree
+	if len(tc.modules) > 0 {
+		var err error
+		mods, err = LocalModules(wf, ".", func(dir string) (map[string][]byte, error) {
+			src, ok := tc.modules[dir]
+			if !ok {
+				return nil, nil
+			}
+			return map[string][]byte{"main.tf": []byte(src)}, nil
+		})
+		if err != nil {
+			t.Fatalf("modules: %v", err)
+		}
+	}
 	var out []model.Diagnostic
-	for _, d := range Check(importHCL(t, src), testCatalog, model.BestPracticeSettings{}) {
+	for _, d := range Check(wf, testCatalog, model.BestPracticeSettings{}, mods) {
 		if d.Severity == model.SeverityError {
 			t.Fatalf("error-severity finding %+v", d)
 		}
@@ -64,6 +91,17 @@ type ruleCase struct {
 	name string
 	src  string
 	want int
+}
+
+// structureCase is a rule case with local modules, environments or a
+// layout (see structureCases).
+type structureCase struct {
+	name    string
+	src     string
+	modules map[string]string // local module directory -> main.tf
+	envs    []string
+	layout  string
+	want    int
 }
 
 func TestRules(t *testing.T) {
@@ -620,17 +658,26 @@ resource "aws_lambda_function" "c" {
 		},
 	}
 	for _, r := range Rules() {
-		if len(cases[r.Code]) == 0 {
+		if len(cases[r.Code]) == 0 && len(structureCases[r.Code]) == 0 {
 			t.Errorf("rule %s has no test cases", r.Code)
 		}
 	}
+	all := map[string][]structureCase{}
 	for code, list := range cases {
+		for _, tc := range list {
+			all[code] = append(all[code], structureCase{name: tc.name, src: tc.src, want: tc.want})
+		}
+	}
+	for code, list := range structureCases {
+		all[code] = append(all[code], list...)
+	}
+	for code, list := range all {
 		if !slices.ContainsFunc(Rules(), func(r model.BestPracticeRule) bool { return r.Code == code }) {
 			t.Errorf("cases for unknown rule %s", code)
 		}
 		for _, tc := range list {
 			t.Run(code+"/"+tc.name, func(t *testing.T) {
-				got := findings(t, tc.src, code)
+				got := caseFindings(t, tc, code)
 				if len(got) != tc.want {
 					t.Errorf("%d findings, want %d: %+v", len(got), tc.want, got)
 				}
@@ -661,22 +708,56 @@ func TestStructureRules(t *testing.T) {
 	}
 	wf := importHCL(t, pinned+queues.String())
 	// Imported files are kept: all 16 queues stay in main.tf.
-	if got := codes(Check(wf, testCatalog, model.BestPracticeSettings{})); got["bp_large_file"] != 1 {
+	if got := codes(Check(wf, testCatalog, model.BestPracticeSettings{}, nil)); got["bp_large_file"] != 1 {
 		t.Errorf("16 resources in one file: %v", got)
 	}
 
 	wf = importHCL(t, pinned+network(8)+queues.String())
-	if got := codes(Check(wf, testCatalog, model.BestPracticeSettings{})); got["bp_module_candidate"] != 1 {
+	if got := codes(Check(wf, testCatalog, model.BestPracticeSettings{}, nil)); got["bp_module_candidate"] != 1 {
 		t.Errorf("8 network resources in a 24-resource workflow: %v", got)
 	}
 	var fix string
-	for _, d := range Check(wf, testCatalog, model.BestPracticeSettings{}) {
+	for _, d := range Check(wf, testCatalog, model.BestPracticeSettings{}, nil) {
 		if d.Code == "bp_module_candidate" {
 			fix = d.Fix
 		}
 	}
 	if !strings.Contains(fix, "extract_module") || !strings.Contains(fix, "aws_vpc.v") {
 		t.Errorf("module candidate fix = %q", fix)
+	}
+
+	// Security group rules belong with the service they protect, not the
+	// network foundation.
+	sgRules := `resource "aws_security_group" "app" { vpc_id = aws_vpc.v.id }
+resource "aws_vpc_security_group_egress_rule" "a" {
+  security_group_id = aws_security_group.app.id
+  cidr_ipv4         = "0.0.0.0/0"
+  ip_protocol       = "-1"
+}
+resource "aws_vpc_security_group_ingress_rule" "b" {
+  security_group_id = aws_security_group.app.id
+  cidr_ipv4         = "10.0.0.0/16"
+  ip_protocol       = "-1"
+}
+`
+	wf = importHCL(t, pinned+network(4)+sgRules+queues.String())
+	if got := codes(Check(wf, testCatalog, model.BestPracticeSettings{}, nil)); got["bp_module_candidate"] != 0 {
+		t.Errorf("4 network resources plus security group rules: %v", got)
+	}
+
+	var tables strings.Builder
+	for i := range 5 {
+		fmt.Fprintf(&tables, "resource \"aws_dynamodb_table\" \"t%d\" {\n  name     = \"t%d\"\n  hash_key = \"id\"\n}\n", i, i)
+	}
+	wf = importHCL(t, pinned+tables.String()+queues.String())
+	found := false
+	for _, d := range Check(wf, testCatalog, model.BestPracticeSettings{}, nil) {
+		if d.Code == "bp_module_candidate" && strings.Contains(d.Message, "data tier") && strings.Contains(d.Fix, `"data"`) {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("5 DynamoDB tables are a data tier candidate")
 	}
 }
 
@@ -691,13 +772,13 @@ func codes(diags []model.Diagnostic) map[string]int {
 func TestSettingsDisableRules(t *testing.T) {
 	src := `variable "a" {}`
 	wf := importHCL(t, src)
-	if got := codes(Check(wf, testCatalog, model.BestPracticeSettings{})); got["bp_variable_type"] != 1 || got["bp_variable_description"] != 1 {
+	if got := codes(Check(wf, testCatalog, model.BestPracticeSettings{}, nil)); got["bp_variable_type"] != 1 || got["bp_variable_description"] != 1 {
 		t.Fatalf("all rules: %v", got)
 	}
-	if got := codes(Check(wf, testCatalog, model.BestPracticeSettings{DisabledRules: []string{"bp_variable_type"}})); got["bp_variable_type"] != 0 || got["bp_variable_description"] != 1 {
+	if got := codes(Check(wf, testCatalog, model.BestPracticeSettings{DisabledRules: []string{"bp_variable_type"}}, nil)); got["bp_variable_type"] != 0 || got["bp_variable_description"] != 1 {
 		t.Errorf("one rule off: %v", got)
 	}
-	if got := Check(wf, testCatalog, model.BestPracticeSettings{Disabled: true}); len(got) != 0 {
+	if got := Check(wf, testCatalog, model.BestPracticeSettings{Disabled: true}, nil); len(got) != 0 {
 		t.Errorf("checks off: %v", got)
 	}
 }
@@ -714,7 +795,7 @@ func TestTemplatesAreClean(t *testing.T) {
 			t.Fatal(err)
 		}
 		hclcodec.Normalize(wf)
-		for _, d := range Check(wf, testCatalog, model.BestPracticeSettings{}) {
+		for _, d := range Check(wf, testCatalog, model.BestPracticeSettings{}, nil) {
 			t.Errorf("%s: %s %s", tpl.ID, d.Code, d.Message)
 		}
 	}
@@ -734,7 +815,7 @@ func TestPopularStartersAreClean(t *testing.T) {
 			}
 		}
 		hclcodec.Normalize(wf)
-		for _, d := range Check(wf, testCatalog, model.BestPracticeSettings{}) {
+		for _, d := range Check(wf, testCatalog, model.BestPracticeSettings{}, nil) {
 			if d.Code == "bp_large_file" || d.Code == "bp_module_candidate" {
 				continue // one big generated workflow per cloud, by construction
 			}
@@ -742,8 +823,8 @@ func TestPopularStartersAreClean(t *testing.T) {
 		}
 	}
 	hclcodec.Normalize(all)
-	for _, d := range Check(all, testCatalog, model.BestPracticeSettings{}) {
-		if d.Code == "bp_large_file" || d.Code == "bp_module_candidate" {
+	for _, d := range Check(all, testCatalog, model.BestPracticeSettings{}, nil) {
+		if d.Code == "bp_large_file" || d.Code == "bp_module_candidate" || d.Code == "bp_state_too_large" {
 			continue
 		}
 		t.Errorf("all clouds: %s %s", d.Code, d.Message)

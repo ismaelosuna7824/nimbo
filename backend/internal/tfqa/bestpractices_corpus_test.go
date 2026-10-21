@@ -64,7 +64,14 @@ func TestCorpusBestPractices(t *testing.T) {
 		for i := range wf.Nodes {
 			addrs[wf.Nodes[i].ID] = hclcodec.Address(&wf.Nodes[i])
 		}
-		for _, d := range lint.Check(wf, cat, model.BestPracticeSettings{}) {
+		scan := filepath.Join(base, cr.Repo, filepath.FromSlash(cr.Scan))
+		mods, err := lint.LocalModules(wf, cr.Project, func(d string) (map[string][]byte, error) {
+			return tfFiles(filepath.Join(scan, filepath.FromSlash(d)))
+		})
+		if err != nil {
+			t.Fatalf("%s: modules: %v", name, err)
+		}
+		for _, d := range lint.Check(wf, cat, model.BestPracticeSettings{}, mods) {
 			if d.Severity == model.SeverityError {
 				t.Errorf("%s: error-severity finding %+v", name, d)
 			}
@@ -96,4 +103,26 @@ func TestCorpusBestPractices(t *testing.T) {
 			t.Error(err)
 		}
 	}
+}
+
+// tfFiles reads the top-level *.tf files of dir (none when it is missing).
+func tfFiles(dir string) (map[string][]byte, error) {
+	entries, err := os.ReadDir(dir)
+	if os.IsNotExist(err) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	files := map[string][]byte{}
+	for _, e := range entries {
+		if e.Type().IsRegular() && strings.HasSuffix(e.Name(), ".tf") {
+			b, err := os.ReadFile(filepath.Join(dir, e.Name()))
+			if err != nil {
+				return nil, err
+			}
+			files[e.Name()] = b
+		}
+	}
+	return files, nil
 }

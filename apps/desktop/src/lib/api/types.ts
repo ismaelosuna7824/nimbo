@@ -181,6 +181,14 @@ export interface Workflow {
   other: Block[]
   environments: Environment[]
   activeEnvironment?: string
+  /**
+   * Directory structure of the export. "single": one root module, environments as variable files (one shared state).
+   * "environments": modules/<service> plus one root (and state) per environment under environments/<env>.
+   * Absent: automatic, "environments" with two or more environments.
+   */
+  layout?: WorkflowLayout
+  /** Service module name of the environments layout (modules/<service>); absent: the workflow name in snake_case. */
+  service?: string
   // derived, read-only
   edges: WorkflowEdge[]
   clouds: Cloud[]
@@ -188,6 +196,8 @@ export interface Workflow {
   /** Node ID -> root .tf file the export writes it to (its `file`, or the recommended layout). */
   nodeFiles?: Record<string, string>
 }
+
+export type WorkflowLayout = "single" | "environments"
 
 export interface WorkflowSummary {
   id: string
@@ -267,6 +277,64 @@ export interface ResourceSchema extends ResourceSummary {
   description?: string
   docsUrl?: string
   block: SchemaBlock
+}
+
+// ---------------------------------------------------------------- code intelligence
+
+/** Schemas the code editor completes from: resource and data types plus provider configuration blocks. */
+export type SchemaKind = "resource" | "data" | "provider"
+
+/** One entry of the compact index of every resource/data type (GET /catalog/types). */
+export interface TypeInfo {
+  kind: "resource" | "data"
+  type: string
+  /** Absent for utility providers (archive, random). */
+  cloud?: Cloud
+  label: string
+  /** Runs in the local emulator (or needs none). */
+  local?: boolean
+}
+
+export interface FunctionParameter {
+  name: string
+  type: CtyType
+  description?: string
+  nullable?: boolean
+}
+
+/** A Terraform built-in function (GET /catalog/functions). */
+export interface FunctionSignature {
+  name: string
+  description?: string
+  returnType: CtyType
+  parameters: FunctionParameter[]
+  variadicParameter?: FunctionParameter
+}
+
+/** A module `terraform init` downloaded into the sandbox: manifest key ("vpc", "app.db"), source and .tf files. */
+export interface DownloadedModule {
+  key: string
+  source: string
+  version?: string
+  files: Record<string, string>
+}
+
+/** Every Terraform source the editor resolves names in: the workflow's .tf files by path and downloaded modules. */
+export interface CodeWorkspace {
+  files: Record<string, string>
+  modules: DownloadedModule[]
+}
+
+/** A problem of a file being edited; lines and columns are 1-based, the end exclusive. */
+export interface CodeProblem {
+  severity: Severity
+  code: string
+  message: string
+  detail?: string
+  line: number
+  column: number
+  endLine: number
+  endColumn: number
 }
 
 export interface ConnectionRecipe {
@@ -1073,6 +1141,12 @@ export interface ImportProject {
   /** A remote backend is configured; the sandbox runs with local state instead. */
   hasBackend: boolean
   diagnostics: Diagnostic[]
+  /**
+   * "environments": environments/<env>/ roots that only call modules/<service>, imported as ONE workflow with one
+   * environment per root (`environments`); `path` is the folder holding environments/ and modules/.
+   */
+  layout: WorkflowLayout
+  environments?: string[]
 }
 
 export interface ImportScan {
@@ -1183,8 +1257,8 @@ export type FileLanguage =
   | "text"
 
 /**
- * One file an export writes (GET /workflows/{id}/files). Generated files are rendered from the workflow;
- * editable generated *.tf change through PUT /terraform, editable assets through PUT /files/content.
+ * One file an export writes (GET /workflows/{id}/files). Generated files are rendered from the workflow; the
+ * others are assets stored with it. Editable files (code and assets) change through PUT /terraform.
  */
 export interface WorkflowFile {
   /** Slash-separated, relative to the export root. */
@@ -1193,10 +1267,36 @@ export interface WorkflowFile {
   kind: WorkflowFileKind
   generated: boolean
   editable: boolean
+  /** Why the file is not editable (absent when it is). */
+  readOnlyReason?: string
+  /** Can be renamed, moved or deleted from the Code tab. */
+  movable: boolean
   binary: boolean
   language: FileLanguage
 }
 
 export interface WorkflowFileContent extends WorkflowFile {
   content: string
+}
+
+/**
+ * PUT /workflows/{id}/terraform with changes: moves run first, then each change sets a file's content (created when
+ * new) or deletes it (null). Paths are export paths. Terraform code is re-imported, every other file is stored.
+ */
+export interface FileChangesRequest {
+  changes?: Record<string, string | null>
+  moves?: { from: string; to: string }[]
+  /** Format the HCL written (terraform fmt). */
+  format?: boolean
+}
+
+/** A new local module, not saved yet (POST /workflows/{id}/modules/scaffold). */
+export interface ModuleScaffold {
+  name: string
+  /** modules/<name> */
+  dir: string
+  /** Export path → content: versions.tf, variables.tf, outputs.tf, main.tf, README.md. */
+  files: Record<string, string>
+  /** The module block calling it and the code file it belongs in. */
+  call: { path: string; block: string }
 }

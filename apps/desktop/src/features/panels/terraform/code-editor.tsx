@@ -1,5 +1,6 @@
 import { useEffect, useImperativeHandle, useLayoutEffect, useRef, type Ref } from "react"
 import { useTheme } from "next-themes"
+import { closeBrackets, closeBracketsKeymap } from "@codemirror/autocomplete"
 import { defaultKeymap, history, historyKeymap, indentWithTab } from "@codemirror/commands"
 import { bracketMatching, foldGutter, foldKeymap, indentOnInput, syntaxHighlighting } from "@codemirror/language"
 import {
@@ -104,6 +105,8 @@ export interface CodeEditorHandle {
   revealLine: (line: number) => void
   /** Opens the search panel with `query` and selects the next match. */
   find: (query: string) => void
+  /** Replaces the text as an undoable edit (reported through onChange), e.g. after formatting. */
+  replaceDocument: (text: string) => void
 }
 
 interface CodeEditorProps {
@@ -119,10 +122,13 @@ interface CodeEditorProps {
   /** Documents whose editor state is kept (the open tabs); the others are dropped. */
   keep: readonly string[]
   className?: string
+  /** Extra extensions of this document (e.g. Terraform language intelligence); keep the array stable per document. */
+  extensions?: Extension[]
 }
 
 const SEVERITY_RANK: Record<Severity, number> = { error: 0, warning: 1, info: 2 }
 const NO_DIAGNOSTICS: EditorDiagnostic[] = []
+const NO_EXTENSIONS: Extension[] = []
 /** Marks transactions that sync the document from props, so they are not reported as edits. */
 const external = Annotation.define<boolean>()
 
@@ -200,6 +206,7 @@ export function CodeEditor({
   onChange,
   keep,
   className,
+  extensions = NO_EXTENSIONS,
 }: CodeEditorProps) {
   const host = useRef<HTMLDivElement>(null)
   const view = useRef<EditorView | null>(null)
@@ -214,11 +221,12 @@ export function CodeEditor({
     wrap: new Compartment(),
     highlight: new Compartment(),
     diagnostics: new Compartment(),
+    extensions: new Compartment(),
   }).current
   const { resolvedTheme } = useTheme()
   const dark = resolvedTheme !== "light"
-  const config = useRef({ readOnly, wrap, dark, diagnostics })
-  config.current = { readOnly, wrap, dark, diagnostics }
+  const config = useRef({ readOnly, wrap, dark, diagnostics, extensions })
+  config.current = { readOnly, wrap, dark, diagnostics, extensions }
 
   useEffect(() => {
     onChangeRef.current = onChange
@@ -237,10 +245,11 @@ export function CodeEditor({
         drawSelection(),
         indentOnInput(),
         bracketMatching(),
+        closeBrackets(),
         highlightActiveLine(),
         highlightSelectionMatches(),
         search({ top: true }),
-        keymap.of([...defaultKeymap, ...historyKeymap, ...searchKeymap, ...foldKeymap, indentWithTab]),
+        keymap.of([...closeBracketsKeymap, ...defaultKeymap, ...historyKeymap, ...searchKeymap, ...foldKeymap, indentWithTab]),
         baseTheme,
         EditorState.tabSize.of(2),
         EditorView.contentAttributes.of({ "aria-label": `Contents of ${id}` }),
@@ -248,6 +257,7 @@ export function CodeEditor({
         c.highlight.of(syntaxHighlighting(cfg.dark ? codeHighlightDark : codeHighlightLight)),
         c.readOnly.of(EditorState.readOnly.of(cfg.readOnly)),
         c.wrap.of(cfg.wrap ? EditorView.lineWrapping : []),
+        c.extensions.of(cfg.extensions),
         EditorView.updateListener.of((u) => {
           if (!u.docChanged || u.transactions.some((tr) => tr.annotation(external))) return
           lastText.current = u.state.doc.toString()
@@ -285,6 +295,7 @@ export function CodeEditor({
           c.wrap.reconfigure(cfg.wrap ? EditorView.lineWrapping : []),
           c.highlight.reconfigure(syntaxHighlighting(cfg.dark ? codeHighlightDark : codeHighlightLight)),
           c.diagnostics.reconfigure(diagnosticsExtension(cfg.diagnostics)),
+          c.extensions.reconfigure(cfg.extensions),
         ],
       })
       const top = restored?.scrollTop ?? 0
@@ -330,6 +341,10 @@ export function CodeEditor({
   }, [c, diagnostics])
 
   useEffect(() => {
+    view.current?.dispatch({ effects: c.extensions.reconfigure(extensions) })
+  }, [c, extensions])
+
+  useEffect(() => {
     for (const id of saved.current.keys()) if (!keep.includes(id)) saved.current.delete(id)
   }, [keep])
 
@@ -353,6 +368,26 @@ export function CodeEditor({
         v.dispatch({ effects: setSearchQuery.of(new SearchQuery({ search: query })) })
         openSearchPanel(v)
         findNext(v)
+      },
+      replaceDocument: (text) => {
+        const v = view.current
+        if (!v || v.state.readOnly) return
+        const old = v.state.doc.toString()
+        // Only the differing middle changes, so the cursor and scroll position survive.
+        let start = 0
+        while (start < old.length && start < text.length && old[start] === text[start]) start++
+        let end = 0
+        while (
+          end < old.length - start &&
+          end < text.length - start &&
+          old[old.length - 1 - end] === text[text.length - 1 - end]
+        )
+          end++
+        if (start === old.length && start === text.length) return
+        v.dispatch({
+          changes: { from: start, to: old.length - end, insert: text.slice(start, text.length - end) },
+          userEvent: "input.format",
+        })
       },
     }),
     [],

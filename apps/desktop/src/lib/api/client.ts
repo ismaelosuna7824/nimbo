@@ -1,8 +1,14 @@
 import type {
+  CodeProblem,
+  CodeWorkspace,
+  FunctionSignature,
+  TypeInfo,
   ImportRequest,
   ImportScan,
   ImportSource,
+  FileChangesRequest,
   ModuleExtraction,
+  ModuleScaffold,
   ModuleExtractRequest,
   ModuleTree,
   ModuleView,
@@ -122,6 +128,12 @@ export const api = {
     request<ResourceSchema>("GET", `/catalog/resources/${kind}/${encodeURIComponent(type)}`),
   templates: () => request<Template[]>("GET", "/catalog/templates"),
   loadPresets: () => request<LoadProfile[]>("GET", "/catalog/load-presets"),
+  /** Every resource and data type of every provider (utility ones included), compact. */
+  catalogTypes: () => request<TypeInfo[]>("GET", "/catalog/types"),
+  /** Several schemas at once, keyed "resource/aws_sqs_queue", "data/…", "provider/aws"; unknown keys are left out. */
+  catalogSchemas: (keys: string[]) =>
+    request<Record<string, ResourceSchema>>("GET", `/catalog/schemas${qs({ types: keys.join(",") })}`),
+  catalogFunctions: () => request<FunctionSignature[]>("GET", "/catalog/functions"),
 
   // workflows
   listWorkflows: () => request<WorkflowSummary[]>("GET", "/workflows"),
@@ -146,9 +158,19 @@ export const api = {
     request<Workflow>("POST", `/workflows/${id}/connections`, body),
 
   // terraform
-  terraform: (id: string) => request<{ files: Record<string, string> }>("GET", `/workflows/${id}/terraform`),
-  putTerraform: (id: string, files: Record<string, string>) =>
-    request<Workflow>("PUT", `/workflows/${id}/terraform`, { files }),
+  /** Creates, edits, moves and deletes workflow files in one request; code re-imports into the diagram. */
+  applyFileChanges: (id: string, body: FileChangesRequest) => request<Workflow>("PUT", `/workflows/${id}/terraform`, body),
+  /** Formats HCL like terraform fmt; syntax errors fail with ApiError 400 and located diagnostics. */
+  formatCode: (content: string, path?: string) =>
+    request<{ content: string; changed: boolean }>("POST", "/terraform/format", { content, path }),
+  /** The files of a new local module modules/<name> and the block calling it; saves nothing. */
+  moduleScaffold: (id: string, name: string) =>
+    request<ModuleScaffold>("POST", `/workflows/${id}/modules/scaffold`, { name }),
+  /** Every .tf source of the workflow (generated and asset files) plus downloaded registry modules. */
+  codeWorkspace: (id: string) => request<CodeWorkspace>("GET", `/workflows/${id}/terraform/workspace`),
+  /** Problems of one file being edited; `files` holds it and any other unsaved files. */
+  checkCode: (id: string, path: string, files: Record<string, string>) =>
+    request<{ problems: CodeProblem[] }>("POST", `/workflows/${id}/terraform/check`, { path, files }),
   exportTo: (id: string, dir: string, environments: boolean) =>
     request<{ dir: string; files: string[] }>("POST", `/workflows/${id}/export`, { dir, environments }),
   exportZipUrl: (id: string, environments: boolean) =>
@@ -176,11 +198,6 @@ export const api = {
   /** A text file; binary files fail with ApiError 415 (code "binary"), files over 2 MiB with 413 ("too_large"). */
   fileContent: (id: string, path: string) =>
     request<WorkflowFileContent>("GET", `/workflows/${id}/files/content${qs({ path })}`),
-  /** Overwrites an editable text asset; generated *.tf go through putTerraform. */
-  putFileContent: (id: string, path: string, content: string) =>
-    request<{ file: WorkflowFile; workflow: Workflow }>("PUT", `/workflows/${id}/files/content${qs({ path })}`, {
-      content,
-    }),
   fileRawUrl: (id: string, path: string) => `${baseUrl}/api/v1/workflows/${id}/files/raw${qs({ path })}`,
 
   // sandbox & runs

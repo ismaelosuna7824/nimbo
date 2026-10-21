@@ -1,4 +1,4 @@
-import type { WorkflowFile } from "@/lib/api/types"
+import type { FileLanguage, WorkflowFile } from "@/lib/api/types"
 
 /** Files above this size are not fetched for content search. */
 export const SEARCH_MAX_BYTES = 1 << 20
@@ -28,8 +28,8 @@ export interface DirNode {
 
 const byName = (a: string, b: string) => a.localeCompare(b, undefined, { numeric: true, sensitivity: "base" })
 
-/** Builds the folder tree; folders before files, each sorted by name. */
-export function buildTree(files: WorkflowFile[]): DirNode {
+/** Builds the folder tree (plus empty folders); folders before files, each sorted by name. */
+export function buildTree(files: WorkflowFile[], emptyDirs: string[] = []): DirNode {
   const root: DirNode = { path: "", name: "", dirs: [], files: [] }
   const dirs = new Map<string, DirNode>([["", root]])
   const dirOf = (path: string): DirNode => {
@@ -42,6 +42,7 @@ export function buildTree(files: WorkflowFile[]): DirNode {
     return node
   }
   for (const f of files) dirOf(dirName(f.path)).files.push(f)
+  for (const d of emptyDirs) dirOf(d)
   const sort = (d: DirNode) => {
     d.dirs.sort((a, b) => byName(a.name, b.name))
     d.files.sort((a, b) => byName(baseName(a.path), baseName(b.path)))
@@ -108,12 +109,71 @@ export const LANGUAGE_LABEL: Record<WorkflowFile["language"], string> = {
 
 /** Why a file can't be edited in Pro mode (undefined: it can). */
 export function readOnlyReason(file: WorkflowFile): string | undefined {
-  if (file.editable) return undefined
-  if (file.binary) return "Binary file"
-  if (file.kind === "tfvars") return "Generated from the environment values — edit them in Variables & Environments"
-  if (file.kind === "env") return "Generated from the environment variables — edit them in Variables & Environments"
-  if (file.kind === "scaffold")
-    return "Generated on every export from the workflow (description, variables, outputs) — delete its first line in your exported copy to keep your own"
-  if (baseName(file.path) === ".terraform.lock.hcl") return "Written by terraform init; kept as imported"
-  return "Too large to edit here"
+  return file.editable ? undefined : (file.readOnlyReason ?? "Read-only")
+}
+
+/** The syntax of a file by its name (as the daemon names it). */
+export function languageOf(path: string): FileLanguage {
+  const base = baseName(path).toLowerCase()
+  if (base.endsWith(".tf.json") || base.endsWith(".tfvars.json")) return "json"
+  if (base.endsWith(".env.example") || base === ".env" || base.startsWith(".env.")) return "shell"
+  const ext = base.includes(".") ? base.slice(base.lastIndexOf(".")) : ""
+  return EXT_LANGUAGE[ext] ?? "text"
+}
+
+const EXT_LANGUAGE: Record<string, FileLanguage> = {
+  ".tf": "hcl",
+  ".tfvars": "hcl",
+  ".hcl": "hcl",
+  ".json": "json",
+  ".js": "javascript",
+  ".mjs": "javascript",
+  ".cjs": "javascript",
+  ".jsx": "javascript",
+  ".ts": "typescript",
+  ".mts": "typescript",
+  ".cts": "typescript",
+  ".tsx": "typescript",
+  ".py": "python",
+  ".go": "go",
+  ".yaml": "yaml",
+  ".yml": "yaml",
+  ".md": "markdown",
+  ".markdown": "markdown",
+  ".sh": "shell",
+  ".bash": "shell",
+  ".zsh": "shell",
+}
+
+/** File types the Code tab creates; names without an extension (Makefile) are accepted too. */
+export const NEW_FILE_EXTENSIONS = [".tf", ".tfvars", ".tftpl", ".md", ".json", ".yaml", ".yml", ".sh", ".py", ".js", ".ts", ".txt"]
+
+/** HCL the format endpoint understands (terraform fmt). */
+export const isFormattable = (path: string) => /\.(tf|tfvars|hcl)$/.test(path)
+
+/**
+ * Checks a name typed in the tree: a file or folder name, or a relative path of them ("modules/net/main.tf"),
+ * without absolute paths, "..", hidden names or characters other systems reject; files need a supported type.
+ * Returns the problem, or undefined.
+ */
+export function nameProblem(input: string, kind: "file" | "folder"): string | undefined {
+  const name = input.trim()
+  if (!name) return "Enter a name"
+  if (name.startsWith("/") || /^[A-Za-z]:/.test(name)) return "Use a path relative to the workflow files"
+  if (name.includes("\\")) return "Use / to separate folders"
+  const segments = name.split("/")
+  for (const s of segments) {
+    if (!s) return "Folder names can't be empty"
+    if (s === "." || s === "..") return "“.” and “..” are not allowed"
+    if (s.startsWith(".")) return "Hidden names (starting with “.”) are not exported"
+    if (/[:*?"<>|]/.test(s) || /\p{Cc}/u.test(s)) return 'Names can\'t contain : * ? " < > | or control characters'
+    if (s.length > 128) return "Names can't be longer than 128 characters"
+  }
+  if (kind === "folder") return undefined
+  const base = segments[segments.length - 1].toLowerCase()
+  if (/\.tfstate|^terraform\.tfstate/.test(base)) return "Terraform state is not stored with the workflow"
+  const dot = base.lastIndexOf(".")
+  if (dot >= 0 && !NEW_FILE_EXTENSIONS.includes(base.slice(dot)))
+    return `Unsupported file type “${base.slice(dot)}” — use ${NEW_FILE_EXTENSIONS.join(", ")} or a name without extension`
+  return undefined
 }

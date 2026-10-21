@@ -35,11 +35,11 @@ type workflowArg struct {
 func registerTools(r *registry, t *tools) {
 	r.group = groupWorkflows
 	addTool(r, "list_workflows", "List workflows", "List workflows (ID, name, node count, clouds), most recently updated first. Archived workflows are hidden unless include_archived=true.", t.listWorkflows)
-	addTool(r, "get_open_workflow", "Get open workflow", "Get the workflow currently open in the Nimbo desktop app (compact view, like get_workflow), or a message when none is open. Every workflow argument also accepts \"current\" (or can be omitted) to mean this workflow.", t.getOpenWorkflow)
+	addTool(r, "get_open_workflow", "Get open workflow", "Get the workflow currently open in the Nimbo desktop app (compact view with structure, like get_workflow), or a message when none is open. Every workflow argument also accepts \"current\" (or can be omitted) to mean this workflow.", t.getOpenWorkflow)
 	addTool(r, "list_templates", "List templates", "List starter templates that can seed create_workflow (e.g. aws-queue-worker, aws-serverless-api).", t.listTemplates)
 	addTool(r, "create_workflow", "Create workflow", "Create a workflow, optionally from a template ID (see list_templates). Returns the compact workflow; use its id in every other tool.", t.createWorkflow)
-	addTool(r, "get_workflow", "Get workflow", "Get a compact view of a workflow: nodes (address, type, attributes as HCL expressions, nested blocks), derived edges (source.attr -> target.attribute), variables, outputs, locals, providers, environments (secret values redacted) and diagnostics. Call this before editing.", t.getWorkflow)
-	addTool(r, "update_workflow", "Update workflow", "Rename a workflow and/or change its description after creation; pass only the fields that change (description \"\" clears it). Its Terraform is unchanged. Returns the compact workflow.", t.updateWorkflow)
+	addTool(r, "get_workflow", "Get workflow", "Get a compact view of a workflow: nodes (address, type, attributes as HCL expressions, nested blocks), derived edges (source.attr -> target.attribute), variables, outputs, locals, providers, environments (secret values redacted), diagnostics, the export layout and a structure summary (states, resources per state, modules with nesting, backend). Call this before editing.", t.getWorkflow)
+	addTool(r, "update_workflow", "Update workflow", "Change a workflow's name, description and/or export layout; pass only the fields that change (description \"\" clears it). layout: \"environments\" exports modules/<service> plus one root (and state, backend.tf) per environment under environments/<env>; \"single\" one root with a tfvars file per environment; \"auto\" picks environments from two environments up. Its Terraform is unchanged. Returns the compact workflow with its structure.", t.updateWorkflow)
 	addTool(r, "archive_workflow", "Archive workflow", "Archive (close) a workflow: its sandbox is stopped keeping state, it is hidden from list_workflows and runs/load tests are refused until unarchive_workflow.", t.archiveWorkflow)
 	addTool(r, "unarchive_workflow", "Unarchive workflow", "Restore an archived workflow so it can be edited, deployed and load-tested again.", t.unarchiveWorkflow)
 
@@ -63,11 +63,11 @@ func registerTools(r *registry, t *tools) {
 
 	r.group = groupTerraform
 	addTool(r, "get_terraform", "Get Terraform code", "Render the workflow as Terraform files. Imported projects keep their own files; new content follows Nimbo's layout: versions.tf, providers.tf, variables.tf, locals.tf, outputs.tf, data.tf, one file per service category (network.tf, compute.tf, storage.tf, messaging.tf, api.tf, iam.tf, ...) and main.tf for module calls (small projects: one main.tf). Move a node with update_node file.", t.getTerraform)
-	addTool(r, "review_terraform", "Review Terraform", "Check the workflow against Terraform best practices and return the findings grouped by severity (warnings: security; info: documentation, versions, hardcoded values, tags, naming, structure), each with why it matters and how to fix it. Call it before finishing any change; mutating tools already return the findings their change introduced as best_practices. Findings never block deploys.", t.reviewTerraform)
+	addTool(r, "review_terraform", "Review Terraform", "Check the workflow against Terraform best practices and return its structure (export layout, states, resources per state, modules with nesting, backend) and the findings grouped by severity (warnings: security, unpinned versions, providers in modules, oversized states; info: documentation, versions, hardcoded values, tags, naming, structure, modules, environments), each with why it matters and how to fix it. Local module contents are checked too. Call it before finishing any change; mutating tools already return the findings their change introduced as best_practices. Findings never block deploys.", t.reviewTerraform)
 	addTool(r, "apply_terraform_code", "Apply Terraform code", "Edit the workflow by writing Terraform code. files maps file name -> full content and is merged over the current files from get_terraform; an empty string deletes that file. The code is re-imported; node IDs, positions and environments are kept by address. Use for complex blocks that are awkward with update_node.", t.applyTerraformCode)
-	addTool(r, "scan_terraform_folder", "Scan Terraform folder", "Scan a local folder (e.g. a repository) for Terraform projects without importing: every directory with *.tf files, with resource/data/module counts, providers, clouds, tfvars files, backend and parse diagnostics. Directories used only as local modules are not separate projects. Pass the chosen paths to import_terraform as projects.", t.scanTerraformFolder)
-	addTool(r, "import_terraform", "Import Terraform", "Import existing Terraform as new workflows, from a local directory or from files (relative path -> content). Local modules (source = \"./modules/x\") are kept as assets and can be opened in the app. By default only the root folder is imported; pass projects (paths from scan_terraform_folder, \".\" = root) to import several projects, one workflow each.", t.importTerraform)
-	addTool(r, "export_terraform", "Export Terraform", "Write the workflow's Terraform (plus assets such as Lambda sources, local modules and the dependency lock file) to a local directory. Comments are kept. With environments=true also writes each environment's values (to the variable file it was imported from, e.g. terraform.tfvars, else environments/<name>.tfvars) and .env.example files.", t.exportTerraform)
+	addTool(r, "scan_terraform_folder", "Scan Terraform folder", "Scan a local folder (e.g. a repository) for Terraform projects without importing: every directory with *.tf files, with resource/data/module counts, providers, clouds, tfvars files, backend, layout and parse diagnostics. Directories used only as local modules are not separate projects, and an environments tree (environments/<env>/ roots that each only call one ../../modules/<service>) is one project with layout \"environments\" and its environments. Pass the chosen paths to import_terraform as projects.", t.scanTerraformFolder)
+	addTool(r, "import_terraform", "Import Terraform", "Import existing Terraform as new workflows, from a local directory or from files (relative path -> content). Local modules (source = \"./modules/x\") are kept as assets and can be opened in the app. An environments tree (as export_terraform writes it) becomes one workflow: the service module's content with one environment per environments/<env> root. By default only the root folder is imported; pass projects (paths from scan_terraform_folder, \".\" = root) to import several projects, one workflow each.", t.importTerraform)
+	addTool(r, "export_terraform", "Export Terraform", "Write the workflow's Terraform (plus assets such as Lambda sources, local modules and the dependency lock file) to a local directory, in the workflow's layout (structure.layout from get_workflow). Single layout: one root; with environments=true each environment's values go to the variable file it was imported from (e.g. terraform.tfvars), else environments/<name>.tfvars, plus .env.example files. Environments layout (auto from two environments): modules/<service>/ with the workflow's resources, its local modules under modules/, and one root per environment under environments/<env>/ (backend.tf with its own state, main.tf calling the service module, providers.tf, versions.tf, variables.tf, outputs.tf; environments=true adds terraform.tfvars and .env.example), plus README.md, .gitignore and a Makefile. Comments are kept.", t.exportTerraform)
 
 	r.group = groupRuns
 	addTool(r, "sandbox_status", "Sandbox status", "Show the workflow's local Floci sandbox: state, emulator URLs and running services.", t.sandboxStatus)
@@ -146,7 +146,26 @@ func (t *tools) getOpenWorkflow(ctx context.Context, _ struct{}) (any, error) {
 	if err != nil {
 		return nil, err
 	}
-	return viewWorkflow(wf), nil
+	return t.viewWithStructure(ctx, wf)
+}
+
+// viewWithStructure is the compact workflow plus its structure summary.
+func (t *tools) viewWithStructure(ctx context.Context, wf *model.Workflow) (workflowView, error) {
+	v := viewWorkflow(wf)
+	s, err := t.structure(ctx, wf.ID)
+	if err != nil {
+		return v, err
+	}
+	v.Structure = s
+	return v, nil
+}
+
+func (t *tools) structure(ctx context.Context, id string) (*structureView, error) {
+	var s model.StructureSummary
+	if err := t.c.get(ctx, "/workflows/"+pathEscape(id)+"/structure", &s); err != nil {
+		return nil, err
+	}
+	return viewStructure(s), nil
 }
 
 func (t *tools) archiveWorkflow(ctx context.Context, in workflowArg) (any, error) {
@@ -196,11 +215,12 @@ type updateWorkflowIn struct {
 	Workflow    string  `json:"workflow,omitempty" jsonschema:"workflow ID or exact name; omit or pass \"current\" for the workflow open in the Nimbo app"`
 	Name        *string `json:"name,omitempty" jsonschema:"new human readable name"`
 	Description *string `json:"description,omitempty" jsonschema:"new description; \"\" clears it"`
+	Layout      *string `json:"layout,omitempty" jsonschema:"export layout: auto (default: environments from two environments up), single or environments"`
 }
 
 func (t *tools) updateWorkflow(ctx context.Context, in updateWorkflowIn) (any, error) {
-	if in.Name == nil && in.Description == nil {
-		return nil, errors.New("pass name and/or description")
+	if in.Name == nil && in.Description == nil && in.Layout == nil {
+		return nil, errors.New("pass name, description and/or layout")
 	}
 	wf, err := t.c.workflow(ctx, in.Workflow)
 	if err != nil {
@@ -216,11 +236,27 @@ func (t *tools) updateWorkflow(ctx context.Context, in updateWorkflowIn) (any, e
 	if in.Description != nil {
 		wf.Description = strings.TrimSpace(*in.Description)
 	}
-	out, err := t.c.saveWorkflow(ctx, wf)
-	if err != nil {
+	if in.Layout != nil {
+		layout := strings.TrimSpace(*in.Layout)
+		if layout == "auto" {
+			layout = model.LayoutAuto
+		}
+		if err := model.ValidLayout(layout); err != nil {
+			return nil, err
+		}
+		wf.Layout = layout
+	}
+	// The workflow's layout field is omitted when empty, which PUT reads as
+	// "keep the current layout": send it explicitly so "auto" sticks.
+	body := struct {
+		*model.Workflow
+		Layout string `json:"layout"`
+	}{wf, wf.Layout}
+	var out model.Workflow
+	if err := t.c.do(ctx, http.MethodPut, "/workflows/"+pathEscape(wf.ID), body, &out); err != nil {
 		return nil, err
 	}
-	return viewWorkflow(out), nil
+	return t.viewWithStructure(ctx, &out)
 }
 
 func (t *tools) getWorkflow(ctx context.Context, in workflowArg) (any, error) {
@@ -228,7 +264,7 @@ func (t *tools) getWorkflow(ctx context.Context, in workflowArg) (any, error) {
 	if err != nil {
 		return nil, err
 	}
-	return viewWorkflow(wf), nil
+	return t.viewWithStructure(ctx, wf)
 }
 
 // ---------------------------------------------------------------------------
@@ -894,7 +930,7 @@ func (t *tools) importTerraform(ctx context.Context, in importIn) (any, error) {
 type exportIn struct {
 	Workflow     string `json:"workflow,omitempty" jsonschema:"workflow ID or name; omit or \"current\" for the workflow open in the Nimbo app"`
 	Dir          string `json:"dir" jsonschema:"absolute destination directory (created if missing; existing files with the same names are overwritten)"`
-	Environments bool   `json:"environments,omitempty" jsonschema:"also write each environment's variable file (imported name or environments/<name>.tfvars) and .env.example"`
+	Environments bool   `json:"environments,omitempty" jsonschema:"also write each environment's values: terraform.tfvars and .env.example in environments/<env>/ (environments layout), or the imported variable file / environments/<name>.tfvars and .env.example (single layout)"`
 }
 
 func (t *tools) exportTerraform(ctx context.Context, in exportIn) (any, error) {

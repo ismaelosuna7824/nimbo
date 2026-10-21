@@ -84,22 +84,17 @@ func reviewSummary(wf *model.Workflow) string {
 }
 
 func countFindings(warnings, infos int) string {
-	plural := func(n int, word string) string {
-		if n == 1 {
-			return fmt.Sprintf("1 %s", word)
-		}
-		return fmt.Sprintf("%d %ss", n, word)
-	}
 	return fmt.Sprintf("%s (%s, %d info)", plural(warnings+infos, "best-practice finding"), plural(warnings, "warning"), infos)
 }
 
 type reviewResult struct {
-	Workflow      string        `json:"workflow"`
-	Summary       string        `json:"summary"`
-	Warnings      []findingView `json:"warnings,omitempty"`
-	Info          []findingView `json:"info,omitempty"`
-	DisabledRules []string      `json:"disabled_rules,omitempty"`
-	Next          string        `json:"next,omitempty"`
+	Workflow      string         `json:"workflow"`
+	Summary       string         `json:"summary"`
+	Structure     *structureView `json:"structure,omitempty"`
+	Warnings      []findingView  `json:"warnings,omitempty"`
+	Info          []findingView  `json:"info,omitempty"`
+	DisabledRules []string       `json:"disabled_rules,omitempty"`
+	Next          string         `json:"next,omitempty"`
 }
 
 func (t *tools) reviewTerraform(ctx context.Context, in workflowArg) (any, error) {
@@ -111,7 +106,11 @@ func (t *tools) reviewTerraform(ctx context.Context, in workflowArg) (any, error
 	if err := t.c.get(ctx, "/settings", &st); err != nil {
 		return nil, err
 	}
-	res := reviewResult{Workflow: wf.Name, DisabledRules: st.BestPractices.DisabledRules}
+	structure, err := t.structure(ctx, wf.ID)
+	if err != nil {
+		return nil, err
+	}
+	res := reviewResult{Workflow: wf.Name, Structure: structure, DisabledRules: st.BestPractices.DisabledRules}
 	if st.BestPractices.Disabled {
 		res.Summary = "Best-practice checks are turned off in the Nimbo app (Settings → Best-practice checks)."
 		return res, nil
@@ -133,6 +132,6 @@ func (t *tools) reviewTerraform(ctx context.Context, in workflowArg) (any, error
 		return res, nil
 	}
 	res.Summary = countFindings(len(res.Warnings), len(res.Info))
-	res.Next = "Fix warnings first (security), then info. Use update_node / set_variable / set_output (or apply_terraform_code for larger edits; extract_module for module candidates) and call review_terraform again. Findings never block deploys; leave one only when the user wants it that way."
+	res.Next = "Fix warnings first (security, unpinned versions, providers in modules), then info. Use update_node / set_variable / set_output (or apply_terraform_code for larger edits; extract_module for module candidates, inline_module for single-resource wrappers; update_workflow layout for state per environment; plan_structure to split a large state by layer) and call review_terraform again. Findings never block deploys; leave one only when the user wants it that way."
 	return res, nil
 }

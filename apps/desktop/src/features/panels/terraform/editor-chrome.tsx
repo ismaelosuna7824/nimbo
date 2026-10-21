@@ -5,6 +5,7 @@ import {
   Download,
   Ellipsis,
   FolderDown,
+  WandSparkles,
   GitCompare,
   Link2,
   Lock,
@@ -142,6 +143,8 @@ interface PathBarProps {
   onRevert?: () => void
   onShowChanges?: () => void
   onFind?: () => void
+  /** HCL being edited: format it like terraform fmt (⌥⇧F). */
+  onFormat?: () => void
   onToggleWrap: () => void
   onCopy?: () => void
   onDownload: () => void
@@ -162,6 +165,7 @@ export function PathBar({
   onRevert,
   onShowChanges,
   onFind,
+  onFormat,
   onToggleWrap,
   onCopy,
   onDownload,
@@ -209,7 +213,7 @@ export function PathBar({
           <TooltipContent className="max-w-64">
             {file.generated
               ? "Edits are re-imported into the diagram when you apply them (⌘S)."
-              : "Saved into the workflow's files (⌘S); exports and deploys use it."}
+              : "Stored with the workflow's files when you save or apply (⌘S); exports and deploys use it."}
           </TooltipContent>
         </Tooltip>
       )}
@@ -241,6 +245,11 @@ export function PathBar({
               {saving ? <Spinner /> : <Save />} Save
             </Button>
           </>
+        )}
+        {onFormat && (
+          <IconButton label="Format document" kbd="⌥⇧F" onClick={onFormat}>
+            <WandSparkles />
+          </IconButton>
         )}
         {onFind && (
           <IconButton label="Find" kbd="⌘F" onClick={onFind}>
@@ -283,6 +292,12 @@ export function PathBar({
             <TooltipContent>More</TooltipContent>
           </Tooltip>
           <DropdownMenuContent align="end" className="w-56">
+            {onFormat && (
+              <DropdownMenuItem onSelect={onFormat}>
+                <WandSparkles /> Format document
+                <Kbd className="ml-auto">⌥⇧F</Kbd>
+              </DropdownMenuItem>
+            )}
             <DropdownMenuItem onSelect={onCopyPath}>
               <Link2 /> Copy path in export
             </DropdownMenuItem>

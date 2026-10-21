@@ -1,10 +1,11 @@
 import { defineConfig, devices } from "@playwright/test"
 
 // The Docker project deploys to real sandbox containers; it only runs with E2E_DOCKER=1
-// and on its own ports so it can run next to the regular suite.
+// and on its own ports so it can run next to the regular suite. E2E_DAEMON_PORT and
+// E2E_VITE_PORT move a run to other ports (e.g. several checkouts or agents at once).
 const docker = process.env.E2E_DOCKER === "1"
-const daemonPort = docker ? 7865 : 7864
-const vitePort = docker ? 5193 : 5192
+const daemonPort = Number(process.env.E2E_DAEMON_PORT) || (docker ? 7865 : 7864)
+const vitePort = Number(process.env.E2E_VITE_PORT) || (docker ? 5193 : 5192)
 const appURL = `http://localhost:${vitePort}`
 
 // Read by the global setup, which builds and starts the daemon.

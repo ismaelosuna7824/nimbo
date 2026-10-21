@@ -34,11 +34,17 @@ test("applies a Pro-mode code edit back to the diagram", async ({ app, api, page
   await editor.click()
   await page.keyboard.press("ControlOrMeta+End")
   await page.keyboard.press("Enter")
-  await page.keyboard.type('resource "aws_sns_topic" "alerts" {\nname = "alerts"\n}')
+  // Typed like a person would: the editor closes the brace and the quotes, and indents the body.
+  await page.keyboard.type('resource "aws_sns_topic" "alerts" {')
+  await page.keyboard.press("Escape")
+  await page.keyboard.press("Enter")
+  await page.keyboard.type('name = "alerts"')
+  await page.keyboard.press("Escape")
+  await expect(editor).toContainText('resource "aws_sns_topic" "alerts" {  name = "alerts"}')
   await expect(panel.getByRole("tab", { name: "main.tf" }).getByLabel("modified")).toBeVisible()
 
   await panel.getByRole("button", { name: "Apply changes" }).click()
-  await expect(page.getByText("Code applied to the diagram")).toBeVisible()
+  await expect(page.getByText("Applied main.tf")).toBeVisible()
   await expect(app.node("aws_sns_topic.alerts")).toBeVisible()
   await expect(panel.getByRole("button", { name: "Apply changes" })).toBeHidden()
 
@@ -60,7 +66,8 @@ test("shows syntax errors at their line and keeps the diagram", async ({ app, ap
   const panel = app.bottomPanel("Code")
   await panel.getByRole("textbox", { name: "Contents of main.tf" }).click()
   await page.keyboard.press("ControlOrMeta+End")
-  await page.keyboard.type('\nresource "aws_sns_topic" "broken" {\nname = \n}')
+  // Pasted verbatim (no auto-closing): the block has an attribute without a value.
+  await page.keyboard.insertText('\nresource "aws_sns_topic" "broken" {\nname = \n}')
   await page.keyboard.press("ControlOrMeta+s")
 
   const problems = panel.getByRole("alert")

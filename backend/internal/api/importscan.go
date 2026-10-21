@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"maps"
 	"net/http"
 	"os"
 	"path"
@@ -58,7 +59,63 @@ type repoScan struct {
 	dirs     map[string]*tfDir
 	order    []string            // sorted keys of dirs
 	usedBy   map[string][]string // module dir -> directories calling it
+	groups   map[string]*envGroup
 	skipped  []string
+}
+
+// envGroup is a tree in the environments layout found by the scan:
+// environment roots <base>/environments/<env> (or envs/<env>) that only call
+// one module, <base>/modules/<service>. It is one project at base.
+type envGroup struct {
+	base    string   // "." or a slash path; not a Terraform directory itself
+	service string   // the service module directory
+	envs    []string // environment root directories, sorted
+}
+
+// findGroups records the environments-layout trees. A group needs every
+// Terraform directory of its environments folder to be such a root.
+func (rs *repoScan) findGroups() {
+	cand := map[string]*envGroup{}
+	bad := map[string]bool{}
+	for _, rel := range rs.order {
+		parent := path.Dir(rel)
+		if b := path.Base(parent); (b != hclcodec.EnvironmentsDir && b != "envs") || parent == "." || len(rs.usedBy[rel]) > 0 {
+			continue
+		}
+		base := path.Dir(parent)
+		td := rs.dirs[rel]
+		if td.sum.Resources > 0 || td.sum.DataSources > 0 || len(td.sum.Modules) != 1 || len(td.calls) != 1 ||
+			path.Dir(td.calls[0].target) != path.Join(base, hclcodec.ModulesDir) {
+			bad[parent] = true
+			continue
+		}
+		g := cand[parent]
+		if g == nil {
+			g = &envGroup{base: base, service: td.calls[0].target}
+			cand[parent] = g
+		} else if g.service != td.calls[0].target {
+			bad[parent] = true
+		}
+		g.envs = append(g.envs, rel)
+	}
+	rs.groups = map[string]*envGroup{}
+	for _, parent := range slices.Sorted(maps.Keys(cand)) {
+		g := cand[parent]
+		if bad[parent] || rs.dirs[g.base] != nil || rs.groups[g.base] != nil {
+			continue
+		}
+		rs.groups[g.base] = g
+	}
+}
+
+// inGroup reports whether rel is an environment root of a group.
+func (rs *repoScan) inGroup(rel string) bool {
+	for _, g := range rs.groups {
+		if slices.Contains(g.envs, rel) {
+			return true
+		}
+	}
+	return false
 }
 
 // scanRepo walks root and parses every directory containing *.tf files.
@@ -198,6 +255,7 @@ func scanRepo(root, rootName string) (*repoScan, error) {
 			rs.skipped = append(rs.skipped, fmt.Sprintf("%s: local module used by %s", rel, strings.Join(users, ", ")))
 		}
 	}
+	rs.findGroups()
 	return rs, nil
 }
 
@@ -220,14 +278,19 @@ func warning(code, msg string) model.Diagnostic {
 	return model.Diagnostic{Severity: model.SeverityWarning, Code: code, Message: msg}
 }
 
-// projects returns the directories that are not local modules of another.
+// projects returns the directories that are not local modules of another
+// nor environment roots of a group, and the base of every group.
 func (rs *repoScan) projects() []string {
 	var out []string
 	for _, rel := range rs.order {
-		if len(rs.usedBy[rel]) == 0 {
+		if len(rs.usedBy[rel]) == 0 && !rs.inGroup(rel) {
 			out = append(out, rel)
 		}
 	}
+	for base := range rs.groups {
+		out = append(out, base)
+	}
+	slices.Sort(out)
 	return out
 }
 
@@ -301,8 +364,12 @@ func (rs *repoScan) moduleClosure(rel string) (dirs []string, names map[string]s
 }
 
 func (rs *repoScan) project(rel, name string) model.ImportProject {
+	if g := rs.groups[rel]; g != nil {
+		return rs.groupProject(g, name)
+	}
 	td := rs.dirs[rel]
 	p := model.ImportProject{
+		Layout:      model.LayoutSingle,
 		Path:        rel,
 		Name:        name,
 		Resources:   td.sum.Resources,
@@ -330,6 +397,62 @@ func (rs *repoScan) project(rel, name string) model.ImportProject {
 	}
 	p.Diagnostics = nonNil(p.Diagnostics)
 	return p
+}
+
+// groupProject summarizes an environments-layout tree: the service
+// module's content, the providers and backend of its roots.
+func (rs *repoScan) groupProject(g *envGroup, name string) model.ImportProject {
+	svc := rs.dirs[g.service]
+	p := model.ImportProject{
+		Path:        g.base,
+		Name:        name,
+		Layout:      model.LayoutEnvironments,
+		Resources:   svc.sum.Resources,
+		DataSources: svc.sum.DataSources,
+		Modules:     len(svc.sum.Modules),
+		Providers:   slices.Clone(svc.sum.Providers),
+		Clouds:      slices.Clone(svc.sum.Clouds),
+		TfvarsFiles: []string{},
+		Diagnostics: slices.Concat(svc.sum.Diagnostics, svc.diags),
+	}
+	for _, env := range g.envs {
+		td := rs.dirs[env]
+		p.Environments = append(p.Environments, path.Base(env))
+		for _, f := range td.tfvars {
+			if f == "terraform.tfvars" || strings.HasSuffix(f, ".auto.tfvars") {
+				p.TfvarsFiles = append(p.TfvarsFiles, relTo(g.base, path.Join(env, f)))
+			}
+		}
+		for _, pr := range td.sum.Providers {
+			if !slices.Contains(p.Providers, pr) {
+				p.Providers = append(p.Providers, pr)
+			}
+		}
+		for _, c := range td.sum.Clouds {
+			if !slices.Contains(p.Clouds, c) {
+				p.Clouds = append(p.Clouds, c)
+			}
+		}
+		p.HasBackend = p.HasBackend || td.sum.HasBackend
+		p.Diagnostics = append(p.Diagnostics, td.sum.Diagnostics...)
+		p.Diagnostics = append(p.Diagnostics, td.diags...)
+	}
+	mods, _ := rs.moduleClosure(g.service)
+	for _, m := range mods {
+		p.Diagnostics = append(p.Diagnostics, rs.dirs[m].sum.Diagnostics...)
+		p.Diagnostics = append(p.Diagnostics, rs.dirs[m].diags...)
+	}
+	slices.Sort(p.Providers)
+	p.Providers, p.Clouds, p.Diagnostics = nonNil(p.Providers), nonNil(p.Clouds), nonNil(p.Diagnostics)
+	return p
+}
+
+// relTo is the slash path p relative to directory base.
+func relTo(base, p string) string {
+	if base == "." {
+		return p
+	}
+	return strings.TrimPrefix(p, base+"/")
 }
 
 func (rs *repoScan) result() model.ImportScan {
@@ -451,6 +574,7 @@ type importPlan struct {
 	assets  []string          // project-relative slash paths copied as is
 	modules []string          // local module dirs (scan-relative)
 	names   map[string]string // module dir -> name under modules/
+	extra   map[string]string // asset path -> scan-relative file, also copied
 }
 
 func (s *Server) importWorkflow(w http.ResponseWriter, r *http.Request) error {
@@ -469,14 +593,16 @@ func (s *Server) importWorkflow(w http.ResponseWriter, r *http.Request) error {
 	}
 	projects := req.Projects
 	if len(projects) == 0 {
-		if rs.dirs["."] == nil {
+		switch {
+		case rs.dirs["."] != nil, rs.groups["."] != nil:
+			projects = []string{"."}
+		default:
 			if found := rs.projects(); len(found) > 0 {
 				return errorf(http.StatusBadRequest, "no Terraform (*.tf) files at the folder root; it contains %d project(s) in subfolders (%s): scan the folder and pass projects",
 					len(found), strings.Join(found[:min(len(found), 5)], ", "))
 			}
 			return errorf(http.StatusBadRequest, "no Terraform (*.tf) files found")
 		}
-		projects = []string{"."}
 	}
 
 	suggested := rs.projectNames()
@@ -488,7 +614,7 @@ func (s *Server) importWorkflow(w http.ResponseWriter, r *http.Request) error {
 			continue
 		}
 		seen[rel] = true
-		if rs.dirs[rel] == nil {
+		if rs.dirs[rel] == nil && rs.groups[rel] == nil {
 			return errorf(http.StatusBadRequest, "project %q has no Terraform (*.tf) files", p)
 		}
 		name := strings.TrimSpace(req.Names[rel])
@@ -536,6 +662,9 @@ func (s *Server) importWorkflow(w http.ResponseWriter, r *http.Request) error {
 
 // plan parses one project and lists the files to copy.
 func (rs *repoScan) plan(rel, name string) (*importPlan, error) {
+	if g := rs.groups[rel]; g != nil {
+		return rs.planGroup(g, name)
+	}
 	plan := &importPlan{project: rel}
 	plan.modules, plan.names = rs.moduleClosure(rel)
 	tf := map[string][]byte{}
@@ -571,7 +700,25 @@ func (rs *repoScan) plan(rel, name string) (*importPlan, error) {
 		return nil, &httpError{status: http.StatusBadRequest, msg: err.Error(), diagnostics: diags}
 	}
 	wf.Name = name
-	// Point local module calls at their copies under modules/.
+	// An imported project keeps its layout: a single root module, even
+	// with several variable files.
+	wf.Layout = model.LayoutSingle
+	if err := pointModules(wf, plan.names, func(src string) string { return hclcodec.ResolveLocalSource(rel, src) }); err != nil {
+		return nil, err
+	}
+	plan.diags = slices.Concat(diags, rs.dirs[rel].diags)
+	// Problems inside the copied modules surface on the workflow too.
+	for _, m := range plan.modules {
+		plan.diags = append(plan.diags, rs.dirs[m].diags...)
+	}
+	plan.wf = wf
+	return plan, nil
+}
+
+// pointModules points local module calls at their copies under modules/
+// (names: module dir -> name); resolve maps a call's source to the
+// scan-relative directory it reaches.
+func pointModules(wf *model.Workflow, names map[string]string, resolve func(src string) string) error {
 	for i := range wf.Nodes {
 		nd := &wf.Nodes[i]
 		if nd.Kind != model.KindModule {
@@ -586,18 +733,97 @@ func (rs *repoScan) plan(rel, name string) (*importPlan, error) {
 			if json.Unmarshal(a.Value.Literal, &src) != nil || !hclcodec.IsLocalModuleSource(src) {
 				continue
 			}
-			if m, ok := plan.names[hclcodec.ResolveLocalSource(rel, src)]; ok {
+			if m, ok := names[resolve(src)]; ok {
 				lit, _ := json.Marshal("./modules/" + m)
 				expr, err := hclcodec.ExprFromLiteral(lit)
 				if err != nil {
-					return nil, err
+					return err
 				}
 				a.Value = model.Value{Expr: expr, Literal: lit}
 			}
 		}
 	}
-	plan.diags = slices.Concat(diags, rs.dirs[rel].diags)
-	// Problems inside the copied modules surface on the workflow too.
+	return nil
+}
+
+// planGroup parses an environments-layout tree into one workflow (see
+// hclcodec.ImportEnvironments): the service module's files become the
+// workflow's (its other files its assets), the local modules it calls are
+// copied, each root gives an environment and the first root's dependency
+// lock file is kept.
+func (rs *repoScan) planGroup(g *envGroup, name string) (*importPlan, error) {
+	plan := &importPlan{project: g.service, extra: map[string]string{}}
+	plan.modules, plan.names = rs.moduleClosure(g.service)
+	svc := path.Base(g.service)
+	files := map[string][]byte{}
+	err := rs.walkOwn(g.service, func(p, sub string) error {
+		if !strings.Contains(sub, "/") && strings.HasSuffix(sub, ".tf") && !hclcodec.IsOverrideFile(sub) {
+			data, err := os.ReadFile(p)
+			if err != nil {
+				return err
+			}
+			if !hclcodec.CommentOnly(data) {
+				files[hclcodec.ModulesDir+"/"+svc+"/"+sub] = data
+				return nil
+			}
+		}
+		if !generatedScaffold(p, sub) {
+			plan.assets = append(plan.assets, sub)
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	for _, env := range g.envs {
+		envName := path.Base(env)
+		err := rs.walkOwn(env, func(p, sub string) error {
+			switch {
+			case strings.Contains(sub, "/"):
+				return nil
+			case sub == lockFile:
+				if plan.extra[lockFile] == "" {
+					plan.extra[lockFile] = path.Join(env, sub)
+				}
+				return nil
+			case strings.HasSuffix(sub, ".tf"), sub == "terraform.tfvars", strings.HasSuffix(sub, ".auto.tfvars"), sub == ".env.example":
+			default:
+				return nil
+			}
+			data, err := os.ReadFile(p)
+			if err != nil {
+				return err
+			}
+			files[hclcodec.EnvironmentsDir+"/"+envName+"/"+sub] = data
+			return nil
+		})
+		if err != nil {
+			return nil, err
+		}
+	}
+	wf, diags, err := hclcodec.ImportEnvironments(name, files)
+	if err == nil {
+		err = syntaxError(diags)
+	}
+	if err != nil {
+		if g.base != "." {
+			err = fmt.Errorf("%s: %w", g.base, err)
+		}
+		return nil, &httpError{status: http.StatusBadRequest, msg: err.Error(), diagnostics: diags}
+	}
+	err = pointModules(wf, plan.names, func(src string) string {
+		if strings.HasPrefix(src, "./"+hclcodec.ModulesDir+"/") {
+			return path.Join(g.base, src) // already relative to the tree (see ImportEnvironments)
+		}
+		return hclcodec.ResolveLocalSource(g.service, src)
+	})
+	if err != nil {
+		return nil, err
+	}
+	plan.diags = slices.Concat(diags, rs.dirs[g.service].diags)
+	for _, env := range g.envs {
+		plan.diags = append(plan.diags, rs.dirs[env].diags...)
+	}
 	for _, m := range plan.modules {
 		plan.diags = append(plan.diags, rs.dirs[m].diags...)
 	}
@@ -610,7 +836,7 @@ func (rs *repoScan) plan(rel, name string) (*importPlan, error) {
 // it is regenerated from the workflow instead of being kept as an asset.
 func generatedScaffold(p, sub string) bool {
 	switch sub {
-	case hclcodec.ReadmeFile, hclcodec.GitignoreFile, hclcodec.TfvarsSampleFile:
+	case hclcodec.ReadmeFile, hclcodec.GitignoreFile, hclcodec.TfvarsSampleFile, hclcodec.BackendTfExampleFile:
 	default:
 		return false
 	}
@@ -655,6 +881,11 @@ func (rs *repoScan) write(plan *importPlan, assetsDir string) error {
 	src := filepath.Join(rs.root, filepath.FromSlash(plan.project))
 	for _, sub := range plan.assets {
 		if err := copyFile(filepath.Join(src, filepath.FromSlash(sub)), filepath.Join(assetsDir, filepath.FromSlash(sub))); err != nil {
+			return err
+		}
+	}
+	for dst, from := range plan.extra {
+		if err := copyFile(filepath.Join(rs.root, filepath.FromSlash(from)), filepath.Join(assetsDir, filepath.FromSlash(dst))); err != nil {
 			return err
 		}
 	}

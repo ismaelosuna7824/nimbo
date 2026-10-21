@@ -48,18 +48,20 @@ func TestWorkflowFilesListsEverythingExported(t *testing.T) {
 	}
 
 	files := listWorkflowFiles(t, e, wf.ID)
+	const scaffold = "Generated on every export from the workflow — delete its first line in your exported copy to keep your own"
+	values := "Generated from the environment values — edit them in Variables & Environments"
 	want := map[string]model.WorkflowFile{
-		"main.tf":                   {Kind: model.FileTerraform, Generated: true, Editable: true, Language: "hcl"},
-		"terraform.tfvars":          {Kind: model.FileTfvars, Generated: true, Language: "hcl"},
-		".terraform.lock.hcl":       {Kind: model.FileAsset, Language: "hcl"},
-		"modules/network/main.tf":   {Kind: model.FileModule, Editable: true, Language: "hcl"},
-		"modules/network/README.md": {Kind: model.FileModule, Editable: true, Language: "markdown"},
-		"modules/subnets/main.tf":   {Kind: model.FileModule, Editable: true, Language: "hcl"},
-		"src/handler.py":            {Kind: model.FileAsset, Editable: true, Language: "python"},
-		"src/layer.zip":             {Kind: model.FileAsset, Binary: true, Language: "text"},
-		"README.md":                 {Kind: model.FileScaffold, Generated: true, Language: "markdown"},
-		".gitignore":                {Kind: model.FileScaffold, Generated: true, Language: "text"},
-		"terraform.tfvars.example":  {Kind: model.FileScaffold, Generated: true, Language: "text"},
+		"main.tf":                   {Kind: model.FileTerraform, Generated: true, Editable: true, Movable: true, Language: "hcl"},
+		"terraform.tfvars":          {Kind: model.FileTfvars, Generated: true, ReadOnlyReason: values, Language: "hcl"},
+		".terraform.lock.hcl":       {Kind: model.FileAsset, ReadOnlyReason: "Written by terraform init; kept as imported", Movable: true, Language: "hcl"},
+		"modules/network/main.tf":   {Kind: model.FileModule, Editable: true, Movable: true, Language: "hcl"},
+		"modules/network/README.md": {Kind: model.FileModule, Editable: true, Movable: true, Language: "markdown"},
+		"modules/subnets/main.tf":   {Kind: model.FileModule, Editable: true, Movable: true, Language: "hcl"},
+		"src/handler.py":            {Kind: model.FileAsset, Editable: true, Movable: true, Language: "python"},
+		"src/layer.zip":             {Kind: model.FileAsset, Binary: true, ReadOnlyReason: "Binary file", Movable: true, Language: "text"},
+		"README.md":                 {Kind: model.FileScaffold, Generated: true, ReadOnlyReason: scaffold, Language: "markdown"},
+		".gitignore":                {Kind: model.FileScaffold, Generated: true, ReadOnlyReason: scaffold, Language: "text"},
+		"terraform.tfvars.example":  {Kind: model.FileScaffold, Generated: true, ReadOnlyReason: scaffold, Language: "text"},
 	}
 	for path, w := range want {
 		got, found := files[path]

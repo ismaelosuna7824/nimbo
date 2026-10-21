@@ -17,14 +17,15 @@ import (
 type pass struct {
 	wf   *model.Workflow
 	cat  *catalog.Catalog
+	mods *model.ModuleTree // local modules; nil = none read
 	rule *rule
 	out  []model.Diagnostic
 
 	byAddr map[string]*model.Node
 }
 
-func newPass(wf *model.Workflow, cat *catalog.Catalog) *pass {
-	p := &pass{wf: wf, cat: cat, byAddr: make(map[string]*model.Node, len(wf.Nodes))}
+func newPass(wf *model.Workflow, cat *catalog.Catalog, mods *model.ModuleTree) *pass {
+	p := &pass{wf: wf, cat: cat, mods: mods, byAddr: make(map[string]*model.Node, len(wf.Nodes))}
 	for i := range wf.Nodes {
 		p.byAddr[hclcodec.Address(&wf.Nodes[i])] = &wf.Nodes[i]
 	}

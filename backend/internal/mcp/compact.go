@@ -66,10 +66,72 @@ type workflowView struct {
 	Providers    []namedView       `json:"providers,omitempty"`
 	Environments []envView         `json:"environments,omitempty"`
 	Diagnostics  []diagView        `json:"diagnostics,omitempty"`
+	// Structure is the export layout plus states, modules and backend
+	// (get_workflow, get_open_workflow, update_workflow).
+	Structure *structureView `json:"structure,omitempty"`
 	// Review summarizes the best-practice findings (review_terraform lists them).
 	Review string `json:"review,omitempty"`
 	// BestPractices are the findings a mutation introduced.
 	BestPractices []bpView `json:"best_practices,omitempty"`
+}
+
+// structureView is the compact model.StructureSummary. Layout is the layout
+// export writes ("single" or "environments"), LayoutSetting the stored
+// choice ("auto" picks environments from two environments up), LayoutNote
+// why they differ.
+type structureView struct {
+	Layout            string   `json:"layout"`
+	LayoutSetting     string   `json:"layout_setting"`
+	LayoutNote        string   `json:"layout_note,omitempty"`
+	Service           string   `json:"service_module,omitempty"`
+	Environments      []string `json:"environments,omitempty"`
+	States            int      `json:"states"`
+	ResourcesPerState int      `json:"resources_per_state"`
+	RootResources     int      `json:"root_resources"`
+	// Modules: "module.app → modules/app (local, 12 resources, depth 1)".
+	Modules    []string `json:"modules,omitempty"`
+	MaxNesting int      `json:"max_nesting"`
+	Backend    string   `json:"backend,omitempty"`
+	State      string   `json:"state"`
+}
+
+func layoutSetting(s string) string {
+	if s == model.LayoutAuto {
+		return "auto"
+	}
+	return s
+}
+
+func viewStructure(s model.StructureSummary) *structureView {
+	v := &structureView{
+		Layout: s.Layout, LayoutSetting: layoutSetting(s.LayoutSetting), LayoutNote: s.LayoutNote, Service: s.Service, Environments: s.Environments, States: s.States,
+		ResourcesPerState: s.ResourcesPerState, RootResources: s.RootResources, MaxNesting: s.MaxNesting, Backend: s.Backend, State: s.State,
+	}
+	for _, m := range s.Modules {
+		var line string
+		switch m.Kind {
+		case "local":
+			line = fmt.Sprintf("%s → %s (local, %s, depth %d)", m.Call, m.Dir, plural(m.Resources, "resource"), m.Depth)
+			if m.Dir == "" {
+				line = fmt.Sprintf("%s → %s (local, not readable, depth %d)", m.Call, m.Source, m.Depth)
+			}
+		default:
+			version := "no version"
+			if m.Version != "" {
+				version = "version " + m.Version
+			}
+			line = fmt.Sprintf("%s → %s (%s, %s, not counted, depth %d)", m.Call, m.Source, m.Kind, version, m.Depth)
+		}
+		v.Modules = append(v.Modules, line)
+	}
+	return v
+}
+
+func plural(n int, word string) string {
+	if n == 1 {
+		return "1 " + word
+	}
+	return fmt.Sprintf("%d %ss", n, word)
 }
 
 const redacted = "(redacted)"

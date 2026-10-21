@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -100,15 +101,35 @@ func (s *Server) save(wf *model.Workflow, extra []model.Diagnostic) error {
 // with fresh ones under the current settings (every rule when the server
 // has no settings store), and its network findings (net_*, design basis)
 // with fresh ones. It runs on every save and on GET, so toggling rules in
-// Settings shows up without an edit. Module views are never reviewed.
+// Settings shows up without an edit. Module views are never reviewed; the
+// local modules wf calls are read for the module rules.
 func (s *Server) review(wf *model.Workflow) {
 	var cfg model.BestPracticeSettings
 	if s.cfg.Settings != nil {
 		cfg = s.cfg.Settings.Get().BestPractices
 	}
 	diags := netcheck.Strip(lint.Strip(wf.Diagnostics))
-	diags = append(diags, lint.Check(wf, s.cfg.Catalog, cfg)...)
+	if !cfg.Disabled {
+		diags = append(diags, lint.Check(wf, s.cfg.Catalog, cfg, s.localModules(wf))...)
+	}
 	wf.Diagnostics = append(diags, netcheck.Check(wf)...)
+}
+
+// localModules reads the local modules wf calls from its files (nil when
+// it calls none or they can't be read: the module rules then stay quiet).
+func (s *Server) localModules(wf *model.Workflow) *model.ModuleTree {
+	if !lint.HasLocalModules(wf) {
+		return nil
+	}
+	root := s.cfg.Store.AssetsDir(wf.ID)
+	mods, err := lint.LocalModules(wf, ".", func(dir string) (map[string][]byte, error) {
+		return readModuleFiles(filepath.Join(root, filepath.FromSlash(dir)))
+	})
+	if err != nil {
+		s.log.Warn("read local modules", "workflow", wf.ID, "err", err)
+		return nil
+	}
+	return mods
 }
 
 // recentIconWindow is how many recently updated workflows a new random icon
@@ -239,28 +260,51 @@ func (s *Server) getWorkflow(w http.ResponseWriter, r *http.Request) error {
 }
 
 func (s *Server) putWorkflow(w http.ResponseWriter, r *http.Request) error {
-	var in model.Workflow
-	if err := decode(w, r, maxImportBody, &in); err != nil {
+	var body struct {
+		model.Workflow
+		// Layout and Service shadow the workflow's fields to tell "empty"
+		// from "not sent".
+		Layout  *string `json:"layout"`
+		Service *string `json:"service"`
+	}
+	if err := decode(w, r, maxImportBody, &body); err != nil {
 		return err
 	}
+	in := body.Workflow
 	id := r.PathValue("id")
 	if in.ID != "" && in.ID != id {
 		return errorf(http.StatusBadRequest, "body id %q does not match path id %q", in.ID, id)
 	}
 	wf, err := s.mutate(id, func(cur *model.Workflow) ([]model.Diagnostic, error) {
-		createdAt, archived, icon := cur.CreatedAt, cur.Archived, cur.Icon
+		createdAt, archived, icon, layout, service := cur.CreatedAt, cur.Archived, cur.Icon, cur.Layout, cur.Service
 		*cur = in
 		// Archive state changes only through archive/unarchive.
 		cur.ID, cur.CreatedAt, cur.Archived = id, createdAt, archived
-		// A body without an icon (older clients, agents) keeps the current one.
+		// A body without an icon (older clients, agents) keeps the current
+		// one; without a layout or service name, the current ones.
 		if cur.Icon == nil {
 			cur.Icon = icon
+		}
+		cur.Layout, cur.Service = layout, service
+		if body.Layout != nil {
+			cur.Layout = *body.Layout
+		}
+		if body.Service != nil {
+			cur.Service = *body.Service
 		}
 		if strings.TrimSpace(cur.Name) == "" {
 			return nil, errorf(http.StatusBadRequest, "name is required")
 		}
 		if err := cur.Icon.Validate(); err != nil {
 			return nil, errorf(http.StatusBadRequest, "%v", err)
+		}
+		if err := model.ValidLayout(cur.Layout); err != nil {
+			return nil, errorf(http.StatusBadRequest, "%v", err)
+		}
+		if cur.Service != "" {
+			if err := hclcodec.ValidServiceName(cur.Service); err != nil {
+				return nil, errorf(http.StatusBadRequest, "%v", err)
+			}
 		}
 		return nil, nil
 	})
