@@ -45,7 +45,29 @@ function iconFor(file: WorkflowFile): { icon: LucideIcon; className: string } {
     case "markdown":
       return { icon: FileText, className: "text-sky-600 dark:text-sky-300" }
     case "shell":
+    case "makefile":
       return { icon: FileTerminal, className: "text-green-600 dark:text-green-400" }
+    case "java":
+    case "rust":
+      return { icon: FileCode, className: "text-orange-600 dark:text-orange-400" }
+    case "kotlin":
+    case "csharp":
+    case "php":
+      return { icon: FileCode, className: "text-purple-600 dark:text-purple-400" }
+    case "ruby":
+    case "html":
+      return { icon: FileCode, className: "text-red-600 dark:text-red-400" }
+    case "css":
+      return { icon: FileCode, className: "text-sky-600 dark:text-sky-400" }
+    case "xml":
+    case "protobuf":
+    case "sql":
+      return { icon: FileCode, className: "text-teal-600 dark:text-teal-400" }
+    case "toml":
+    case "ini":
+    case "properties":
+    case "nginx":
+      return { icon: FileSliders, className: "text-slate-600 dark:text-slate-400" }
     default:
       return { icon: FileText, className: "text-muted-foreground" }
   }

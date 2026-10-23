@@ -31,7 +31,7 @@ import { CheckCard, Lead, SetupError, StatusIcon, StatusPill, SuccessBanner } fr
 import { OsIcon } from "./os-icons"
 import { PLATFORMS, archLabel, type Platform } from "./platforms"
 import { findCheck, stepForCheck, type StepDef } from "./steps"
-import { useOnboarding, useSetup, useSetupAction, useStepCheck, type ImageProgress } from "./store"
+import { useOnboarding, useSetup, useSetupAction, useStepCheck, type ActionProgress, type ImageProgress } from "./store"
 
 const FIRST_TEMPLATE = "aws-serverless-api"
 
@@ -86,7 +86,6 @@ export function ImagesStep() {
   const progress = useOnboarding((s) => s.actions["pull-images"])
   const ok = check?.status === "ok"
   const dockerDown = daemon && daemon.status !== "ok" && daemon.status !== "warning"
-  const overall = progress && progress.total > 0 ? Math.round((progress.current / progress.total) * 100) : 0
 
   return (
     <div className="flex flex-col gap-6">
@@ -116,26 +115,7 @@ export function ImagesStep() {
             <StatusPill status={check?.status} checking={setup.isFetching} />
             {!ok && <span className="text-sm text-muted-foreground">About 1.5 GB, one time. Keep Nimbo open while it downloads.</span>}
           </div>
-          {progress && (progress.running || progress.images.length > 0) && (
-            <div className="flex flex-col gap-3" aria-live="polite">
-              {progress.total > 0 && (
-                <div className="flex flex-col gap-1.5">
-                  <div className="flex justify-between text-xs text-muted-foreground">
-                    <span>{progress.running ? "Overall" : "Finished"}</span>
-                    <span>
-                      {progress.current} of {progress.total} images
-                    </span>
-                  </div>
-                  <Progress value={overall} aria-label="Overall download progress" className="h-2" />
-                </div>
-              )}
-              <ul className="flex flex-col gap-2">
-                {progress.images.map((img) => (
-                  <ImageRow key={img.image} image={img} />
-                ))}
-              </ul>
-            </div>
-          )}
+          {progress && (progress.running || progress.images.length > 0) && <PullProgress progress={progress} />}
           {progress?.error && !progress.running && <p className="text-sm text-destructive">{progress.error}</p>}
           {check && check.status !== "ok" && check.detail && <p className="text-sm text-muted-foreground">{check.detail}</p>}
         </div>
@@ -150,6 +130,43 @@ export function ImagesStep() {
           <CheckCard check={socket} />
         </div>
       )}
+    </div>
+  )
+}
+
+/** Overall and per-image layer progress of a pull action (pull-images, pull-kube-image). */
+function PullProgress({ progress }: { progress: ActionProgress }) {
+  const overall = progress.total > 0 ? Math.round((progress.current / progress.total) * 100) : 0
+  return (
+    <div className="flex flex-col gap-3" aria-live="polite">
+      {progress.total > 0 && (
+        <div className="flex flex-col gap-1.5">
+          <div className="flex justify-between text-xs text-muted-foreground">
+            <span>{progress.running ? "Overall" : "Finished"}</span>
+            <span>
+              {progress.current} of {progress.total} images
+            </span>
+          </div>
+          <Progress value={overall} aria-label="Overall download progress" className="h-2" />
+        </div>
+      )}
+      <ul className="flex flex-col gap-2">
+        {progress.images.map((img) => (
+          <ImageRow key={img.image} image={img} />
+        ))}
+      </ul>
+    </div>
+  )
+}
+
+/** Download progress of the Kubernetes node image (`pull-kube-image`), shown in the "kubernetes" check's card. */
+function KubeImageProgress() {
+  const progress = useOnboarding((s) => s.actions["pull-kube-image"])
+  if (!progress) return null
+  return (
+    <div className="flex flex-col gap-2" data-testid="setup-pull-kube-image">
+      {(progress.running || progress.images.length > 0) && <PullProgress progress={progress} />}
+      {progress.error && !progress.running && <p className="text-sm text-destructive">{progress.error}</p>}
     </div>
   )
 }
@@ -224,7 +241,13 @@ export function HealthStep({ steps }: { steps: StepDef[] }) {
       ) : null}
       {setup.isError && <SetupError error={setup.error} />}
       <div className="flex flex-col gap-3">
-        {status ? status.checks.map((c) => <CheckCard key={c.id} check={c} />) : !setup.isError && <Skeleton className="h-28 rounded-xl" />}
+        {status
+          ? status.checks.map((c) => (
+              <CheckCard key={c.id} check={c}>
+                {c.id === "kubernetes" && <KubeImageProgress />}
+              </CheckCard>
+            ))
+          : !setup.isError && <Skeleton className="h-28 rounded-xl" />}
       </div>
     </div>
   )

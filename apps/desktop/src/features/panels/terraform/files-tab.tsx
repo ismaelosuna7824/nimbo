@@ -35,9 +35,14 @@ import { registerCloseFileTab } from "./close-file-tab"
 import type { CodeEditorHandle, EditorDiagnostic } from "./code-editor"
 import { downloadWorkflowFile } from "./download-file"
 import { EditorTabs, PathBar } from "./editor-chrome"
-import { ancestors, baseName, dirName, isFormattable } from "./file-model"
+import { ancestors, baseName, dirName, isFormattable, isYaml } from "./file-model"
 import { FileTree, type EntryKind, type FileTreeHandle, type OpenOptions } from "./file-tree"
+import { dockerIntel } from "@/features/docker/intel"
+import { kubernetesIntel } from "@/features/kubernetes/intel"
+import { formatYaml, YamlFormatError } from "@/features/code-intel/yaml/format"
+import { insertService } from "@/features/docker/compose-snippet"
 import { terraformIntel } from "./intel"
+import { NewFromTemplateDialog } from "./new-from-template-dialog"
 import { NewModuleDialog } from "./new-module-dialog"
 import {
   changesRequest,
@@ -121,6 +126,9 @@ export function FilesTab() {
   const workflowId = useWorkflowStore((s) => s.workflow!.id)
   const workflowName = useWorkflowStore((s) => s.workflow!.name)
   const updatedAt = useWorkflowStore((s) => s.workflow!.updatedAt)
+  const docker = useWorkflowStore((s) => s.workflow!.kind === "docker")
+  const kubernetes = useWorkflowStore((s) => s.workflow!.kind === "kubernetes")
+  const composeFiles = useWorkflowStore((s) => s.workflow!.compose?.files)
   const mode = useWorkflowStore((s) => s.mode)
   const visible = useWorkflowStore((s) => s.bottomOpen && s.bottomTab === "terraform")
   const pro = mode === "pro"
@@ -136,6 +144,8 @@ export function FilesTab() {
   const [applyError, setApplyError] = useState<ApplyError | null>(null)
   const [quickOpen, setQuickOpen] = useState(false)
   const [moduleOpen, setModuleOpen] = useState(false)
+  /** "New from template…": the folder the file goes in; null when closed. */
+  const [templateDir, setTemplateDir] = useState<string | null>(null)
   const [review, setReview] = useState<"all" | string | null>(null)
   const [confirm, setConfirm] = useState<ConfirmRequest | null>(null)
   const rootRef = useRef<HTMLDivElement>(null)
@@ -195,7 +205,7 @@ export function FilesTab() {
   const canEdit = pro && !!activeFile?.editable
   const isCode = (path: string) => {
     const f = byPath.get(path)
-    return !!f && f.generated && f.kind === "terraform"
+    return !!f && ((f.generated && f.kind === "terraform") || f.kind === "compose" || f.kind === "dockerfile")
   }
   const changed = pendingPaths(visiblePending, visibleBuffers).sort()
   const changedKey = changed.join("\n")
@@ -222,18 +232,23 @@ export function FilesTab() {
   pendingRef.current = pending
   const buffersRef = useRef(buffers)
   buffersRef.current = buffers
+  const filesRef = useRef(files)
+  filesRef.current = files
 
-  // Open main.tf (in the environments layout the service module's: the only generated code under modules/) or the
-  // first file once the files are known; drop tabs of files that are gone.
+  // Open main.tf (in the environments layout the service module's: the only generated code under modules/; in a Docker
+  // workspace the first compose file) or the first file once the files are known; drop tabs of files that are gone.
   const initialized = useRef(false)
   useEffect(() => {
     if (listing.isPlaceholderData || !listing.data || files.length === 0) return
     if (!initialized.current) {
       initialized.current = true
-      const first = byPath.has(DEFAULT_FILE)
-        ? DEFAULT_FILE
-        : (files.find((f) => f.generated && f.kind === "terraform" && /^modules\/[^/]+\/main\.tf$/.test(f.path)) ??
-            files.find((f) => !f.binary))?.path
+      const preferred = docker ? composeFiles?.[0] : DEFAULT_FILE
+      const first =
+        preferred && byPath.has(preferred)
+          ? preferred
+          : (files.find((f) => f.generated && f.kind === "terraform" && /^modules\/[^/]+\/main\.tf$/.test(f.path)) ??
+              files.find((f) => f.kind === "compose") ??
+              files.find((f) => !f.binary))?.path
       if (first) {
         setTabs([first])
         setActive(first)
@@ -247,7 +262,7 @@ export function FilesTab() {
         Object.keys(b).every((p) => byPath.has(p)) ? b : Object.fromEntries(Object.entries(b).filter(([p]) => byPath.has(p))),
       )
     }
-  }, [listing.data, listing.isPlaceholderData, byPath, files, pro])
+  }, [listing.data, listing.isPlaceholderData, byPath, files, pro, docker, composeFiles])
 
   useEffect(() => {
     if (!active && tabs.length) setActive(tabs[tabs.length - 1])
@@ -267,25 +282,6 @@ export function FilesTab() {
     }
   }, [])
 
-  // Terraform completion, hover and go to definition for the open .tf file; references reach unapplied files too.
-  const intel = useMemo(
-    () =>
-      active?.endsWith(".tf")
-        ? terraformIntel({
-            workflowId,
-            path: active,
-            openFile: (path, opts) => openFile(path, { line: opts.line }),
-            buffers: () => {
-              const out: Record<string, string> = {}
-              for (const p of Object.keys(pendingRef.current.created)) out[p] = ""
-              for (const [p, b] of Object.entries(buffersRef.current)) out[p] = b.value
-              return out
-            },
-          })
-        : undefined,
-    [workflowId, active, openFile],
-  )
-
   // "Open files" requests (e.g. a module's folder): open the file once the current listing has it.
   const filesRequest = useFilesRequestFor(workflowId)
   const openedRequest = useRef(0)
@@ -296,7 +292,7 @@ export function FilesTab() {
       filesRequest.open && byPath.has(filesRequest.open)
         ? filesRequest.open
         : files.find((f) => !f.binary && f.path.startsWith(filesRequest.filter))?.path
-    if (target) openFile(target)
+    if (target) openFile(target, target === filesRequest.open && filesRequest.line ? { line: filesRequest.line } : {})
   }, [filesRequest, listing.data, listing.isPlaceholderData, byPath, files, openFile])
 
   // Run focus/find/reveal once the editor shows the requested file.
@@ -399,6 +395,77 @@ export function FilesTab() {
     [openFile],
   )
 
+  /** Stages files written by a quick fix or a template: new ones are created, existing ones get an unsaved edit. */
+  const writeFiles = useCallback(
+    async (written: Record<string, string>) => {
+      for (const [path, value] of Object.entries(written)) {
+        const exists = filesRef.current.some((f) => f.path === path)
+        if (!exists) {
+          setPending((p) => createFile(p, path))
+          setBuffers((b) => ({ ...b, [path]: { base: "", value } }))
+          continue
+        }
+        const base = buffersRef.current[path]?.base ?? (await textOf(path))
+        setBuffers((b) => ({ ...b, [path]: { base: b[path]?.base ?? base, value } }))
+      }
+      const first = Object.keys(written)[0]
+      if (first) openFile(first)
+    },
+    [textOf, openFile],
+  )
+
+  // Completion, hover, go to definition, checks and quick fixes as you type: Terraform for .tf files; compose files,
+  // Dockerfiles, .env and .dockerignore in a Docker workspace; manifests, Kustomize and Helm files in a Kubernetes
+  // one. References reach unapplied files too.
+  const intel = useMemo(() => {
+    if (!active) return undefined
+    const buffers = () => {
+      const out: Record<string, string> = {}
+      for (const p of Object.keys(pendingRef.current.created)) out[p] = ""
+      for (const [p, b] of Object.entries(buffersRef.current)) out[p] = b.value
+      return out
+    }
+    const open = (path: string, opts: { line?: number }) => openFile(path, { line: opts.line })
+    if (docker) {
+      return (
+        dockerIntel({
+          workflowId,
+          path: active,
+          buffers,
+          compose: () => useWorkflowStore.getState().workflow?.compose,
+          files: () => filesRef.current.map((f) => f.path),
+          read: textOf,
+          openFile: (path, opts) => openFile(path, { line: opts.line }),
+          writeFiles: (written) => void writeFiles(written),
+        }) ?? undefined
+      )
+    }
+    if (kubernetes) {
+      return (
+        kubernetesIntel({
+          workflowId,
+          path: active,
+          buffers,
+          openFile: open,
+          kube: () => useWorkflowStore.getState().workflow?.kubernetes,
+        }) ?? undefined
+      )
+    }
+    return active.endsWith(".tf") ? terraformIntel({ workflowId, path: active, openFile: open, buffers }) : undefined
+  }, [workflowId, active, openFile, docker, kubernetes, textOf, writeFiles])
+
+  /** "New from template…" with a snippet: the service goes at the end of the compose file's services. */
+  const insertSnippet = useCallback(
+    async (composeFile: string, snippet: string) => {
+      try {
+        await writeFiles({ [composeFile]: insertService(await textOf(composeFile), snippet) })
+      } catch (err) {
+        toast.error(`Couldn't add the service to ${baseName(composeFile)}`, { description: errorMessage(err) })
+      }
+    },
+    [writeFiles, textOf],
+  )
+
   const renameEntry = useCallback(
     (from: string, to: string) => {
       const r = renamePath(pendingRef.current, files, from, to)
@@ -415,7 +482,7 @@ export function FilesTab() {
         title: kind === "folder" ? `Delete folder ${baseName(path)}?` : `Delete ${baseName(path)}?`,
         description: `${
           kind === "folder" ? `${inside.length} file${inside.length === 1 ? "" : "s"} in ${path}/ will be deleted. ` : ""
-        }Nothing is removed until you apply your changes; Terraform blocks in deleted files then leave the diagram.`,
+        }Nothing is removed until you apply your changes; ${docker ? "services, networks and volumes declared in deleted compose files" : "Terraform blocks in deleted files"} then leave the diagram.`,
         confirmLabel: "Delete",
       })
       if (choice !== "confirm") return
@@ -427,7 +494,7 @@ export function FilesTab() {
       setActive((a) => (a && gone.has(a) ? null : a))
       requestAnimationFrame(() => rootRef.current?.querySelector<HTMLElement>('[role="tree"]')?.focus())
     },
-    [files, ask, dropBuffers],
+    [files, ask, dropBuffers, docker],
   )
 
   const duplicateEntry = useCallback(
@@ -630,7 +697,19 @@ export function FilesTab() {
   }, [visible])
 
   const formatActive = async () => {
-    if (!canEdit || !active || shownText === undefined || !isFormattable(active)) return
+    if (!canEdit || !active || shownText === undefined) return
+    if (isYaml(active)) {
+      // Re-indents only: comments, key order and values stay as written.
+      try {
+        const formatted = formatYaml(shownText)
+        if (formatted !== shownText) editorRef.current?.replaceDocument(formatted)
+        else toast.success(`${baseName(active)} is already formatted`)
+      } catch (err) {
+        toast.error(`Couldn't format ${baseName(active)}`, { description: err instanceof YamlFormatError ? err.message : errorMessage(err) })
+      }
+      return
+    }
+    if (!isFormattable(active)) return
     try {
       const res = await api.formatCode(shownText, active)
       if (res.changed) editorRef.current?.replaceDocument(res.content)
@@ -711,7 +790,11 @@ export function FilesTab() {
             <Files />
           </EmptyMedia>
           <EmptyTitle>No files yet</EmptyTitle>
-          <EmptyDescription>Add resources to the canvas and their Terraform code appears here.</EmptyDescription>
+          <EmptyDescription>
+            {docker
+              ? "Add services to the canvas and their compose file appears here."
+              : "Add resources to the canvas and their Terraform code appears here."}
+          </EmptyDescription>
         </EmptyHeader>
       </Empty>
     )
@@ -751,7 +834,9 @@ export function FilesTab() {
             onRename={renameEntry}
             onDelete={(p, kind) => void deleteEntry(p, kind)}
             onDuplicate={(p) => void duplicateEntry(p)}
-            onNewModule={() => setModuleOpen(true)}
+            onNewModule={docker || kubernetes ? undefined : () => setModuleOpen(true)}
+            onNewFromTemplate={docker || kubernetes ? setTemplateDir : undefined}
+            docker={docker || kubernetes}
           />
         </ResizablePanel>
         <ResizableHandle />
@@ -779,7 +864,11 @@ export function FilesTab() {
                 onRevert={() => dropBuffers([active!])}
                 onShowChanges={() => setReview(active)}
                 onFind={shownText !== undefined ? () => editorRef.current?.openSearch() : undefined}
-                onFormat={canEdit && shownText !== undefined && isFormattable(activeFile.path) ? () => void formatActive() : undefined}
+                onFormat={
+                  canEdit && shownText !== undefined && (isFormattable(activeFile.path) || isYaml(activeFile.path))
+                    ? () => void formatActive()
+                    : undefined
+                }
                 onToggleWrap={() =>
                   setWrap((w) => {
                     localStorage.setItem(WRAP_KEY, w ? "0" : "1")
@@ -899,7 +988,6 @@ export function FilesTab() {
                   <DiagnosticRow
                     key={i}
                     diagnostic={d}
-                    nodeLabel={d.file ? `${d.file}${d.line ? `:${d.line}` : ""}` : undefined}
                     onSelect={d.file && byPath.has(d.file) ? () => openFile(d.file!, { line: d.line }) : undefined}
                   />
                 ))}
@@ -974,13 +1062,28 @@ export function FilesTab() {
         onCreate={(sc, call) => void addModule(sc, call)}
       />
 
+      <NewFromTemplateDialog
+        dir={templateDir}
+        onClose={() => setTemplateDir(null)}
+        kinds={kubernetes ? ["kubernetes", "docker"] : ["docker"]}
+        composeFiles={docker ? (composeFiles ?? []).filter((f) => byPath.has(f)) : []}
+        validate={(p) => validatePath(p, "file")}
+        onCreate={(path, content) => {
+          createEntry(path, "file")
+          setBuffers((b) => ({ ...b, [path]: { base: "", value: content } }))
+        }}
+        onInsert={(file, snippet) => void insertSnippet(file, snippet)}
+      />
+
       <ChangesDialog
         open={review !== null}
         onOpenChange={(o) => !o && setReview(null)}
         title={review === "all" ? "Review changes" : `Changes to ${review ? baseName(review) : ""}`}
         description={
           review === "all"
-            ? "Applying stores these files and re-imports the Terraform code into the diagram."
+            ? docker
+              ? "Applying stores these files and reads the compose files and Dockerfiles back into the diagram."
+              : "Applying stores these files and re-imports the Terraform code into the diagram."
             : "Saving writes this file into the workflow's files."
         }
         changes={pendingChanges(reviewPaths)}

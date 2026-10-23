@@ -53,9 +53,35 @@ account. AI agents can do the same through the built-in MCP server.
   reachability analyzer ("can the internet reach my database on 5432?"),
   plus live tests against a one-click test instance. See
   [Testing networks](#testing-networks).
-- **MCP**: 53 tools for agents (search → add → connect → validate → deploy →
+- **Docker workspaces**: open, import or create a docker-compose project
+  (compose files with overrides, `include`, `extends`, profiles, plus
+  Dockerfiles and `.env`, which stay the source of truth). Services show as
+  cards with their technology's icon inside network frames, with
+  `depends_on`, mount and inferred connection edges. You can add images from
+  a curated palette or build from a starter Dockerfile, and drag between two
+  cards to connect them ("Wait until healthy", connection settings, a
+  network or a volume). Every edit is written back into the YAML with
+  comments kept. The Code tab completes compose keys and Dockerfile
+  instructions. *Deploy* runs `docker compose up` under a project name only
+  Nimbo uses, with live state, logs, Endpoints *Try it* and load tests.
+
+  ![Build canvas of a Node.js + PostgreSQL + Redis stack running](docs/images/docker-build-canvas.png)
+- **Kubernetes workspaces**: plain manifests, Kustomize (base + overlays per
+  environment) and Helm charts (values per environment) as the source of
+  truth. Objects show inside namespace frames with Kubernetes and
+  technology icons, Service selector, Ingress and mount edges; a palette of
+  starters, workloads from the image catalog and pinned Helm charts; edits
+  written back with comments kept (Helm fields into the values file that
+  drives them); schema-driven completion, `k8s_*` best-practice checks and
+  quick fixes. *Deploy* runs on a local k3s cluster per workflow (a single
+  Docker container; your `~/.kube/config` is never touched) with rollout
+  state, logs, port-forwards, Ingress URLs and load tests with a resource
+  verdict. *Convert to Kubernetes* turns a compose project into manifests,
+  Kustomize or a Helm chart.
+- **MCP**: 74 tools for agents (search → add → connect → validate → deploy →
   use what you deployed → check networks → load test → export, plus the
-  Connections library). See [docs/MCP.md](docs/MCP.md).
+  Connections library, Docker and Kubernetes workspaces). See
+  [docs/MCP.md](docs/MCP.md).
 
 Architecture, contracts and verified Floci facts:
 [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
@@ -230,3 +256,12 @@ Azure, Google Cloud, Oracle Cloud Infrastructure) bundled for the Architecture
 diagram view are not covered by the MIT license; they stay under their owners'
 terms — see
 [`apps/desktop/src/features/architecture/icons/NOTICE.md`](apps/desktop/src/features/architecture/icons/NOTICE.md).
+Technology logos (Docker, Kubernetes, nginx, Go, Node.js, PostgreSQL…) come from
+[Devicon](https://github.com/devicons/devicon) (MIT) and
+[Simple Icons](https://github.com/simple-icons/simple-icons) (CC0); the marks
+remain their owners' trademarks — see
+[`apps/desktop/src/components/tech-icons/NOTICE.md`](apps/desktop/src/components/tech-icons/NOTICE.md).
+Kubernetes object icons (Deployment, Service, Ingress…) are the
+[Kubernetes community icon set](https://github.com/kubernetes/community/tree/master/icons)
+(Apache 2.0) — see
+[`apps/desktop/src/components/k8s-icons/NOTICE.md`](apps/desktop/src/components/k8s-icons/NOTICE.md).

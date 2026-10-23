@@ -7,6 +7,8 @@ import { Spinner } from "@/components/ui/spinner"
 import type { SandboxState } from "@/lib/api/types"
 import { cn } from "@/lib/utils"
 import { useWorkflowStore } from "@/state/workflow-store"
+import { ComposeChip } from "@/features/docker/deploy/compose-chip"
+import { KubeChip } from "@/features/kubernetes/deploy/kube-chip"
 import { sandboxAction } from "./actions"
 
 const STATE: Record<SandboxState, { label: string; dot: string }> = {
@@ -17,7 +19,13 @@ const STATE: Record<SandboxState, { label: string; dot: string }> = {
   error: { label: "Sandbox error", dot: "bg-destructive" },
 }
 
+/** Runtime chip of the toolbar: the Floci sandbox, the containers of a Docker workspace or a Kubernetes cluster. */
 export function SandboxChip() {
+  const kind = useWorkflowStore((s) => s.workflow?.kind)
+  return kind === "docker" ? <ComposeChip /> : kind === "kubernetes" ? <KubeChip /> : <FlociSandboxChip />
+}
+
+function FlociSandboxChip() {
   const sandbox = useWorkflowStore((s) => s.sandbox)
   const [busy, setBusy] = useState(false)
   const [confirmReset, setConfirmReset] = useState(false)

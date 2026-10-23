@@ -31,6 +31,7 @@ type runner struct {
 	timeout    time.Duration
 	maxWorkers int
 	col        *collector
+	resources  *resourceRecorder // docker workflow targets; nil otherwise
 
 	ctx     context.Context
 	cancel  context.CancelFunc
@@ -56,6 +57,7 @@ func (r *runner) snapshot(timeline bool) model.LoadTestRun {
 		out.Timeline = slices.Clone(r.run.Timeline)
 	} else {
 		out.Timeline = []model.LoadSample{}
+		out.Resources = resourcesSummary(r.run.Resources)
 	}
 	return out
 }
@@ -74,6 +76,12 @@ func (r *runner) execute() {
 	defer r.exec.close()
 	defer r.cancel()
 
+	if m := r.e.monitor; m != nil && r.run.WorkflowID != "" && r.run.Spec.Target.ConnectionID == "" {
+		if probe := m.MonitorResources(r.ctx, r.run.WorkflowID, r.run.Spec.Target); probe != nil {
+			r.resources = newResourceRecorder(probe)
+		}
+	}
+
 	pctx, cancel := context.WithTimeout(r.ctx, max(r.timeout, minPreflightTimeout))
 	err := r.exec.preflight(pctx)
 	cancel()
@@ -89,6 +97,9 @@ func (r *runner) execute() {
 	r.mu.Lock()
 	r.start = time.Now()
 	r.mu.Unlock()
+	if r.resources != nil {
+		r.resources.record(0)
+	}
 
 	var sampler sync.WaitGroup
 	sampler.Add(1)
@@ -244,6 +255,9 @@ func (r *runner) sample() {
 		}
 		target := r.sched.integral(float64(k)) - r.sched.integral(float64(k-1))
 		s, st := r.col.roll(float64(k), target, int(r.inFlight.Load()))
+		if r.resources != nil {
+			r.resources.record(float64(k))
+		}
 		r.mu.Lock()
 		r.run.Timeline = append(r.run.Timeline, s)
 		r.secs = append(r.secs, st)
@@ -291,6 +305,18 @@ func (r *runner) finish(preflightErr error) {
 		}
 	}
 	r.mu.Unlock()
+
+	if r.resources != nil && preflightErr == nil {
+		r.mu.Lock()
+		timeline, sum := slices.Clone(r.run.Timeline), r.run.Summary
+		r.mu.Unlock()
+		if sum != nil {
+			res := r.resources.result(timeline, sum)
+			r.mu.Lock()
+			r.run.Resources = res
+			r.mu.Unlock()
+		}
+	}
 
 	if err := r.e.save(r.snapshot(true)); err != nil {
 		r.mu.Lock()

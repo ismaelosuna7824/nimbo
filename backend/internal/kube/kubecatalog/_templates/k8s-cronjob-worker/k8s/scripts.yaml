@@ -1,0 +1,30 @@
+# The producer and worker scripts, mounted into the pods.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: scripts
+  namespace: jobs
+data:
+  enqueue.sh: |
+    #!/bin/sh
+    # Runs every minute: queue a few jobs.
+    set -eu
+    for i in $(seq 1 "${BATCH_SIZE:-3}"); do
+      redis-cli -h "$REDIS_HOST" RPUSH jobs "job-$(date +%s)-$i" >/dev/null
+    done
+    echo "queued ${BATCH_SIZE:-3} jobs; queue length: $(redis-cli -h "$REDIS_HOST" LLEN jobs)"
+  work.sh: |
+    #!/bin/sh
+    # Waits for jobs and processes them one at a time.
+    set -u
+    echo "worker waiting for jobs on $REDIS_HOST"
+    while true; do
+      job=$(redis-cli -h "$REDIS_HOST" --raw BLPOP jobs 5 | tail -n 1)
+      if [ -n "$job" ] && [ "$job" != "jobs" ]; then
+        echo "processing $job"
+        sleep 1
+        touch /tmp/heartbeat
+      else
+        touch /tmp/heartbeat
+      fi
+    done

@@ -1,0 +1,20 @@
+# Development: one replica in hello-dev, http://hello-dev.localhost
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: hello-dev
+resources:
+  - ../../base
+  - namespace.yaml
+configMapGenerator:
+  - name: site
+    behavior: replace
+    files:
+      - index.html
+patches:
+  - target:
+      kind: Ingress
+      name: web
+    patch: |-
+      - op: replace
+        path: /spec/rules/0/host
+        value: hello-dev.localhost

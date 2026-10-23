@@ -21,16 +21,20 @@ type View = "configure" | "results" | "history"
 
 /** Header note: where the traffic of what is on screen goes. */
 export function TrafficScope({ external }: { external: string | null }) {
+  const kind = useWorkflowStore((s) => s.workflow?.kind)
+  const local = kind === "docker" || kind === "kubernetes"
   return external ? (
     <Badge
       variant="outline"
       className="ml-auto h-5 max-w-[50%] gap-1 border-amber-500/40 text-[11px] text-amber-700 dark:text-amber-400"
-      title={`Traffic goes to ${external}, outside your local sandbox.`}
+      title={`Traffic goes to ${external}, outside ${local ? "this machine" : "your local sandbox"}.`}
     >
       <ShieldAlert className="size-3" /> <span className="truncate">External target · {external}</span>
     </Badge>
   ) : (
-    <span className="ml-auto hidden text-[11px] text-muted-foreground md:inline">Traffic goes to your local sandbox only.</span>
+    <span className="ml-auto hidden text-[11px] text-muted-foreground md:inline">
+      Traffic goes to your local {kind === "kubernetes" ? "cluster" : kind === "docker" ? "containers" : "sandbox"} only.
+    </span>
   )
 }
 

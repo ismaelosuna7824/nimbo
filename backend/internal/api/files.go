@@ -52,6 +52,9 @@ func (s *Server) putTerraform(w http.ResponseWriter, r *http.Request) error {
 		if req.Files == nil {
 			return s.applyFileChanges(cur, req)
 		}
+		if !cur.IsTerraform() {
+			return nil, errorf(http.StatusBadRequest, "%s is a %s workflow: send changes/moves of its files, not files", cur.ID, model.KindLabel(cur.Kind))
+		}
 		files := make(map[string][]byte, len(req.Files))
 		var syntax []model.Diagnostic
 		for name, content := range req.Files {
@@ -110,12 +113,17 @@ func (s *Server) exportLayout(wf *model.Workflow, environments bool) (map[string
 // Generated Terraform wins over an asset with the same export path; the
 // project scaffold (README.md, .gitignore, ...) is only generated where the
 // workflow has no file of its own (e.g. a README that came with an import).
+// Docker and Kubernetes workflows generate nothing: their files are
+// exported as stored.
 func (s *Server) exportFiles(wf *model.Workflow, environments bool) (generated map[string][]byte, assets map[string]string, err error) {
-	generated, err = s.exportLayout(wf, environments)
-	if err != nil {
-		return nil, nil, err
+	place := func(rel string) []string { return []string{rel} }
+	generated = map[string][]byte{}
+	if wf.IsTerraform() {
+		if generated, err = s.exportLayout(wf, environments); err != nil {
+			return nil, nil, err
+		}
+		place = hclcodec.AssetPlacement(wf)
 	}
-	place := hclcodec.AssetPlacement(wf)
 	own := map[string]bool{}
 	assets = map[string]string{}
 	root := s.cfg.Store.AssetsDir(wf.ID)
@@ -140,6 +148,9 @@ func (s *Server) exportFiles(wf *model.Workflow, environments bool) (generated m
 	})
 	if err != nil {
 		return nil, nil, err
+	}
+	if !wf.IsTerraform() {
+		return generated, assets, nil
 	}
 	for name, data := range hclcodec.Scaffold(wf, s.cfg.Catalog.ResourceFile) {
 		if _, taken := generated[name]; !taken && !own[name] {

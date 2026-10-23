@@ -6,6 +6,7 @@ import {
   Copy,
   Download,
   FilePlus,
+  FilePlus2,
   FileSearch,
   FolderPlus,
   Link2,
@@ -97,7 +98,12 @@ interface FileTreeProps {
   onRename: (from: string, to: string) => void
   onDelete: (path: string, kind: EntryKind) => void
   onDuplicate: (path: string) => void
-  onNewModule: () => void
+  /** Terraform workflows only: scaffold a local module. */
+  onNewModule?: () => void
+  /** Docker and Kubernetes workspaces: create a file from a template (Dockerfile per stack, .env, …) in a folder. */
+  onNewFromTemplate?: (dir: string) => void
+  /** Docker workspace: build contexts take any file type and dotfiles. */
+  docker?: boolean
 }
 
 type Row = TreeRow | { type: "input"; path: string; name: string; depth: number }
@@ -131,6 +137,8 @@ export function FileTree({
   onDelete,
   onDuplicate,
   onNewModule,
+  onNewFromTemplate,
+  docker = false,
 }: FileTreeProps) {
   const [filter, setFilter] = useState("")
   const [searchContents, setSearchContents] = useState(false)
@@ -246,10 +254,15 @@ export function FileTree({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activePath])
 
+  // Scroll to the active file once when it changes (its row may only appear after its folders open), never because
+  // the user opened or closed some other folder: that changes the row count but must keep the scroll where it is.
+  const revealed = useRef<string | null>(null)
   useEffect(() => {
+    if (!activePath || revealed.current === activePath) return
     const i = rows.findIndex((r) => r.type === "file" && r.path === activePath)
-    if (i >= 0) virtualizer.scrollToIndex(i, { align: "auto" })
-    // Scroll when the active file changes or its row appears, not on every re-render.
+    if (i < 0) return
+    revealed.current = activePath
+    virtualizer.scrollToIndex(i, { align: "auto" })
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activePath, rows.length])
 
@@ -305,7 +318,7 @@ export function FileTree({
     }
     const path = join(draft.mode === "create" ? draft.parent : dirName(draft.path), name)
     const problem =
-      nameProblem(name, draft.kind) ?? validatePath(path, draft.kind, draft.mode === "rename" ? draft.path : undefined)
+      nameProblem(name, draft.kind, docker) ?? validatePath(path, draft.kind, draft.mode === "rename" ? draft.path : undefined)
     if (problem) {
       setDraftError(problem)
       return false
@@ -481,7 +494,8 @@ export function FileTree({
         </div>
         {editButton("New file", <FilePlus />, () => startCreate("file"), "⌘N")}
         {editButton("New folder", <FolderPlus />, () => startCreate("folder"))}
-        {editButton("New module…", <Package />, onNewModule)}
+        {onNewModule && editButton("New module…", <Package />, onNewModule)}
+        {onNewFromTemplate && editButton("New from template…", <FilePlus2 />, () => onNewFromTemplate(""))}
         <Tooltip>
           <TooltipTrigger asChild>
             <Button variant="ghost" size="icon-xs" aria-label="Go to file" onClick={onQuickOpen}>
@@ -776,9 +790,16 @@ export function FileTree({
                 <ContextMenuItem onSelect={() => startCreate("folder", menuDir)}>
                   <FolderPlus /> New folder…
                 </ContextMenuItem>
-                <ContextMenuItem onSelect={onNewModule}>
-                  <Package /> New module…
-                </ContextMenuItem>
+                {onNewModule && (
+                  <ContextMenuItem onSelect={onNewModule}>
+                    <Package /> New module…
+                  </ContextMenuItem>
+                )}
+                {onNewFromTemplate && (
+                  <ContextMenuItem onSelect={() => onNewFromTemplate(menuDir)}>
+                    <FilePlus2 /> New from template…
+                  </ContextMenuItem>
+                )}
                 {menuRow && menuRow.type !== "input" && (
                   <>
                     <ContextMenuSeparator />

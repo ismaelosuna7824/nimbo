@@ -89,6 +89,20 @@ func (s *Server) checkCode(w http.ResponseWriter, r *http.Request) error {
 	if err != nil {
 		return err
 	}
+	if wf.IsDocker() {
+		problems, err := s.checkComposeCode(wf, req, rel)
+		if err != nil {
+			return err
+		}
+		return ok(w, map[string]any{"problems": problems})
+	}
+	if wf.IsKubernetes() {
+		problems, err := s.checkKubeCode(wf, req, rel)
+		if err != nil {
+			return err
+		}
+		return ok(w, map[string]any{"problems": problems})
+	}
 	if !strings.HasSuffix(rel, ".tf") {
 		return errorf(http.StatusBadRequest, "%s is not a Terraform file", rel)
 	}

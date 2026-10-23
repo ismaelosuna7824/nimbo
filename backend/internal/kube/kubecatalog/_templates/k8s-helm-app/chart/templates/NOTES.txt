@@ -1,0 +1,4 @@
+{{ .Chart.Name }} {{ .Chart.AppVersion }} is running as release {{ .Release.Name }} in {{ .Release.Namespace }}.
+{{- if .Values.ingress.enabled }}
+Open http://{{ .Values.ingress.host }}
+{{- end }}

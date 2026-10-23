@@ -59,7 +59,15 @@ export function richText(text: string): HTMLElement {
 }
 
 /** Info panel shared by completion info and hover: a title line, badges, a description and a docs link. */
-export function docNode(opts: { title: string; badges?: string[]; description?: string; docsUrl?: string; extra?: string }): HTMLElement {
+export function docNode(opts: {
+  title: string
+  badges?: string[]
+  description?: string
+  docsUrl?: string
+  /** Text of the docs link (default: the Terraform Registry). */
+  docsLabel?: string
+  extra?: string
+}): HTMLElement {
   const root = document.createElement("div")
   root.className = "cm-tf-doc"
   const head = document.createElement("div")
@@ -90,7 +98,7 @@ export function docNode(opts: { title: string; badges?: string[]; description?: 
     a.className = "cm-tf-doc-link"
     a.href = url
     a.rel = "noreferrer"
-    a.textContent = "Open in the Terraform Registry ↗"
+    a.textContent = opts.docsLabel ?? "Open in the Terraform Registry ↗"
     a.addEventListener("mousedown", (e) => e.preventDefault())
     a.addEventListener("click", (e) => {
       e.preventDefault()

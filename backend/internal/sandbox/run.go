@@ -105,7 +105,15 @@ func (m *Manager) Run(ctx context.Context, req RunRequest) (*model.Run, error) {
 	m.mu.Unlock()
 
 	m.publish(model.EventRunStatus, wfID, snap)
-	go m.execute(runCtx, rs, req)
+	go m.execute(runCtx, rs, func(ctx context.Context) error { return m.runSteps(ctx, rs, req) }, func(snap model.Run) {
+		if snap.Status == model.RunSucceeded && (snap.Action == model.ActionApply || snap.Action == model.ActionDestroy) {
+			sctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+			defer cancel()
+			if st, err := m.State(sctx, req.Workflow); err == nil {
+				m.publish(model.EventStateUpdated, rs.run.WorkflowID, st)
+			}
+		}
+	})
 	return &snap, nil
 }
 
@@ -124,7 +132,9 @@ func (m *Manager) snapshot(rs *runState, withLog bool) model.Run {
 	return r
 }
 
-func (m *Manager) execute(ctx context.Context, rs *runState, req RunRequest) {
+// execute runs steps as the run's body, settles its status, persists it and
+// then calls done with the final snapshot (without log).
+func (m *Manager) execute(ctx context.Context, rs *runState, steps func(context.Context) error, done func(model.Run)) {
 	defer close(rs.done)
 	defer rs.cancel()
 
@@ -136,7 +146,7 @@ func (m *Manager) execute(ctx context.Context, rs *runState, req RunRequest) {
 	m.mu.Unlock()
 	m.publish(model.EventRunStatus, rs.run.WorkflowID, snap)
 
-	err := m.runSteps(ctx, rs, req)
+	err := steps(ctx)
 
 	m.mu.Lock()
 	end := time.Now().UTC()
@@ -166,14 +176,7 @@ func (m *Manager) execute(ctx context.Context, rs *runState, req RunRequest) {
 		m.logLine(rs, "system", "Could not save run history: "+perr.Error())
 	}
 	m.publish(model.EventRunStatus, rs.run.WorkflowID, snap)
-
-	if snap.Status == model.RunSucceeded && (snap.Action == model.ActionApply || snap.Action == model.ActionDestroy) {
-		sctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
-		defer cancel()
-		if st, err := m.State(sctx, req.Workflow); err == nil {
-			m.publish(model.EventStateUpdated, rs.run.WorkflowID, st)
-		}
-	}
+	done(snap)
 }
 
 func (m *Manager) runSteps(ctx context.Context, rs *runState, req RunRequest) error {

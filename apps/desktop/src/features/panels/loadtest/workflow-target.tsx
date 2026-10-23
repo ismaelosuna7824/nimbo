@@ -1,5 +1,5 @@
 import { useMemo } from "react"
-import { CircleAlert, Globe, Plug, Rocket, Route, ScrollText, Zap } from "lucide-react"
+import { CircleAlert, Globe, Play, Plug, Rocket, Route, ScrollText, Zap } from "lucide-react"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
@@ -18,6 +18,8 @@ import { ConnectionTargetPicker } from "@/features/connections/target-picker"
 import { INITIAL_CONNECTION_TARGET } from "@/features/connections/target-draft"
 import { openReachability } from "@/features/network/store"
 import { hasNetworkResources } from "@/features/network/use-network"
+import { firstPublishedUrl, runningServices } from "@/features/docker/deploy/compose-model"
+import { firstKubeUrl, runningWorkloads } from "@/features/kubernetes/deploy/kube-model"
 import { nodeLabelById } from "../lib/nodes"
 import { CopyButton, MethodBadge } from "../endpoints/bits"
 import { apiPathOf } from "../endpoints/model"
@@ -39,9 +41,36 @@ export function WorkflowTargetStep({
   pro: boolean
 }) {
   const nodes = useWorkflowStore((s) => s.workflow!.nodes)
-  const deployedCount = useWorkflowStore((s) => s.deployed?.resources.filter((r) => r.mode === "managed").length ?? 0)
-  const emulatorUrl = useWorkflowStore((s) => s.sandbox?.emulators.find((e) => e.state === "running")?.url)
-  const labels = useMemo(() => nodeLabelById(nodes), [nodes])
+  const composeNodes = useWorkflowStore((s) => s.workflow!.compose?.graph.nodes)
+  const kubeNodes = useWorkflowStore((s) => s.workflow!.kubernetes?.graph.nodes)
+  const kind = useWorkflowStore((s) => s.workflow!.kind)
+  const docker = kind === "docker"
+  const kube = kind === "kubernetes"
+  // Docker workspaces: running services stand for deployed resources, published ports for the emulator address;
+  // Kubernetes workspaces: running workloads, and the first port-forward / ingress address.
+  const deployedCount = useWorkflowStore((s) =>
+    kube
+      ? runningWorkloads(s.kube)
+      : docker
+        ? runningServices(s.compose)
+        : (s.deployed?.resources.filter((r) => r.mode === "managed").length ?? 0),
+  )
+  const emulatorUrl = useWorkflowStore((s) =>
+    kube
+      ? firstKubeUrl(s.kube)
+      : docker
+        ? firstPublishedUrl(s.compose)
+        : s.sandbox?.emulators.find((e) => e.state === "running")?.url,
+  )
+  const labels = useMemo(
+    () =>
+      kube
+        ? Object.fromEntries((kubeNodes ?? []).map((n) => [n.id, `${n.kind} ${n.name}`]))
+        : docker
+          ? Object.fromEntries((composeNodes ?? []).filter((n) => n.kind === "service").map((n) => [n.id, n.name]))
+          : nodeLabelById(nodes),
+    [kube, docker, kubeNodes, composeNodes, nodes],
+  )
   const accessResources = useEndpoints().data?.resources
   const { suggested: targets, loading } = resolved
   const groups = useMemo(() => {
@@ -95,7 +124,19 @@ export function WorkflowTargetStep({
           <Spinner />
         ) : targets.length === 0 ? (
           <div className="rounded-lg border border-dashed p-3 text-xs text-muted-foreground">
-            {deployedCount > 0 ? (
+            {kube ? (
+              <p>
+                {deployedCount > 0
+                  ? "Your workloads are running, but no Service forwards an HTTP port and no Ingress routes to one. Add a Service (or an Ingress) on the canvas and Deploy again, or test another address with Custom HTTP or a Connection."
+                  : "Nothing to test yet. Deploy the workflow to its local cluster — every Service port and Ingress rule that answers HTTP then shows up here."}
+              </p>
+            ) : docker ? (
+              <p>
+                {deployedCount > 0
+                  ? "Your containers are running, but none publishes an HTTP port. Add one to a service (ports: \"8080:80\") and press Up again, or test another address with Custom HTTP or a Connection."
+                  : "Nothing to test yet. Start the containers (Up in the Deploy tab) — every service that publishes an HTTP port then shows up here."}
+              </p>
+            ) : deployedCount > 0 ? (
               <>
                 <p>
                   Your resources are deployed, but none of them receives traffic on its own. Networks, subnets, route tables,
@@ -193,7 +234,7 @@ export function WorkflowTargetStep({
             </Select>
             <Input
               className="h-7 font-mono text-xs"
-              placeholder={`${emulatorUrl ?? "http://127.0.0.1:<sandbox port>"}/…`}
+              placeholder={`${emulatorUrl ?? (kube ? "http://127.0.0.1:<forwarded port>" : docker ? "http://127.0.0.1:<published port>" : "http://127.0.0.1:<sandbox port>")}/…`}
               value={draft.http.url}
               onChange={(e) => setDraft((d) => ({ ...d, http: { ...d.http, url: e.target.value } }))}
               aria-label="URL"
@@ -201,7 +242,8 @@ export function WorkflowTargetStep({
           </div>
           {resolved.external && (
             <p className="text-[11px] text-amber-700 dark:text-amber-400">
-              {resolved.external.where} is outside your local sandbox — you will be asked to confirm before traffic is sent.
+              {resolved.external.where} is outside {docker || kube ? "this machine" : "your local sandbox"} — you will be asked to
+              confirm before traffic is sent.
             </p>
           )}
           <Label className="text-[11px] text-muted-foreground">Headers (one “Name: value” per line)</Label>
@@ -333,26 +375,71 @@ function ConnectionSource({ draft, setDraft, connection }: { draft: LoadDraft; s
  * explain that and offer the deploy right here instead of a dead end.
  */
 function DeployGate() {
-  const deployedCount = useWorkflowStore((s) => s.deployed?.resources.filter((r) => r.mode === "managed").length ?? 0)
-  const lastApply = useWorkflowStore((s) => s.runs.find((r) => r.action === "apply"))
+  const kind = useWorkflowStore((s) => s.workflow?.kind)
+  const docker = kind === "docker"
+  const kube = kind === "kubernetes"
+  const deployedCount = useWorkflowStore((s) =>
+    kube
+      ? runningWorkloads(s.kube)
+      : docker
+        ? runningServices(s.compose)
+        : (s.deployed?.resources.filter((r) => r.mode === "managed").length ?? 0),
+  )
+  const lastDeploy = useWorkflowStore((s) => s.runs.find((r) => r.action === (docker || kube ? "up" : "apply")))
   const showBottom = useWorkflowStore((s) => s.showBottom)
   const busy = useRunBusy()
   if (deployedCount > 0) return null
-  const failed = lastApply?.status === "failed"
+  const failed = lastDeploy?.status === "failed"
+  const DeployIcon = docker ? Play : Rocket
   return (
     <div className={cn("mb-2 rounded-lg border p-2.5 text-xs", failed ? "border-destructive/50 bg-destructive/5" : "border-primary/40 bg-primary/5")}>
       <p className="flex items-center gap-1.5 font-medium">
-        {failed ? <CircleAlert className="size-3.5 text-destructive" /> : <Rocket className="size-3.5" />}
-        {busy ? "Deploying to your local sandbox…" : failed ? "The last deploy failed" : "First, deploy your infrastructure"}
+        {failed ? <CircleAlert className="size-3.5 text-destructive" /> : <DeployIcon className="size-3.5" />}
+        {kube
+          ? busy
+            ? "Deploying to your local cluster…"
+            : failed
+              ? "The last Deploy failed"
+              : "First, deploy to your local cluster"
+          : docker
+            ? busy
+              ? "Starting your containers…"
+              : failed
+                ? "The last Up failed"
+                : "First, start your containers"
+            : busy
+              ? "Deploying to your local sandbox…"
+              : failed
+                ? "The last deploy failed"
+                : "First, deploy your infrastructure"}
       </p>
       <p className="mt-1 text-muted-foreground">
-        {busy
-          ? "Terraform is creating your resources in Floci (usually under a minute). Targets appear here when it finishes."
-          : "Load tests send real traffic to what is running in the local Floci sandbox. Deploy it once (nothing touches your real cloud), then pick a target below, choose a traffic shape and press Start test. To test a service deployed elsewhere, choose Connection."}
+        {kube
+          ? busy
+            ? "Nimbo is applying your manifests and waiting for the rollouts. Targets appear here once Services are forwarded."
+            : "Load tests send real traffic to the Services and Ingress rules of this workflow's local k3s cluster. Deploy once (it runs in Docker on this machine), then pick a target below, choose a traffic shape and press Start test. To test a service deployed elsewhere, choose Connection."
+          : docker
+            ? busy
+              ? "docker compose is building and starting your services. Targets appear here once they publish their ports."
+              : "Load tests send real traffic to the ports your containers publish on this machine. Start them once with docker compose, then pick a target below, choose a traffic shape and press Start test. To test a service deployed elsewhere, choose Connection."
+            : busy
+              ? "Terraform is creating your resources in Floci (usually under a minute). Targets appear here when it finishes."
+              : "Load tests send real traffic to what is running in the local Floci sandbox. Deploy it once (nothing touches your real cloud), then pick a target below, choose a traffic shape and press Start test. To test a service deployed elsewhere, choose Connection."}
       </p>
       <div className="mt-2 flex gap-1.5">
         <Button size="xs" onClick={() => void runAction("apply", { showLog: false })} disabled={busy}>
-          {busy ? <Spinner /> : <Rocket />} {failed ? "Retry deploy" : "Deploy now"}
+          {busy ? <Spinner /> : <DeployIcon />}{" "}
+          {kube
+            ? failed
+              ? "Retry deploy"
+              : "Deploy now"
+            : docker
+              ? failed
+                ? "Retry Up"
+                : "Start containers"
+              : failed
+                ? "Retry deploy"
+                : "Deploy now"}
         </Button>
         <Button size="xs" variant="outline" onClick={() => showBottom("deploy")}>
           <ScrollText /> View logs

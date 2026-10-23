@@ -165,7 +165,7 @@ func TestPrompts(t *testing.T) {
 		t.Fatal(err)
 	}
 	cat := PromptCatalog()
-	if len(res.Prompts) != len(cat) || len(cat) != 6 {
+	if len(res.Prompts) != len(cat) || len(cat) != 8 {
 		t.Fatalf("server lists %d prompts, catalog %d", len(res.Prompts), len(cat))
 	}
 	for i, p := range res.Prompts {
@@ -201,7 +201,34 @@ func TestPrompts(t *testing.T) {
 	if got := text("test_deployed_service", nil); !strings.Contains(got, "confirm") {
 		t.Fatalf("test_deployed_service lacks confirmation: %s", got)
 	}
+	if got := text("create_docker_stack", map[string]string{"request": "a Node.js API with PostgreSQL"}); !strings.Contains(got, "a Node.js API with PostgreSQL") || !strings.Contains(got, "review_docker") || !strings.Contains(got, "multi-stage") || !strings.Contains(got, ".dockerignore") {
+		t.Fatalf("create_docker_stack: %s", got)
+	}
+	if got := text("create_kubernetes_app", map[string]string{"request": "an API with PostgreSQL"}); !strings.Contains(got, "an API with PostgreSQL") || !strings.Contains(got, "review_kubernetes") || !strings.Contains(got, "readiness") {
+		t.Fatalf("create_kubernetes_app: %s", got)
+	}
 	if _, err := cs.GetPrompt(ctx, &sdk.GetPromptParams{Name: "import_terraform_folder"}); err == nil || !strings.Contains(err.Error(), `"dir"`) {
 		t.Fatalf("missing required argument: %v", err)
+	}
+}
+
+// Creating a workflow while the user looks at another one says so: the agent
+// may have meant to change the open workflow.
+func TestCreateWorkflowWhileAnotherIsOpen(t *testing.T) {
+	cs, _, base := sessionURL(t)
+	var open workflowView
+	mustTool(t, cs, "create_workflow", map[string]any{"name": "Being Watched"}, &open)
+	setOpen(t, base, open.ID)
+
+	var res struct {
+		Workflow workflowView `json:"workflow"`
+		Notice   string       `json:"notice"`
+	}
+	mustTool(t, cs, "create_workflow", map[string]any{"name": "Side Project"}, &res)
+	if res.Workflow.Name != "Side Project" || res.Workflow.ID == "" {
+		t.Fatalf("created %+v", res.Workflow)
+	}
+	if !strings.Contains(res.Notice, `"Being Watched"`) || !strings.Contains(res.Notice, "archive_workflow") {
+		t.Fatalf("notice %q", res.Notice)
 	}
 }

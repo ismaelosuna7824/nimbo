@@ -1,0 +1,7 @@
+bin
+vendor
+*.test
+.git
+.env*
+Dockerfile
+.dockerignore

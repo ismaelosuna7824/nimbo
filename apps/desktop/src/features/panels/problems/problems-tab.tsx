@@ -33,9 +33,19 @@ const RANK = { error: 0, warning: 1, info: 2 } as const
 export function ProblemsTab() {
   const nodes = useWorkflowStore((s) => s.workflow?.nodes)
   const diagnostics = useWorkflowStore((s) => s.workflow?.diagnostics)
+  const docker = useWorkflowStore((s) => s.workflow?.kind === "docker")
+  const kubeGraph = useWorkflowStore((s) => (s.workflow?.kind === "kubernetes" ? s.workflow.kubernetes?.graph : undefined))
+  const kubernetes = useWorkflowStore((s) => s.workflow?.kind === "kubernetes")
   const select = useWorkflowStore((s) => s.select)
   const openSettings = useSettingsView((s) => s.openView)
-  const labels = useMemo(() => nodeLabelById(nodes), [nodes])
+  // Kubernetes objects read "Deployment shop/web" (node ids are "Deployment/shop/web").
+  const labels = useMemo(
+    () =>
+      kubeGraph
+        ? Object.fromEntries(kubeGraph.nodes.map((n) => [n.id, `${n.kind} ${n.namespace ? `${n.namespace}/` : ""}${n.name}`]))
+        : nodeLabelById(nodes),
+    [nodes, kubeGraph],
+  )
   const withNetwork = useMemo(() => hasNetworkResources(nodes), [nodes])
 
   const groups = useMemo<Group[]>(() => {
@@ -65,7 +75,11 @@ export function ProblemsTab() {
         label: "Best practices",
         icon: ShieldCheck,
         className: "text-sky-600 dark:text-sky-400",
-        hint: "Suggestions to make the Terraform production-ready. They never block a deploy.",
+        hint: docker
+          ? "Suggestions to make the images, compose services and their security production-ready. They never block a run."
+          : kubernetes
+            ? "Suggestions to make the workloads reliable, secure and reachable. They never block a run."
+            : "Suggestions to make the Terraform production-ready. They never block a deploy.",
         items: practices,
       },
       {
@@ -79,7 +93,7 @@ export function ProblemsTab() {
         items: network,
       },
     ]
-  }, [diagnostics, withNetwork])
+  }, [diagnostics, withNetwork, docker, kubernetes])
 
   if (groups.every((g) => g.items.length === 0 && !g.always)) {
     return (
@@ -118,8 +132,14 @@ export function ProblemsTab() {
                 </CollapsibleTrigger>
                 {g.help && <TermHint text={g.help} label={`About ${g.label.toLowerCase()} checks`} />}
                 {g.id === "practices" && (
-                  <Button size="xs" variant="ghost" className="text-muted-foreground" onClick={() => openSettings("practices")}>
-                    <Settings2 /> Configure
+                  <Button
+                    size="xs"
+                    variant="ghost"
+                    className="text-muted-foreground"
+                    data-testid="problems-configure-practices"
+                    onClick={() => openSettings("practices")}
+                  >
+                    <Settings2 /> {kubernetes ? "Configure Kubernetes checks" : "Configure"}
                   </Button>
                 )}
                 {g.id === "network" && (
@@ -133,7 +153,7 @@ export function ProblemsTab() {
                   <DiagnosticRow
                     key={`${d.code}-${d.nodeId ?? ""}-${d.attribute ?? ""}-${i}`}
                     diagnostic={d}
-                    nodeLabel={d.nodeId ? labels[d.nodeId] : undefined}
+                    nodeLabel={d.nodeId ? (labels[d.nodeId] ?? (docker ? d.nodeId.replace(/^service:/, "") : kubernetes ? d.nodeId : undefined)) : undefined}
                     onSelect={d.nodeId ? () => select(d.nodeId!) : undefined}
                   />
                 ))}

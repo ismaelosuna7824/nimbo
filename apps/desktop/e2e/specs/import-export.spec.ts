@@ -10,8 +10,8 @@ test("exports a workflow to a folder and imports it back", async ({ app, api, pa
   expect(await readdir(dir)).toContain("README.md")
 
   await app.gotoHome()
-  await page.getByRole("button", { name: "Import Terraform" }).click()
-  const dialog = page.getByRole("dialog", { name: "Import Terraform" })
+  await page.getByRole("button", { name: "Import project" }).click()
+  const dialog = page.getByRole("dialog", { name: "Import project" })
   const chooser = page.waitForEvent("filechooser")
   await dialog.getByRole("button", { name: "Choose folder…" }).click()
   await (await chooser).setFiles(dir)

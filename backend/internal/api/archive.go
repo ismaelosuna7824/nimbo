@@ -21,9 +21,19 @@ func (s *Server) archiveWorkflow(w http.ResponseWriter, r *http.Request) error {
 	}
 	// Stopping must not be torn down halfway when the client disconnects.
 	// An active run fails the archive (409) so nothing is cut mid-apply.
-	// Without Docker there is nothing running; archiving proceeds.
+	// Without Docker there is nothing running; archiving proceeds. A docker
+	// workflow's compose project goes down; its named volumes (data) stay
+	// for when it is restored. A Kubernetes workflow's cluster stops, with
+	// everything in it kept.
 	ctx := context.WithoutCancel(r.Context())
-	if err := s.cfg.Sandbox.Stop(ctx, id); err != nil {
+	stop := s.cfg.Sandbox.Stop
+	switch {
+	case wf.IsDocker():
+		stop = func(ctx context.Context, id string) error { return s.cfg.Sandbox.ComposeDown(ctx, id, false) }
+	case wf.IsKubernetes():
+		stop = s.cfg.Sandbox.KubeStop
+	}
+	if err := stop(ctx, id); err != nil {
 		if s.cfg.Sandbox.DockerAvailable(ctx) == nil {
 			return fmt.Errorf("stop sandbox: %w", err)
 		}

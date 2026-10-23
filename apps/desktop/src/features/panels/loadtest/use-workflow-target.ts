@@ -6,6 +6,8 @@ import { useWorkflowStore } from "@/state/workflow-store"
 import { describeExternal, type ExternalTarget } from "@/features/connections/safety"
 import { useConnections, useConnectionsStore } from "@/features/connections/store"
 import { resolveConnectionTarget } from "@/features/connections/target-draft"
+import { composeKey } from "@/features/docker/deploy/compose-model"
+import { kubeKey } from "@/features/kubernetes/deploy/kube-model"
 import type { SetDraft } from "./configure"
 import type { LoadDraft } from "./draft"
 import { parseHeaders, targetKey } from "./targets"
@@ -23,8 +25,12 @@ export interface WorkflowTarget {
 export function useWorkflowTarget(draft: LoadDraft, setDraft: SetDraft): WorkflowTarget {
   const workflowId = useWorkflowStore((s) => s.workflow?.id)
   const deployedAt = useWorkflowStore((s) => s.deployed?.updatedAt)
+  // Docker and Kubernetes workspaces have no deployed state: their targets follow the containers' state and published
+  // ports, or the cluster's port-forwards and ingress URLs.
+  const containersKey = useWorkflowStore((s) => composeKey(s.compose))
+  const clusterKey = useWorkflowStore((s) => kubeKey(s.kube))
   const targets = useQuery({
-    queryKey: ["load-targets", workflowId, deployedAt],
+    queryKey: ["load-targets", workflowId, deployedAt, containersKey, clusterKey],
     queryFn: () => api.loadTargets(workflowId!),
     enabled: !!workflowId,
   })

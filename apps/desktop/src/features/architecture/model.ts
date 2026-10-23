@@ -12,9 +12,20 @@ export type GroupKind =
   | "logical"
   | "external"
   | "other"
+  // Docker workspaces: the machine running the containers, the compose project, one network.
+  | "docker-host"
+  | "compose-project"
+  | "docker-network"
+  // Kubernetes workspaces: the local cluster, one namespace, a namespace's data tier.
+  | "k8s-cluster"
+  | "k8s-namespace"
+  | "k8s-data"
 
 /** Subnet tier, from routes to an internet/NAT gateway, public IPs or the subnet's name. */
 export type SubnetTier = "public" | "private" | "unknown"
+
+/** A Docker network the containers cannot leave (internal) or that the project uses but does not create (external). */
+export type NetworkScope = "internal" | "external"
 
 export interface ArchGroup {
   id: string
@@ -25,6 +36,8 @@ export interface ArchGroup {
   sublabel?: string[]
   provider?: ArchProvider
   tier?: SubnetTier
+  /** Docker networks only. */
+  scope?: NetworkScope
   /** Workflow node behind the group (VPC, subnet, resource group…); selecting the group opens it. */
   nodeId?: string
   /** Cards of one kind ("ECS services (6)"): laid out as a grid of at most three rows. */
@@ -52,7 +65,7 @@ export interface ArchCard {
   security?: string[]
   /** Drawn small on its parent group's top border (an internet gateway on its VPC), outside the automatic layout. */
   onBorder?: boolean
-  /** Data source: an existing resource the design only reads. */
+  /** Data source: an existing resource the design only reads (dashed). Docker: a service whose profiles are not active. */
   existing?: boolean
 }
 

@@ -69,6 +69,9 @@ func (c *client) do(ctx context.Context, method, path string, body, out any) err
 	if err != nil {
 		return err
 	}
+	// Lets the daemon tell the desktop app that an AI agent (not the user in
+	// the app) created a workflow, so the app can offer to open it.
+	req.Header.Set(model.ClientHeader, model.ClientMCP)
 	if body != nil {
 		req.Header.Set("Content-Type", "application/json")
 	}

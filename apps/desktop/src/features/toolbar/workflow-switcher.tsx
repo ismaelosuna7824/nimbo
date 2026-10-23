@@ -20,6 +20,8 @@ import { SidebarMenu, SidebarMenuButton, SidebarMenuItem } from "@/components/ui
 import { api } from "@/lib/api/client"
 import type { WorkflowSummary } from "@/lib/api/types"
 import { useWorkflowStore } from "@/state/workflow-store"
+import { contentCount, DockerBadge } from "../docker/badge"
+import { KubernetesBadge } from "../kubernetes/badge"
 import { MOD_KEY, openWorkflow } from "./actions"
 import { DeleteWorkflowDialog } from "./delete-workflow-dialog"
 import { archiveWorkflow, closeWorkflow, duplicateWorkflow } from "./workflow-actions"
@@ -28,7 +30,7 @@ const RECENT_LIMIT = 12
 
 export function WorkflowSwitcher() {
   const current = useWorkflowStore(
-    useShallow((s) => s.workflow && { id: s.workflow.id, name: s.workflow.name, icon: s.workflow.icon }),
+    useShallow((s) => s.workflow && { id: s.workflow.id, name: s.workflow.name, icon: s.workflow.icon, kind: s.workflow.kind }),
   )
   const openDialog = useWorkflowStore((s) => s.openDialog)
   const workflows = useQuery({ queryKey: ["workflows"], queryFn: api.listWorkflows })
@@ -45,7 +47,9 @@ export function WorkflowSwitcher() {
               <WorkflowIconTile icon={current?.icon} size={32} />
               <div className="grid flex-1 text-left leading-tight">
                 <span className="truncate text-sm font-medium">{current?.name ?? "Nimbo"}</span>
-                <span className="truncate text-xs text-muted-foreground">Nimbo workflow</span>
+                <span className="truncate text-xs text-muted-foreground">
+                  {current?.kind === "docker" ? "Docker workspace" : current?.kind === "kubernetes" ? "Kubernetes workspace" : "Nimbo workflow"}
+                </span>
               </div>
               <ChevronsUpDownIcon className="ml-auto" />
             </SidebarMenuButton>
@@ -74,7 +78,11 @@ export function WorkflowSwitcher() {
                 <DropdownMenuItem className="min-w-0 flex-1" onSelect={() => void openWorkflow(w.id)}>
                   <WorkflowIconTile icon={w.icon} size={20} />
                   <span className="truncate">{w.name}</span>
-                  <span className="ml-auto text-xs text-muted-foreground">{w.nodeCount}</span>
+                  {w.kind === "docker" && <DockerBadge compact />}
+                  {w.kind === "kubernetes" && <KubernetesBadge compact />}
+                  <span className="ml-auto text-xs text-muted-foreground" title={contentCount(w)}>
+                    {w.nodeCount}
+                  </span>
                   {w.id === current?.id && <CheckIcon />}
                 </DropdownMenuItem>
                 <DropdownMenuSub>

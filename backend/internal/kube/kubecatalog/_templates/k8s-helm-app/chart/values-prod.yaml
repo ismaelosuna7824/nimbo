@@ -1,0 +1,16 @@
+# Production: two replicas kept up by a PodDisruptionBudget and scaled by
+# an autoscaler, more memory, http://podinfo-prod.localhost
+replicaCount: 2
+message: Hello from Helm (prod)
+ingress:
+  host: podinfo-prod.localhost
+resources:
+  requests:
+    cpu: 50m
+    memory: 64Mi
+  limits:
+    memory: 128Mi
+autoscaling:
+  enabled: true
+podDisruptionBudget:
+  enabled: true

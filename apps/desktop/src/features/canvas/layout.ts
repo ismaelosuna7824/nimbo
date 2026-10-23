@@ -9,6 +9,15 @@ export const GROUP_HEADER = 44
 // elkjs is ~1.4 MB: loaded on the first layout instead of with the app.
 let elk: Promise<ELK> | undefined
 
+/** The shared ELK engine (loaded on first use; a failed chunk load is retried next time). */
+export function loadElk(): Promise<ELK> {
+  elk ??= import("elkjs/lib/elk.bundled.js").then(({ default: Elk }) => new Elk())
+  return elk.catch((err: unknown) => {
+    elk = undefined
+    throw err
+  })
+}
+
 const ROOT_OPTIONS = {
   "elk.algorithm": "layered",
   "elk.direction": "RIGHT",
@@ -98,12 +107,7 @@ export async function computeLayout(nodes: WorkflowNode[], edges: WorkflowEdge[]
     children: nodes.filter((n) => !parentOf.has(n.id)).map(build),
     edges: elkEdges,
   }
-  elk ??= import("elkjs/lib/elk.bundled.js").then(({ default: Elk }) => new Elk())
-  const engine = await elk.catch((err: unknown) => {
-    elk = undefined // the chunk failed to load: retry on the next layout
-    throw err
-  })
-  const result = await engine.layout(graph)
+  const result = await (await loadElk()).layout(graph)
 
   const positions = new Map<string, Position>()
   const walk = (node: ElkNode, ox: number, oy: number) => {

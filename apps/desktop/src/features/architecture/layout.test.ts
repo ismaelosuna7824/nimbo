@@ -37,4 +37,22 @@ describe("containerLinks", () => {
     // Edges between direct children stay as they are.
     expect(links("global").edges).toEqual([{ id: "e2", sources: ["dns"], targets: ["lb"] }])
   })
+
+  test("a child the Users reach that a sibling also feeds is not put first", () => {
+    // Compose: web and redis both publish ports, web calls redis (ELK rejects a FIRST node with an incoming edge).
+    const compose: ArchModel = {
+      groups: [{ id: "net", kind: "docker-network", label: "default" }],
+      cards: [card("web", "net"), card("redis", "net"), card("adminer", "net")],
+      actors: [{ id: "actor:users", kind: "users", label: "Users" }],
+      edges: [
+        { id: "u1", source: "actor:users", target: "web", kind: "data" },
+        { id: "u2", source: "actor:users", target: "redis", kind: "data" },
+        { id: "u3", source: "actor:users", target: "adminer", kind: "data" },
+        { id: "d1", source: "web", target: "redis", kind: "data" },
+      ],
+      providers: [],
+      regions: [],
+    }
+    expect([...containerLinks(compose)("net").first].sort()).toEqual(["adminer", "web"])
+  })
 })

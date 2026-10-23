@@ -89,11 +89,15 @@ export interface Decorations {
 
 /** Title block above the diagram (left) and legend below it (right). */
 export function decorations(model: ArchModel, diagram: Diagram, wf: Pick<Workflow, "name" | "activeEnvironment">): Decorations {
+  return frameDecorations(diagram, wf.name, defaultSubtitle(model, wf), legendEntries(model, diagram))
+}
+
+/** Places a title block and a legend around a laid-out diagram. */
+export function frameDecorations(diagram: Diagram, title: string, subtitle: string, legend: LegendEntry[]): Decorations {
   const b = diagram.bounds
-  const legend = legendEntries(model, diagram)
   return {
-    title: wf.name,
-    subtitle: defaultSubtitle(model, wf),
+    title,
+    subtitle,
     legend,
     header: { x: b.x, y: b.y - HEADER_H - HEADER_GAP, width: Math.max(b.width, 320), height: HEADER_H },
     legendRect: { x: b.x + Math.max(b.width, LEGEND_W) - LEGEND_W, y: b.y + b.height + LEGEND_GAP, width: LEGEND_W, height: legendHeight(legend) },

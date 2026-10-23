@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react"
-import { Cable, CircleAlert, Plug, RefreshCw, Rocket } from "lucide-react"
+import { Cable, CircleAlert, Play, Plug, RefreshCw, Rocket } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Empty, EmptyContent, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from "@/components/ui/empty"
 import { Spinner } from "@/components/ui/spinner"
@@ -8,8 +8,11 @@ import type { ResourceAccess } from "@/lib/api/types"
 import { cn } from "@/lib/utils"
 import { useWorkflowStore } from "@/state/workflow-store"
 import { runAction, useRunBusy } from "@/features/toolbar/actions"
-import { ConnectCard, PostmanCard } from "./connect-card"
-import { KIND_GROUPS, KIND_ICON } from "./model"
+import { runningServices } from "@/features/docker/deploy/compose-model"
+import { KubeAccessIcon } from "@/features/kubernetes/deploy/kube-access-icon"
+import { kubeChipSummary } from "@/features/kubernetes/deploy/kube-model"
+import { ConnectCard, ContainersCard, KubeClusterCard, PostmanCard } from "./connect-card"
+import { DOCKER_KIND_GROUPS, KIND_GROUPS, KIND_ICON, KUBE_KIND_GROUPS, type KindGroup } from "./model"
 import { ResourceCard } from "./resource-card"
 import { SUPPORTING_SECTION_ID, SupportingSection } from "./supporting-section"
 import { cardDomId, tryTarget, useEndpoints, useEndpointsFocus } from "./use-endpoints"
@@ -23,22 +26,30 @@ function scrollWithin(box: HTMLElement | null, domId: string) {
 }
 
 /**
- * How to use what is deployed: the sandbox connection details, then one card
- * per resource (addresses, snippets, "Try it"), grouped by kind.
+ * How to use what is deployed: the sandbox connection details (the containers
+ * in a Docker workspace), then one card per resource (addresses, snippets,
+ * "Try it"), grouped by kind.
  */
 export function EndpointsTab() {
   const workflowId = useWorkflowStore((s) => s.workflow!.id)
+  const kind = useWorkflowStore((s) => s.workflow!.kind)
+  const docker = kind === "docker"
+  const kube = kind === "kubernetes"
   const query = useEndpoints()
   const info = query.data
   const resources = useMemo(() => info?.resources ?? [], [info])
   const supporting = useMemo(() => resources.filter((r) => r.supporting), [resources])
   const groups = useMemo(
     () =>
-      KIND_GROUPS.map((g) => ({
-        ...g,
-        items: resources.filter((r) => !r.supporting && g.kinds.includes(r.kind)),
-      })).filter((g) => g.items.length > 0),
-    [resources],
+      ((kube ? KUBE_KIND_GROUPS : docker ? DOCKER_KIND_GROUPS : KIND_GROUPS) as (KindGroup & {
+        match?: (r: ResourceAccess) => boolean
+      })[])
+        .map((g) => ({
+          ...g,
+          items: resources.filter((r) => !r.supporting && (g.match ? g.match(r) : g.kinds.includes(r.kind))),
+        }))
+        .filter((g) => g.items.length > 0),
+    [resources, docker, kube],
   )
   const [tryOpen, setTryOpen] = useState<Record<string, boolean>>({})
   const [supportingOpen, setSupportingOpen] = useState(false)
@@ -94,7 +105,7 @@ export function EndpointsTab() {
   return (
     <div className="grid h-full min-h-0 grid-cols-[minmax(16rem,20rem)_minmax(0,1fr)]">
       <aside className="flex min-h-0 flex-col gap-2 overflow-auto border-r p-2">
-        <ConnectCard sandbox={info?.sandbox ?? []} />
+        {kube ? <KubeClusterCard /> : docker ? <ContainersCard /> : <ConnectCard sandbox={info?.sandbox ?? []} />}
         {resources.length > 0 && <PostmanCard />}
         {(groups.length > 0 || supporting.length > 0) && (
           <nav aria-label="Deployed resources" className="flex flex-col gap-2 rounded-lg border p-2.5">
@@ -103,7 +114,7 @@ export function EndpointsTab() {
               <div key={g.id} className="flex flex-col gap-0.5">
                 <span className="text-[10px] font-semibold tracking-wide text-muted-foreground uppercase">{g.title}</span>
                 {g.items.map((r) => (
-                  <IndexLink key={r.address} resource={r} />
+                  <IndexLink key={r.address} resource={r} kube={kube} />
                 ))}
               </div>
             ))}
@@ -128,7 +139,7 @@ export function EndpointsTab() {
 
       <div ref={scroller} className="min-h-0 overflow-auto p-3">
         {resources.length === 0 ? (
-          <NothingDeployed />
+          kube ? <NothingForwarded /> : docker ? <NothingPublished /> : <NothingDeployed />
         ) : (
           <div className="mx-auto flex max-w-5xl flex-col gap-5">
             {groups.map((g) => (
@@ -150,6 +161,7 @@ export function EndpointsTab() {
                     highlighted={highlight === r.address}
                     tryOpen={tryOpen[r.address] ?? false}
                     setTryOpen={(open) => setTryOpen((s) => ({ ...s, [r.address]: open }))}
+                    media={kube && r.nodeId ? <KubeAccessIcon nodeId={r.nodeId} /> : undefined}
                   />
                 ))}
               </section>
@@ -169,7 +181,7 @@ export function EndpointsTab() {
   )
 }
 
-function IndexLink({ resource: r }: { resource: ResourceAccess }) {
+function IndexLink({ resource: r, kube }: { resource: ResourceAccess; kube: boolean }) {
   const Icon = KIND_ICON[r.kind] ?? KIND_ICON.generic
   return (
     <button
@@ -180,7 +192,11 @@ function IndexLink({ resource: r }: { resource: ResourceAccess }) {
       )}
       onClick={() => useEndpointsFocus.getState().focus(r.address)}
     >
-      <Icon className="size-3 shrink-0 text-muted-foreground" />
+      {kube && r.nodeId ? (
+        <KubeAccessIcon nodeId={r.nodeId} size={12} />
+      ) : (
+        <Icon className="size-3 shrink-0 text-muted-foreground" />
+      )}
       <span className="truncate">{r.label}</span>
     </button>
   )
@@ -205,6 +221,91 @@ function NothingDeployed() {
       <EmptyContent className="flex-row justify-center">
         <Button size="sm" disabled={busy} onClick={() => void runAction("apply", { showLog: false })}>
           {busy ? <Spinner /> : <Rocket />} {failed ? "Retry deploy" : "Deploy"}
+        </Button>
+        {(busy || failed) && (
+          <Button size="sm" variant="outline" onClick={() => useWorkflowStore.getState().showBottom("deploy")}>
+            View logs
+          </Button>
+        )}
+      </EmptyContent>
+    </Empty>
+  )
+}
+
+/** Kubernetes workspace: no Service is forwarded yet (cluster down, nothing deployed, or no Service declares a port). */
+function NothingForwarded() {
+  const busy = useRunBusy()
+  const summary = kubeChipSummary(useWorkflowStore((s) => s.kube))
+  const lastUp = useWorkflowStore((s) => s.runs.find((r) => r.action === "up"))
+  const failed = !busy && lastUp?.status === "failed"
+  const running = summary.cluster === "running" && summary.running > 0
+  return (
+    <Empty className="h-full" data-testid="kube-endpoints-empty">
+      <EmptyHeader>
+        <EmptyMedia variant="icon">
+          <Plug />
+        </EmptyMedia>
+        <EmptyTitle>
+          {busy
+            ? "Deploying to your cluster…"
+            : failed
+              ? "The last Deploy failed"
+              : running
+                ? "No Service exposes a port"
+                : summary.cluster === "running"
+                  ? "Your workloads are not running"
+                  : "Your cluster is not running"}
+        </EmptyTitle>
+        <EmptyDescription>
+          {running && !busy
+            ? "Pods are reachable from this machine through Services (forwarded to 127.0.0.1) and Ingress rules. Add a Service for a workload on the canvas and Deploy again."
+            : "After Deploy, every Service port is forwarded to this machine and every Ingress rule gets a URL you can use from your browser, curl, Postman or a database client."}
+        </EmptyDescription>
+      </EmptyHeader>
+      <EmptyContent className="flex-row justify-center">
+        <Button size="sm" disabled={busy} onClick={() => void runAction("up", { showLog: false })}>
+          {busy ? <Spinner /> : <Rocket />} {failed ? "Retry Deploy" : running ? "Deploy again" : "Deploy"}
+        </Button>
+        {(busy || failed) && (
+          <Button size="sm" variant="outline" onClick={() => useWorkflowStore.getState().showBottom("deploy")}>
+            View logs
+          </Button>
+        )}
+      </EmptyContent>
+    </Empty>
+  )
+}
+
+/** Docker workspace: no service publishes a port yet (containers down, or none declares ports:). */
+function NothingPublished() {
+  const busy = useRunBusy()
+  const running = useWorkflowStore((s) => runningServices(s.compose))
+  const lastUp = useWorkflowStore((s) => s.runs.find((r) => r.action === "up"))
+  const failed = !busy && lastUp?.status === "failed"
+  return (
+    <Empty className="h-full">
+      <EmptyHeader>
+        <EmptyMedia variant="icon">
+          <Plug />
+        </EmptyMedia>
+        <EmptyTitle>
+          {busy
+            ? "Starting your containers…"
+            : failed
+              ? "The last Up failed"
+              : running > 0
+                ? "No service publishes a port"
+                : "Your containers are not running"}
+        </EmptyTitle>
+        <EmptyDescription>
+          {running > 0 && !busy
+            ? "Services are reachable from this machine only through published ports. Add one to a service (ports: \"8080:80\") on the canvas or in compose.yaml and press Up again."
+            : "After docker compose up, every service that publishes a port gets an address you can use from your browser, curl, Postman or a database client."}
+        </EmptyDescription>
+      </EmptyHeader>
+      <EmptyContent className="flex-row justify-center">
+        <Button size="sm" disabled={busy} onClick={() => void runAction("up", { showLog: false })}>
+          {busy ? <Spinner /> : <Play />} {failed ? "Retry Up" : running > 0 ? "Up again" : "Start containers"}
         </Button>
         {(busy || failed) && (
           <Button size="sm" variant="outline" onClick={() => useWorkflowStore.getState().showBottom("deploy")}>

@@ -1,6 +1,8 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
+import { ExternalLink } from "lucide-react"
 import { toast } from "sonner"
 import { errorMessage } from "@/components/errors"
+import { openExternal } from "@/components/open-external"
 import { Skeleton } from "@/components/ui/skeleton"
 import { Switch } from "@/components/ui/switch"
 import { api } from "@/lib/api/client"
@@ -8,6 +10,7 @@ import type { BestPracticeRule, Settings } from "@/lib/api/types"
 import { cn } from "@/lib/utils"
 import { useWorkflowStore } from "@/state/workflow-store"
 import { Row, Section } from "./common"
+import { ruleEnabled, toggleRuleSettings } from "./practices"
 import { SETTINGS_KEY, useSettings } from "./store"
 
 /** Display order and labels of the rule categories. */
@@ -19,6 +22,12 @@ const CATEGORIES: { id: BestPracticeRule["category"]; label: string }[] = [
   { id: "tagging", label: "Tags & labels" },
   { id: "naming", label: "Naming" },
   { id: "structure", label: "Structure" },
+  { id: "docker-build", label: "Docker images & builds" },
+  { id: "docker-compose", label: "Docker services" },
+  { id: "docker-security", label: "Docker security" },
+  { id: "kubernetes-reliability", label: "Kubernetes reliability" },
+  { id: "kubernetes-security", label: "Kubernetes security" },
+  { id: "kubernetes-networking", label: "Kubernetes networking" },
 ]
 
 /** Settings → Best-practice checks: the master switch and one switch per rule. */
@@ -46,15 +55,11 @@ export function PracticesSection() {
   const update = (next: Settings["bestPractices"]) => {
     if (current) save.mutate({ ...current, bestPractices: next })
   }
-  const toggleRule = (code: string, on: boolean) => {
-    const disabledRules = on ? bp.disabledRules.filter((c) => c !== code) : [...bp.disabledRules, code]
-    update({ ...bp, disabledRules })
-  }
 
   return (
     <Section
       title="Best-practice checks"
-      description="Nimbo reviews the Terraform on every edit and lists findings under Problems → Best practices, with why they matter and how to fix them. They are hints: they never block a deploy."
+      description="Nimbo reviews the Terraform, compose files, Dockerfiles and Kubernetes manifests on every edit and lists findings under Problems → Best practices, with why they matter, how to fix them and a link to the docs. They are hints: they never block a deploy."
     >
       <div>
         <Row label="Best-practice checks" htmlFor="bp-enabled" description="Turn every check off, or pick the ones you want below.">
@@ -79,17 +84,29 @@ export function PracticesSection() {
                         id={r.code}
                         className="mt-0.5"
                         aria-label={r.title}
-                        checked={!bp.disabledRules.includes(r.code)}
+                        checked={ruleEnabled(r, bp)}
                         disabled={!enabled || !current || save.isPending}
-                        onCheckedChange={(on) => toggleRule(r.code, on)}
+                        onCheckedChange={(on) => update(toggleRuleSettings(r, on, bp))}
                       />
-                      <label htmlFor={r.code} className="min-w-0 flex-1 text-sm">
-                        <span className="font-medium">{r.title}</span>
-                        {r.severity === "warning" && (
-                          <span className="ml-2 rounded bg-amber-500/12 px-1 text-[11px] text-amber-600 dark:text-amber-400">warning</span>
+                      <div className="min-w-0 flex-1 text-sm">
+                        <label htmlFor={r.code}>
+                          <span className="font-medium">{r.title}</span>
+                          {r.severity === "warning" && (
+                            <span className="ml-2 rounded bg-amber-500/12 px-1 text-[11px] text-amber-600 dark:text-amber-400">warning</span>
+                          )}
+                          {r.defaultOff && <span className="ml-2 rounded bg-muted px-1 text-[11px] text-muted-foreground">opt-in</span>}
+                          <span className="block text-xs text-muted-foreground">{r.description}</span>
+                        </label>
+                        {r.docs && (
+                          <button
+                            type="button"
+                            className="mt-0.5 inline-flex items-center gap-1 text-xs text-primary hover:underline"
+                            onClick={() => void openExternal(r.docs!)}
+                          >
+                            Docs <ExternalLink className="size-3" />
+                          </button>
                         )}
-                        <span className="block text-xs text-muted-foreground">{r.description}</span>
-                      </label>
+                      </div>
                     </li>
                   ))}
                 </ul>

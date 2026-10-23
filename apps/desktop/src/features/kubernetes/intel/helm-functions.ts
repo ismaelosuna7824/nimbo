@@ -1,0 +1,278 @@
+// The functions and built-in objects Helm templates can use: Go template
+// builtins, Helm's own (include, tpl, required, lookup, toYaml…) and the
+// Sprig library, with their signatures (pipeline argument last) and a short
+// description each.
+
+export interface TemplateFunction {
+  name: string
+  /** "default DEFAULT VALUE". */
+  signature: string
+  description: string
+  /** "helm" | "go" | "sprig": where it comes from. */
+  origin: "helm" | "go" | "sprig"
+}
+
+const fn = (origin: TemplateFunction["origin"]) => (name: string, args: string, description: string): TemplateFunction => ({
+  name,
+  signature: args ? `${name} ${args}` : name,
+  description,
+  origin,
+})
+const helm = fn("helm")
+const go = fn("go")
+const sprig = fn("sprig")
+
+export const TEMPLATE_FUNCTIONS: TemplateFunction[] = [
+  // Helm
+  helm("include", "NAME CONTEXT", "Renders the named template (define) with CONTEXT and returns it as a string, so it can be piped (| nindent 4)."),
+  helm("tpl", "TEMPLATE CONTEXT", "Renders a string as a template (values holding {{ }})."),
+  helm("required", "MESSAGE VALUE", "Fails the render with MESSAGE when VALUE is empty."),
+  helm("toYaml", "VALUE", "Serializes a value as YAML (pipe to nindent to place it)."),
+  helm("fromYaml", "STRING", "Parses YAML into a dict."),
+  helm("fromYamlArray", "STRING", "Parses a YAML list."),
+  helm("toJson", "VALUE", "Serializes a value as JSON."),
+  helm("fromJson", "STRING", "Parses JSON into a dict."),
+  helm("fromJsonArray", "STRING", "Parses a JSON list."),
+  helm("toToml", "VALUE", "Serializes a value as TOML."),
+  helm("fromToml", "STRING", "Parses TOML into a dict."),
+  helm("lookup", "APIVERSION KIND NAMESPACE NAME", "Reads an object from the cluster (empty dict on helm template / dry-run)."),
+  helm("mustToYaml", "VALUE", "toYaml that fails on error."),
+  helm("mustToJson", "VALUE", "toJson that fails on error."),
+  // Go text/template
+  go("and", "ARG...", "The first empty argument, or the last one: true when all are non-empty."),
+  go("or", "ARG...", "The first non-empty argument, or the last one."),
+  go("not", "VALUE", "Boolean negation of VALUE's truth."),
+  go("eq", "A B...", "A equals B (or any of the following arguments)."),
+  go("ne", "A B", "A is not equal to B."),
+  go("lt", "A B", "A < B."),
+  go("le", "A B", "A <= B."),
+  go("gt", "A B", "A > B."),
+  go("ge", "A B", "A >= B."),
+  go("len", "VALUE", "Length of a string, list or dict."),
+  go("index", "COLLECTION KEY...", "Element of a list or dict (keys with dashes: index .Values \"my-key\")."),
+  go("print", "ARG...", "Concatenates the arguments (spaces between non-strings)."),
+  go("printf", "FORMAT ARG...", "Formats like Go fmt.Sprintf (%s, %d, %v, %q)."),
+  go("println", "ARG...", "print with spaces and a newline."),
+  go("html", "STRING", "HTML-escapes."),
+  go("js", "STRING", "JavaScript-escapes."),
+  go("urlquery", "STRING", "URL query-escapes."),
+  go("slice", "COLLECTION START END", "A slice of a string or list."),
+  go("call", "FUNC ARG...", "Calls a function value."),
+  // Sprig: defaults and flow
+  sprig("default", "DEFAULT VALUE", "VALUE, or DEFAULT when VALUE is empty (0, \"\", false, nil, empty list/dict)."),
+  sprig("empty", "VALUE", "Whether VALUE is empty."),
+  sprig("coalesce", "VALUE...", "The first non-empty argument."),
+  sprig("ternary", "IF_TRUE IF_FALSE CONDITION", "IF_TRUE when CONDITION is true, else IF_FALSE."),
+  sprig("fail", "MESSAGE", "Fails the render with MESSAGE."),
+  sprig("all", "VALUE...", "Whether every argument is non-empty."),
+  sprig("any", "VALUE...", "Whether any argument is non-empty."),
+  sprig("compact", "LIST", "LIST without empty items."),
+  sprig("kindOf", "VALUE", "Go kind of a value (string, map, slice…)."),
+  sprig("kindIs", "KIND VALUE", "Whether VALUE is of KIND."),
+  sprig("typeOf", "VALUE", "Go type of a value."),
+  sprig("typeIs", "TYPE VALUE", "Whether VALUE is of TYPE."),
+  sprig("deepEqual", "A B", "Deep equality."),
+  // Strings
+  sprig("quote", "VALUE...", "Wraps each value in double quotes (use for strings that look like numbers or booleans)."),
+  sprig("squote", "VALUE...", "Wraps each value in single quotes."),
+  sprig("indent", "N STRING", "Indents every line by N spaces."),
+  sprig("nindent", "N STRING", "A newline, then STRING indented by N spaces (for blocks: {{- toYaml .x | nindent 4 }})."),
+  sprig("trim", "STRING", "Removes surrounding whitespace."),
+  sprig("trimAll", "CHARS STRING", "Removes CHARS from both ends."),
+  sprig("trimPrefix", "PREFIX STRING", "Removes a prefix."),
+  sprig("trimSuffix", "SUFFIX STRING", "Removes a suffix (trimSuffix \"-\" after trunc 63)."),
+  sprig("trunc", "N STRING", "Truncates to N characters (names: trunc 63)."),
+  sprig("lower", "STRING", "Lower case."),
+  sprig("upper", "STRING", "Upper case."),
+  sprig("title", "STRING", "Title Case."),
+  sprig("untitle", "STRING", "Removes title casing."),
+  sprig("replace", "OLD NEW STRING", "Replaces every OLD with NEW."),
+  sprig("repeat", "N STRING", "STRING repeated N times."),
+  sprig("substr", "START END STRING", "A substring."),
+  sprig("contains", "SUBSTRING STRING", "Whether STRING contains SUBSTRING."),
+  sprig("hasPrefix", "PREFIX STRING", "Whether STRING starts with PREFIX."),
+  sprig("hasSuffix", "SUFFIX STRING", "Whether STRING ends with SUFFIX."),
+  sprig("cat", "VALUE...", "Joins values with spaces."),
+  sprig("wrap", "WIDTH STRING", "Wraps text at WIDTH."),
+  sprig("abbrev", "WIDTH STRING", "Truncates with an ellipsis."),
+  sprig("nospace", "STRING", "Removes all whitespace."),
+  sprig("snakecase", "STRING", "snake_case."),
+  sprig("camelcase", "STRING", "CamelCase."),
+  sprig("kebabcase", "STRING", "kebab-case."),
+  sprig("plural", "ONE MANY COUNT", "ONE or MANY depending on COUNT."),
+  sprig("split", "SEP STRING", "Splits into a dict (_0, _1…)."),
+  sprig("splitList", "SEP STRING", "Splits into a list."),
+  sprig("join", "SEP LIST", "Joins a list with SEP."),
+  sprig("toString", "VALUE", "Converts to a string."),
+  sprig("toStrings", "LIST", "Converts every item to a string."),
+  sprig("atoi", "STRING", "String to integer."),
+  sprig("int", "VALUE", "Converts to int."),
+  sprig("int64", "VALUE", "Converts to int64."),
+  sprig("float64", "VALUE", "Converts to float64."),
+  sprig("toDecimal", "STRING", "Octal string to integer."),
+  sprig("regexMatch", "REGEX STRING", "Whether STRING matches REGEX."),
+  sprig("regexFind", "REGEX STRING", "First match of REGEX."),
+  sprig("regexFindAll", "REGEX STRING N", "Matches of REGEX (N: max, -1 all)."),
+  sprig("regexReplaceAll", "REGEX STRING REPLACEMENT", "Replaces matches ($1 expands groups)."),
+  sprig("regexSplit", "REGEX STRING N", "Splits on REGEX."),
+  // Encoding, crypto
+  sprig("b64enc", "STRING", "Base64-encodes (Secret data:)."),
+  sprig("b64dec", "STRING", "Base64-decodes."),
+  sprig("b32enc", "STRING", "Base32-encodes."),
+  sprig("b32dec", "STRING", "Base32-decodes."),
+  sprig("sha1sum", "STRING", "SHA-1 hex digest."),
+  sprig("sha256sum", "STRING", "SHA-256 hex digest (checksum/config annotations roll pods on change)."),
+  sprig("adler32sum", "STRING", "Adler-32 checksum."),
+  sprig("htpasswd", "USER PASSWORD", "An htpasswd line (bcrypt)."),
+  sprig("randAlphaNum", "N", "Random alphanumeric string (new on every upgrade unless kept with lookup)."),
+  sprig("randAlpha", "N", "Random letters."),
+  sprig("randNumeric", "N", "Random digits."),
+  sprig("randAscii", "N", "Random ASCII."),
+  sprig("uuidv4", "", "A random UUID."),
+  sprig("genPrivateKey", "TYPE", "A PEM private key (rsa, dsa, ecdsa, ed25519)."),
+  sprig("genCA", "CN DAYS", "A self-signed CA (.Cert, .Key)."),
+  sprig("genSelfSignedCert", "CN IPS DNS DAYS", "A self-signed certificate (.Cert, .Key)."),
+  sprig("genSignedCert", "CN IPS DNS DAYS CA", "A certificate signed by CA."),
+  sprig("encryptAES", "KEY STRING", "AES-encrypts, base64."),
+  sprig("decryptAES", "KEY STRING", "Decrypts encryptAES output."),
+  // Lists
+  sprig("list", "ITEM...", "A list of the arguments."),
+  sprig("first", "LIST", "The first item."),
+  sprig("last", "LIST", "The last item."),
+  sprig("rest", "LIST", "Every item but the first."),
+  sprig("initial", "LIST", "Every item but the last."),
+  sprig("append", "LIST ITEM", "LIST with ITEM appended (alias push)."),
+  sprig("prepend", "LIST ITEM", "LIST with ITEM first."),
+  sprig("concat", "LIST...", "Concatenates lists."),
+  sprig("reverse", "LIST", "Reversed list."),
+  sprig("uniq", "LIST", "Without duplicates."),
+  sprig("without", "LIST ITEM...", "LIST without the items."),
+  sprig("has", "ITEM LIST", "Whether LIST contains ITEM."),
+  sprig("sortAlpha", "LIST", "Sorted strings."),
+  sprig("until", "N", "The list 0..N-1."),
+  sprig("untilStep", "START STOP STEP", "A list of integers."),
+  sprig("seq", "START [STEP] END", "Like the seq command."),
+  sprig("chunk", "SIZE LIST", "Splits a list into chunks."),
+  // Dicts
+  sprig("dict", "KEY VALUE...", "A dict of key/value pairs (context for include: dict \"root\" $ \"x\" .x)."),
+  sprig("get", "DICT KEY", "The value of KEY (\"\" when missing)."),
+  sprig("set", "DICT KEY VALUE", "Sets KEY (returns the dict)."),
+  sprig("unset", "DICT KEY", "Removes KEY."),
+  sprig("hasKey", "DICT KEY", "Whether DICT has KEY."),
+  sprig("pluck", "KEY DICT...", "The values of KEY in each dict."),
+  sprig("dig", "KEY... DEFAULT DICT", "A nested value, or DEFAULT."),
+  sprig("keys", "DICT...", "The keys (unordered: sortAlpha them)."),
+  sprig("values", "DICT", "The values."),
+  sprig("pick", "DICT KEY...", "A dict with only KEYs."),
+  sprig("omit", "DICT KEY...", "A dict without KEYs."),
+  sprig("merge", "DEST SRC...", "Merges dicts; DEST's values win."),
+  sprig("mergeOverwrite", "DEST SRC...", "Merges dicts; later values win."),
+  sprig("deepCopy", "VALUE", "A deep copy."),
+  // Math
+  sprig("add", "A B...", "Sum."),
+  sprig("add1", "N", "N + 1."),
+  sprig("sub", "A B", "A - B."),
+  sprig("mul", "A B...", "Product."),
+  sprig("div", "A B", "Integer division."),
+  sprig("mod", "A B", "Remainder."),
+  sprig("max", "A B...", "Largest."),
+  sprig("min", "A B...", "Smallest."),
+  sprig("floor", "N", "Rounds down."),
+  sprig("ceil", "N", "Rounds up."),
+  sprig("round", "N PRECISION", "Rounds."),
+  // Versions, dates, misc
+  sprig("semverCompare", "CONSTRAINT VERSION", "Whether VERSION satisfies CONSTRAINT (semverCompare \">=1.25-0\" .Capabilities.KubeVersion.Version)."),
+  sprig("semver", "VERSION", "Parses a version (.Major, .Minor, .Patch)."),
+  sprig("now", "", "The current time."),
+  sprig("date", "FORMAT TIME", "Formats a time (Go layout 2006-01-02)."),
+  sprig("ago", "TIME", "Duration since TIME."),
+  sprig("toDate", "FORMAT STRING", "Parses a date."),
+  sprig("unixEpoch", "TIME", "Seconds since the epoch."),
+  sprig("env", "NAME", "Environment variable (disabled in Helm)."),
+  sprig("expandenv", "STRING", "Expands $VARS (disabled in Helm)."),
+  sprig("base", "PATH", "Last element of a path."),
+  sprig("dir", "PATH", "Directory of a path."),
+  sprig("ext", "PATH", "Extension of a path."),
+  sprig("clean", "PATH", "Cleans a path."),
+  sprig("isAbs", "PATH", "Whether a path is absolute."),
+  sprig("urlParse", "URL", "Parses a URL into a dict."),
+  sprig("urlJoin", "DICT", "Builds a URL from a dict."),
+  sprig("getHostByName", "NAME", "Resolves a host name."),
+]
+
+export const TEMPLATE_FUNCTION_BY_NAME: Record<string, TemplateFunction> = Object.fromEntries(TEMPLATE_FUNCTIONS.map((f) => [f.name, f]))
+
+/** Template actions (keywords). */
+export const TEMPLATE_KEYWORDS: { name: string; description: string; snippet?: string }[] = [
+  { name: "if", description: "Renders the block when the pipeline is non-empty: {{ if .Values.x }} … {{ end }}." },
+  { name: "else", description: "The alternative of if/with/range (else if …)." },
+  { name: "end", description: "Closes if, with, range, define and block." },
+  { name: "range", description: "Iterates a list or dict: {{ range $k, $v := .Values.x }} … {{ end }} (. is each item)." },
+  { name: "with", description: "Sets . to the pipeline's value when it is non-empty: {{ with .Values.x }} … {{ end }}." },
+  { name: "define", description: "Declares a named template: {{ define \"chart.name\" }} … {{ end }} (usually in _helpers.tpl)." },
+  { name: "template", description: "Renders a named template in place (can't be piped: prefer include)." },
+  { name: "block", description: "define + template: a named template with a default body." },
+  { name: "break", description: "Leaves the enclosing range." },
+  { name: "continue", description: "Skips to the next range item." },
+  { name: "nil", description: "The untyped nil value." },
+  { name: "true", description: "Boolean true." },
+  { name: "false", description: "Boolean false." },
+]
+
+export interface BuiltinMember {
+  name: string
+  description: string
+  members?: BuiltinMember[]
+}
+
+const m = (name: string, description: string, members?: BuiltinMember[]): BuiltinMember => ({ name, description, members })
+
+/** The objects of a template's root context (.Values comes from the values files). */
+export const BUILTIN_OBJECTS: BuiltinMember[] = [
+  m("Values", "The merged values: the chart's values.yaml, then the values files and --set of the release."),
+  m("Release", "The release being installed or upgraded.", [
+    m("Name", "Release name."),
+    m("Namespace", "Namespace the release goes to."),
+    m("Service", "Always \"Helm\"."),
+    m("IsUpgrade", "true during an upgrade or rollback."),
+    m("IsInstall", "true during an install."),
+    m("Revision", "Release revision number (1 on install)."),
+  ]),
+  m("Chart", "The contents of Chart.yaml (fields capitalized).", [
+    m("Name", "Chart name."),
+    m("Version", "Chart version."),
+    m("AppVersion", "Version of the app."),
+    m("Description", "Chart description."),
+    m("Type", "application or library."),
+    m("KubeVersion", "Supported Kubernetes versions."),
+    m("APIVersion", "Chart API version (v2)."),
+    m("Home", "Home page."),
+    m("Icon", "Icon URL."),
+    m("Keywords", "Keywords."),
+    m("Sources", "Source URLs."),
+    m("Maintainers", "Maintainers."),
+    m("Dependencies", "Dependencies."),
+    m("Annotations", "Annotations."),
+    m("Deprecated", "Whether deprecated."),
+  ]),
+  m("Capabilities", "What the cluster supports.", [
+    m("KubeVersion", "Kubernetes version.", [
+      m("Version", "Full version (v1.36.5)."),
+      m("Major", "Major version."),
+      m("Minor", "Minor version."),
+      m("GitVersion", "Git version string."),
+    ]),
+    m("APIVersions", "API versions the cluster serves (.Capabilities.APIVersions.Has \"apps/v1/Deployment\").", [m("Has", "Whether an apiVersion (or apiVersion/Kind) is served.")]),
+    m("HelmVersion", "Helm's version.", [m("Version", "Helm version."), m("GitCommit", "Git commit."), m("GoVersion", "Go version.")]),
+  ]),
+  m("Files", "Non-template files of the chart.", [
+    m("Get", "Contents of a file as a string: .Files.Get \"config/app.conf\"."),
+    m("GetBytes", "Contents of a file as bytes."),
+    m("Glob", "Files matching a pattern (.Files.Glob \"config/*\")."),
+    m("Lines", "A file's lines."),
+    m("AsConfig", "Files as ConfigMap data (on a Glob)."),
+    m("AsSecrets", "Files as base64 Secret data (on a Glob)."),
+  ]),
+  m("Template", "The current template.", [m("Name", "Path of the template (mychart/templates/x.yaml)."), m("BasePath", "Templates directory of the chart.")]),
+  m("Subcharts", "Scopes of the subcharts (.Subcharts.postgresql.Values…)."),
+]

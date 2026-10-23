@@ -1,6 +1,7 @@
 import { lazy, Suspense, useEffect, useState } from "react"
 import { EditorShell } from "@/components/editor-shell"
 import { Spinner } from "@/components/ui/spinner"
+import { AgentWorkflowNotifier } from "@/features/agents/agent-workflow-notifier"
 import { CommandPalette } from "@/features/command/command-palette"
 import { useConnectionsStore } from "@/features/connections/store"
 import { Home } from "@/features/home/home"
@@ -77,6 +78,7 @@ export default function App() {
       <DestroyDialog />
       <OnboardingHost />
       <UpdateNotifier />
+      <AgentWorkflowNotifier />
     </>
   )
 }

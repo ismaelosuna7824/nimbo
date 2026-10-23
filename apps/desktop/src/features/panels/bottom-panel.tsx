@@ -19,6 +19,12 @@ import { VariablesTab } from "./variables/variables-tab"
 // Heavier tabs (code highlighting, charts) load in their own chunks after the first paint.
 const EndpointsTab = lazy(() => import("./endpoints/endpoints-tab").then((m) => ({ default: m.EndpointsTab })))
 const LoadTestTab = lazy(() => import("./loadtest/loadtest-tab").then((m) => ({ default: m.LoadTestTab })))
+const ComposeDeployTab = lazy(() =>
+  import("@/features/docker/deploy/compose-deploy-tab").then((m) => ({ default: m.ComposeDeployTab })),
+)
+const KubeDeployTab = lazy(() =>
+  import("@/features/kubernetes/deploy/kube-deploy-tab").then((m) => ({ default: m.KubeDeployTab })),
+)
 const TAB_FALLBACK = (
   <div className="flex h-full items-center justify-center">
     <Spinner />
@@ -35,12 +41,20 @@ const TABS: { id: BottomTab; label: string; icon: typeof Code2; pixel: PixelIcon
 ]
 
 /**
+ * Docker and Kubernetes workspaces have no Terraform variables or environments (compose reads .env, edited in Code;
+ * Kubernetes environments are overlays / values files, switched on the canvas and in Deploy).
+ */
+const CONTAINER_HIDDEN: Partial<Record<BottomTab, true>> = { variables: true }
+
+/**
  * Bottom dock with the code (file viewer), variables, deploy, endpoints, load test and
  * problems tabs. The tab strip is always rendered; the content only while open.
  * Ctrl/Cmd+J toggles it.
  */
 export function BottomPanel() {
   const workflowId = useWorkflowStore((s) => s.workflow?.id)
+  const kind = useWorkflowStore((s) => s.workflow?.kind)
+  const containers = kind === "docker" || kind === "kubernetes"
   const problems = useWorkflowStore((s) => s.workflow?.diagnostics) ?? []
   const tab = useWorkflowStore((s) => s.bottomTab)
   const open = useWorkflowStore((s) => s.bottomOpen)
@@ -49,6 +63,8 @@ export function BottomPanel() {
   const errorCount = problems.filter((d) => d.severity === "error").length
   // Info (mostly best-practice suggestions) is listed in the tab but not counted, like the node badges.
   const alertCount = problems.filter((d) => d.severity !== "info").length
+
+  const tabs = containers ? TABS.filter((t) => !CONTAINER_HIDDEN[t.id]) : TABS
 
   useDeployToast()
   useEffect(() => {
@@ -63,6 +79,11 @@ export function BottomPanel() {
     return () => window.removeEventListener("keydown", onKey)
   }, [])
 
+  // A Docker or Kubernetes workspace opened while a Terraform-only tab was active: show its code instead.
+  useEffect(() => {
+    if (containers && CONTAINER_HIDDEN[tab]) useWorkflowStore.setState({ bottomTab: "terraform" })
+  }, [containers, tab])
+
   if (!workflowId) return null
 
   return (
@@ -73,7 +94,7 @@ export function BottomPanel() {
     >
       <div className="flex h-9 shrink-0 items-center gap-2 border-b px-2">
         <TabsList variant="line" className="h-full gap-0">
-          {TABS.map(({ id, label, icon, pixel }) => (
+          {tabs.map(({ id, label, icon, pixel }) => (
             <TabsTrigger
               key={id}
               value={id}
@@ -113,7 +134,7 @@ export function BottomPanel() {
           </Tooltip>
         </div>
       </div>
-      {TABS.map(({ id }) => (
+      {tabs.map(({ id }) => (
         <TabsContent
           key={id}
           value={id}
@@ -121,7 +142,7 @@ export function BottomPanel() {
           className={cn("min-h-0 flex-1 overflow-hidden data-[state=inactive]:hidden", !open && "hidden")}
         >
           {/* Keyed by workflow so edit buffers and wizard state never leak into another workflow. */}
-          <TabBody key={workflowId} tab={id} />
+          <TabBody key={workflowId} tab={id} kind={kind ?? ""} />
         </TabsContent>
       ))}
     </Tabs>
@@ -129,14 +150,24 @@ export function BottomPanel() {
 }
 
 /** Memoized so switching tabs or collapsing the panel doesn't re-render every (always mounted) tab. */
-const TabBody = memo(function TabBody({ tab }: { tab: BottomTab }) {
+const TabBody = memo(function TabBody({ tab, kind }: { tab: BottomTab; kind: string }) {
   switch (tab) {
     case "terraform":
       return <FilesTab />
     case "variables":
       return <VariablesTab />
     case "deploy":
-      return <DeployTab />
+      return kind === "docker" ? (
+        <Suspense fallback={TAB_FALLBACK}>
+          <ComposeDeployTab />
+        </Suspense>
+      ) : kind === "kubernetes" ? (
+        <Suspense fallback={TAB_FALLBACK}>
+          <KubeDeployTab />
+        </Suspense>
+      ) : (
+        <DeployTab />
+      )
     case "endpoints":
       return (
         <Suspense fallback={TAB_FALLBACK}>

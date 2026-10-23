@@ -1,0 +1,30 @@
+# A static website served by NGINX.
+# Edit site/ (Code tab) and run "up" again; the files are mounted read-only.
+
+# Settings every service shares: restart after crashes, rotated logs.
+x-defaults: &defaults
+  restart: unless-stopped
+  logging:
+    driver: json-file
+    options:
+      max-size: "10m"
+      max-file: "3"
+
+services:
+  web:
+    <<: *defaults
+    image: nginx:1.27-alpine
+    ports:
+      - "8180:80"
+    volumes:
+      - ./site:/usr/share/nginx/html:ro
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1/ >/dev/null || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+    deploy:
+      resources:
+        limits:
+          cpus: "0.5"
+          memory: 64M

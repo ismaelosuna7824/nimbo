@@ -48,7 +48,7 @@ export function buildSceneSvg({
           const src = scene.groupIcons.get(it.id)
           return (
             <g key={it.id} transform={`translate(${it.ax} ${it.ay})`}>
-              <GroupShape width={it.width} height={it.height} kind={g.kind} tier={g.tier} label={g.label} sublabel={g.sublabel} icon={src && icon(src)} iconWidth={groupIconWidth(g)} />
+              <GroupShape width={it.width} height={it.height} kind={g.kind} tier={g.tier} scope={g.scope} label={g.label} sublabel={g.sublabel} icon={src && icon(src)} iconWidth={groupIconWidth(g)} />
             </g>
           )
         })}

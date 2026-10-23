@@ -29,6 +29,7 @@ flowchart LR
 | `backend/internal/sandbox` | sandbox | Per-workflow Docker sandbox, Terraform runs in containers, deployed state |
 | `backend/internal/loadtest` | loadtest | Load engine, presets, target suggestions, results persistence |
 | `backend/internal/endpoints` | endpoints | "How to use what you deployed": per-resource summaries, host URLs/identifiers, runnable snippets, "Try it" executor, Postman export |
+| `backend/internal/compose` | compose | Docker workflows: compose/Dockerfile parsing (compose-go for the effective model, yaml node trees for locations), graph derivation, `dk_*` checks, comment-preserving write-back, image palette, docker templates |
 | `backend/internal/store` | store | Workflow persistence on disk |
 | `backend/internal/events` | events | SSE hub implementing `model.Publisher` |
 | `backend/internal/api` | api | HTTP handlers, orchestration |
@@ -770,6 +771,80 @@ Sandbox behavior notes:
   (`azurerm_storage_container` by account name, blobs, queues) are not
   supported in the sandbox.
 
+#### Docker workflows (compose runtime: `compose.go`, `compose_ports.go`, `compose_logs.go`)
+
+```go
+type ComposeRunRequest struct {
+    Workflow *model.Workflow
+    Action model.RunAction   // up | down | build | pull | restart
+    SourceDir string         // the workflow's files (store.AssetsDir), copied into the work dir
+    Files, Profiles []string // Workflow.Compose.Files (-f order; empty = compose's default names) and active profiles
+    Service string           // up/build/pull/restart: only this service
+    RemoveVolumes bool       // down: also the named volumes
+    RemapPorts bool          // up: move busy fixed host ports to free ones
+    Timeout time.Duration    // up --wait-timeout (0 = 5 min)
+}
+func (m *Manager) ComposeRun(ctx context.Context, req ComposeRunRequest) (*model.Run, error) // async, same Run model/history/Cancel as Terraform runs; *PortConflictError | *InvalidComposeError | ErrComposeMissing | ErrRunActive before any run exists
+func (m *Manager) ComposePorts(ctx context.Context, wfID, sourceDir string, files, profiles []string) (model.ComposePorts, error) // up's port pre-check on the files as they are
+func (m *Manager) ComposeInspect(ctx context.Context, wfID string, services []ComposeService) (ComposeRuntime, error) // {Status model.ComposeStatus; Env: service -> container env in clear (snippets only)}; no Docker → absent + message
+func (m *Manager) ComposeStatus(ctx context.Context, wfID string, services []ComposeService) (model.ComposeStatus, error)
+func (m *Manager) ComposeLogs(ctx context.Context, wfID, service string, tail int, follow bool, emit func(model.ComposeLogLine)) error // docker logs per container (stdout/stderr split, docker timestamps); tail ≤ 5000
+func (m *Manager) ComposeDown(ctx context.Context, wfID string, volumes bool) error // outside a run (archive); ErrRunActive during one
+func (m *Manager) ComposeRemove(ctx context.Context, wfID string) error             // delete: cancels a run, down -v, built images, work dir
+func ComposeHTTPPort(p model.ComposePort) bool // published TCP port on the loopback that is not a well-known non-HTTP port (5432, 3306, 6379, 5672, …)
+const ComposeLabel = "com.nimbo.workflow"
+```
+
+- Every command is `docker compose --ansi never --progress plain -p
+  nimbo-dk-<wf> --project-directory <home>/workflows/<wf>/compose/<folder of
+  the first file> -f <files…> -f .nimbo/compose.override.yaml [--profile …]`
+  (the project directory is docker compose's default: relative paths and
+  `.env` resolve against the first compose file's folder), with `COMPOSE_*`
+  variables removed from the environment (they would add files, profiles or
+  a project name). The compose v2 plugin is checked once per docker binary
+  (`docker compose version`). Actions: `up --detach --build --wait
+  --wait-timeout N --remove-orphans [svc]`, `down --remove-orphans
+  [--volumes]`, `build [svc]`, `pull --ignore-buildable [svc]`, `restart
+  [svc]`; stdout/stderr stream into the run log (`run.log`); cancel sends
+  SIGINT (compose stops what it started), then kills after 15 s.
+- Work dir: the workflow's files are synced into `<home>/workflows/<wf>/compose`
+  like Terraform's work dir (manifest of written files; files containers
+  create in bind-mounted folders stay), so bind mounts never write into the
+  workflow's sources. `docker compose config --format json` (without the
+  override) gives the effective model (`.env` interpolated, ports in long
+  syntax); invalid files fail before any run with compose's message.
+- Isolation: the generated override adds `labels: {com.nimbo.workflow: <wf>}`
+  to every service, every `build:` (so built images carry it) and every
+  non-external network and volume. Nimbo only lists containers matching both
+  `com.docker.compose.project=nimbo-dk-<wf>` and that label; `down` goes by
+  project name (compose finds the project's objects by its labels, so it works
+  even when the files are gone) and removal deletes images by the label only.
+- Ports: before `up`, every fixed published port is probed on the host (bind
+  on its host IP, plus a connect to 127.0.0.1: BSD lets a wildcard bind
+  succeed next to a loopback-only dev server). Ports the project's own
+  containers hold are fine. Busy ports become `PortConflict`s with the holder
+  from `lsof` (Docker engines' forwarders read as "a Docker container
+  (OrbStack)") and a free suggested port; without `RemapPorts` the up fails
+  with `*PortConflictError` and no run. With it, the override replaces that
+  service's `ports` with `!override` (same entries, remapped `published`),
+  the user's files untouched, and the remaps are saved in
+  `compose/.nimbo/ports.json`: later ups reuse a remap while its original port
+  stays busy and drop it once the original is free.
+- Status: one `docker ps -aq` (both labels) + `docker inspect`: per service
+  (every active service of the graph, absent ones too; containers of removed
+  services listed as well) its containers with state, health, exit code,
+  restart count, image and image ID, start time and published ports (IPv4/
+  IPv6 bindings merged, `url` for TCP ports reachable on 127.0.0.1, ephemeral
+  ones resolved). Container → state: running (health starting → starting,
+  unhealthy → error), created → starting, restarting → starting (error from 3
+  restarts), exited 0 → stopped, exited ≠ 0 / dead → error; services and the
+  project take the worst (error > starting > running > stopped > absent).
+- Live state: `compose.status` is published when the status changes. A
+  `docker events` watcher per workflow (filtered by both labels, debounced
+  300 ms) runs from an up/restart until the project has no containers; a
+  status read restarts it when containers exist (e.g. after a daemon restart:
+  the project keeps running when the app exits, like Floci sandboxes).
+
 ### loadtest
 
 ```go
@@ -785,6 +860,7 @@ type Resolver interface {
 type ConnectionResolver interface { Connection(id string) (model.Connection, bool) }
 func Presets() []model.LoadProfile
 func Suggest(wf *model.Workflow, st *model.DeployedState, r Resolver, instances map[string]sandbox.InstanceAccess) []model.LoadTarget // instances: sandbox.Manager.Instances (nil: none); EC2 instances get "GET / · <name>:<port>" on each published HTTP port (sandbox.HTTPAppPorts, InstanceAccess.URL — the Endpoints card's Host URL)
+func SuggestCompose(st model.ComposeStatus) []model.LoadTarget // docker workflows: "GET / · <service>:<port>" (replicas: "<service>-N") per sandbox.ComposeHTTPPort of running containers, URL http://127.0.0.1:<host>/ (loopback: preflight warmup applies)
 func (e *Engine) Start(ctx context.Context, wfID string, spec model.LoadTestSpec) (*model.LoadTestRun, error) // async; ErrTooManyRuns when 3 are running
 func (e *Engine) StartConnection(ctx context.Context, connID string, spec model.LoadTestSpec) (*model.LoadTestRun, error) // run owned by the connection
 func (e *Engine) Stop(id string) error // ErrNotFound for unknown ids; no-op for finished runs
@@ -831,6 +907,24 @@ under `<home>/workflows/<wf>/loadtests/`, connection runs under
 check details have connection secrets redacted. Suggestions that write
 data end their label with ` (writes data)` (Lambda: ` (invokes function)`).
 
+**Docker workspaces in the Deploy, Endpoints and Load test tabs.** For
+`kind: "docker"` the bottom panel hides *Variables & Environments* (falling
+back to Code) and the Deploy tab is `ComposeDeployTab`
+(`apps/desktop/src/features/docker/deploy/`): Up/Build/Pull/Restart/Down runs
+(Down asks whether to delete volumes), one row per `ComposeServiceStatus`
+(tech icon from the service's graph facts, state, health, replicas, published
+ports opening their URL, restarts, per-service Up/Restart), port remaps,
+the run history with its log, and *Container logs* streaming
+`GET /workflows/{id}/compose/logs?follow=true` over SSE only while visible
+(closed on `end`/error so EventSource never replays the tail; reconnected
+when the compose status changes). The toolbar chip becomes the compose chip
+(Containers off / Starting… / Running n/m / Stopped / Error, with Up/Down).
+Docker workflows have no `DeployedState`: Endpoints and load targets are
+refetched on `composeKey(status)` (project and service states plus published
+ports), "deployed" means a service with a running container, the last
+`up` run replaces the last `apply` in empty states, and the Endpoints aside
+shows the containers instead of the sandbox connection card.
+
 ### endpoints
 
 ```go
@@ -844,7 +938,28 @@ type Sandbox struct {
 func Build(wf *model.Workflow, st *model.DeployedState, sb Sandbox) model.EndpointsInfo
 func Try(ctx context.Context, wf *model.Workflow, st *model.DeployedState, sb Sandbox, req model.TryRequest) (model.TryResult, error) // ErrNotFound | *RequestError
 func Postman(wf *model.Workflow, st *model.DeployedState, sb Sandbox) PostmanCollection
+func BuildCompose(wf *model.Workflow, rt sandbox.ComposeRuntime) model.EndpointsInfo                      // docker workflows
+func TryCompose(ctx context.Context, rt sandbox.ComposeRuntime, req model.TryRequest) (model.TryResult, error) // ErrNotFound | *RequestError
+func PostmanCompose(wf *model.Workflow, rt sandbox.ComposeRuntime) PostmanCollection
 ```
+
+Docker workflows (`compose.go`): one `ResourceAccess` per service whose
+containers publish ports (`nodeId` = `address` = `service:<name>`, `type` =
+the image, `sandbox` empty). Databases and caches are recognized by the
+compose image (postgres/postgis/timescale, mysql/mariadb/percona, mongo,
+mssql/sqlserver, redis/valkey/keydb, memcached; built images only by their
+container port, since they are named after the project): `database`/`cache`
+cards with host, port, user, password and connection URL (secret) from the
+container's environment as the official images read it (`POSTGRES_*`,
+`MYSQL_*`/`MARIADB_*` or root, `MONGO_INITDB_ROOT_*`, `MSSQL_SA_PASSWORD`,
+`REDIS_PASSWORD`), and `psql`/`mysql`/`mongosh`/`sqlcmd`/`redis-cli`
+snippets on the host plus one inside the container. Other services with
+HTTP-ish ports (`sandbox.ComposeHTTPPort`) are `web-service` cards: a GET
+endpoint per host URL, the `request` Try action, curl/fetch/urllib, shell and
+logs snippets; the rest are `generic` with `host:port` fields. Services not
+running carry a warning. Try only calls loopback URLs on one of the project's
+published HTTP ports (relative paths resolve against the service's first
+URL). Postman: a folder per HTTP service with a GET per host URL.
 
 Every managed resource of the state becomes one `ResourceAccess` (data
 sources and non-cloud providers such as `random`/`archive` are skipped).
@@ -1077,6 +1192,566 @@ func (c *Connections) Draft(in model.Connection) (model.Connection, error) // un
 func Mask(c model.Connection) model.Connection
 ```
 
+## Docker workflows (`internal/compose`)
+
+`Workflow.Kind` is `""` (Terraform) or `"docker"`. A docker workflow is a
+docker-compose project stored as the workflow's files; its project directory
+is the folder of the first compose file (`compose.ProjectDir`: `.` for
+`compose.yaml`, `docker` for `docker/compose.yaml`), where `.env` is read and
+relative paths resolve, as docker compose does. `Workflow.Compose` holds `files` (the `-f` list),
+`profiles`, `project` (`nimbo-dk-<id>`) and the derived `graph`
+(`ComposeNode`/`ComposeEdge`, see `model/docker.go`). `wf.Nodes`/`Edges` stay
+empty. Every save (and GET) runs `compose.Derive`:
+
+1. Each compose file (and every file reached by `include`/`extends.file`, which
+   must stay inside the workflow) is parsed into a yaml node tree (`compose.Doc`):
+   YAML errors → `dk_yaml` at file:line.
+2. Each file is validated on its own against the compose-spec schema after
+   `.env` interpolation (`dk_schema`, located by the schema path); `${VAR}`
+   without value or default → `dk_unresolved_var`.
+3. compose-go v2 (`loader.LoadWithContext`, validation/consistency/env
+   resolution skipped) merges overrides, include, extends and anchors into the
+   effective model; all profiles are loaded, services outside the active ones
+   are `inactive`.
+4. Dockerfiles are parsed by a small exact parser (`dockerfile.go`; BuildKit's
+   parser would pull protobuf/containerd through its error helpers and lacks the
+   spans write-back needs): parser directives, escape char, continuations,
+   heredocs, JSON form, stages, ARG in FROM, `COPY --from`/`RUN --mount from=`.
+   Only stages the build target needs become `build-stage` nodes.
+5. Checks: unknown references, host port clashes (also replicas on a fixed port),
+   missing build context/Dockerfile, env_file (`checks.go`), then the
+   best-practice advice on every service and every Dockerfile/target a service
+   builds (`practices.go`, rules below). Every finding is a `dk_*` diagnostic
+   with `file`/`line`, `nodeId` (the service), `detail` (why), `fix` and `docs`.
+   Errors always show; warning/info rules are listed in
+   `GET /best-practices/rules` (categories `docker-build`, `docker-compose`,
+   `docker-security`) and honour Settings: `disabledRules` turns one off,
+   `defaultOff` (opt-in) rules only run when listed in `enabledRules`
+   (`compose.FilterSettings`, used by `Derive` and by `POST /terraform/check`).
+
+Write-back (`compose.Editor`) splices only the lines an edit touches (located
+through the node tree), so comments, key order, quoting, anchors and blank lines
+survive; values that did not change keep their source (`${VAR}`), attributes
+inherited through `<<: *anchor` are overridden locally (or `!reset`), and the
+file that already sets an attribute (an override) is the one edited. Verified on
+all 39 docker/awesome-compose projects: byte-identical round trips and
+edit/undo pairs (rename, env set/delete, unchanged list patches).
+
+Terraform-only endpoints (nodes, connections, `GET /terraform`, workspace,
+modules, structure, network) answer 400 for docker workflows; `PUT /terraform`
+`{changes, moves}` and `POST /terraform/check` are kind-aware (dotfiles allowed,
+compose/Dockerfile syntax errors refused with file:line, moved compose files
+followed). Export and the files endpoints serve the stored files as is.
+
+Import (`api/importdocker.go`): the folder scan offers every folder with a
+compose file (one workflow per project), every folder with a Dockerfile that no
+compose project covers or builds (a generated `compose.yaml`), and, for
+sibling folders holding such Dockerfiles, a group `dockerfiles:<parent>`
+(`members`) that imports them as ONE workflow with one service per folder (a
+host port two of them `EXPOSE` moves to the next free one). A compose project
+may reference paths outside its folder (`context: ../services/api`,
+`build.dockerfile`, `env_file`, bind mounts, `configs`/`secrets` `file`,
+`include`/`extends.file`, after `.env` interpolation; `Project.References`).
+They are imported too: the workflow's root becomes the common ancestor and the
+compose files keep their relative place (`files: ["docker/compose.yaml"]`), so
+they stay byte-identical and export writes the same tree back (rewriting
+paths instead would change the user's files and break their own
+`docker compose up` of the export). References may reach as far as the git
+work tree holding the scanned folder (else its outermost ancestor below the
+home folder or `/`; uploads: the uploaded files); others, and those inside
+hidden or dependency folders, are left out with a `docker_ref_not_imported`
+warning (bind mounts of host paths such as `/var/run/docker.sock` silently).
+Build contexts copy what `docker build` would send: their `.dockerignore`
+(or `<Dockerfile>.dockerignore`) applies, dependency/VCS/hidden folders and
+regenerated build output (`target` next to Cargo.toml/pom.xml, `bin`/`obj`
+of .NET, `bin` next to go.mod, `dist` next to package.json, `__pycache__`)
+are skipped unless a `COPY`/`ADD` names them. Executable modes are kept. A
+project over 100 MB or 5000 files is refused (scan: a `docker_import_size`
+error) naming its biggest folders. `ImportProject.outside` lists each
+outside folder/file (relative to the project folder, with kinds, files and
+bytes) and `bytes`/`fileCount` the total; the import dialog shows them.
+
+Graph editing goes through the engine, never by patching YAML in the client:
+`POST/PATCH/DELETE /workflows/{id}/compose/services[/{name}]`, `…/networks`,
+`…/volumes`, `PATCH …/compose/stages/{nodeId}` (a stage's `FROM`),
+`GET …/compose/connect?from&to` (the recipes between two nodes) and
+`POST …/compose/connect`. Each runs the editor, re-derives the graph and returns
+the workflow. Canvas positions are stored on the graph nodes
+(`PATCH …/compose/layout`, `null` = automatic), so the compose files never get
+layout noise.
+
+### Docker best-practice rules
+
+Noise budget: on the 39 docker/awesome-compose projects (81 services) the
+default rules report ~200 findings, almost all info, and none on the 8
+templates or the 5 build starters (also with the opt-in limits and cache-mount
+rules on; `TestTemplatesAreClean`, `TestStartersFollowThePractices`;
+`NIMBO_AWESOME_COMPOSE=<checkout> go test ./internal/compose -run Awesome -v`
+prints the per-rule counts). Rules that fired on almost every service there
+(`dk_no_limits` 80/81, `dk_cache_mount` 20, `dk_hardening` 81) are opt-in.
+
+| Code | Severity | Default | Trigger | awesome-compose |
+|---|---|---|---|---|
+| `dk_latest_tag` | info | on | compose `image:` or Dockerfile `FROM` (stages the target builds) without tag or `latest`, no digest | 20 |
+| `dk_single_stage` | warning (info when `build.target` is a build stage of a multi-stage file) | on | the only stage built runs `go build/run`, `cargo build`, `mvn package/install`, `gradle build/bootJar…`, `dotnet publish/build/run`, `npm/yarn/pnpm run build`, `npx vite/next/ng build`, `tsc` | 3 |
+| `dk_heavy_base` | info | on | final stage on `node`/`python`/`ruby` without slim/alpine, a JDK (not JRE), or `maven`/`gradle`/`golang`/`rust`/`dotnet/sdk` | 6 |
+| `dk_dockerignore` | warning | on | build context (or a first-level subfolder) holds `node_modules`, `.git`, `.venv`, `venv`, `target`, `.gradle` or `.next` of ≥ 5 MB (measured, cached by mtime) not excluded by `.dockerignore` / `<Dockerfile>.dockerignore` | 0 (no installed deps in the checkout) |
+| `dk_layer_order` | warning | on | `COPY .`/`COPY *` before the first dependency install (npm/yarn/pnpm, pip -r/., poetry, uv, go mod download/build (with go.sum), mvn, gradle, dotnet, cargo, bundle, composer) and no manifest copied (or bind-mounted) before it | 3 |
+| `dk_cache_mount` | info | **opt-in** | first dependency install without `--mount=type=cache` (fix names the cache path) | 20 |
+| `dk_apt_install` | info | on | `apt-get install` without `--no-install-recommends` or without removing `/var/lib/apt/lists` in the same RUN (or a cache mount) | 2 |
+| `dk_pip_cache` | info | on | `pip install` without `--no-cache-dir`, `PIP_NO_CACHE_DIR` or a pip cache mount | 2 |
+| `dk_apk_cache` | info | on | `apk add` without `--no-cache` (or removing `/var/cache/apk`) | 2 |
+| `dk_add` | info | on | `ADD` of local non-archive files, or of an http(s) URL without `--checksum` | 0 |
+| `dk_shell_form` | warning | on | effective `ENTRYPOINT`, or `CMD` without ENTRYPOINT, in shell form (not `exec …`) and not overridden by compose | 2 |
+| `dk_workdir` | info | on | RUN starting with `cd <dir> &&` | 0 |
+| `dk_secret_build` | warning | on | `ARG` with a secret-looking name, or `ENV` with a secret name and a literal value | 0 |
+| `dk_root_user` | info | on | built service without `user:` whose final stage has no USER or USER root/0 | 34 |
+| `dk_secret_env` | warning | on | secret-looking key with a literal value in a compose `environment` | 17 |
+| `dk_unresolved_var` | warning | on | `${VAR}` without value in .env and without default | 0 |
+| `dk_missing_env_file` | warning | on | `env_file` that does not exist | 0 |
+| `dk_no_healthcheck` | warning | on | `depends_on … service_healthy` on a service without healthcheck | 0 |
+| `dk_depends_healthy` | warning | on | `depends_on` (`service_started`) on a database/cache/broker that has a healthcheck | 2 |
+| `dk_missing_healthcheck` | info | on | built server (ports/expose/dependents, not one-shot) without compose healthcheck or HEALTHCHECK; image service others depend on whose palette entry knows a healthcheck | 36 |
+| `dk_healthcheck_timing` | info | on | healthcheck (compose or HEALTHCHECK) interval < 5s, or timeout > interval | 4 |
+| `dk_no_restart` | info | on | long-running service (not waited for with `service_completed_successfully`, not `restart: "no"` without ports/dependents) without `restart:` or `deploy.restart_policy` | 39 |
+| `dk_no_limits` | info | **opt-in** | long-running service without a memory limit (`deploy.resources.limits.memory` / `mem_limit`) | 80 |
+| `dk_log_rotation` | info | on | `logging:` with json-file (or no driver) and no `max-size` | 0 |
+| `dk_anon_volume` | warning | on | database/broker (palette category or official image) with nothing mounted on its data path, or an anonymous volume there (caches excluded) | 5 |
+| `dk_bind_deps` | warning | on (macOS/Windows hosts only) | bind mount of `node_modules`/`vendor`/`.venv`/`venv`, or of a folder holding one without a volume masking it | 0 (no installed deps) |
+| `dk_no_init` | info | on | exec-form node/npm/yarn/pnpm/python process as PID 1 (Dockerfile or compose command; not uvicorn/gunicorn/tini/dumb-init) without `init: true`, not one-shot | 14 |
+| `dk_expose_mismatch` | info | on | published container port not in the final stage's EXPOSE, or not the fixed port of postgres/mysql/mariadb/mongo/redis/valkey/memcached (skipped when compose sets command/entrypoint/PORT) | 0 |
+| `dk_db_published` | warning | on | database/cache/broker publishing a port on all interfaces (no host IP, 0.0.0.0, ::) | 3 |
+| `dk_docker_sock` | warning | on | bind mount of `docker.sock` | 2 |
+| `dk_privileged` | warning | on | `privileged: true`, `network_mode: host`, `pid: host` | 1 |
+| `dk_hardening` | info | **opt-in** | service without `read_only: true`, `cap_drop: [ALL]` or `no-new-privileges` | 81 |
+
+Replicas with a fixed host port are an error (`dk_port_clash`). New services
+follow the rules: the palette publishes databases/caches/brokers on
+`127.0.0.1` (`compose.PublishIP`), every added service gets
+`restart: unless-stopped`, node/python starters get `init: true`, and the
+starters ship a `.dockerignore`, a HEALTHCHECK, cache mounts and (Go) a
+distroless runtime.
+
+### Docker performance (`internal/sandbox/compose_stats.go`, `compose_build.go`, `internal/loadtest/resources.go`)
+
+- **Live usage**: while a project has running containers, one `docker stats
+  --no-trunc <ids…>` stream (explicit IDs: `docker stats` has no label filter)
+  feeds a per-second aggregate per service (replicas summed; limits from
+  `HostConfig.NanoCpus`/`CpuQuota`/`Memory`, host CPUs/memory when unlimited),
+  kept for 120 s and published as `compose.stats`; `GET
+  /workflows/{id}/compose/stats` returns it with history. Values are the CLI's
+  rounded strings (`31.08MiB`, `1.48kB`), so ±0.5 % of the unit.
+- **Problems and startup**: `ComposeStatus.problems` lists OOM kills,
+  restarts, non-zero exits and unhealthy containers; startup (start →
+  healthy) comes from the `health_status: healthy` event (Docker 29: ID in
+  `Actor.ID`), or from the health log while it still holds every check — its
+  resolution is the healthcheck interval.
+- **Builds**: after `build`/`up` runs the BuildKit plain progress lines of the
+  run log give per-service steps (CACHED vs DONE, FROM excluded from cache
+  counts), build time (first step start → last step end, line timestamps) and
+  the image name; `docker image inspect`/`history` give the size and biggest
+  layers. The base/own split uses `compose.Project.ImageBases` (one history
+  entry per instruction of the final stage chain). The last 20 builds live in
+  `<home>/workflows/<id>/perf/builds.json` (`GET …/compose/builds`, event
+  `compose.build`) with the delta vs the service's previous build and findings
+  (`image_too_big` per stack, `base_dominates`, `slow_uncached_step`) linking
+  `dk_*` rules. BuildKit reports steps shared by several services once.
+- **Load tests**: `loadtest.EngineConfig.Monitor` (the sandbox manager) gives
+  workflow runs a probe; the runner samples it at load start (t=0) and at every
+  timeline second, and `correlate` derives per-service verdicts (cpu-bound when
+  the 2-second average reaches 90 % of the limit, single-core, memory-bound,
+  oom, restarted, ok) and a headline stored in `LoadTestRun.resources`.
+
+### Build canvas (`apps/desktop/src/features/docker/canvas`)
+
+`model.ts` turns `workflow.compose.graph` (plus the live `ComposeStatus`) into
+plain data, with no React (unit-tested in `model.test.ts`):
+
+- **Frames and cards.** Networks are frames. A service sits in the frame of its
+  first declared network. Services naming no network share the implicit
+  `network:default` frame, which is drawn only when it is used. External
+  networks are dashed frames. Volumes, secrets, configs and external items
+  are small cards. Build stages are folded into their service's card, in
+  Dockerfile order (`deps › build › runtime`), and are never nodes.
+- **Edges point from the user to what it uses** (`api → db`), the reverse of
+  the graph's "source is used by target":
+  - `depends_on` is labelled with its condition (`started`/`healthy`/`completed`);
+  - inferred edges show the env key that names the other service (`DATABASE_URL`);
+  - mounts show their target path (and `(ro)`).
+
+  Membership in the network a service is drawn in is the frame itself, so only
+  the service's other networks get a (dashed) edge. `build`/`copy_from` stay
+  inside the card. An edge is *live* when both ends run.
+- **Placement.**
+  - A canvas where nothing is placed gets the elkjs layered layout (`layout.ts`,
+    left→right, frames as compound nodes). ELK reads spacing per compound node,
+    so every frame repeats it. The model-order option stays on the root, because
+    elkjs throws inside a frame.
+  - Items added later (palette clicks, code edits, agents) go through
+    `placeNew`. A service joins its frame below the members already there. An
+    item used by a placed card (a catalog image's data volume) lines up in the
+    column right of that card's frame. Anything else starts a row below the
+    drawing. A new card is moved down until it overlaps nothing.
+  - Positions are saved through `PATCH /compose/layout`. *Tidy up* re-runs the
+    full layout, and a failed layout shows a toast.
+- **Connecting.** Dragging from one card's handle to another loads the recipes
+  (`GET /compose/connect`) into the "How should these connect?" dialog:
+  - **Start order:** `depends_on` started, healthy or completed;
+  - **Connection settings:** the catalog's env templates, such as `DATABASE_URL`,
+    with secrets in `.env`;
+  - **Network:** a shared network;
+  - **Volume:** a mount, asking for the path when the catalog doesn't know it.
+
+  Connect and delete show an *Undo* toast. Undo writes the compose files back
+  as they were through `PUT /terraform {changes}`.
+- **Inspector** (`../inspector`): a service form (image or build, ports, env
+  with masked secrets, volumes, depends_on, healthcheck, restart, replicas,
+  CPU/memory, networks, command). It sends a partial `PATCH
+  /compose/services/{name}`, so fields that weren't touched keep their source
+  text.
+
+### Palette (`apps/desktop/src/features/docker/palette.tsx`)
+
+In a docker workflow the palette's cloud tabs (AWS/Azure/GCP/OCI) are
+replaced by a single *Docker* tab. It has these parts:
+
+- image search (label, image:tag, description, category);
+- *Build from Dockerfile* starters: Node.js, Python and Go apps, a static site,
+  and a plain alpine image. The engine scaffolds a buildable folder for each;
+- *Network* and *Volume*;
+- the curated catalog (`GET /catalog/docker/images`, `compose.Images`): ~170
+  pinned images in 17 categories (`compose.ImageCategories`: web servers &
+  proxies, API gateways, languages & runtimes, databases, caches, search &
+  vector, messaging & streaming, storage, observability, auth & secrets,
+  workflow & data, AI, dev tools, apps, CMS, DNS & networking, tools), with
+  icon, ports, env hints (credentials flagged secret: by key, by a known
+  list, or a URL carrying a password), healthcheck (CMD-SHELL with the
+  image's own tools; none for shell-less images), data volumes, connection
+  templates and an optional entrypoint/command. `images_test.go` checks the
+  invariants (unique ids, pinned non-`latest` tags, valid ports, flagged
+  secrets, absolute volume paths, a non-generic icon in the desktop registry,
+  a palette label per category, payload under 128 KiB).
+
+Clicking an item adds it without a position, so `placeNew` places it.
+Dragging uses the drop point. Terraform workflows keep the resource palette
+unchanged.
+
+### Code tab (`apps/desktop/src/features/docker/intel`)
+
+`dockerFileKind` picks the language from the file path:
+
+- the workflow's compose files and `compose*.y{a,}ml` names are compose files;
+- `*.dockerignore` / `.dockerignore` are ignore files (checked before Dockerfiles);
+- `Dockerfile*`, `Containerfile` and `*.dockerfile` are Dockerfiles;
+- `.env`, `.env.*` and `*.env` are env files.
+
+Completion, hover and go to definition (F12, ⌘/Ctrl-click; shared
+`features/code-intel/definition.ts`) run in the client. Diagnostics use the
+shared as-you-type check (`features/code-intel/lint.ts` → `POST
+/terraform/check`, kind-aware), so YAML, schema, Dockerfile syntax and `dk_*`
+findings appear as squiggles; `quick-fixes.ts` turns the mechanical ones into
+lint actions (pin a tag to the catalog tag or its major, `init: true`,
+`restart:`, log rotation, ports on 127.0.0.1, `condition: service_healthy`,
+exec-form CMD/ENTRYPOINT, apt `--no-install-recommends` + list cleanup, apk
+`--no-cache`, pip `--no-cache-dir`, ADD → COPY, a `.dockerignore` with the
+stack's defaults created as a pending file).
+
+- **Generic YAML layer** (`features/code-intel/yaml`, reused by Kubernetes):
+  `context.ts` (tolerant line scanner: key path at the cursor, `[]` for
+  sequence items, key vs value, `documentAt` for `---` streams), `tree.ts`
+  (tolerant parser with offsets: block/flow collections, block scalars,
+  anchors, aliases, merge keys, Helm `{{ }}` as text), `schema.ts` (JSON-schema
+  navigation incl. Kubernetes `x-kubernetes-*`), `schema-intel.ts` (schema
+  completion/hover with dialect hooks), `validate.ts` (unknown keys, types,
+  enums, required), `format.ts` (⌥⇧F for every `.yaml`/`.yml`: re-indents only
+  — comments, order and values kept; refused if the data would change) and
+  `index.ts` (`yamlSchemaIntel`).
+- **.env** (`env-file.ts`): completes the variables the compose files read
+  (`${VAR}`, `${VAR:-d}`, `${VAR:?}`) and the catalog images expect; hover
+  shows where a key is read. **.dockerignore** (`dockerignore.ts`): patterns
+  for the stack found next to it (package.json, go.mod, pom.xml, …).
+- **Go to definition**: compose (`compose-definition.ts`: depends_on, links,
+  extends, volumes_from, networks, named volumes, secrets/configs → their
+  declaration, also in other compose files via the graph; build context /
+  dockerfile, env_file, include, secret files → the file; `${VAR}` → its `.env`
+  line); Dockerfile (stage names in FROM/`--from=`/`--mount from=`, `$VAR` →
+  ARG/ENV).
+- **New from template…** (tree header and context menu, Docker and Kubernetes
+  workspaces): `GET /catalog/file-templates` (`backend/internal/filetemplates`)
+  — Dockerfile and .dockerignore per stack, .env, a compose service snippet
+  (added under `services:`), compose.yaml, nginx.conf, Kustomize, Helm and a
+  Deployment manifest.
+- **Compose** (`compose-completion.ts`, `compose-schema.ts`):
+  - Keys and values come from the Compose Specification JSON schema the daemon
+    serves (`GET /catalog/docker/compose-schema`, compose-go's own). `$ref`,
+    `oneOf`/`anyOf`/`allOf` and `patternProperties` are resolved.
+  - Keys already set in the same mapping, and deprecated keys, are left out. The
+    insert text follows the value's shape: a nested mapping, a `- ` list or
+    inline.
+  - Values are enums, booleans and known values (`restart`, `pull_policy`, …).
+    Project names are offered too: other services in `depends_on`/`links`/
+    `extends.service` (never the service itself), networks, named volumes
+    (`data:`), secrets and configs, including names from the project's other
+    compose files.
+  - `image:` offers the catalog images. Items that take a short string or a
+    mapping (`ports`, `volumes`) offer the long-syntax keys once a word is
+    being typed.
+  - Hover shows the key's docs, linked to its Compose reference section, or an
+    image's catalog entry with a Docker Hub link.
+- **Dockerfile** (`dockerfile.ts`):
+  - instructions with snippets and docs (`MAINTAINER` ranks last);
+  - each instruction's flags;
+  - images and earlier stage names after `FROM` and `COPY|ADD|RUN --from=`;
+  - `AS` after the image;
+  - `ARG`/`ENV` names declared above the cursor, after `$` or `${`.
+
+  Continuation lines are arguments, not instructions.
+
+The unit tests (`*.test.ts`) read a vendored copy of compose-go's schema
+(`intel/testdata/compose-spec.json`). Refresh it when `compose-go` moves in
+`backend/go.mod`.
+
+### Architecture, runtime and isolation
+
+- **Architecture view**: see *Architecture diagram view → Docker
+  workspaces* below. It shows host → project → networks → services, with live
+  state.
+- **Runtime**: see *sandbox → Docker workflows*.
+  - *Deploy* is `compose up --wait` and *Destroy* is `compose down`, with an
+    opt-in "also delete volumes".
+  - Busy ports offer "Use free ports" (remapped in Nimbo's override, not the
+    files).
+  - The Deploy tab lists services with state and health, the run log and live
+    per-service logs. The toolbar chip shows the compose state.
+  - Endpoints (*Try it*) and Load test target the published ports.
+- **Isolation**: every run uses the project `nimbo-dk-<workflowId>`, and
+  Nimbo's override labels every service, build, network and volume with
+  `com.nimbo.workflow=<id>`. Nimbo lists, stops and removes only objects
+  matching both, never other containers on the same Docker engine. Tests
+  follow the same rule: the `-tags docker` runtime test uses its own
+  `nimbo-dk-…` projects and removes them.
+
+## Kubernetes workflows (`internal/kube`)
+
+A Kubernetes workflow (`Workflow.Kind == "kubernetes"`) stores manifests,
+Kustomize trees and Helm charts as its files. `Workflow.Kubernetes.Sources`
+says what gets deployed: `{kind: manifests|kustomize|helm, path, release?,
+namespace?, valuesFiles?, environments?}`.
+
+- **Rendering** (`kube.Open`). Plain manifests are read like `kubectl apply
+  -f <dir>`. Kustomize builds in process with `sigs.k8s.io/kustomize/api`
+  (v0.21.1) on an in-memory copy of the workflow's files. Origin
+  annotations say which file each object comes from, and remote bases and
+  `helmCharts:` are refused with a file:line diagnostic. Helm charts
+  render in process with the `helm.sh/helm/v4` (v4.2.4) engine, like
+  `helm template`, against `kube.KubeVersion` (v1.36.5, the local
+  cluster's version). Dependencies must be vendored in `charts/`; missing
+  ones produce `k8s_dependency`. Template output is split into documents
+  the way Helm splits it.
+- **Environments**: each environment maps to a Kustomize overlay
+  (`overlays/<env>`, or siblings of `base/`) or a Helm values file
+  (`values-<env>.yaml`, `values.<env>.yaml`, `values/<env>.yaml`).
+  Explicit `environments` entries override these conventions.
+  `Workflow.Environments` follows them, and `activeEnvironment` picks what
+  is rendered.
+- **Graph** (`kube.Derive`). There is one node per rendered object (ID
+  `Kind/namespace/name`). Each node carries its file:line and the facts of
+  its kind (containers, Service ports and selector, routes, HPA, PDB,
+  storage). Edges are listed in `model/kube.go`. A Service whose selector
+  selects nothing is marked `unmatched`.
+- **Write-back** (`kube.Editor`, `GET /kubernetes/fields`). Every field is
+  mapped to where it is written, and edits splice only the lines they
+  change (the compose `Doc` editor, extended to sequence items):
+  - manifests: the field is edited in its document;
+  - Kustomize: the patch that sets the field, the `images:` or
+    `replicas:` transformer, or else the base resource;
+  - Helm: the values key that renders the field. To find it, the chart
+    is rendered again with every string value replaced by a unique token
+    and every integer by a unique number. Values that templates compare
+    keep their value, and keys that break the chart are found by
+    bisection. A mapping is kept only if putting the current values back
+    into the token pattern reproduces the rendered value. A field that
+    joins several keys can be edited by splitting the new value along
+    the template's literal text. A value set back to what the chart gives
+    removes the override.
+  - Helm template literals: a third render puts tokens on literal
+    `key: value` lines.
+  Any other field is read-only, with a reason.
+- **API** (`api/kube.go`): create (blank or template), PUT
+  sources/builds/active environment, `/kubernetes/{layout,render,fields,
+  objects,connect}`, the Code tab (YAML syntax gate, render problems,
+  sources follow moves) and import scan (`kube.Detect`: charts, Kustomize
+  base and overlays, manifest folders).
+
+### Kubernetes runtime (`internal/sandbox/kube*.go`)
+
+- **Cluster**: one k3s node container per workflow, `rancher/k3s:v1.36.5-k3s1`
+  (Kubernetes 1.36), named `nimbo-k8s-<id>`, labels `com.nimbo.workflow=<id>`
+  and `com.nimbo.role=kube-node`, driven with the docker CLI. It publishes
+  the API server and Traefik (HTTP) on fixed `127.0.0.1` ports saved in
+  `<home>/workflows/<id>/kube/cluster.json`. Nimbo writes its own kubeconfig
+  to `<home>/workflows/<id>/kube/kubeconfig` (context `nimbo-k8s-<id>`) and
+  builds every client (client-go, Helm) from it; it never reads `KUBECONFIG`,
+  `~/.kube/config` or `~/.kube/cache`. A same-named container without the
+  labels is refused, never adopted.
+- **Why k3s** (measured on Docker 29/OrbStack arm64, cold): k3s pulls 89 MB
+  (248 MB on disk) in 4 s, node Ready 4 s, CoreDNS 19 s, Traefik 24 s, and
+  bundles Traefik (IngressClass `traefik`, default), ServiceLB (LoadBalancer),
+  local-path (default StorageClass) and metrics-server. kind: 346 MB pull
+  (909 MB on disk) in 12 s, node Ready 30 s, DNS 41 s, no ingress,
+  LoadBalancer or metrics-server. k3d: same k3s image plus k3d-tools/proxy
+  images, ingress 35 s, Docker SDK dependency (35 MB binary). All are
+  CGO-free; k3s needs no extra Go dependency at all.
+- **Runs** (`sandbox.KubeRun`, `POST /workflows/{id}/runs`): `up` creates or
+  starts the cluster, adds an IngressClass `nginx` served by Traefik (unless
+  the workflow ships one or ingress-nginx), builds `kubernetes.builds` plus
+  images whose repository names a folder with a Dockerfile
+  (`KubeBuildPlan`), loads them with `docker save | ctr images import`,
+  applies each source in order — manifests/Kustomize by server-side apply
+  (field manager `nimbo`, Helm's kind order with CRDs right after
+  Namespaces, CRDs waited until Established, missing namespaces created and
+  recorded), Helm by `upgrade --install` through the Helm v4 SDK — forces
+  `imagePullPolicy: IfNotPresent` on locally built images (a post-renderer
+  for Helm), prunes objects of the previous up's inventory
+  (`kube/inventory.json`) that are gone, and waits for Deployments,
+  StatefulSets, DaemonSets and bare Pods (fails after ~10 s of crash loop /
+  image pull error / unschedulable, with the problems). `down` uninstalls
+  releases and deletes the inventory in reverse order (PVCs and namespaces
+  holding them only with `removeVolumes`; `deleteCluster` deletes the
+  cluster), `restart` patches `restartedAt` like `kubectl rollout restart`,
+  `cluster-stop|start|delete`. Archive stops the cluster; deleting the
+  workflow deletes cluster, built images and the kube dir.
+- **Status** (`GET /workflows/{id}/kubernetes/status`, event `kube.status`):
+  client-go informers (pods, ReplicaSets, Deployments, StatefulSets,
+  DaemonSets, Jobs, CronJobs, Services, EndpointSlices, Ingresses, Events)
+  of the user's namespaces feed `buildKubeView`: workload state/rollout per
+  graph node ID, pods and containers, problems (oom, crashloop, restarts,
+  image-pull, config, unschedulable, probe, exit, job-failed), newest
+  events. A 10 s health check notices a node stopped behind Nimbo's back.
+- **Endpoints**: every TCP Service port is forwarded by the daemon from a
+  stable `127.0.0.1` port (Service port, or +8000 below 1024, else free;
+  saved in `kube/forwards.json`, never one saved by another workflow); each
+  connection picks a ready pod from the EndpointSlices and tunnels through
+  the pod's port-forward (WebSocket, SPDY fallback). Ingress rules get
+  `http://<host>:<ingress port><path>` (`*.localhost` resolves in browsers)
+  and an `Address` on 127.0.0.1 for the Host header. Cards: cluster, each
+  forwarded Service, each Ingress; Try and load test targets use the same
+  URLs (`loadtest.SuggestKube`).
+- **Usage and Perf verdict**: metrics-server refreshes every 15 s (kubelet's
+  resource metrics ~10–15 s, verified), too coarse for per-second load test
+  timelines, so one `docker exec` in the node reads every pod cgroup's
+  `cpu.stat` usage_usec and `memory.current − inactive_file` once a second
+  (`kube.stats`, `GET …/kubernetes/stats`; workload node IDs as services).
+  The load test probe labels workloads by name and maps them back to node
+  IDs (`describedProbe`), so `loadtest.correlate`'s verdicts are reused
+  unchanged. metrics-server stays installed for HPAs.
+- **Setup doctor**: check `kubernetes` (node image present, ≥ 3 GB free),
+  fix action `pull-kube-image` with `setup.progress` layer events.
+- **Tests**: unit (apply order, preparation, build plan, status mapping,
+  forwarder, cgroup parser, endpoints, suggestions, setup);
+  `go test -tags docker -run TestKubeRuntime ./internal/sandbox/` runs
+  cluster → build+load → manifests + Helm → rollout → 200 via forward and
+  Ingress → load test verdict → logs/stats → restart → down →
+  cluster-delete, checking that `KUBECONFIG`, `~/.kube/config`, the default
+  discovery cache and every other container are untouched.
+
+### Kubernetes rules, palette and templates (`internal/kube/kuberules`, `internal/kube/kubecatalog`)
+
+`kuberules.Check(p *kube.Project, wf, cfg)` runs on the rendered objects
+of the active environment (called by `deriveKube`); findings carry
+file:line (`kube.Project.Locate`: manifest, Kustomize patch, Helm
+template/values), `nodeId` and `attribute` (field path, `[i]` indexes,
+`["dotted.key"]`) for editor quick fixes. Schema validation uses the
+Kubernetes v1.36.5 swagger reduced by `kuberules/gen` (embedded gzip,
+served by `GET /catalog/kubernetes/schema`): unknown kinds/fields (with
+suggestions), scalar types (unquoted numbers in env values or
+annotations), required fields, quantities, base64 Secret data; custom
+resources are validated against a CRD of the same workflow and skipped
+otherwise. Removed/deprecated API versions come from the deprecation guide
+table (`apis.go`). Noise guards: Services/PDBs in system namespaces or in
+namespaces with custom resources (operator-made pods) are not "selecting
+nothing"; Secrets made by Certificates/ExternalSecrets/SealedSecrets or by
+a Role allowed to create Secrets are not "missing"; DaemonSet host access
+is info; limits alone count as requests; LimitRange defaults count.
+
+| Code | Severity | Trigger |
+|---|---|---|
+| `k8s_schema`, `k8s_removed_api`, `k8s_duplicate`, `k8s_workload_selector` | error | OpenAPI violations; removed apiVersion; same group/kind/namespace/name twice; workload selector not matching its template labels |
+| `k8s_deprecated_api` | warning | deprecated but served apiVersion (v1 Endpoints, resource.k8s.io v1beta*) |
+| `k8s_no_requests` / `k8s_no_memory_limit` | warning / info | container without cpu/memory request (or limit) / without memory limit |
+| `k8s_no_readiness_probe` / `k8s_no_liveness_probe` | warning / info | long-running container with ports and no probe |
+| `k8s_probe_port`, `k8s_service_port` | warning | named probe port / Service targetPort not declared by the containers |
+| `k8s_latest_tag`, `k8s_local_image` | warning | untagged or :latest image; locally built image pulled (latest or Always) |
+| `k8s_single_replica` | warning (info when stateful) | prod-like environment (prod, production, prd, live, staging, stage, stg): ≤1 replica, or replicas without a PDB |
+| `k8s_hpa_no_requests` | warning | HPA utilization metric on containers without that request |
+| `k8s_pvc_storage_class` | info | PVC or claim template without storageClassName |
+| `k8s_selector_mismatch`, `k8s_ingress_backend`, `k8s_unknown_ref` | warning | selector matching no pods; Ingress/HTTPRoute backend Service/port missing; missing ConfigMap/Secret/PVC/ServiceAccount/HPA target |
+| `k8s_namespace_missing` | info | namespace without Namespace object or source namespace |
+| `k8s_secret_env`, `k8s_secret_in_configmap` | warning | literal credential in env / ConfigMap data |
+| `k8s_privileged`, `k8s_host_namespaces`, `k8s_host_path` | warning (info for DaemonSets) | privileged, privilege escalation, ALL/SYS_ADMIN/NET_ADMIN caps; hostNetwork/PID/IPC; hostPath |
+| `k8s_run_as_root` | info | no runAsNonRoot/runAsUser>0 |
+| `k8s_hardening`, `k8s_network_policy`, `k8s_default_namespace` | info, opt-in | restricted PSS settings / no NetworkPolicy selects the pods / objects in default |
+
+Palette (`GET /catalog/kubernetes`, `POST /workflows/{id}/kubernetes/catalog`,
+`GET /catalog/kubernetes/{item}/yaml`): 13 starters, 159 images from the
+Docker catalog (the 9 build-only images are left out; 41 StatefulSets,
+118 Deployments) and 14 pinned charts downloaded on add (https index or
+anonymous OCI pull) into a wrapper chart `charts/<name>/` with the
+dependency vendored, so rendering and `up` work offline. Templates live in
+`kubecatalog/_templates` and render without warnings in every environment
+(tested); `-tags network` fetches and renders every chart.
+
+### Convert to Kubernetes (`internal/kube/kubeconvert`)
+
+`POST /workflows/{id}/convert/kubernetes {format, name?, namespace?,
+dryRun?}` turns a docker workflow into a **new** Kubernetes workflow (the
+docker one is untouched; `dryRun` returns the report and generated files for
+the dialog's preview). The UI is `features/docker/convert-kubernetes-dialog.tsx`
+(format, name, namespace, live preview of objects, mapping table, what
+couldn't be mapped, files); the MCP tool is `convert_to_kubernetes`.
+
+`kubeconvert.Convert(*compose.Project, Options)` works on compose-go's
+effective model plus the derived service facts (Dockerfile USER, EXPOSE,
+HEALTHCHECK) and the image catalog:
+
+| Compose | Kubernetes |
+| --- | --- |
+| service | Deployment; StatefulSet (+ headless Service, volumeClaimTemplates) for data services (catalog database/cache/queue/search/storage) owning their named volumes; Job for one-shot services others wait for with `service_completed_successfully` |
+| `build:` | build context copied, image `<service>:dev` (`imagePullPolicy: IfNotPresent`) listed in `Kubernetes.Builds` |
+| `image:` without tag / `:latest` | pinned to the catalog tag when known |
+| ports, expose, EXPOSE, catalog ports, `<svc>:<port>` in other services' env / mounted configs | container ports + a ClusterIP Service **named like the service** (connection strings keep working) |
+| published HTTP port on every interface | Ingress rule `<service>.<name>.localhost` (class `traefik`; prod: `nginx`) |
+| loopback-only / data-service published ports | Service only (Endpoints port-forward) |
+| environment, env_file, `.env` interpolation | ConfigMap `<svc>-env` + Secret `<svc>-secret` via envFrom; credentials, URLs with `user:pass@`, `password=` and values interpolating secret variables go to the Secret |
+| healthcheck / HEALTHCHECK | readiness + startup probes (HTTP GET when the check fetches `http://127.0.0.1…`, else exec with the same command); liveness = TCP on the port (a dependency outage must not restart the app); no healthcheck → TCP probes |
+| deploy.resources (limits/reservations), mem_limit, cpus | limits; requests = reservations, else cpu ¼ of the limit (≥ 50m) and memory = limit; defaults when missing |
+| user / Dockerfile USER | `runAsNonRoot` + numeric `runAsUser` (UID from the Dockerfile's `useradd -u`, base-image users, official images that run as their own user: postgres, mysql, redis, rabbitmq…), `fsGroup` with volumes; `allowPrivilegeEscalation: false`, drop ALL when non-root, RuntimeDefault seccomp, no SA token, no service links |
+| named volume | volumeClaimTemplate (StatefulSet) or PVC + `strategy: Recreate` |
+| bind mount of workflow files | ConfigMap from the file/folder (read-only; Kustomize `configMapGenerator`, Helm `.Files.Get`) |
+| tmpfs / anonymous volume | emptyDir (Memory) / emptyDir |
+| compose secrets / configs | Secret / ConfigMap mounted at the same path |
+| depends_on | init container `wait-for-<dep>` polling the dependency's Service port (ready pods only: its readiness probe gates it) |
+| init, extra_hosts, dns, stop_grace_period, cap_add/cap_drop, read_only, command/entrypoint, working_dir, tty/stdin | shareProcessNamespace, hostAliases, dnsConfig, terminationGracePeriodSeconds, capabilities, readOnlyRootFilesystem, args/command (`$(` escaped), workingDir, tty/stdin |
+
+Reported instead of mapped (with why and what to do): host bind mounts and
+the Docker socket, privileged, network_mode/pid/ipc host, devices, GPUs,
+volumes_from, external volumes/secrets, platform, ulimits, sysctls,
+security_opt, logging drivers, restart policies, container_name, hostname,
+networks, profiles, develop/watch, lifecycle hooks, placement/update config.
+
+Formats: manifests → `k8s/<service>.yaml` + `namespace.yaml` +
+`ingress.yaml` (source `manifests k8s`); Kustomize → `k8s/base` (generators
+with content hashes) + `overlays/dev` + `overlays/prod` (source `kustomize
+k8s/base`); Helm → `chart/` with `values.yaml` (image, replicaCount,
+resources, env, secretEnv, persistence, pdb, ingress per service),
+`values-dev.yaml`, `values-prod.yaml`, checksum annotations and NOTES.txt
+(source `helm chart`, release = name). Prod scales stateless Deployments to
+2 replicas with a PodDisruptionBudget; data services keep one replica.
+Tests: every docker template × format × environment renders through the
+engine and passes the `k8s_*` rules with no warning; `go test -tags docker
+-run TestDeployConvertedTemplates ./internal/kube/kubeconvert` deploys them
+all on a throwaway `nimbo-k8s-convert-it` k3s cluster (removed afterwards).
+
 ## Architecture diagram view
 
 The canvas has two views, switched with the *Build | Architecture* control
@@ -1091,7 +1766,15 @@ is dragged, resized, renamed, annotated or hidden, and it stores nothing —
 the layout is always the automatic one and only Build edits. Pan, zoom, fit
 and "Export image…" work; selecting a card (or a VPC/subnet) opens its
 resource — for a card drawn from a module, the module call — in the
-inspector.
+inspector. Types of non-cloud providers that stand for a technology
+(`kubernetes_*`, `kubectl_*`, `helm_*`, `docker_*`, `vault_*`, `consul_*`,
+`keycloak_*`, `grafana_*`, `kafka_*`, `rabbitmq_*`, `postgresql_*`, `mysql_*`,
+`mongodbatlas_*`, `elasticstack_*`/`elasticsearch_*`, `opensearch_*`,
+`minio_*`; `classify.ts` `techTypeOf`) are drawn with that technology's logo
+from the shared technology icon set (`components/tech-icons`: `techIcon`,
+`techIconFor`, `parseImageRef`, `<TechIcon>`; Devicon/Simple Icons, see its
+NOTICE.md), which Docker workspaces also use; managed cloud services keep
+their official icon (`aws_eks_cluster` is EKS, not Kubernetes).
 
 - **Derivation** (`derive.ts`, pure, unit-tested in `derive.test.ts` and,
   per provider, `providers.test.ts`): containers per provider —
@@ -1336,6 +2019,32 @@ inspector.
   layout, text measurement, icon assets); the daemon cannot draw the
   diagram without duplicating the view in Go.
 
+### Docker workspaces
+
+Docker workflows (`kind: "docker"`) are drawn from `workflow.compose.graph`
+(and the live `ComposeStatus`) by `deriveDockerArchitecture` (`docker.ts`,
+unit-tested in `docker.test.ts`); `ArchitectureView` renders them through
+`useDockerScene()` instead of `useScene()`, sharing the layout, the canvas
+and the export. Containers: the **Docker host** (`docker-host`, Docker
+icon) → the **compose project** (`compose-project`, titled with the
+compose `name:` or the workflow name, the `nimbo-dk-…` project below) →
+one group per **network** (`docker-network`: driver, `internal`
+(violet) or `external` (dashed) with its real name). A service sits in its
+first network, with a dashed line to each other network it joins; services
+naming no network sit in `default`, shown only when used. One card per
+service, iconed by `techIconFor` (image, Dockerfile stages, stack) and
+selecting `service:<name>`: image or `build ./ctx (Dockerfile, target x)`,
+`×N` replicas, state and health when the project runs, published ports
+(`8080→80/tcp`, the host port actually bound and the remapped one), the
+inactive profile (dashed card), Dockerfile stages (`3-stage build: deps →
+builder → runtime`), mounts (`vol db-data → /var/lib/postgresql/data`,
+`bind`, `tmpfs`, external volumes), secrets and configs — stages,
+volumes, secrets and configs are not cards. *Users* reach every service
+that publishes ports; `depends_on`, `links` and inferred env connections
+are drawn as requests (api → db, the reverse of the graph's "source is
+used by target"), one arrow per pair. The subtitle is `Docker Compose ·
+<project>`; the legend adds internal/external networks when present.
+
 ## Connections (already-deployed services)
 
 The Connections library is global (not per workflow): saved services that
@@ -1411,7 +2120,10 @@ Docker; the desktop onboarding wizard (`GET /setup`) and `nimbo doctor`
   `alpine:3`), `docker-socket` (required, evaluated once the daemon answers
   and `alpine:3` is present; `docker run --rm -v /var/run/docker.sock:…
   alpine:3 test -S …`, successes cached 5 min), `docker-memory` (warning
-  < 4 GiB), `disk` (warning < 5 GiB free on the home volume), `internet`
+  < 4 GiB), `docker-compose` (not required; `docker compose version
+  --short`, the Compose v2 plugin docker workflows run with; missing → link to
+  the install docs, plus `docker-compose-plugin` for apt/dnf or
+  `docker-compose` for pacman/zypper), `disk` (warning < 5 GiB free on the home volume), `internet`
   (warning; `HEAD https://registry.terraform.io` within 3 s). Checks that
   depend on an earlier failure report `missing` with a "Checked once …"
   summary and no fixes.
@@ -1443,12 +2155,12 @@ Docker; the desktop onboarding wizard (`GET /setup`) and `nimbo doctor`
 | `GET /catalog/schemas?types=` | `types` = comma-separated `resource/<type>`, `data/<type>`, `provider/<name>` (≤ 200) → `{key: ResourceSchema}` (unknown keys left out; provider schemas have `kind: "provider"` and the provider's Registry docs URL); 400 for other kinds |
 | `GET /catalog/functions` | → `FunctionSignature[]` `{name, description?, returnType, parameters: {name, type, description?, nullable?}[], variadicParameter?}`: Terraform's built-in functions |
 | `GET /workflows` | → `WorkflowSummary[]` (archived ones included with `archived: true`; the UI hides them from recents) |
-| `POST /workflows` | `{name, description?, templateId?}` → `Workflow` (gets a random `icon` whose glyph differs from the most recently updated workflows; the template's own `icon` only decorates its card) |
+| `POST /workflows` | `{name, description?, templateId?, kind?}` → `Workflow` (`kind: "docker"` or a docker template creates a docker-compose workflow) (gets a random `icon` whose glyph differs from the most recently updated workflows; the template's own `icon` only decorates its card) |
 | `GET /workflows/{id}` | → `Workflow` |
 | `PUT /workflows/{id}` | `Workflow` → `Workflow` (normalized + validated; `archived` in the body is ignored; `icon` is `{glyph, color}` with IDs matching `^[a-z0-9-]{1,32}$`, else 400; glyph `nimbo` is the explicit Nimbo mascot; a body without `icon` keeps the current one; `layout` is `""` (auto), `single` or `environments`, else 400, and `service` a module name (`^[A-Za-z][A-Za-z0-9_-]*$`), else 400; a body without them keeps the current ones) |
-| `DELETE /workflows/{id}` | → 204. Removes the sandbox first (containers, Floci-spawned containers/volumes/networks, network, data); if that fails while Docker is up → 500 and the workflow is kept |
+| `DELETE /workflows/{id}` | → 204. Removes the sandbox first (containers, Floci-spawned containers/volumes/networks, network, data; docker workflows: `ComposeRemove` — compose down -v, the images built for it, the compose work dir); if that fails while Docker is up → 500 and the workflow is kept |
 | `POST /workflows/{id}/duplicate` | `{name}` → `Workflow` (with a new random icon so the copy stands out) |
-| `POST /workflows/{id}/archive` | → `Workflow` with `archived: true`. Stops the sandbox keeping all state (409 while a run is active; proceeds without Docker); runs, load tests and `sandbox/start` then answer 409 `workflow is archived` |
+| `POST /workflows/{id}/archive` | → `Workflow` with `archived: true`. Stops the sandbox keeping all state (docker workflows: compose down, named volumes kept) (409 while a run is active; proceeds without Docker); runs (except a docker `down`), load tests and `sandbox/start` then answer 409 `workflow is archived` |
 | `POST /workflows/{id}/unarchive` | → `Workflow` (restored; the sandbox starts again on the next deploy) |
 | `POST /workflows/{id}/nodes` | `{kind, type, name?, position}` → `{workflow, nodeId}` (new nodes whose 248×84 card, plus 24px gap, overlaps another card move to the nearest free grid slot) |
 | `PATCH /workflows/{id}/nodes/{nodeId}` | `{name?, label?, position?, positioned?, parent?, body?, file?}` → `Workflow` (`file`: root `.tf` file to write the node to, `""` = recommended layout; invalid names → 400) |
@@ -1475,20 +2187,34 @@ Docker; the desktop onboarding wizard (`GET /setup`) and `nimbo doctor`
 | `POST /workflows/{id}/modules/{nodeId}/inline` | → `Workflow` (`hclcodec.InlineModule`; then the module's `*.tf` and `README.md` are deleted, other files stay). 400 for non-local modules, count/for_each, clashes, whole-module references; 409 when another local module also calls the directory |
 | `POST /workflows/{id}/modules/scaffold` | `{name}` (snake_case) → `ModuleScaffold{name, dir, files: {path: content}, call: {path, block}}`: a new local module `modules/<name>/` (versions.tf with the workflow's `required_version` and required providers — plus the catalog provider of every cloud the root does not require yet — as `>=` minimums; variables.tf, outputs.tf, main.tf, README.md) and the module block calling it from `main.tf` (environments layout: from `modules/<service>/main.tf` with `source = "../<name>"`); nothing is saved (the Code tab adds them as pending changes). 400 invalid name, 409 when `modules/<name>` exists |
 | `POST /terraform/format` | `{content, path?}` → `{content, changed}`: HCL formatted like `terraform fmt` (`hclcodec.Format`); 400 + diagnostics located in `path` (default `main.tf`) on syntax errors |
-| `GET /workflows/{id}/sandbox` | → `SandboxStatus` |
+| `GET /catalog/docker/images` | → `DockerImage[]` (curated palette: id, image, tag, label, description, category, icon, ports, env, volumes, healthcheck, connect templates, command, entrypoint) |
+| `GET /catalog/docker/compose-schema` | → the compose-spec JSON schema (completion) |
+| `GET /catalog/file-templates` | → `FileTemplate[]` (Code tab "New from template…", `internal/filetemplates`, sorted by kind, group, label: id, kind `docker`/`kubernetes`, group, label, description, fileName, stack?, snippet? — inserted under `services:` of a compose file instead of a new file —, content). Dockerfiles per stack pass every dk_* rule with their `.dockerignore` and the compose service snippet (tested) |
+| `POST /workflows/{id}/compose/services` | `{name?, image?, catalogId?, build?: {context, dockerfile?, target?, starter?}, position?}` → 201 `{workflow, nodeId}` (catalog secrets go to `.env` as `${VAR}`; a build context without Dockerfile gets a buildable starter) |
+| `PATCH /workflows/{id}/compose/services/{name}` | partial patch (null deletes, lists replace; `environment` entries `{key, secret: true}` keep the stored value; `name` renames and rewrites references) → `Workflow` |
+| `DELETE /workflows/{id}/compose/services/{name}` | → `Workflow` (references removed) |
+| `POST/PATCH/DELETE /workflows/{id}/compose/networks[/{name}]`, `…/compose/volumes[/{name}]` | `{name, driver?, external?, internal?}` → 201 `{workflow, nodeId}` / `Workflow` (renames/deletes update services) |
+| `GET /workflows/{id}/compose/connect?from=&to=` | → `ConnectRecipe[] {id, kind, label, description, condition?, network?, target?, env?}` |
+| `POST /workflows/{id}/compose/connect` | `{from, to, kind?, condition?, network?, target?, recipeId?}` → `Workflow` |
+| `PATCH /workflows/{id}/compose/layout` | `{positions: {nodeId: {x,y}\|null}}` → `Workflow` |
+| `PATCH /workflows/{id}/compose/stages/{nodeId}` | `{from}` → `Workflow` (rewrites that stage's FROM image) |
+| `GET /workflows/{id}/sandbox` | → `SandboxStatus` (400 for docker workflows, as `sandbox/{action}` and `state`) |
 | `POST /workflows/{id}/sandbox/start` / `stop` / `reset` | → `SandboxStatus` |
-| `POST /workflows/{id}/runs` | `{action, environment?}` → `Run` (starts sandbox if needed; environment defaults to the active one, 404 if unknown; plan/apply → 400 + diagnostics while error diagnostics other than `net_*` exist; 409 while another run is active) |
+| `POST /workflows/{id}/runs` | `{action, environment?}` → `Run` (starts sandbox if needed; environment defaults to the active one, 404 if unknown; plan/apply → 400 + diagnostics while error diagnostics other than `net_*` exist; 409 while another run is active). Docker workflows: `{action: up\|down\|build\|pull\|restart, service?, removeVolumes?, remapPorts?, timeoutSec?}` → 201 `Run` (`service`, `removeVolumes` echoed); up with busy fixed host ports and no `remapPorts` → 409 `{code: "port_conflict", conflicts: PortConflict[]}`; invalid compose files or unknown service → 400; no compose plugin → 503 `compose_missing`; Terraform actions on docker workflows and compose actions on Terraform ones → 400 |
 | `GET /workflows/{id}/runs` | → `Run[]` |
 | `GET /runs/{runId}` | → `Run` (with log) |
 | `POST /runs/{runId}/cancel` | → 204 |
 | `GET /workflows/{id}/state` | → `DeployedState` |
-| `GET /workflows/{id}/endpoints` | → `EndpointsInfo` (empty `resources` when nothing is deployed; empty `sandbox` while the sandbox is not running — resource URLs then use the saved stable ports). Refetch when `state.updated` / `sandbox.status` arrive |
+| `GET /workflows/{id}/compose/status` | docker workflows → `ComposeStatus{workflowId, project, state, services: {name, nodeId, state, health?, image?, containers: {id, name, state, health?, exitCode, restarts, image, imageId, startedAt?, ports: {container, protocol, hostIp, host, url?}[]}[]}[], remaps: PortRemap[], message?, updatedAt}`; the same body arrives as `compose.status` events on changes. 400 for Terraform workflows |
+| `GET /workflows/{id}/compose/ports` | → `{conflicts: PortConflict{service, containerPort, protocol, hostIp?, hostPort, holder?, suggestedPort}[], remaps: PortRemap{service, containerPort, protocol, hostPort, port}[]}`: up's pre-check on the saved files |
+| `GET /workflows/{id}/compose/logs?service=&tail=&follow=` | → `{lines: ComposeLogLine{service, container, line: LogLine}[]}` (tail default 200, ≤ 5000; no service = all, oldest first). `follow=true` → SSE: `event: compose.log` per line, `event: end` (`{error}`) when the followed containers stop |
+| `GET /workflows/{id}/endpoints` | → `EndpointsInfo` (empty `resources` when nothing is deployed; empty `sandbox` while the sandbox is not running — resource URLs then use the saved stable ports; docker workflows: one card per service publishing ports, see endpoints). Refetch when `state.updated` / `sandbox.status` / `compose.status` arrive |
 | `POST /workflows/{id}/endpoints/try` | `TryRequest` → `TryResult`; always 200 for operation failures (`ok: false`, `error`; stopped sandbox included); 400 bad request (missing `nodeId`/`action`, unknown action, invalid JSON input, URL outside the sandbox); 404 unknown resource |
 | `GET /workflows/{id}/endpoints/postman.json` | → Postman Collection v2.1 download (`Content-Disposition: attachment`) |
 | `GET /workflows/{id}/network` | → `NetworkSummary` (`basis` deployed/design + `basisReason`, networks, subnets with `classification` public/private/isolated/unknown and `why`, route tables, gateways, security groups with `summary`, placements, `findings`, `counts`, `notes`). Reads the cached deployed state; nothing deployed → design |
 | `POST /workflows/{id}/network/reachability` | `ReachabilityRequest {source, destination: {kind: internet\|node, nodeId?}, protocol: tcp\|udp\|icmp, port, live?}` → `ReachabilityResult {reachable, verdict, basis, summary, path: ReachabilityHop[], blockers, suggestions, live?: LiveCheck}`; 400 for unknown nodes, non-network nodes, internet → internet, bad protocol/port. `live` adds real probes (`LiveCheck.unavailable` explains when they can't run) |
 | `POST /workflows/{id}/network/test-instance` | `{subnet}` (aws_subnet ID/address; count/for_each subnets need an instance address) → 201 `{workflow, nodeId}` |
-| `GET /workflows/{id}/loadtests/targets` | → `LoadTarget[]` |
+| `GET /workflows/{id}/loadtests/targets` | → `LoadTarget[]` (docker workflows: `loadtest.SuggestCompose`) |
 | `POST /workflows/{id}/loadtests` | `LoadTestSpec` → `LoadTestRun` (targets may use a saved connection; outside the sandbox without `confirmExternal` → 428 `confirmation_required`) |
 | `GET /workflows/{id}/loadtests` | → `LoadTestRun[]` |
 | `GET /loadtests/{runId}` | → `LoadTestRun` |

@@ -3,7 +3,9 @@ package mcp
 import (
 	"encoding/json"
 	"fmt"
+	"math"
 	"sort"
+	"strconv"
 	"strings"
 
 	"github.com/ismaelosuna7824/nimbo/backend/internal/model"
@@ -501,8 +503,12 @@ type loadRunView struct {
 	Profile    string                  `json:"profile"`
 	Summary    *model.LoadSummary      `json:"summary,omitempty"`
 	Thresholds []model.ThresholdResult `json:"thresholds,omitempty"`
-	Error      string                  `json:"error,omitempty"`
-	Hint       string                  `json:"hint,omitempty"`
+	// Docker workflow targets: the bottleneck verdict and one line per
+	// container (peak CPU of its limit, memory, startup time).
+	Bottleneck string   `json:"bottleneck,omitempty"`
+	Containers []string `json:"containers,omitempty"`
+	Error      string   `json:"error,omitempty"`
+	Hint       string   `json:"hint,omitempty"`
 }
 
 func viewLoadRun(r *model.LoadTestRun) loadRunView {
@@ -510,5 +516,34 @@ func viewLoadRun(r *model.LoadTestRun) loadRunView {
 	if r.Spec.Profile.Label != "" {
 		profile = r.Spec.Profile.Label
 	}
-	return loadRunView{ID: r.ID, Status: r.Status, Target: r.Spec.Target.Label, Profile: profile, Summary: r.Summary, Thresholds: r.Thresholds, Error: r.Error}
+	v := loadRunView{ID: r.ID, Status: r.Status, Target: r.Spec.Target.Label, Profile: profile, Summary: r.Summary, Thresholds: r.Thresholds, Error: r.Error}
+	if res := r.Resources; res != nil {
+		v.Bottleneck = res.Verdict
+		for i, s := range res.Services {
+			line := fmt.Sprintf("%s: peak CPU %d%% of %s, peak memory %s", s.Service, int(math.Round(s.PeakCPUOf*100)), cpuLimitLabel(s.CPULimit, s.CPULimited), binBytes(s.PeakMem))
+			if s.MemLimited {
+				line += fmt.Sprintf(" (%d%% of %s)", int(math.Round(s.PeakMemOf*100)), binBytes(s.MemLimit))
+			}
+			if s.StartupMs != nil {
+				line += fmt.Sprintf(", startup %s", seconds(*s.StartupMs))
+			}
+			if i < len(res.Verdicts) {
+				line += " — " + res.Verdicts[i].Message
+			}
+			v.Containers = append(v.Containers, line)
+		}
+	}
+	return v
+}
+
+// cpuLimitLabel names a CPU limit ("0.25 CPU", "the host's 14 CPUs").
+func cpuLimitLabel(c float64, limited bool) string {
+	s := strconv.FormatFloat(c, 'f', -1, 64) + " CPU"
+	if c > 1 {
+		s += "s"
+	}
+	if !limited {
+		return "the host's " + s
+	}
+	return s
 }

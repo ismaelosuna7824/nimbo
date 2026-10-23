@@ -2,7 +2,7 @@
 // edges, and the image export composes the same elements into one standalone SVG, so both look alike.
 import type { ReactNode } from "react"
 import { BORDER_CARD_H, BORDER_CARD_W, CARD_H, CARD_W, FONT_FAMILY, fitText, LEGEND_W } from "./geometry"
-import type { FlowKind, GroupKind, SubnetTier } from "./model"
+import type { FlowKind, GroupKind, NetworkScope, SubnetTier } from "./model"
 import {
   ACCENT,
   CARD_TEXT_W,
@@ -55,6 +55,7 @@ export function GroupShape({
   height,
   kind,
   tier,
+  scope,
   label,
   sublabel,
   icon,
@@ -65,6 +66,7 @@ export function GroupShape({
   height: number
   kind: GroupKind
   tier?: SubnetTier
+  scope?: NetworkScope
   label: string
   sublabel?: readonly string[]
   icon?: string
@@ -72,7 +74,7 @@ export function GroupShape({
   iconWidth?: number
   selected?: boolean
 }) {
-  const s = groupStyle(kind, tier)
+  const s = groupStyle(kind, tier, scope)
   const textX = icon ? 18 + iconWidth : 14
   const max = Math.max(40, width - textX - 12)
   const logical = kind === "logical" || kind === "other"
@@ -83,7 +85,7 @@ export function GroupShape({
         y={0.5}
         width={Math.max(0, width - 1)}
         height={Math.max(0, height - 1)}
-        rx={kind === "cloud" ? 12 : 10}
+        rx={kind === "cloud" || kind === "docker-host" || kind === "k8s-cluster" ? 12 : 10}
         fill={s.fill}
         stroke={selected ? ACCENT : s.stroke}
         strokeWidth={selected ? 2 : 1.25}
@@ -228,8 +230,11 @@ export function LegendShape({ entries }: { entries: LegendEntry[] }) {
     if (e.kind === "data" || e.kind === "control") {
       sample = <EdgeShape path={`M 14 ${y - 4} L 50 ${y - 4}`} kind={e.kind} />
     } else {
-      const s = groupStyle("subnet", e.kind)
-      sample = <rect x={16} y={y - 12} width={32} height={16} rx={4} fill={s.fill} stroke={s.stroke} />
+      const s =
+        e.kind === "internal-network" || e.kind === "external-network"
+          ? groupStyle("docker-network", undefined, e.kind === "internal-network" ? "internal" : "external")
+          : groupStyle("subnet", e.kind)
+      sample = <rect x={16} y={y - 12} width={32} height={16} rx={4} fill={s.fill} stroke={s.stroke} strokeDasharray={s.dash} />
     }
     return (
       <g key={e.kind}>

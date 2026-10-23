@@ -32,6 +32,7 @@ const (
 	CheckImages            = "images"
 	CheckDockerSocket      = "docker-socket"
 	CheckDockerMemory      = "docker-memory"
+	CheckDockerCompose     = "docker-compose"
 	CheckDisk              = "disk"
 	CheckInternet          = "internet"
 )
@@ -151,6 +152,11 @@ func (c *Checker) Run(ctx context.Context) model.SetupStatus {
 	if cli.err == nil {
 		info, infoErr = c.info(ctx, cli.bin)
 	}
+	var composeVer string
+	var composeErr error
+	if cli.err == nil {
+		wg.Go(func() { composeVer, composeErr = c.composeVersion(ctx, cli) })
+	}
 	flavor := detectFlavor(cli.versionLine, cli.contextHost, "", "")
 	if info != nil {
 		flavor = detectFlavor(cli.versionLine, cli.contextHost, info.OperatingSystem, info.Name)
@@ -168,6 +174,8 @@ func (c *Checker) Run(ctx context.Context) model.SetupStatus {
 	add(c.socketCheck(ctx, cli, info, present[podImage], flavor))
 	add(c.memoryCheck(info, flavor))
 	wg.Wait()
+	add(c.composeCheck(cli, composeVer, composeErr))
+	add(c.kubeCheck(ctx, cli, info))
 	if c.plat.GOOS == "windows" {
 		checks = append([]model.SetupCheck{wsl}, checks...)
 	}
@@ -434,18 +442,7 @@ func memoryAdvice(goos, flavor string) string {
 func (c *Checker) checkDisk() model.SetupCheck {
 	ch := model.SetupCheck{ID: CheckDisk, Title: "Enough free disk space"}
 	intro := "Docker images, emulator data and Terraform providers need a few gigabytes of disk space."
-	dir := c.cfg.Home
-	for dir != "" && !dirExists(dir) {
-		parent := filepath.Dir(dir)
-		if parent == dir {
-			break
-		}
-		dir = parent
-	}
-	if dir == "" {
-		dir, _ = os.UserHomeDir()
-	}
-	free, err := freeBytes(dir)
+	free, err := freeBytes(c.homeVolume())
 	switch {
 	case err != nil:
 		ch.Status = model.SetupWarning

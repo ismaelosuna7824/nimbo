@@ -44,7 +44,7 @@ var (
 	// imageRef accepts [registry[:port]/]path[:tag][@digest] in lower case.
 	imageRef  = regexp.MustCompile(`^[a-z0-9]+(?:[._-][a-z0-9]+)*(?::[0-9]+)?(?:/[a-z0-9]+(?:(?:[._]|__|-+)[a-z0-9]+)*)*(?::[A-Za-z0-9_][A-Za-z0-9_.-]{0,127})?(?:@sha256:[a-f0-9]{64})?$`)
 	awsRegion = regexp.MustCompile(`^[a-z]{2}(?:-[a-z]+)+-[0-9]$`)
-	ruleCode  = regexp.MustCompile(`^bp_[a-z0-9_]+$`)
+	ruleCode  = regexp.MustCompile(`^(?:bp|dk)_[a-z0-9_]+$`)
 )
 
 // Normalize returns s with empty fields set to their defaults, surrounding
@@ -100,17 +100,32 @@ func Normalize(s model.Settings) (model.Settings, error) {
 		return model.Settings{}, fmt.Errorf("%w: defaultAWSRegion %q is not an AWS region (e.g. us-east-1)", ErrInvalid, out.DefaultAWSRegion)
 	}
 	out.BestPractices.Disabled = s.BestPractices.Disabled
-	out.BestPractices.DisabledRules = []string{}
-	for _, code := range s.BestPractices.DisabledRules {
+	var err error
+	if out.BestPractices.DisabledRules, err = ruleCodes(s.BestPractices.DisabledRules); err != nil {
+		return model.Settings{}, err
+	}
+	if out.BestPractices.EnabledRules, err = ruleCodes(s.BestPractices.EnabledRules); err != nil {
+		return model.Settings{}, err
+	}
+	if len(out.BestPractices.EnabledRules) == 0 {
+		out.BestPractices.EnabledRules = nil
+	}
+	return out, nil
+}
+
+// ruleCodes trims, checks, deduplicates and sorts rule codes.
+func ruleCodes(in []string) ([]string, error) {
+	out := []string{}
+	for _, code := range in {
 		code = strings.TrimSpace(code)
 		if !ruleCode.MatchString(code) {
-			return model.Settings{}, fmt.Errorf("%w: best-practice rule %q is not a rule code (bp_*)", ErrInvalid, code)
+			return nil, fmt.Errorf("%w: best-practice rule %q is not a rule code (bp_* or dk_*)", ErrInvalid, code)
 		}
-		if !slices.Contains(out.BestPractices.DisabledRules, code) {
-			out.BestPractices.DisabledRules = append(out.BestPractices.DisabledRules, code)
+		if !slices.Contains(out, code) {
+			out = append(out, code)
 		}
 	}
-	slices.Sort(out.BestPractices.DisabledRules)
+	slices.Sort(out)
 	return out, nil
 }
 
@@ -197,6 +212,7 @@ func clone(s model.Settings) model.Settings {
 	}
 	s.Images = images
 	s.BestPractices.DisabledRules = slices.Clone(s.BestPractices.DisabledRules)
+	s.BestPractices.EnabledRules = slices.Clone(s.BestPractices.EnabledRules)
 	return s
 }
 

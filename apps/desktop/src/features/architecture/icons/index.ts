@@ -2,10 +2,12 @@
 // Icons are third-party assets under their owners' terms (see NOTICE.md);
 // they are used only by the Architecture view, never by the dev canvas.
 
+import { techIcon } from "@/components/tech-icons";
 import {
   archCategoryOf,
   baseType,
   matchRule,
+  techTypeOf,
   type ArchCategory,
   type ArchProvider,
 } from "./classify";
@@ -16,6 +18,7 @@ export {
   baseType,
   isPlumbing,
   providerOfType,
+  techTypeOf,
   type ArchCategory,
   type ArchProvider,
 } from "./classify";
@@ -1263,6 +1266,12 @@ const TYPE_NAMES: Record<string, readonly [service: string, short: string]> = {
 
 export function archIconFor(provider: ArchProvider, resourceType: string): ArchIcon {
   const { slug, generic } = archIconSlugFor(provider, resourceType);
+  // Non-cloud providers' types (kubernetes_*, helm_release, docker_*…) get their technology's logo.
+  const tech = generic ? techTypeOf(resourceType) : undefined;
+  if (tech) {
+    const icon = techIcon(tech.icon);
+    return { src: icon.src, service: icon.label, short: icon.label, category: tech.category, generic: false };
+  }
   const [service, short, iconCategory] = ICONS[slug];
   const named = TYPE_NAMES[baseType(resourceType)];
   const category = archCategoryOf(provider, resourceType);

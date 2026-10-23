@@ -1,0 +1,18 @@
+# Kustomize overlay (e.g. overlays/prod/kustomization.yaml): the base plus
+# this environment's namespace, replica count and image tag.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: app-prod
+resources:
+  - ../../base
+patches:
+  - target:
+      kind: Deployment
+      name: app
+    patch: |-
+      - op: replace
+        path: /spec/replicas
+        value: 3
+images:
+  - name: ghcr.io/example/app
+    newTag: "1.0.0"

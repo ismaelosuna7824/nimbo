@@ -155,7 +155,7 @@ func startDaemon(home, addr string, legacyMigrated bool, logger *slog.Logger) (*
 	if err != nil {
 		return nil, err
 	}
-	engine := loadtest.NewEngine(loadtest.EngineConfig{Home: home, Events: hub, Resolver: sb, Connections: conns})
+	engine := loadtest.NewEngine(loadtest.EngineConfig{Home: home, Events: hub, Resolver: sb, Connections: conns, Monitor: sb})
 	server := api.New(api.Config{
 		Version: version, Home: home, Store: st, Connections: conns, Catalog: cat,
 		Sandbox: sb, LoadTest: engine, Events: hub, Logger: logger,

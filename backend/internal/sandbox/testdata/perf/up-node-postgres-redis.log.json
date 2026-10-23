@@ -1,0 +1,467 @@
+[
+ {
+  "t": "2026-10-22T21:06:30.94939Z",
+  "stream": "system",
+  "text": "$ docker compose -p nimbo-dk-perf-node-47etxq up --detach --build --wait --wait-timeout 300 --remove-orphans"
+ },
+ {
+  "t": "2026-10-22T21:06:31.119383Z",
+  "stream": "stderr",
+  "text": " Image nimbo-dk-perf-node-47etxq-api Building "
+ },
+ {
+  "t": "2026-10-22T21:06:31.30407Z",
+  "stream": "stdout",
+  "text": "#1 [internal] load local bake definitions"
+ },
+ {
+  "t": "2026-10-22T21:06:31.454549Z",
+  "stream": "stdout",
+  "text": "#1 reading from stdin 658B done"
+ },
+ {
+  "t": "2026-10-22T21:06:31.454569Z",
+  "stream": "stdout",
+  "text": "#1 DONE 0.0s"
+ },
+ {
+  "t": "2026-10-22T21:06:32.094245Z",
+  "stream": "stdout",
+  "text": ""
+ },
+ {
+  "t": "2026-10-22T21:06:32.094277Z",
+  "stream": "stdout",
+  "text": "#2 [internal] load build definition from Dockerfile"
+ },
+ {
+  "t": "2026-10-22T21:06:32.094308Z",
+  "stream": "stdout",
+  "text": "#2 transferring dockerfile:"
+ },
+ {
+  "t": "2026-10-22T21:06:32.337423Z",
+  "stream": "stdout",
+  "text": "#2 transferring dockerfile: 341B done"
+ },
+ {
+  "t": "2026-10-22T21:06:32.337441Z",
+  "stream": "stdout",
+  "text": "#2 DONE 0.2s"
+ },
+ {
+  "t": "2026-10-22T21:06:32.337442Z",
+  "stream": "stdout",
+  "text": ""
+ },
+ {
+  "t": "2026-10-22T21:06:32.337445Z",
+  "stream": "stdout",
+  "text": "#3 [internal] load metadata for docker.io/library/node:22-alpine"
+ },
+ {
+  "t": "2026-10-22T21:06:33.10214Z",
+  "stream": "stdout",
+  "text": "#3 DONE 0.9s"
+ },
+ {
+  "t": "2026-10-22T21:06:33.252799Z",
+  "stream": "stdout",
+  "text": ""
+ },
+ {
+  "t": "2026-10-22T21:06:33.252807Z",
+  "stream": "stdout",
+  "text": "#4 [internal] load .dockerignore"
+ },
+ {
+  "t": "2026-10-22T21:06:33.490256Z",
+  "stream": "stdout",
+  "text": "#4 transferring context:"
+ },
+ {
+  "t": "2026-10-22T21:06:33.592515Z",
+  "stream": "stdout",
+  "text": "#4 transferring context: 104B done"
+ },
+ {
+  "t": "2026-10-22T21:06:33.59252Z",
+  "stream": "stdout",
+  "text": "#4 DONE 0.4s"
+ },
+ {
+  "t": "2026-10-22T21:06:33.59252Z",
+  "stream": "stdout",
+  "text": ""
+ },
+ {
+  "t": "2026-10-22T21:06:33.59255Z",
+  "stream": "stdout",
+  "text": "#5 [stage-0 1/5] FROM docker.io/library/node:22-alpine@sha256:fe4f6d74e20370acb04ad889077d14d0f64a9c8ea6a42bc60cddf1e844699914"
+ },
+ {
+  "t": "2026-10-22T21:06:33.592554Z",
+  "stream": "stdout",
+  "text": "#5 DONE 0.0s"
+ },
+ {
+  "t": "2026-10-22T21:06:33.592554Z",
+  "stream": "stdout",
+  "text": ""
+ },
+ {
+  "t": "2026-10-22T21:06:33.592555Z",
+  "stream": "stdout",
+  "text": "#6 [internal] load build context"
+ },
+ {
+  "t": "2026-10-22T21:06:33.70438Z",
+  "stream": "stdout",
+  "text": "#6 transferring context: 1.96kB done"
+ },
+ {
+  "t": "2026-10-22T21:06:33.704393Z",
+  "stream": "stdout",
+  "text": "#6 DONE 0.1s"
+ },
+ {
+  "t": "2026-10-22T21:06:33.704394Z",
+  "stream": "stdout",
+  "text": ""
+ },
+ {
+  "t": "2026-10-22T21:06:33.704395Z",
+  "stream": "stdout",
+  "text": "#7 [stage-0 2/5] WORKDIR /app"
+ },
+ {
+  "t": "2026-10-22T21:06:33.704396Z",
+  "stream": "stdout",
+  "text": "#7 CACHED"
+ },
+ {
+  "t": "2026-10-22T21:06:33.704396Z",
+  "stream": "stdout",
+  "text": ""
+ },
+ {
+  "t": "2026-10-22T21:06:33.704396Z",
+  "stream": "stdout",
+  "text": "#8 [stage-0 3/5] COPY package.json ./"
+ },
+ {
+  "t": "2026-10-22T21:06:33.704397Z",
+  "stream": "stdout",
+  "text": "#8 CACHED"
+ },
+ {
+  "t": "2026-10-22T21:06:33.704408Z",
+  "stream": "stdout",
+  "text": ""
+ },
+ {
+  "t": "2026-10-22T21:06:33.704414Z",
+  "stream": "stdout",
+  "text": "#9 [stage-0 4/5] RUN --mount=type=cache,target=/root/.npm npm install --omit=dev --no-audit --no-fund"
+ },
+ {
+  "t": "2026-10-22T21:06:38.821598Z",
+  "stream": "stdout",
+  "text": "#9 5.117 "
+ },
+ {
+  "t": "2026-10-22T21:06:38.821642Z",
+  "stream": "stdout",
+  "text": "#9 5.117 added 92 packages in 3s"
+ },
+ {
+  "t": "2026-10-22T21:06:38.972132Z",
+  "stream": "stdout",
+  "text": "#9 5.118 npm notice"
+ },
+ {
+  "t": "2026-10-22T21:06:38.972274Z",
+  "stream": "stdout",
+  "text": "#9 5.118 npm notice New major version of npm available! 10.9.9 -> 12.2.1"
+ },
+ {
+  "t": "2026-10-22T21:06:38.972346Z",
+  "stream": "stdout",
+  "text": "#9 5.118 npm notice Changelog: https://github.com/npm/cli/releases/tag/v12.2.1"
+ },
+ {
+  "t": "2026-10-22T21:06:38.972347Z",
+  "stream": "stdout",
+  "text": "#9 5.118 npm notice To update run: npm install -g npm@12.2.1"
+ },
+ {
+  "t": "2026-10-22T21:06:38.972347Z",
+  "stream": "stdout",
+  "text": "#9 5.118 npm notice"
+ },
+ {
+  "t": "2026-10-22T21:06:39.473954Z",
+  "stream": "stdout",
+  "text": "#9 DONE 5.8s"
+ },
+ {
+  "t": "2026-10-22T21:06:39.641245Z",
+  "stream": "stdout",
+  "text": ""
+ },
+ {
+  "t": "2026-10-22T21:06:39.641294Z",
+  "stream": "stdout",
+  "text": "#10 [stage-0 5/5] COPY server.js ./"
+ },
+ {
+  "t": "2026-10-22T21:06:39.659666Z",
+  "stream": "stdout",
+  "text": "#10 DONE 0.2s"
+ },
+ {
+  "t": "2026-10-22T21:06:39.813694Z",
+  "stream": "stdout",
+  "text": ""
+ },
+ {
+  "t": "2026-10-22T21:06:39.8137Z",
+  "stream": "stdout",
+  "text": "#11 exporting to image"
+ },
+ {
+  "t": "2026-10-22T21:06:39.813703Z",
+  "stream": "stdout",
+  "text": "#11 exporting layers 0.1s done"
+ },
+ {
+  "t": "2026-10-22T21:06:39.994384Z",
+  "stream": "stdout",
+  "text": "#11 writing image sha256:bc9a06cff3181c0d4673d4589d2b0af9b0833bb002081d9a522859210ba81a49 done"
+ },
+ {
+  "t": "2026-10-22T21:06:39.994391Z",
+  "stream": "stdout",
+  "text": "#11 naming to docker.io/library/nimbo-dk-perf-node-47etxq-api done"
+ },
+ {
+  "t": "2026-10-22T21:06:39.994392Z",
+  "stream": "stdout",
+  "text": "#11 DONE 0.2s"
+ },
+ {
+  "t": "2026-10-22T21:06:40.054916Z",
+  "stream": "stdout",
+  "text": ""
+ },
+ {
+  "t": "2026-10-22T21:06:40.054923Z",
+  "stream": "stdout",
+  "text": "#12 resolving provenance for metadata file"
+ },
+ {
+  "t": "2026-10-22T21:06:40.108657Z",
+  "stream": "stdout",
+  "text": "#12 DONE 0.0s"
+ },
+ {
+  "t": "2026-10-22T21:06:40.110772Z",
+  "stream": "stderr",
+  "text": " Image nimbo-dk-perf-node-47etxq-api Built "
+ },
+ {
+  "t": "2026-10-22T21:06:40.115456Z",
+  "stream": "stderr",
+  "text": " Volume nimbo-dk-perf-node-47etxq_pgdata Creating "
+ },
+ {
+  "t": "2026-10-22T21:06:40.115458Z",
+  "stream": "stderr",
+  "text": " Network nimbo-dk-perf-node-47etxq_data Creating "
+ },
+ {
+  "t": "2026-10-22T21:06:40.115471Z",
+  "stream": "stderr",
+  "text": " Volume nimbo-dk-perf-node-47etxq_redisdata Creating "
+ },
+ {
+  "t": "2026-10-22T21:06:40.115478Z",
+  "stream": "stderr",
+  "text": " Volume nimbo-dk-perf-node-47etxq_redisdata Creating "
+ },
+ {
+  "t": "2026-10-22T21:06:40.115478Z",
+  "stream": "stderr",
+  "text": " Network nimbo-dk-perf-node-47etxq_data Creating "
+ },
+ {
+  "t": "2026-10-22T21:06:40.115488Z",
+  "stream": "stderr",
+  "text": " Volume nimbo-dk-perf-node-47etxq_pgdata Creating "
+ },
+ {
+  "t": "2026-10-22T21:06:40.11551Z",
+  "stream": "stderr",
+  "text": " Network nimbo-dk-perf-node-47etxq_web Creating "
+ },
+ {
+  "t": "2026-10-22T21:06:40.115519Z",
+  "stream": "stderr",
+  "text": " Network nimbo-dk-perf-node-47etxq_web Creating "
+ },
+ {
+  "t": "2026-10-22T21:06:40.13789Z",
+  "stream": "stderr",
+  "text": " Volume nimbo-dk-perf-node-47etxq_pgdata Created "
+ },
+ {
+  "t": "2026-10-22T21:06:40.137893Z",
+  "stream": "stderr",
+  "text": " Volume nimbo-dk-perf-node-47etxq_pgdata Created "
+ },
+ {
+  "t": "2026-10-22T21:06:40.144245Z",
+  "stream": "stderr",
+  "text": " Volume nimbo-dk-perf-node-47etxq_redisdata Created "
+ },
+ {
+  "t": "2026-10-22T21:06:40.144246Z",
+  "stream": "stderr",
+  "text": " Volume nimbo-dk-perf-node-47etxq_redisdata Created "
+ },
+ {
+  "t": "2026-10-22T21:06:40.157726Z",
+  "stream": "stderr",
+  "text": " Network nimbo-dk-perf-node-47etxq_data Created "
+ },
+ {
+  "t": "2026-10-22T21:06:40.157729Z",
+  "stream": "stderr",
+  "text": " Network nimbo-dk-perf-node-47etxq_data Created "
+ },
+ {
+  "t": "2026-10-22T21:06:40.157731Z",
+  "stream": "stderr",
+  "text": " Container nimbo-dk-perf-node-47etxq-db-1 Creating "
+ },
+ {
+  "t": "2026-10-22T21:06:40.157736Z",
+  "stream": "stderr",
+  "text": " Container nimbo-dk-perf-node-47etxq-cache-1 Creating "
+ },
+ {
+  "t": "2026-10-22T21:06:40.179074Z",
+  "stream": "stderr",
+  "text": " Network nimbo-dk-perf-node-47etxq_web Created "
+ },
+ {
+  "t": "2026-10-22T21:06:40.179077Z",
+  "stream": "stderr",
+  "text": " Network nimbo-dk-perf-node-47etxq_web Created "
+ },
+ {
+  "t": "2026-10-22T21:06:40.319383Z",
+  "stream": "stderr",
+  "text": " Container nimbo-dk-perf-node-47etxq-cache-1 Created "
+ },
+ {
+  "t": "2026-10-22T21:06:40.319387Z",
+  "stream": "stderr",
+  "text": " Container nimbo-dk-perf-node-47etxq-db-1 Created "
+ },
+ {
+  "t": "2026-10-22T21:06:40.319396Z",
+  "stream": "stderr",
+  "text": " Container nimbo-dk-perf-node-47etxq-api-1 Creating "
+ },
+ {
+  "t": "2026-10-22T21:06:40.360644Z",
+  "stream": "stderr",
+  "text": " Container nimbo-dk-perf-node-47etxq-api-1 Created "
+ },
+ {
+  "t": "2026-10-22T21:06:40.362003Z",
+  "stream": "stderr",
+  "text": " Container nimbo-dk-perf-node-47etxq-cache-1 Starting "
+ },
+ {
+  "t": "2026-10-22T21:06:40.362006Z",
+  "stream": "stderr",
+  "text": " Container nimbo-dk-perf-node-47etxq-db-1 Starting "
+ },
+ {
+  "t": "2026-10-22T21:06:40.543134Z",
+  "stream": "stderr",
+  "text": " Container nimbo-dk-perf-node-47etxq-cache-1 Started "
+ },
+ {
+  "t": "2026-10-22T21:06:40.56497Z",
+  "stream": "stderr",
+  "text": " Container nimbo-dk-perf-node-47etxq-db-1 Started "
+ },
+ {
+  "t": "2026-10-22T21:06:40.565094Z",
+  "stream": "stderr",
+  "text": " Container nimbo-dk-perf-node-47etxq-db-1 Waiting "
+ },
+ {
+  "t": "2026-10-22T21:06:40.565097Z",
+  "stream": "stderr",
+  "text": " Container nimbo-dk-perf-node-47etxq-cache-1 Waiting "
+ },
+ {
+  "t": "2026-10-22T21:06:46.0665Z",
+  "stream": "stderr",
+  "text": " Container nimbo-dk-perf-node-47etxq-cache-1 Healthy "
+ },
+ {
+  "t": "2026-10-22T21:06:46.066599Z",
+  "stream": "stderr",
+  "text": " Container nimbo-dk-perf-node-47etxq-db-1 Healthy "
+ },
+ {
+  "t": "2026-10-22T21:06:46.066603Z",
+  "stream": "stderr",
+  "text": " Container nimbo-dk-perf-node-47etxq-api-1 Starting "
+ },
+ {
+  "t": "2026-10-22T21:06:46.260981Z",
+  "stream": "stderr",
+  "text": " Container nimbo-dk-perf-node-47etxq-api-1 Started "
+ },
+ {
+  "t": "2026-10-22T21:06:46.26129Z",
+  "stream": "stderr",
+  "text": " Container nimbo-dk-perf-node-47etxq-api-1 Waiting "
+ },
+ {
+  "t": "2026-10-22T21:06:46.261294Z",
+  "stream": "stderr",
+  "text": " Container nimbo-dk-perf-node-47etxq-db-1 Waiting "
+ },
+ {
+  "t": "2026-10-22T21:06:46.261295Z",
+  "stream": "stderr",
+  "text": " Container nimbo-dk-perf-node-47etxq-cache-1 Waiting "
+ },
+ {
+  "t": "2026-10-22T21:06:46.763857Z",
+  "stream": "stderr",
+  "text": " Container nimbo-dk-perf-node-47etxq-cache-1 Healthy "
+ },
+ {
+  "t": "2026-10-22T21:06:46.763884Z",
+  "stream": "stderr",
+  "text": " Container nimbo-dk-perf-node-47etxq-db-1 Healthy "
+ },
+ {
+  "t": "2026-10-22T21:06:56.76321Z",
+  "stream": "stderr",
+  "text": " Container nimbo-dk-perf-node-47etxq-api-1 Healthy "
+ },
+ {
+  "t": "2026-10-22T21:06:56.767501Z",
+  "stream": "system",
+  "text": "Run succeeded."
+ }
+]

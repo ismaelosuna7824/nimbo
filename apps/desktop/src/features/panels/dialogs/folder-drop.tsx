@@ -69,7 +69,10 @@ export function FolderDrop() {
       readDataTransfer(e.dataTransfer)
         .then((p) => {
           if (p) startImport(p)
-          else toast.error("No Terraform files found", { description: "Drop a folder that contains .tf files." })
+          else
+            toast.error("No project files found", {
+              description: "Drop a folder with .tf files, a compose file, a Dockerfile or Kubernetes manifests (kustomization, Helm chart).",
+            })
         })
         .catch((err) => toast.error("Couldn't read the dropped folder", { description: errorMessage(err) }))
     }

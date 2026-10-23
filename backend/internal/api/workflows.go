@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"time"
 
@@ -18,8 +19,17 @@ import (
 
 // finalize derives edges/clouds/node files, fills value pairs and
 // recomputes diagnostics: normalization first, then schema validation, then
-// extra (e.g. import) diagnostics, deduplicated.
+// extra (e.g. import) diagnostics, deduplicated. A docker workflow derives
+// its compose graph and dk_* diagnostics from its files instead.
 func (s *Server) finalize(wf *model.Workflow, extra []model.Diagnostic) {
+	if wf.IsDocker() {
+		s.deriveDocker(wf, extra)
+		return
+	}
+	if wf.IsKubernetes() {
+		s.deriveKube(wf, extra)
+		return
+	}
 	wf.Diagnostics = nil
 	diags := hclcodec.Normalize(wf)
 	wf.NodeFiles = hclcodec.NodeFiles(wf, s.cfg.Catalog.ResourceFile)
@@ -97,6 +107,17 @@ func (s *Server) save(wf *model.Workflow, extra []model.Diagnostic) error {
 	return nil
 }
 
+// announceCreated tells every client (the desktop app included) that wf is
+// new and who asked for it, so the app can offer to open what an AI agent
+// created instead of leaving the user on the workflow they had open.
+func (s *Server) announceCreated(r *http.Request, wf *model.Workflow) {
+	origin := "app"
+	if r.Header.Get(model.ClientHeader) == model.ClientMCP {
+		origin = model.ClientMCP
+	}
+	s.cfg.Events.Publish(model.Event{Type: model.EventWorkflowCreated, Data: model.WorkflowCreated{ID: wf.ID, Name: wf.Name, Kind: wf.Kind, Origin: origin}})
+}
+
 // review replaces wf's best-practice findings (bp_*, info/warning only)
 // with fresh ones under the current settings (every rule when the server
 // has no settings store), and its network findings (net_*, design basis)
@@ -104,6 +125,9 @@ func (s *Server) save(wf *model.Workflow, extra []model.Diagnostic) error {
 // Settings shows up without an edit. Module views are never reviewed; the
 // local modules wf calls are read for the module rules.
 func (s *Server) review(wf *model.Workflow) {
+	if !wf.IsTerraform() {
+		return // finalize's dk_*/k8s_* checks honour the settings already
+	}
 	var cfg model.BestPracticeSettings
 	if s.cfg.Settings != nil {
 		cfg = s.cfg.Settings.Get().BestPractices
@@ -195,6 +219,9 @@ type createRequest struct {
 	Name        string `json:"name"`
 	Description string `json:"description"`
 	TemplateID  string `json:"templateId"`
+	// Kind "docker" creates a docker-compose workflow (implied by a docker
+	// template).
+	Kind string `json:"kind"`
 }
 
 func (s *Server) createWorkflow(w http.ResponseWriter, r *http.Request) error {
@@ -207,7 +234,44 @@ func (s *Server) createWorkflow(w http.ResponseWriter, r *http.Request) error {
 		wf    *model.Workflow
 		extra []model.Diagnostic
 	)
-	if req.TemplateID != "" {
+	tmplDocker, isDockerTemplate := dockerTemplate(req.TemplateID)
+	tmplKube, isKubeTemplate := kubeTemplate(req.TemplateID)
+	switch {
+	case req.Kind != "" && req.Kind != model.WorkflowDocker && req.Kind != model.WorkflowKubernetes:
+		return errorf(http.StatusBadRequest, "invalid kind %q: use %q, %q or omit it (Terraform)", req.Kind, model.WorkflowDocker, model.WorkflowKubernetes)
+	case req.Kind == model.WorkflowKubernetes && req.TemplateID != "" && !isKubeTemplate:
+		return errorf(http.StatusBadRequest, "template %q is not a Kubernetes template", req.TemplateID)
+	case req.Kind == model.WorkflowKubernetes || isKubeTemplate:
+		req.Name = orName(req.Name, tmplKube.Name)
+		if req.Description == "" {
+			req.Description = tmplKube.Description
+		}
+		if req.Name == "" {
+			return errorf(http.StatusBadRequest, "name is required")
+		}
+		wf = &model.Workflow{ID: store.NewID(req.Name)}
+		if err := s.newKubeWorkflow(wf, req.TemplateID); err != nil {
+			_ = s.cfg.Store.Delete(wf.ID)
+			return err
+		}
+	case req.Kind == model.WorkflowDocker && req.TemplateID != "" && !isDockerTemplate:
+		return errorf(http.StatusBadRequest, "template %q is not a docker template", req.TemplateID)
+	case req.Kind == model.WorkflowDocker || isDockerTemplate:
+		if req.Name == "" {
+			req.Name = tmplDocker.Name
+		}
+		if req.Description == "" {
+			req.Description = tmplDocker.Description
+		}
+		if req.Name == "" {
+			return errorf(http.StatusBadRequest, "name is required")
+		}
+		wf = &model.Workflow{ID: store.NewID(req.Name)}
+		if err := s.newDockerWorkflow(wf, req.TemplateID); err != nil {
+			_ = s.cfg.Store.Delete(wf.ID)
+			return err
+		}
+	case req.TemplateID != "":
 		files, found := s.cfg.Catalog.TemplateFiles(req.TemplateID)
 		if !found {
 			return errorf(http.StatusBadRequest, "unknown template %q", req.TemplateID)
@@ -232,21 +296,27 @@ func (s *Server) createWorkflow(w http.ResponseWriter, r *http.Request) error {
 		// Templates are starters: they get the recommended layout, not
 		// the file split of their source.
 		hclcodec.UnpinFiles(wf, s.cfg.Catalog.ResourceFile)
-	} else {
+	default:
 		if req.Name == "" {
 			return errorf(http.StatusBadRequest, "name is required")
 		}
 		wf = &model.Workflow{}
 	}
-	wf.ID = store.NewID(req.Name)
+	if wf.ID == "" {
+		wf.ID = store.NewID(req.Name)
+	}
 	wf.Name = req.Name
 	wf.Description = req.Description
 	// Random even for templates (their own icon only decorates the template
 	// card) so several workflows from one template stay distinguishable.
 	wf.Icon = s.randomIcon()
 	if err := s.save(wf, extra); err != nil {
+		if !wf.IsTerraform() {
+			_ = s.cfg.Store.Delete(wf.ID)
+		}
 		return err
 	}
+	s.announceCreated(r, wf)
 	return writeJSON(w, http.StatusCreated, wf)
 }
 
@@ -254,6 +324,13 @@ func (s *Server) getWorkflow(w http.ResponseWriter, r *http.Request) error {
 	wf, err := s.cfg.Store.Get(r.PathValue("id"))
 	if err != nil {
 		return err
+	}
+	// The files may have changed outside the app; settings too.
+	switch {
+	case wf.IsDocker():
+		s.deriveDocker(wf, nil)
+	case wf.IsKubernetes():
+		s.deriveKube(wf, nil)
 	}
 	s.review(wf)
 	return ok(w, wf)
@@ -276,6 +353,15 @@ func (s *Server) putWorkflow(w http.ResponseWriter, r *http.Request) error {
 		return errorf(http.StatusBadRequest, "body id %q does not match path id %q", in.ID, id)
 	}
 	wf, err := s.mutate(id, func(cur *model.Workflow) ([]model.Diagnostic, error) {
+		if in.Kind != cur.Kind {
+			return nil, errorf(http.StatusBadRequest, "kind can't change (%q)", cur.Kind)
+		}
+		if cur.IsDocker() {
+			return nil, putDocker(cur, in)
+		}
+		if cur.IsKubernetes() {
+			return nil, putKube(cur, in)
+		}
 		createdAt, archived, icon, layout, service := cur.CreatedAt, cur.Archived, cur.Icon, cur.Layout, cur.Service
 		*cur = in
 		// Archive state changes only through archive/unarchive.
@@ -318,13 +404,21 @@ func (s *Server) deleteWorkflow(w http.ResponseWriter, r *http.Request) error {
 	id := r.PathValue("id")
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if _, err := s.cfg.Store.Get(id); err != nil {
+	wf, err := s.cfg.Store.Get(id)
+	if err != nil {
 		return err
 	}
-	// Keep the workflow when its sandbox cannot be removed, so the user can
-	// retry instead of orphaning containers. Without Docker there is nothing
-	// to remove now; deletion proceeds.
-	if err := s.cfg.Sandbox.Remove(r.Context(), id); err != nil {
+	// Keep the workflow when its sandbox (compose project, cluster) cannot
+	// be removed, so the user can retry instead of orphaning containers.
+	// Without Docker there is nothing to remove now; deletion proceeds.
+	remove := s.cfg.Sandbox.Remove
+	switch {
+	case wf.IsDocker():
+		remove = s.cfg.Sandbox.ComposeRemove
+	case wf.IsKubernetes():
+		remove = s.cfg.Sandbox.KubeRemove
+	}
+	if err := remove(r.Context(), id); err != nil {
 		if s.cfg.Sandbox.DockerAvailable(r.Context()) == nil {
 			return fmt.Errorf("remove sandbox: %w", err)
 		}
@@ -359,12 +453,20 @@ func (s *Server) duplicateWorkflow(w http.ResponseWriter, r *http.Request) error
 	wf.CreatedAt = time.Time{} // Save stamps a fresh creation time
 	wf.Archived = false
 	wf.Icon = s.randomIcon(src.Icon) // a fresh look tells the copy apart
-	if err := s.save(&wf, nil); err != nil {
-		return err
+	if src.Compose != nil {
+		c := *src.Compose
+		c.Files, c.Profiles = slices.Clone(c.Files), slices.Clone(c.Profiles)
+		c.Graph.Nodes = slices.Clone(c.Graph.Nodes)
+		wf.Compose = &c
 	}
+	// Files first: saving derives from them (docker graph, module rules).
 	if err := copyTree(s.cfg.Store.AssetsDir(src.ID), s.cfg.Store.AssetsDir(wf.ID)); err != nil && !errors.Is(err, os.ErrNotExist) {
 		return fmt.Errorf("copy assets: %w", err)
 	}
+	if err := s.save(&wf, nil); err != nil {
+		return err
+	}
+	s.announceCreated(r, &wf)
 	return writeJSON(w, http.StatusCreated, &wf)
 }
 

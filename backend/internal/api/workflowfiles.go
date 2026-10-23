@@ -16,7 +16,9 @@ import (
 	"strings"
 	"unicode/utf8"
 
+	"github.com/ismaelosuna7824/nimbo/backend/internal/compose"
 	"github.com/ismaelosuna7824/nimbo/backend/internal/hclcodec"
+	"github.com/ismaelosuna7824/nimbo/backend/internal/kube"
 	"github.com/ismaelosuna7824/nimbo/backend/internal/model"
 )
 
@@ -64,6 +66,7 @@ func (s *Server) listFiles(w http.ResponseWriter, r *http.Request) error {
 			if err != nil {
 				return err
 			}
+			classifyFile(wf, &f)
 			files = append(files, f)
 		}
 	}
@@ -198,6 +201,7 @@ func (s *Server) putFileContent(w http.ResponseWriter, r *http.Request) error {
 			return nil, err
 		}
 		saved, err = assetFile(root, src, rel, 1)
+		classifyFile(cur, &saved)
 		return nil, err
 	})
 	if err != nil {
@@ -252,6 +256,7 @@ func (s *Server) lookupFile(wf *model.Workflow, rel string) (f model.WorkflowFil
 		}
 	}
 	f, err = assetFile(root, src, rel, placements(assets)[src])
+	classifyFile(wf, &f)
 	return f, nil, src, err
 }
 
@@ -379,6 +384,16 @@ func fileLanguage(rel string) string {
 		return "json"
 	case strings.HasSuffix(base, ".env.example"), base == ".env", strings.HasPrefix(base, ".env."):
 		return "shell"
+	case compose.IsDockerfileName(base):
+		return "dockerfile"
+	case base == "gemfile", base == "rakefile":
+		return "ruby"
+	case base == "makefile", base == "gnumakefile":
+		return "makefile"
+	case base == "nginx.conf":
+		return "nginx"
+	case base == ".editorconfig":
+		return "ini"
 	}
 	switch path.Ext(base) {
 	case ".tf", ".tfvars", ".hcl":
@@ -399,8 +414,60 @@ func fileLanguage(rel string) string {
 		return "markdown"
 	case ".sh", ".bash", ".zsh":
 		return "shell"
+	case ".java":
+		return "java"
+	case ".kt", ".kts":
+		return "kotlin"
+	case ".cs", ".csx":
+		return "csharp"
+	case ".rs":
+		return "rust"
+	case ".php", ".phtml":
+		return "php"
+	case ".rb", ".rake", ".gemspec":
+		return "ruby"
+	case ".sql":
+		return "sql"
+	case ".toml":
+		return "toml"
+	case ".properties":
+		return "properties"
+	case ".xml", ".xsd", ".xsl", ".plist", ".csproj", ".fsproj", ".vbproj", ".props", ".targets":
+		return "xml"
+	case ".html", ".htm":
+		return "html"
+	case ".css", ".scss", ".less":
+		return "css"
+	case ".proto":
+		return "protobuf"
+	case ".mk":
+		return "makefile"
+	case ".nginx":
+		return "nginx"
+	case ".conf":
+		// nginx keeps its server blocks in conf.d/ (or an nginx/ folder).
+		for _, dir := range strings.Split(strings.ToLower(path.Dir(rel)), "/") {
+			if dir == "nginx" || dir == "conf.d" {
+				return "nginx"
+			}
+		}
+		return "ini"
+	case ".ini", ".cfg", ".cnf":
+		return "ini"
 	}
 	return "text"
+}
+
+// classifyFile classifies a docker workflow's file (compose, dockerfile, env,
+// asset) or a Kubernetes workflow's (manifest, kustomization, chart,
+// values, helm-template, dockerfile, env, asset).
+func classifyFile(wf *model.Workflow, f *model.WorkflowFile) {
+	switch {
+	case wf.IsDocker():
+		f.Kind = compose.FileKind(wf, f.Path)
+	case wf.IsKubernetes():
+		f.Kind = kube.FileKind(wf, f.Path)
+	}
 }
 
 // cleanFilePath validates a file path from a request: slash-separated,

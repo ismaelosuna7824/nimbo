@@ -2,13 +2,18 @@ import { create } from "zustand"
 import { api, subscribeEvents } from "@/lib/api/client"
 import { queryClient } from "@/lib/query-client"
 import type {
+  ComposeBuild,
+  ComposeStats,
+  ComposeStatus,
   DeployedState,
   LoadSample,
   LoadTestRun,
   LogLine,
   Run,
   SandboxStatus,
+  ServiceUsage,
   ServerEvent,
+  KubeStatus,
   Workflow,
   WorkflowSummary,
 } from "@/lib/api/types"
@@ -38,6 +43,19 @@ interface WorkflowStoreState {
   mode: UserMode
 
   sandbox: SandboxStatus | null
+  /** Docker workspaces: containers of the compose project (null while unknown). */
+  compose: ComposeStatus | null
+  /** Docker and Kubernetes workspaces: the usage stream (host size, interval) without the samples. */
+  composeStats: ComposeStatsInfo | null
+  /**
+   * Docker and Kubernetes workspaces: last USAGE_SAMPLES usage samples, oldest first, per compose service name
+   * (docker) or workload node id (kubernetes).
+   */
+  composeUsage: Record<string, ServiceUsage[]>
+  /** Docker workspaces: build metrics of recent build/up runs, newest first. */
+  composeBuilds: ComposeBuild[]
+  /** Kubernetes workspaces: the local cluster and its workloads, pods, port-forwards, events (null while unknown). */
+  kube: KubeStatus | null
   runs: Run[]
   /** Live log lines per run id (from SSE); complete logs come from api.run(). */
   runLogs: Record<string, LogLine[]>
@@ -78,6 +96,15 @@ let pendingLogs: Record<string, LogLine[]> = {}
 let logTimer: number | undefined
 const LOG_FLUSH_MS = 50
 
+export type ComposeStatsInfo = Omit<ComposeStats, "services">
+
+/** Samples kept per service (about 2 minutes at the daemon's 1 s interval). */
+const USAGE_SAMPLES = 120
+/** Builds kept (the daemon keeps 20 per workflow). */
+const MAX_BUILDS = 20
+/** Workflow whose GET compose/stats is in flight (it starts the stream, one call is enough). */
+let statsLoading: string | null = null
+
 /** Asked before the user switches away from or closes the open workflow; resolves false to stay. */
 let leaveGuard: (() => Promise<boolean>) | null = null
 
@@ -111,6 +138,11 @@ export const useWorkflowStore = create<WorkflowStoreState>((set, get) => ({
   dialog: null,
   mode: (localStorage.getItem("nimbo.mode") as UserMode | null) ?? "guided",
   sandbox: null,
+  compose: null,
+  composeStats: null,
+  composeUsage: {},
+  composeBuilds: [],
+  kube: null,
   runs: [],
   runLogs: {},
   deployed: null,
@@ -132,6 +164,11 @@ export const useWorkflowStore = create<WorkflowStoreState>((set, get) => ({
       saveError: null,
       selectedNodeId: null,
       sandbox: null,
+      compose: null,
+      composeStats: null,
+      composeUsage: {},
+      composeBuilds: [],
+      kube: null,
       runs: [],
       runLogs: {},
       deployed: null,
@@ -153,6 +190,11 @@ export const useWorkflowStore = create<WorkflowStoreState>((set, get) => ({
       workflow: null,
       selectedNodeId: null,
       sandbox: null,
+      compose: null,
+      composeStats: null,
+      composeUsage: {},
+      composeBuilds: [],
+      kube: null,
       runs: [],
       runLogs: {},
       deployed: null,
@@ -185,7 +227,18 @@ export const useWorkflowStore = create<WorkflowStoreState>((set, get) => ({
       const current = get().workflow!
       const shared = shareWorkflow(current, saved)
       if (!get().dirty) set({ workflow: shared })
-      else set({ workflow: { ...current, edges: shared.edges, diagnostics: shared.diagnostics, clouds: shared.clouds } })
+      else
+        set({
+          workflow: {
+            ...current,
+            edges: shared.edges,
+            diagnostics: shared.diagnostics,
+            clouds: shared.clouds,
+            compose: shared.compose,
+            kubernetes: shared.kubernetes,
+            environments: current.kind === "kubernetes" ? shared.environments : current.environments,
+          },
+        })
       set({ saveError: null })
     } catch (err) {
       set({ saveError: err instanceof Error ? err.message : String(err), dirty: true })
@@ -209,18 +262,29 @@ export const useWorkflowStore = create<WorkflowStoreState>((set, get) => ({
   async refreshRuntime() {
     const wf = get().workflow
     if (!wf) return
-    const [sandbox, runs, deployed, loadTests] = await Promise.allSettled([
-      api.sandbox(wf.id),
+    const docker = wf.kind === "docker"
+    const kubernetes = wf.kind === "kubernetes"
+    const terraform = !docker && !kubernetes
+    const none = Promise.resolve(null)
+    if (docker || kubernetes) void loadComposeStats(wf.id, set, get, kubernetes)
+    const [sandbox, compose, runs, deployed, loadTests, builds, kube] = await Promise.allSettled([
+      terraform ? api.sandbox(wf.id) : none,
+      docker ? api.composeStatus(wf.id) : none,
       api.runs(wf.id),
-      api.state(wf.id),
+      terraform ? api.state(wf.id) : none,
       api.loadTests(wf.id),
+      docker ? api.composeBuilds(wf.id, MAX_BUILDS) : none,
+      kubernetes ? api.kubeStatus(wf.id) : none,
     ])
     if (get().workflow?.id !== wf.id) return
     set({
       sandbox: sandbox.status === "fulfilled" ? sandbox.value : null,
+      compose: compose.status === "fulfilled" ? compose.value : null,
       runs: runs.status === "fulfilled" ? runs.value : [],
       deployed: deployed.status === "fulfilled" ? deployed.value : null,
       loadTests: loadTests.status === "fulfilled" ? loadTests.value : [],
+      composeBuilds: builds.status === "fulfilled" ? mergeBuilds(get().composeBuilds, builds.value?.builds ?? []) : [],
+      kube: kube.status === "fulfilled" ? kube.value : null,
     })
   },
 }))
@@ -245,7 +309,12 @@ function applyEvent(
                 icon: e.data.icon,
                 archived: e.data.archived,
                 updatedAt: e.data.updatedAt,
-                nodeCount: e.data.nodes.length,
+                nodeCount:
+                  e.data.kind === "docker"
+                    ? (e.data.compose?.graph.nodes.filter((n) => n.kind === "service").length ?? 0)
+                    : e.data.kind === "kubernetes"
+                      ? (e.data.kubernetes?.graph.nodes.length ?? 0)
+                      : e.data.nodes.length,
                 clouds: e.data.clouds,
               }
             : w,
@@ -266,6 +335,38 @@ function applyEvent(
       break
     case "sandbox.status":
       set({ sandbox: e.data })
+      break
+    case "compose.status": {
+      set({ compose: e.data })
+      // GET compose/stats starts the `docker stats` stream: ask again once containers run.
+      const running = e.data.services.some((svc) => svc.containers.some((c) => c.state === "running"))
+      if (running && !s.composeStats?.streaming) void loadComposeStats(e.workflowId, set, get)
+      else if (!running && s.composeStats?.streaming) set({ composeStats: { ...s.composeStats, streaming: false } })
+      break
+    }
+    case "kube.status": {
+      set({ kube: e.data })
+      // GET kubernetes/stats starts the usage stream: ask again once pods run.
+      const running = e.data.workloads.some((w) => w.pods.some((p) => p.phase === "Running"))
+      if (running && !s.composeStats?.streaming) void loadComposeStats(e.workflowId, set, get, true)
+      else if (!running && s.composeStats?.streaming) set({ composeStats: { ...s.composeStats, streaming: false } })
+      break
+    }
+    case "compose.stats":
+    case "kube.stats": {
+      const usage = { ...s.composeUsage }
+      for (const u of e.data.services) {
+        const prev = usage[u.service] ?? []
+        usage[u.service] = prev.length >= USAGE_SAMPLES ? [...prev.slice(prev.length - USAGE_SAMPLES + 1), u] : [...prev, u]
+      }
+      set({
+        composeUsage: usage,
+        ...(s.composeStats && !s.composeStats.streaming && { composeStats: { ...s.composeStats, streaming: true } }),
+      })
+      break
+    }
+    case "compose.build":
+      set({ composeBuilds: mergeBuilds(s.composeBuilds, [e.data]) })
       break
     case "run.status": {
       const others = s.runs.filter((r) => r.id !== e.data.id)
@@ -298,6 +399,44 @@ function applyEvent(
       break
     }
   }
+}
+
+/**
+ * Fetches the live usage of a Docker workspace (`docker stats`) or a Kubernetes one (pod cgroups, keyed by workload
+ * node id), starting the daemon's stream, and keeps samples streamed meanwhile.
+ */
+async function loadComposeStats(
+  workflowId: string,
+  set: (partial: Partial<WorkflowStoreState>) => void,
+  get: () => WorkflowStoreState,
+  kubernetes = false,
+) {
+  if (statsLoading === workflowId) return
+  statsLoading = workflowId
+  try {
+    const { services, ...info } = await (kubernetes ? api.kubeStats(workflowId) : api.composeStats(workflowId))
+    if (get().workflow?.id !== workflowId) return
+    const prev = get().composeUsage
+    const usage: Record<string, ServiceUsage[]> = {}
+    for (const svc of services) {
+      const history = svc.history.length > 0 ? svc.history : svc.current ? [svc.current] : []
+      const last = history.length > 0 ? Date.parse(history[history.length - 1].t) : -Infinity
+      const live = (prev[svc.service] ?? []).filter((u) => Date.parse(u.t) > last)
+      usage[svc.service] = [...history, ...live].slice(-USAGE_SAMPLES)
+    }
+    set({ composeStats: info, composeUsage: usage })
+  } catch {
+    // Docker unavailable: views show no live usage, like an unknown compose status.
+  } finally {
+    if (statsLoading === workflowId) statsLoading = null
+  }
+}
+
+/** Builds by run id (`next` wins), newest first, at most MAX_BUILDS. */
+function mergeBuilds(prev: ComposeBuild[], next: ComposeBuild[]): ComposeBuild[] {
+  const byRun = new Map(prev.map((b) => [b.runId, b]))
+  for (const b of next) byRun.set(b.runId, b)
+  return [...byRun.values()].sort((a, b) => Date.parse(b.at) - Date.parse(a.at)).slice(0, MAX_BUILDS)
 }
 
 /** Structural equality of JSON values (what the API sends). */
@@ -345,6 +484,23 @@ function shareWorkflow(prev: Workflow | null, next: Workflow): Workflow {
   for (const key of Object.keys(next) as (keyof Workflow)[]) {
     if (key === "nodes" || key === "edges") continue
     if (jsonEqual(prev[key], next[key])) (out as Record<string, unknown>)[key] = prev[key]
+  }
+  // Docker and Kubernetes workspaces: unchanged graph nodes and edges keep their identity too (canvas cards skip re-rendering).
+  if (out.compose && prev.compose && out.compose !== prev.compose) {
+    const graph = {
+      nodes: shareById(prev.compose.graph.nodes, out.compose.graph.nodes),
+      edges: shareById(prev.compose.graph.edges, out.compose.graph.edges),
+    }
+    const same = graph.nodes === prev.compose.graph.nodes && graph.edges === prev.compose.graph.edges
+    out.compose = { ...out.compose, graph: same ? prev.compose.graph : graph }
+  }
+  if (out.kubernetes && prev.kubernetes && out.kubernetes !== prev.kubernetes) {
+    const graph = {
+      nodes: shareById(prev.kubernetes.graph.nodes, out.kubernetes.graph.nodes),
+      edges: shareById(prev.kubernetes.graph.edges, out.kubernetes.graph.edges),
+    }
+    const same = graph.nodes === prev.kubernetes.graph.nodes && graph.edges === prev.kubernetes.graph.edges
+    out.kubernetes = { ...out.kubernetes, graph: same ? prev.kubernetes.graph : graph }
   }
   return out
 }

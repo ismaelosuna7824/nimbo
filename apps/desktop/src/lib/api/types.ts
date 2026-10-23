@@ -134,6 +134,8 @@ export interface Diagnostic {
   detail?: string
   /** Suggested change (best-practice findings). */
   fix?: string
+  /** Documentation of the practice (docker findings). */
+  docs?: string
   nodeId?: string
   attribute?: string
   /** Code diagnostics (Terraform syntax errors): the file and 1-based line they point at. */
@@ -141,11 +143,18 @@ export interface Diagnostic {
   line?: number
 }
 
-/** Best-practice findings carry codes with this prefix. */
+/** Terraform best-practice findings carry codes with this prefix. */
 export const BEST_PRACTICE_PREFIX = "bp_"
+/** Docker checks carry codes with this prefix; their warnings and info are best practices (errors are problems docker compose refuses). */
+export const DOCKER_PREFIX = "dk_"
+/** Kubernetes checks carry codes with this prefix; warnings and info are best practices (errors: invalid YAML/schema, render failures). */
+export const KUBERNETES_PREFIX = "k8s_"
 
 export function isBestPractice(d: Diagnostic): boolean {
-  return d.code.startsWith(BEST_PRACTICE_PREFIX)
+  return (
+    d.code.startsWith(BEST_PRACTICE_PREFIX) ||
+    ((d.code.startsWith(DOCKER_PREFIX) || d.code.startsWith(KUBERNETES_PREFIX)) && d.severity !== "error")
+  )
 }
 
 /** Network findings (configuration review) carry codes with this prefix; they never block deploys. */
@@ -189,6 +198,16 @@ export interface Workflow {
   layout?: WorkflowLayout
   /** Service module name of the environments layout (modules/<service>); absent: the workflow name in snake_case. */
   service?: string
+  /**
+   * "docker": a Docker Compose workspace (files are the source of truth; `compose` holds the derived graph).
+   * "kubernetes": manifests / Kustomize / Helm (files are the source of truth; `kubernetes` holds the derived graph).
+   * Absent/"" = Terraform.
+   */
+  kind?: WorkflowKind
+  /** Docker workspaces only. */
+  compose?: ComposeModel
+  /** Kubernetes workspaces only. */
+  kubernetes?: KubernetesModel
   // derived, read-only
   edges: WorkflowEdge[]
   clouds: Cloud[]
@@ -204,7 +223,9 @@ export interface WorkflowSummary {
   name: string
   description?: string
   updatedAt: string
+  /** Docker workspaces: services. */
   nodeCount: number
+  kind?: WorkflowKind
   clouds: Cloud[]
   archived?: boolean
   icon?: WorkflowIcon
@@ -335,6 +356,10 @@ export interface CodeProblem {
   column: number
   endLine: number
   endColumn: number
+  /** k8s_* problems: field path inside the object ("spec.template.spec.containers[0].image"). */
+  attribute?: string
+  /** The diagnostic's fix text. */
+  fix?: string
 }
 
 export interface ConnectionRecipe {
@@ -350,7 +375,9 @@ export interface Template {
   id: string
   name: string
   description: string
-  cloud: Cloud
+  /** "" for Docker templates. */
+  cloud: Cloud | ""
+  kind?: WorkflowKind
   difficulty: "beginner" | "intermediate" | "advanced"
   tags: string[]
   icon?: WorkflowIcon
@@ -380,7 +407,9 @@ export interface SandboxStatus {
   message?: string
 }
 
-export type RunAction = "validate" | "plan" | "apply" | "destroy"
+export type RunAction = "validate" | "plan" | "apply" | "destroy" | ComposeRunAction | KubeClusterRunAction
+/** Kubernetes workspaces: lifecycle of the workflow's local cluster (up/down/restart are shared with docker). */
+export type KubeClusterRunAction = "cluster-stop" | "cluster-start" | "cluster-delete"
 export type RunStatus = "queued" | "running" | "succeeded" | "failed" | "canceled"
 
 export interface LogLine {
@@ -408,6 +437,10 @@ export interface Run {
   plan?: PlanSummary
   error?: string
   log?: LogLine[]
+  /** Kubernetes restart: the workload node id. */
+  workload?: string
+  removeVolumes?: boolean
+  deleteCluster?: boolean
 }
 
 export interface DeployedResource {
@@ -902,6 +935,52 @@ export interface LoadTestRun {
   summary?: LoadSummary
   thresholds?: ThresholdResult[]
   error?: string
+  /** Runs against a docker workflow's service: container usage during the run (set once it ends). */
+  resources?: LoadResources
+}
+
+export type LoadVerdictKind = "cpu-bound" | "single-core" | "memory-bound" | "oom" | "restarted" | "ok"
+
+export interface LoadServiceResources {
+  service: string
+  nodeId: string
+  /** The service the load test targeted. */
+  target?: boolean
+  cpuLimit: number
+  cpuLimited: boolean
+  memLimit: number
+  memLimited: boolean
+  startupMs?: number
+  /** t aligned with LoadTestRun.timeline[].t (0 = baseline). */
+  timeline: { t: number; cpuPercent: number; memBytes: number; containers: number }[]
+  peakCpuPercent: number
+  /** Ratio: 1 = the CPU limit is saturated. */
+  peakCpuOfLimit: number
+  peakMemBytes: number
+  /** Ratio: 1 = the memory limit is reached. */
+  peakMemOfLimit: number
+  restarts?: number
+  oomKilled?: boolean
+}
+
+export interface LoadVerdict {
+  service: string
+  kind: LoadVerdictKind
+  bottleneck: boolean
+  message: string
+  atRps?: number
+  atT?: number
+}
+
+/** Load test ↔ container usage correlation. */
+export interface LoadResources {
+  /** Targeted service. */
+  service?: string
+  services: LoadServiceResources[]
+  verdicts: LoadVerdict[]
+  /** Headline, e.g. "api reached 98% of its 0.25 CPU limit at 80 req/s — CPU-bound; raise limits or add replicas". */
+  verdict: string
+  note?: string
 }
 
 // ---------------------------------------------------------------- connections
@@ -976,7 +1055,7 @@ export interface SetupFix {
 }
 
 export interface SetupCheck {
-  /** wsl (Windows only) | docker-cli | docker-daemon | docker-permissions (Linux only) | images | docker-socket | docker-memory | disk | internet */
+  /** wsl (Windows only) | docker-cli | docker-daemon | docker-permissions (Linux only) | images | docker-socket | docker-memory | disk | internet | docker-compose (compose v2 plugin, for Docker workspaces) */
   id: string
   title: string
   status: SetupCheckStatus
@@ -1019,17 +1098,36 @@ export interface SetupProgress {
   error?: string
 }
 
+/** A new workflow; origin "mcp" when an AI agent created it through the MCP server. */
+export interface WorkflowCreated {
+  id: string
+  name: string
+  kind?: WorkflowKind
+  origin: "mcp" | "app"
+}
+
 // ---------------------------------------------------------------- events
 
 export type ServerEvent =
   | { type: "workflow.updated"; workflowId: string; data: Workflow }
   | { type: "workflow.deleted"; workflowId: string; data: { id: string } }
+  | { type: "workflow.created"; workflowId?: string; data: WorkflowCreated }
   | { type: "sandbox.status"; workflowId: string; data: SandboxStatus }
   | { type: "run.status"; workflowId: string; data: Run }
   | { type: "run.log"; workflowId: string; data: { runId: string; line: LogLine } }
   | { type: "state.updated"; workflowId: string; data: DeployedState }
   | { type: "loadtest.sample"; workflowId: string; data: { runId: string; sample: LoadSample } }
   | { type: "loadtest.status"; workflowId: string; data: LoadTestRun }
+  /** Docker workspaces: container state changed (and after every run). */
+  | { type: "compose.status"; workflowId: string; data: ComposeStatus }
+  /** Docker workspaces: one `docker stats` sample per service (about 1/s while containers run). */
+  | { type: "compose.stats"; workflowId: string; data: ComposeStatsEvent }
+  /** Docker workspaces: metrics of a build/up run that built at least one image. */
+  | { type: "compose.build"; workflowId: string; data: ComposeBuild }
+  /** Kubernetes workspaces: cluster, rollout, pod or event change (and after every run). */
+  | { type: "kube.status"; workflowId: string; data: KubeStatus }
+  /** Kubernetes workspaces: one usage sample per workload (`service` = workload node id), about 1/s while pods run. */
+  | { type: "kube.stats"; workflowId: string; data: ComposeStatsEvent }
   /** Global (no workflowId): a saved connection was created, updated or deleted. */
   | { type: "connections.updated"; workflowId?: string; data: { id: string } }
   /** Global (no workflowId): progress of a POST /setup/actions/{action}. */
@@ -1052,7 +1150,7 @@ export interface Settings {
   terraformImage: string
   /** Region of new AWS provider blocks and of Terraform runs in the sandbox. */
   defaultAWSRegion: string
-  /** Best-practice checks (bp_* diagnostics): on by default, off as a whole or per rule. */
+  /** Best-practice checks (bp_* Terraform, dk_* Docker advice): on by default, off as a whole or per rule; opt-in rules on demand. */
   bestPractices: BestPracticeSettings
 }
 
@@ -1060,16 +1158,36 @@ export interface BestPracticeSettings {
   disabled?: boolean
   /** Rule codes turned off, e.g. "bp_missing_tags". */
   disabledRules: string[]
+  /** Opt-in rules (defaultOff) turned on, e.g. "dk_hardening". */
+  enabledRules?: string[]
 }
 
 /** One best-practice check (GET /best-practices/rules). */
 export interface BestPracticeRule {
   code: string
   title: string
-  category: "inputs" | "versions" | "hardcoding" | "tagging" | "naming" | "security" | "structure"
+  category:
+    | "inputs"
+    | "versions"
+    | "hardcoding"
+    | "tagging"
+    | "naming"
+    | "security"
+    | "structure"
+    | "docker-build"
+    | "docker-compose"
+    | "docker-security"
+    | "kubernetes"
+    | "kubernetes-reliability"
+    | "kubernetes-security"
+    | "kubernetes-networking"
   /** Default severity (a few findings of a rule may be lower). */
   severity: Severity
   description: string
+  /** Documentation of the practice. */
+  docs?: string
+  /** Opt-in: only runs when listed in enabledRules. */
+  defaultOff?: boolean
 }
 
 /** An AI agent app Nimbo can register its MCP server with (GET /agents). */
@@ -1147,6 +1265,36 @@ export interface ImportProject {
    */
   layout: WorkflowLayout
   environments?: string[]
+  /** "docker": a compose project (or a lone Dockerfile); "kubernetes": manifests, a Kustomize tree or a Helm chart. */
+  kind?: WorkflowKind
+  /** Compose files in -f order; empty = a lone Dockerfile (compose.yaml is generated). */
+  composeFiles?: string[]
+  services?: number
+  dockerfiles?: string[]
+  /** Kubernetes projects: what would be deployed (manifests dirs, kustomizations, charts). */
+  kubeSources?: KubeSource[]
+  /** Kubernetes projects: objects rendered without an environment. */
+  objects?: number
+  /**
+   * Folders and files outside `path` the compose files reference (build contexts, Dockerfiles, env_file, bind mounts,
+   * config/secret files, include/extends files), imported too: the workflow keeps the layout from their common
+   * ancestor so the compose files stay byte-identical. Paths relative to `path` ("../services/api").
+   */
+  outside?: ImportOutside[]
+  /** A group of sibling Dockerfile folders ("dockerfiles:<parent>"): the folders, one service each of a generated compose.yaml. */
+  members?: string[]
+  /** Size of what a docker workflow imports. */
+  bytes?: number
+  fileCount?: number
+}
+
+export interface ImportOutside {
+  path: string
+  /** "build context", "Dockerfile", "env_file", "bind mount", "config", "secret", "compose file" */
+  kinds: string[]
+  dir: boolean
+  bytes: number
+  files: number
 }
 
 export interface ImportScan {
@@ -1243,7 +1391,7 @@ export interface ModuleExtraction {
 }
 
 /** "scaffold": README.md, .gitignore, terraform.tfvars.example generated next to the Terraform (unless the workflow has its own). */
-export type WorkflowFileKind = "terraform" | "tfvars" | "env" | "module" | "scaffold" | "asset"
+export type WorkflowFileKind = "terraform" | "tfvars" | "env" | "module" | "scaffold" | "asset" | "compose" | "dockerfile"
 export type FileLanguage =
   | "hcl"
   | "json"
@@ -1254,6 +1402,23 @@ export type FileLanguage =
   | "yaml"
   | "markdown"
   | "shell"
+  | "dockerfile"
+  | "java"
+  | "kotlin"
+  | "csharp"
+  | "rust"
+  | "php"
+  | "ruby"
+  | "sql"
+  | "toml"
+  | "ini"
+  | "properties"
+  | "xml"
+  | "html"
+  | "css"
+  | "nginx"
+  | "makefile"
+  | "protobuf"
   | "text"
 
 /**
@@ -1299,4 +1464,1079 @@ export interface ModuleScaffold {
   files: Record<string, string>
   /** The module block calling it and the code file it belongs in. */
   call: { path: string; block: string }
+}
+
+// ---------------------------------------------------------------------------
+// Docker workspaces (docker compose + Dockerfiles)
+
+export type WorkflowKind = "" | "docker" | "kubernetes"
+
+export function isDocker(wf: Pick<Workflow, "kind"> | null | undefined): boolean {
+  return wf?.kind === "docker"
+}
+
+export function isKubernetes(wf: Pick<Workflow, "kind"> | null | undefined): boolean {
+  return wf?.kind === "kubernetes"
+}
+
+export interface ComposeModel {
+  /** Compose files in `-f` order. */
+  files: string[]
+  /** Compose project name runs use ("nimbo-dk-<id>"). */
+  project: string
+  /** Active profiles. */
+  profiles?: string[]
+  /** Top-level `name:` (display only). */
+  name?: string
+  /** Files reached through include: / extends.file. */
+  included?: string[]
+  dockerfiles?: string[]
+  /** ${VAR} references with no value in .env and no default. */
+  unresolved?: string[]
+  graph: ComposeGraph
+}
+
+export interface ComposeGraph {
+  nodes: ComposeNode[]
+  edges: ComposeEdge[]
+}
+
+export type ComposeNodeKind = "service" | "build-stage" | "network" | "volume" | "config" | "secret" | "external"
+
+export interface ComposeNode {
+  /** Stable: "service:web", "network:backend", "volume:db-data", "stage:web:builder", "secret:x". */
+  id: string
+  kind: ComposeNodeKind
+  name: string
+  /** build-stage → its service node. */
+  parent?: string
+  /** Saved canvas position; absent = automatic layout. */
+  position?: Position
+  /** Where it is declared (workflow file path, 1-based line). */
+  file?: string
+  line?: number
+  external?: boolean
+  /** What an "external" node is (extends targets are "service"). */
+  externalKind?: "network" | "volume" | "config" | "secret" | "service"
+  /** A service whose profiles are not active. */
+  inactive?: boolean
+  service?: ServiceFacts
+  stage?: StageFacts
+  network?: { driver?: string; internal?: boolean; name?: string }
+  volume?: { driver?: string; name?: string }
+  /** configs/secrets. */
+  resource?: { file?: string; environment?: string; content?: boolean }
+}
+
+export interface ComposePortMapping {
+  host?: string
+  container: string
+  protocol?: string
+  hostIp?: string
+  published?: boolean
+}
+
+export interface ComposeHealthcheck {
+  test: string
+  interval?: string
+  timeout?: string
+  retries?: number
+  startPeriod?: string
+  startInterval?: string
+  disabled?: boolean
+}
+
+export type DependsOnCondition = "service_started" | "service_healthy" | "service_completed_successfully"
+
+export interface ComposeEnvVar {
+  key: string
+  /** Absent when redacted (secret) or taken from the shell/.env. */
+  value?: string
+  /** The value as written in the compose file when it differs from `value` (`${VAR}`, `$$`): what editors show and send back. */
+  raw?: string
+  /** Sent back without a value: keeps the stored value. */
+  secret?: boolean
+  fromFile?: string
+  unresolved?: boolean
+}
+
+export interface ComposeMount {
+  source?: string
+  target: string
+  type?: "volume" | "bind" | "tmpfs"
+  readOnly?: boolean
+}
+
+export interface ComposeDependency {
+  service: string
+  condition?: DependsOnCondition | string
+  required?: boolean
+  restart?: boolean
+}
+
+export interface ServiceFacts {
+  image?: { ref: string; repo: string; tag?: string; digest?: string }
+  build?: { context: string; dockerfile: string; target?: string; args?: Record<string, string> }
+  /** FROM of every Dockerfile stage. */
+  baseImages: string[]
+  /** Frameworks/runtimes found in the build context (node, express, nextjs, go, spring…), for icons. */
+  stack?: string[]
+  ports: ComposePortMapping[]
+  expose: string[]
+  command?: string
+  entrypoint?: string
+  healthcheck?: ComposeHealthcheck
+  healthcheckFrom?: "compose" | "dockerfile"
+  restart?: string
+  replicas?: number
+  resources?: { cpus?: string; memory?: string }
+  profiles?: string[]
+  environment: ComposeEnvVar[]
+  envFiles?: string[]
+  volumes: ComposeMount[]
+  networks: string[]
+  dependsOn: ComposeDependency[]
+  links?: string[]
+  containerName?: string
+  hostname?: string
+  user?: string
+  workingDir?: string
+  platform?: string
+  /** "svc" or "file#svc". */
+  extends?: string
+}
+
+export interface StageFacts {
+  index: number
+  name?: string
+  from: string
+  /** FROM another stage of the same Dockerfile. */
+  fromStage?: string
+  platform?: string
+  dockerfile: string
+  line: number
+  final?: boolean
+  expose?: string[]
+  user?: string
+  workdir?: string
+  cmd?: string
+  entrypoint?: string
+}
+
+/** No "bind": bind mounts have no node (see ServiceFacts.volumes). */
+export type ComposeEdgeKind =
+  | "depends_on"
+  | "links"
+  | "network"
+  | "volume"
+  | "config"
+  | "secret"
+  | "build"
+  | "copy_from"
+  | "extends"
+  | "inferred"
+
+/** Like Terraform edges, the source is used by the target: db → api for `api.depends_on: [db]`, network → service. */
+export interface ComposeEdge {
+  id: string
+  source: string
+  target: string
+  kind: ComposeEdgeKind
+  label?: string
+  condition?: string
+  /** Mount target path. */
+  path?: string
+  readOnly?: boolean
+  /** Inferred connections: the env key whose value names the source (DATABASE_URL). */
+  envKey?: string
+}
+
+export type DockerImageCategory =
+  | "web"
+  | "gateway"
+  | "language"
+  | "database"
+  | "cache"
+  | "search"
+  | "messaging"
+  | "storage"
+  | "observability"
+  | "auth"
+  | "workflow"
+  | "ai"
+  | "devtools"
+  | "apps"
+  | "cms"
+  | "network"
+  | "tools"
+
+/** A file template of GET /catalog/file-templates (Code tab "New from template…"). */
+export interface FileTemplate {
+  id: string
+  kind: "docker" | "kubernetes"
+  /** Menu group: "Dockerfile", ".dockerignore", "Environment", "Compose", "Config", "Kustomize", "Helm", "Manifest". */
+  group: string
+  label: string
+  description: string
+  /** Default name of the new file (for a snippet, the file it goes into). */
+  fileName: string
+  stack?: string
+  /** Inserted into an existing file (a compose service under `services:`) instead of creating one. */
+  snippet?: boolean
+  content: string
+}
+
+/** A curated image of GET /catalog/docker/images. */
+export interface DockerImage {
+  id: string
+  image: string
+  tag: string
+  label: string
+  description: string
+  category: DockerImageCategory
+  /** Tech icon ID (src/components/tech-icons). */
+  icon: string
+  ports: number[]
+  env?: { key: string; value: string; secret?: boolean; description?: string }[]
+  healthcheck?: ComposeHealthcheck
+  volumes?: { target: string; name?: string }[]
+  /** Env values another service sets to reach this one ({{host}}, {{port}}, {{env.KEY}} placeholders). */
+  connect?: { key: string; template: string }[]
+  command?: string
+  /** Replaces the image's entrypoint (e.g. "sh -c" chaining a setup step before command). */
+  entrypoint?: string
+}
+
+export interface AddServiceRequest {
+  name?: string
+  image?: string
+  /** DockerImage.id: image, ports, env, healthcheck and volumes from the catalog. */
+  catalogId?: string
+  /**
+   * Builds from `context`. A context without a Dockerfile gets a buildable starter (and the folder): node/python/go
+   * = a tiny HTTP server on 8080, static = nginx serving index.html on 80, alpine (default) = a container that keeps running.
+   */
+  build?: { context: string; dockerfile?: string; target?: string; starter?: DockerStarter }
+  position?: Position
+}
+
+export type DockerStarter = "node" | "python" | "go" | "static" | "alpine"
+
+/** PATCH /workflows/{id}/compose/services/{name}: set fields; null removes the key; lists replace the whole list. */
+export interface ServicePatch {
+  name?: string
+  image?: string | null
+  build?: { context: string; dockerfile?: string; target?: string } | null
+  ports?: ComposePortMapping[] | null
+  environment?: ComposeEnvVar[] | null
+  volumes?: ComposeMount[] | null
+  dependsOn?: ComposeDependency[] | null
+  healthcheck?: ComposeHealthcheck | null
+  restart?: string | null
+  replicas?: number | null
+  resources?: { cpus?: string; memory?: string } | null
+  networks?: string[] | null
+  command?: string | string[] | null
+  entrypoint?: string | string[] | null
+  profiles?: string[] | null
+  user?: string | null
+  containerName?: string | null
+  expose?: string[] | null
+  envFiles?: string[] | null
+}
+
+export interface ComposeNetworkRequest {
+  name: string
+  driver?: string
+  external?: boolean
+  internal?: boolean
+}
+
+export interface ComposeVolumeRequest {
+  name: string
+  driver?: string
+  external?: boolean
+}
+
+export type ComposeConnectKind = "depends_on" | "network" | "volume" | "env"
+
+/** One way to connect two compose nodes (GET /workflows/{id}/compose/connect). */
+export interface ComposeConnectRecipe {
+  id: string
+  kind: ComposeConnectKind
+  label: string
+  description?: string
+  condition?: DependsOnCondition
+  network?: string
+  env?: { key: string; value: string }[]
+  /** Volume recipes: the mount path when the catalog knows it; absent = ask the user and send `target`. */
+  target?: string
+}
+
+export interface ComposeConnectRequest {
+  from: string
+  to: string
+  kind: ComposeConnectKind
+  condition?: DependsOnCondition
+  network?: string
+  recipeId?: string
+  /** Volume mounts: path inside the container. */
+  target?: string
+}
+
+// Runtime (docker compose up/down of a docker workspace)
+
+export type ComposeRunAction = "up" | "down" | "build" | "pull" | "restart"
+
+export interface ComposeRunRequest {
+  action: ComposeRunAction
+  /** up/build/pull/restart: only this service. */
+  service?: string
+  /** down: also delete named volumes (data). */
+  removeVolumes?: boolean
+  /** up: move busy fixed host ports to free ones (an override file; the user's compose stays untouched). */
+  remapPorts?: boolean
+  timeoutSec?: number
+}
+
+export interface PortConflict {
+  service: string
+  containerPort: number
+  protocol: "tcp" | "udp"
+  hostIp?: string
+  hostPort: number
+  /** Process holding the port, when known. */
+  holder?: string
+  /** Free port remapPorts would use. */
+  suggestedPort: number
+}
+
+export interface PortRemap {
+  service: string
+  containerPort: number
+  protocol: "tcp" | "udp"
+  /** From the compose file. */
+  hostPort: number
+  /** Actually published. */
+  port: number
+}
+
+export type ComposeState = "absent" | "starting" | "running" | "stopped" | "error"
+export type ContainerHealth = "healthy" | "unhealthy" | "starting"
+
+export interface ComposePort {
+  container: number
+  protocol: "tcp" | "udp"
+  hostIp: string
+  host: number
+  /** http://127.0.0.1:<host>/ for TCP ports reachable from this machine. */
+  url?: string
+}
+
+export interface ComposeContainer {
+  id: string
+  name: string
+  state: "created" | "running" | "restarting" | "paused" | "exited" | "dead" | "removing"
+  health?: ContainerHealth
+  exitCode: number
+  restarts: number
+  image: string
+  imageId: string
+  startedAt?: string
+  finishedAt?: string
+  oomKilled?: boolean
+  /** Time from start until ready, in ms. */
+  startupMs?: number
+  /** CPU limit in cores; 0/absent = none. */
+  cpuLimit?: number
+  /** Memory limit in bytes; 0/absent = none. */
+  memLimit?: number
+  ports: ComposePort[]
+}
+
+export interface ComposeServiceStatus {
+  name: string
+  nodeId: string
+  state: ComposeState
+  health?: ContainerHealth
+  containers: ComposeContainer[]
+  /** Time from start until ready, in ms. */
+  startupMs?: number
+}
+
+export interface ComposeStatus {
+  workflowId: string
+  project: string
+  state: ComposeState
+  /** Every service of the compose files (absent ones too), by name. */
+  services: ComposeServiceStatus[]
+  remaps: PortRemap[]
+  message?: string
+  updatedAt: string
+  /** OOM kills, restart loops, failed exits and unhealthy containers. */
+  problems?: ComposeProblem[]
+}
+
+export interface ComposeProblem {
+  service: string
+  nodeId: string
+  container: string
+  kind: "oom" | "restarts" | "exit" | "unhealthy"
+  severity: "error" | "warning"
+  message: string
+  fix?: string
+  exitCode?: number
+  restarts?: number
+}
+
+/** One `docker stats` sample of a service (containers summed). % of limit = cpuPercent / cpuLimit. */
+export interface ServiceUsage {
+  service: string
+  /** ISO time. */
+  t: string
+  /** Running containers summed. */
+  containers: number
+  /** docker stats %: 100 = one core. */
+  cpuPercent: number
+  /** Cores: sum of limits, or host CPUs when unlimited. */
+  cpuLimit: number
+  cpuLimited: boolean
+  memBytes: number
+  memLimit: number
+  memLimited: boolean
+  /** Cumulative counters. */
+  netRxBytes: number
+  netTxBytes: number
+  blockReadBytes: number
+  blockWriteBytes: number
+  pids: number
+}
+
+/** GET /workflows/{id}/compose/stats (also starts the `docker stats` stream when containers run). */
+export interface ComposeStats {
+  workflowId: string
+  streaming: boolean
+  hostCpus: number
+  hostMemory: number
+  intervalMs: number
+  services: { service: string; nodeId: string; current?: ServiceUsage; history: ServiceUsage[] /* last 120 s, oldest first */ }[]
+  message?: string
+  updatedAt: string
+}
+
+export interface ComposeStatsEvent {
+  workflowId: string
+  services: ServiceUsage[]
+}
+
+export interface BuildStep {
+  name: string
+  stage?: string
+  instruction: string
+  internal?: boolean
+  cached: boolean
+  durationMs: number
+  error?: boolean
+}
+
+export interface BuildFinding {
+  code: "image_too_big" | "base_dominates" | "slow_uncached_step"
+  severity: "error" | "warning" | "info"
+  message: string
+  fix?: string
+  /** dk_* rule ids (GET /best-practices/rules). */
+  rules?: string[]
+}
+
+export interface ServiceBuildStats {
+  service: string
+  nodeId: string
+  image?: string
+  imageId?: string
+  /** node | go | python | java | dotnet | rust | ruby | php | static */
+  stack?: string
+  durationMs: number
+  cacheHits: number
+  cacheMisses: number
+  steps: BuildStep[]
+  sizeBytes: number
+  baseImage?: string
+  /** 0 = unknown. */
+  baseSizeBytes: number
+  /** Biggest first (top 8). */
+  layers: { createdBy: string; sizeBytes: number; base: boolean }[]
+  failed?: boolean
+  /** This build − the previous one. */
+  delta?: { prevRunId: string; durationMs: number; sizeBytes: number; cacheHits: number; cacheMisses: number }
+  findings: BuildFinding[]
+}
+
+/** Metrics of a build/up run that built at least one image. */
+export interface ComposeBuild {
+  runId: string
+  action: "build" | "up"
+  at: string
+  durationMs: number
+  succeeded: boolean
+  services: ServiceBuildStats[]
+}
+
+export interface ComposeLogLine {
+  service: string
+  container: string
+  line: LogLine
+}
+
+// ---------------------------------------------------------------------------
+// Kubernetes workspaces (manifests, Kustomize, Helm; mirror of backend/internal/model/kube.go)
+
+export type KubeSourceKind = "manifests" | "kustomize" | "helm"
+
+/** One deployable unit of a Kubernetes workflow, in apply order. */
+export interface KubeSource {
+  kind: KubeSourceKind
+  /** Manifest file/dir, kustomization dir (base) or chart dir, relative to the workflow files. */
+  path: string
+  /** Helm release name (default: the chart name). */
+  release?: string
+  /** Namespace of objects that declare none (default "default"). */
+  namespace?: string
+  /** Helm values files layered on the chart's values.yaml for every environment. */
+  valuesFiles?: string[]
+  /** Environment → Kustomize overlay dir / Helm values file (explicit; conventions fill envPaths). */
+  environments?: Record<string, string>
+  // derived, read-only
+  envPaths?: Record<string, string>
+  chart?: KubeChart
+  objects: number
+  error?: string
+}
+
+export interface KubeChart {
+  name: string
+  version: string
+  appVersion?: string
+  description?: string
+  icon?: string
+  dependencies?: KubeChartDependency[]
+}
+
+export interface KubeChartDependency {
+  name: string
+  version?: string
+  repository?: string
+  alias?: string
+  condition?: string
+  vendored: boolean
+  enabled: boolean
+}
+
+/** An image built from the workflow's files and loaded into the local cluster before `up`. */
+export interface KubeBuild {
+  image: string
+  context: string
+  dockerfile?: string
+  target?: string
+  args?: Record<string, string>
+}
+
+export interface KubernetesModel {
+  sources: KubeSource[]
+  builds?: KubeBuild[]
+  // derived, read-only
+  /** Environment the graph was rendered for ("" = base). */
+  environment?: string
+  files?: string[]
+  dockerfiles?: string[]
+  graph: KubeGraph
+}
+
+export interface KubeGraph {
+  nodes: KubeNode[]
+  edges: KubeEdge[]
+}
+
+export type KubeCategory = "workload" | "network" | "config" | "storage" | "autoscaling" | "rbac" | "cluster" | "custom"
+
+/** One rendered object. id = "<Kind>/<namespace>/<name>" ("<Kind>/<name>" cluster-scoped). */
+export interface KubeNode {
+  id: string
+  kind: string
+  apiVersion: string
+  name: string
+  namespace?: string
+  category: KubeCategory
+  position?: Position
+  source: number
+  sourceKind: KubeSourceKind
+  sourcePath: string
+  file?: string
+  line?: number
+  /** Canvas/inspector edits can be written back (Helm objects: field by field, see kubernetesFields). */
+  editable: boolean
+  labels?: Record<string, string>
+  /** Image repositories (icon hints for techIconFor). */
+  stack?: string[]
+  workload?: KubeWorkload
+  service?: KubeServiceFacts
+  routes?: KubeRoute[]
+  scaler?: KubeScaler
+  disruption?: KubeDisruption
+  storage?: KubeStorage
+  /** ConfigMap/Secret keys (values never sent). */
+  data?: string[]
+  custom?: boolean
+}
+
+export interface KubeWorkload {
+  replicas?: number
+  selector?: Record<string, string>
+  podLabels?: Record<string, string>
+  serviceAccount?: string
+  schedule?: string
+  serviceName?: string
+  containers: KubeContainer[]
+  initContainers?: KubeContainer[]
+  volumes?: KubeVolume[]
+  volumeClaimTemplates?: KubeClaimTemplate[]
+}
+
+export interface KubeContainer {
+  name: string
+  image: string
+  imageRef?: { ref: string; repo: string; tag?: string; digest?: string }
+  pullPolicy?: string
+  command?: string[]
+  args?: string[]
+  ports: KubeContainerPort[]
+  probes: KubeProbes
+  resources: KubeResources
+  env: KubeEnv[]
+  envFrom: KubeEnvFrom[]
+  volumeMounts: KubeVolumeMount[]
+}
+
+export interface KubeContainerPort {
+  name?: string
+  containerPort: number
+  protocol?: string
+}
+
+export interface KubeProbes {
+  liveness?: KubeProbe
+  readiness?: KubeProbe
+  startup?: KubeProbe
+}
+
+export interface KubeProbe {
+  type: "http" | "tcp" | "exec" | "grpc"
+  path?: string
+  /** Number or port name. */
+  port?: string
+  command?: string
+  initialDelaySeconds?: number
+  periodSeconds?: number
+  timeoutSeconds?: number
+  failureThreshold?: number
+}
+
+export interface KubeQuantities {
+  cpu?: string
+  memory?: string
+}
+
+export interface KubeResources {
+  requests: KubeQuantities
+  limits: KubeQuantities
+}
+
+export interface KubeEnv {
+  name: string
+  /** Absent for secret-looking names (secret set) and valueFrom. */
+  value?: string
+  secret?: boolean
+  from?: KubeRef
+}
+
+/** valueFrom: ConfigMap | Secret (name, key), Field (key = fieldPath), Resource (key = resource). */
+export interface KubeRef {
+  kind: "ConfigMap" | "Secret" | "Field" | "Resource"
+  name?: string
+  key?: string
+}
+
+export interface KubeEnvFrom {
+  kind: "ConfigMap" | "Secret"
+  name: string
+  prefix?: string
+}
+
+export interface KubeVolumeMount {
+  name: string
+  mountPath: string
+  subPath?: string
+  readOnly?: boolean
+}
+
+export interface KubeVolume {
+  name: string
+  kind: "configMap" | "secret" | "persistentVolumeClaim" | "emptyDir" | "hostPath" | "projected" | "other"
+  /** ConfigMap/Secret/claim name or host path. */
+  source?: string
+}
+
+export interface KubeClaimTemplate {
+  name: string
+  storageClass?: string
+  size?: string
+}
+
+export interface KubeServiceFacts {
+  type: "ClusterIP" | "NodePort" | "LoadBalancer" | "ExternalName" | string
+  headless?: boolean
+  ports: KubeServicePort[]
+  selector?: Record<string, string>
+  externalName?: string
+  /** The selector selects no rendered pod template. */
+  unmatched?: boolean
+}
+
+export interface KubeServicePort {
+  name?: string
+  port: number
+  targetPort?: string
+  nodePort?: number
+  protocol?: string
+}
+
+export interface KubeRoute {
+  host?: string
+  path?: string
+  service: string
+  port?: string
+  tls?: boolean
+  class?: string
+}
+
+export interface KubeScaler {
+  /** Node id of scaleTargetRef. */
+  target: string
+  minReplicas: number
+  maxReplicas: number
+  cpu?: number
+  memory?: number
+}
+
+export interface KubeDisruption {
+  minAvailable?: string
+  maxUnavailable?: string
+  selector?: Record<string, string>
+}
+
+export interface KubeStorage {
+  storageClass?: string
+  size?: string
+  accessModes?: string[]
+  provisioner?: string
+  default?: boolean
+}
+
+/** Source refers to target: the Service selects the workload, the workload uses the ConfigMap, the HPA scales it. */
+export type KubeEdgeKind =
+  | "selects"
+  | "routes"
+  | "env"
+  | "envFrom"
+  | "volume"
+  | "pvc"
+  | "storageclass"
+  | "scales"
+  | "disrupts"
+  | "serviceaccount"
+  | "binds"
+  | "netpol"
+  | "governs"
+  | "inferred"
+
+export interface KubeEdge {
+  id: string
+  source: string
+  target: string
+  kind: KubeEdgeKind
+  label?: string
+  envKey?: string
+}
+
+/** Where one field of a rendered object is written (GET /workflows/{id}/kubernetes/fields). */
+export interface KubeField {
+  /** "spec.replicas", "spec.template.spec.containers[name=web].image", "[0]" indexes. */
+  path: string
+  value: unknown
+  editable: boolean
+  /** Why it is read-only (computed by a template expression, several values keys…). */
+  reason?: string
+  file?: string
+  line?: number
+  via?: "manifest" | "patch" | "kustomization" | "values" | "template"
+  valuesKeys?: string[]
+}
+
+export interface KubeFields {
+  nodeId: string
+  fields: KubeField[]
+}
+
+export interface KubeRendered {
+  environment: string
+  sources: { index: number; kind: KubeSourceKind; path: string; yaml: string }[]
+  diagnostics: Diagnostic[]
+}
+
+export interface KubeObjectPatch {
+  node: string
+  set?: Record<string, unknown>
+  unset?: string[]
+}
+
+export interface KubeConnectRecipe {
+  id: string
+  kind: "expose" | "selects" | "route" | "envFrom" | "volume" | "env" | "serviceaccount" | "scale" | string
+  label: string
+  description: string
+}
+
+export interface KubeConnectRequest {
+  from: string
+  to: string
+  recipeId?: string
+  kind?: string
+  port?: number
+  path?: string
+  host?: string
+  key?: string
+}
+
+/** GET /catalog/kubernetes/schema: the Kubernetes swagger definitions (OpenAPI v2) the k8s_schema rule uses. */
+export interface KubeSchema {
+  version: string
+  /** "apps/v1/Deployment"… kinds that live in a namespace. */
+  namespaced: string[]
+  definitions: Record<string, Record<string, unknown>>
+}
+
+/** A palette entry of Kubernetes workspaces (GET /catalog/kubernetes). */
+export interface KubeCatalogItem {
+  /** "deployment-service", "image:<docker catalog id>", "chart:<name>". */
+  id: string
+  group: "starter" | "image" | "chart"
+  label: string
+  description: string
+  category: string
+  /** "kubernetes" for starters, else a tech icon id. */
+  icon: string
+  /** Object kinds the item adds. */
+  kinds: string[]
+  image?: string
+  workload?: "Deployment" | "StatefulSet"
+  chart?: { repository: string; name: string; version: string; appVersion?: string }
+}
+
+// Kubernetes runtime (mirror of backend/internal/model/kuberun.go): one local k3s cluster per workflow.
+
+/** Same values as ComposeState. */
+export type KubeState = "absent" | "starting" | "running" | "stopped" | "error"
+export type KubeClusterState = "absent" | "starting" | "running" | "stopped" | "error"
+
+export interface KubeRunRequest {
+  action: "up" | "down" | "restart" | "cluster-stop" | "cluster-start" | "cluster-delete"
+  /** restart: workload node id ("" = every Deployment/StatefulSet/DaemonSet). */
+  workload?: string
+  /** down: also delete PVCs (data!). */
+  removeVolumes?: boolean
+  /** down: also delete the cluster. */
+  deleteCluster?: boolean
+  /** up: environment to render (default: the active one). */
+  environment?: string
+  timeoutSec?: number
+}
+
+/** GET /workflows/{id}/kubernetes/status; SSE "kube.status". */
+export interface KubeStatus {
+  workflowId: string
+  cluster: KubeClusterStatus
+  /** Worst workload state (absent without workloads). */
+  state: KubeState
+  workloads: KubeWorkloadStatus[]
+  forwards: KubeForward[]
+  ingresses: KubeIngressURL[]
+  /** Newest first. */
+  events: KubeEvent[]
+  problems: KubeProblem[]
+  message?: string
+  updatedAt: string
+}
+
+export interface KubeClusterStatus {
+  name: string
+  state: KubeClusterState
+  image: string
+  version?: string
+  apiPort?: number
+  ingressPort?: number
+  /** Nimbo's kubeconfig for this cluster (kubectl --kubeconfig <it>). */
+  kubeconfig?: string
+  ingressClass?: string
+  storageClass?: string
+  message?: string
+}
+
+export interface KubeWorkloadStatus {
+  nodeId: string
+  kind: string
+  namespace: string
+  name: string
+  state: KubeState
+  desired: number
+  ready: number
+  updated: number
+  available: number
+  succeeded?: number
+  failed?: number
+  /** One line ("2 of 3 updated pods are ready"). */
+  rollout?: string
+  images: string[]
+  pods: KubePod[]
+  startupMs?: number
+  lastSchedule?: string
+}
+
+export interface KubePod {
+  name: string
+  namespace: string
+  phase: "Pending" | "Running" | "Succeeded" | "Failed" | "Unknown" | string
+  ready: boolean
+  restarts: number
+  /** CrashLoopBackOff, OOMKilled, ImagePullBackOff, Unschedulable… */
+  reason?: string
+  message?: string
+  node?: string
+  ip?: string
+  startedAt?: string
+  readyAt?: string
+  containers: KubePodContainer[]
+  cpuLimit?: number
+  memLimit?: number
+}
+
+export interface KubePodContainer {
+  name: string
+  image: string
+  init?: boolean
+  ready: boolean
+  state: "waiting" | "running" | "terminated" | string
+  reason?: string
+  message?: string
+  exitCode?: number
+  restarts: number
+  lastReason?: string
+  lastExitCode?: number
+  oomKilled?: boolean
+}
+
+/** Daemon-managed port-forward 127.0.0.1:hostPort → Service port. */
+export interface KubeForward {
+  nodeId: string
+  namespace: string
+  service: string
+  port: number
+  portName?: string
+  protocol: string
+  hostPort: number
+  url?: string
+  ready: boolean
+  message?: string
+}
+
+export interface KubeIngressURL {
+  nodeId: string
+  namespace: string
+  ingress: string
+  host?: string
+  path: string
+  service: string
+  port?: string
+  url: string
+  /** http://127.0.0.1:<ingress port><path> (send the Host header). */
+  address: string
+  serviceNodeId: string
+  class?: string
+}
+
+export interface KubeEvent {
+  type: "Normal" | "Warning" | string
+  reason: string
+  message: string
+  nodeId?: string
+  kind: string
+  namespace?: string
+  name: string
+  count: number
+  lastSeen: string
+}
+
+export interface KubeProblem {
+  nodeId: string
+  namespace: string
+  pod?: string
+  container?: string
+  kind: "oom" | "crashloop" | "restarts" | "image-pull" | "unschedulable" | "probe" | "exit" | "job-failed" | "config" | string
+  severity: "error" | "warning"
+  message: string
+  fix?: string
+  exitCode?: number
+  restarts?: number
+}
+
+export interface KubeLogLine {
+  nodeId?: string
+  namespace: string
+  pod: string
+  container: string
+  line: LogLine
+}
+
+// Convert a docker workflow to Kubernetes (POST /workflows/{id}/convert/kubernetes).
+
+export type ConvertKubernetesFormat = "manifests" | "kustomize" | "helm"
+
+export interface ConvertKubernetesRequest {
+  format: ConvertKubernetesFormat
+  /** Application name (DNS label): labels, chart/release name, Ingress hosts; default from the workflow name. */
+  name?: string
+  /** Default: name. */
+  namespace?: string
+  /** Preview: the report and generated files, nothing created. */
+  dryRun?: boolean
+}
+
+export interface KubeConvertReport {
+  format: ConvertKubernetesFormat
+  name: string
+  namespace: string
+  sources: KubeSource[]
+  builds: KubeBuild[]
+  environments: string[]
+  objects: { kind: string; name: string; file: string; service?: string }[]
+  /** One compose feature and what it became. */
+  mappings: { service?: string; from: string; to: string }[]
+  /** What couldn't be mapped (or only approximately): why and what to do. */
+  unmapped: { service?: string; feature: string; detail: string; severity: "warning" | "info"; file?: string; line?: number }[]
+}
+
+export interface ConvertKubernetesResponse {
+  /** The new Kubernetes workflow (not set for a dry run). */
+  workflow?: Workflow
+  report: KubeConvertReport
+  /** Dry run: the generated files by path. */
+  files?: Record<string, string>
 }

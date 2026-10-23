@@ -11,6 +11,36 @@ import (
 // the user (slash commands in most MCP clients).
 func registerPrompts(r *registry) {
 	r.addPrompt(&sdk.Prompt{
+		Name:        "create_docker_stack",
+		Title:       "Create Docker stack",
+		Description: "Build a docker-compose stack (services, Dockerfiles, databases) that follows Docker best practices, run it and prove it works.",
+		Arguments: []*sdk.PromptArgument{
+			{Name: "request", Description: "what to run, e.g. \"a Node.js API with PostgreSQL and Redis\"", Required: true},
+		},
+	}, func(a map[string]string) (string, error) {
+		req, err := required(a, "request")
+		if err != nil {
+			return "", err
+		}
+		return fmt.Sprintf(`Build this Docker stack with the Nimbo tools: %s
+
+Steps:
+1. list_templates: if a docker-* template is close, create_workflow from it (templates are worked examples of every practice below); otherwise create_workflow kind "docker" with a short descriptive name.
+2. Data services first: add_service with catalog_id from list_docker_images (pinned tag, credentials moved to .env, named volume, healthcheck, published on 127.0.0.1). Then the app services: add_service build_context with a starter (node, python, go, static) or your own Dockerfile, written with get_compose + apply_terraform_code.
+3. Wire them with connect_services: depends_on with condition service_healthy on every database, cache and broker; env recipes for connection URLs (DATABASE_URL=postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@db:5432/app).
+4. Follow these practices in every file you write:
+   - Images: pinned tags (postgres:16-alpine, node:22-alpine), never latest, in compose and in every FROM.
+   - Dockerfiles: multi-stage builds for compiled code and bundles (Go, Rust, Java, .NET, npm run build) with a slim runtime stage (alpine, -slim, gcr.io/distroless, -jre); copy the dependency manifests (package.json + lock, go.mod/go.sum, requirements.txt, pom.xml, *.csproj) and install before COPY . so source edits reuse the dependency layer; BuildKit cache mounts for package managers (RUN --mount=type=cache,target=/root/.npm npm ci; /root/.cache/pip; /go/pkg/mod; /root/.m2; /root/.nuget/packages); apt-get install --no-install-recommends with rm -rf /var/lib/apt/lists/* in the same RUN, apk add --no-cache; COPY (not ADD), WORKDIR (not cd); a non-root USER; exec-form CMD/ENTRYPOINT; a HEALTHCHECK (or a compose healthcheck).
+   - A .dockerignore in every build context: node_modules, .git, .venv, target, bin/obj, .env*.
+   - Secrets: in .env as ${VAR} (or secrets:), never literal in compose; build secrets with RUN --mount=type=secret, never ARG/ENV.
+   - Services: restart: unless-stopped; healthchecks with interval 5s or more and timeout below interval; init: true for node/python processes; deploy.resources.limits with memory and cpus; json-file logging with max-size and max-file (one x-defaults anchor merged into every service with <<: *defaults keeps restart and logging in one place); named volumes for data, never anonymous; data services on an internal network (networks: {data: {internal: true}}) with the app on both networks; publish only what users reach, databases on 127.0.0.1:<port> or not at all; no docker.sock, privileged, network_mode: host or pid: host.
+5. Fix every error diagnostic and every best_practices finding your edits return, then call review_docker and fix its warnings and info (or tell the user why one stays). Mention the opt-in rules it lists (hardening, limits, cache mounts) if they matter for the request.
+6. deploy (docker compose up, waits for healthy; remap_ports=true if host ports are taken). On failure read the log tail and get_deployed_state, fix and deploy again.
+7. get_endpoints and try_endpoint on the published services, then list_load_targets + run_load_test with preset smoke; get_docker_metrics for image sizes, build times, memory vs limits and startup times (resize limits from it).
+8. Summarize for the user: services and how they connect, what is published where, image sizes, health and smoke-test results, findings left open and why, and how to stop it (destroy).`, req), nil
+	})
+
+	r.addPrompt(&sdk.Prompt{
 		Name:        "create_infrastructure",
 		Title:       "Create infrastructure",
 		Description: "Design, deploy and smoke-test new infrastructure from a plain-language request.",
@@ -44,6 +74,31 @@ Steps:
 11. Summarize for the user: the structure (workflows/layers, modules, environments and layout), what was built (nodes and how they connect), deployed endpoints/outputs, smoke-test latency and error rate, best-practice findings you deliberately left (and why), and next steps (e.g. a load test or export_terraform).
 
 Nothing touches a real cloud: everything runs in the local Floci emulator. Tell the user they can watch the graph live in the Nimbo app.`, req, cloud), nil
+	})
+
+	r.addPrompt(&sdk.Prompt{
+		Name:        "create_kubernetes_app",
+		Title:       "Create Kubernetes app",
+		Description: "Build a Kubernetes app (manifests, Kustomize or Helm) that follows Kubernetes best practices, deploy it to a local cluster and prove it works.",
+		Arguments: []*sdk.PromptArgument{
+			{Name: "request", Description: "what to run, e.g. \"a Node.js API with PostgreSQL behind an Ingress, dev and prod\"", Required: true},
+		},
+	}, func(a map[string]string) (string, error) {
+		req, err := required(a, "request")
+		if err != nil {
+			return "", err
+		}
+		return fmt.Sprintf(`Build this Kubernetes app with the Nimbo tools: %s
+
+Steps:
+1. list_templates: if a k8s-* template is close (web app + PostgreSQL, Kustomize dev/prod, Helm chart, microservices with Ingress + HPA, CronJob worker), create_workflow from it; with an existing docker workflow, convert_to_kubernetes; otherwise create_workflow kind "kubernetes". Several environments: Kustomize overlays/<env> or Helm values-<env>.yaml.
+2. Add objects with add_kubernetes_object: catalog_id from list_kubernetes_catalog (image:<id> for databases and services: probes, resources, claims and a Secret already set; chart:<id> for pinned Helm charts; starters for Ingress, HPA, PDB, NetworkPolicy, ConfigMap, Secret) or your own yaml. Code you build goes in a folder with a Dockerfile, its image named <folder>:dev.
+3. Wire them with connect_kubernetes (expose, route, envFrom/volume, env, scale) and change fields with update_kubernetes_object.
+4. Follow these practices: pinned tags (local images <name>:dev + imagePullPolicy IfNotPresent); requests (cpu, memory) and a memory limit on every container; readiness and liveness probes on named ports for every container that serves a port; credentials in Secrets (secretKeyRef/envFrom), never literal env values; selectors equal to the pod template labels; Ingress backends on existing Service ports; securityContext runAsNonRoot + numeric runAsUser, automountServiceAccountToken: false when the pod never calls the API, no privileged/hostPath/hostNetwork; a Namespace object for the app; StatefulSets with volumeClaimTemplates for data and an init container that waits for dependencies (pg_isready) instead of crash-looping; prod-like environments with replicas >= 2 (or an HPA) and a PodDisruptionBudget.
+5. Fix every error diagnostic and best_practices finding the edits return, then review_kubernetes for each environment (update_workflow environment switches it) and fix warnings and info (or tell the user why one stays).
+6. deploy (local k3s cluster; waits for rollouts). On failure read get_deployed_state problems/events and get_kubernetes_logs, fix and deploy again.
+7. get_endpoints and try_endpoint on the Services and Ingress URLs, then list_load_targets + run_load_test with preset smoke.
+8. Summarize: objects and how they connect, URLs, health and smoke-test results, findings left open and why, and how to stop it (destroy, kubernetes_cluster stop).`, req), nil
 	})
 
 	r.addPrompt(&sdk.Prompt{

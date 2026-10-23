@@ -66,8 +66,57 @@ export async function loadLanguage(lang: FileLanguage): Promise<Extension> {
     case "shell":
       parser = (await import("@codemirror/legacy-modes/mode/shell")).shell
       break
+    case "dockerfile":
+      parser = (await import("@codemirror/legacy-modes/mode/dockerfile")).dockerFile
+      break
     case "markdown":
       parser = markdownParser as StreamParser<unknown>
+      break
+    case "java":
+      parser = (await import("@codemirror/legacy-modes/mode/clike")).java
+      break
+    case "kotlin":
+      parser = (await import("@codemirror/legacy-modes/mode/clike")).kotlin
+      break
+    case "csharp":
+      parser = (await import("@codemirror/legacy-modes/mode/clike")).csharp
+      break
+    case "php":
+      parser = (await import("./php-language")).php
+      break
+    case "rust":
+      parser = (await import("@codemirror/legacy-modes/mode/rust")).rust
+      break
+    case "ruby":
+      parser = (await import("@codemirror/legacy-modes/mode/ruby")).ruby
+      break
+    case "sql":
+      parser = (await import("@codemirror/legacy-modes/mode/sql")).standardSQL
+      break
+    case "toml":
+      parser = (await import("@codemirror/legacy-modes/mode/toml")).toml
+      break
+    case "ini":
+    case "properties":
+      parser = (await import("@codemirror/legacy-modes/mode/properties")).properties
+      break
+    case "xml":
+      parser = (await import("@codemirror/legacy-modes/mode/xml")).xml
+      break
+    case "html":
+      parser = (await import("@codemirror/legacy-modes/mode/xml")).html
+      break
+    case "css":
+      parser = (await import("@codemirror/legacy-modes/mode/css")).css
+      break
+    case "nginx":
+      parser = (await import("@codemirror/legacy-modes/mode/nginx")).nginx
+      break
+    case "protobuf":
+      parser = (await import("@codemirror/legacy-modes/mode/protobuf")).protobuf
+      break
+    case "makefile":
+      parser = (await import("./makefile-language")).makefile as StreamParser<unknown>
       break
     default:
       return []
@@ -99,6 +148,10 @@ export const codeHighlightLight = HighlightStyle.define([
   { tag: t.strong, fontWeight: "700" },
   { tag: t.link, color: "#1d4ed8", textDecoration: "underline" },
   { tag: t.quote, color: "#2f7d32", fontStyle: "italic" },
+  { tag: [t.bool, t.null, t.self], color: "#0e7490" },
+  { tag: [t.className, t.namespace], color: "#a626a4" },
+  { tag: [t.regexp, t.escape], color: "#0e7490" },
+  { tag: [t.labelName, t.macroName], color: "#c2410c" },
   { tag: t.invalid, color: "#dc2626" },
 ])
 
@@ -126,5 +179,9 @@ export const codeHighlightDark = HighlightStyle.define([
   { tag: t.strong, fontWeight: "700" },
   { tag: t.link, color: "#61afef", textDecoration: "underline" },
   { tag: t.quote, color: "#98c379", fontStyle: "italic" },
+  { tag: [t.bool, t.null, t.self], color: "#56b6c2" },
+  { tag: [t.className, t.namespace], color: "#c678dd" },
+  { tag: [t.regexp, t.escape], color: "#56b6c2" },
+  { tag: [t.labelName, t.macroName], color: "#d19a66" },
   { tag: t.invalid, color: "#f87171" },
 ])

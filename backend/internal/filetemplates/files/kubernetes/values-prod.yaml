@@ -1,0 +1,15 @@
+# Production overrides: more replicas, a released image tag and room to grow.
+replicaCount: 3
+
+image:
+  tag: "1.0.0"
+
+resources:
+  requests:
+    cpu: 250m
+    memory: 256Mi
+  limits:
+    memory: 512Mi
+
+env:
+  LOG_LEVEL: info

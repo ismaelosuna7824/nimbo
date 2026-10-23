@@ -60,12 +60,25 @@ func (s *Store) List() ([]model.WorkflowSummary, error) {
 		if clouds == nil {
 			clouds = []model.Cloud{}
 		}
+		count := len(wf.Nodes)
+		if wf.IsDocker() && wf.Compose != nil {
+			count = 0
+			for _, n := range wf.Compose.Graph.Nodes {
+				if n.Kind == model.ComposeService {
+					count++
+				}
+			}
+		}
+		if wf.IsKubernetes() && wf.Kubernetes != nil {
+			count = len(wf.Kubernetes.Graph.Nodes)
+		}
 		out = append(out, model.WorkflowSummary{
 			ID:          wf.ID,
 			Name:        wf.Name,
 			Description: wf.Description,
+			Kind:        wf.Kind,
 			UpdatedAt:   wf.UpdatedAt,
-			NodeCount:   len(wf.Nodes),
+			NodeCount:   count,
 			Clouds:      clouds,
 			Archived:    wf.Archived,
 			Icon:        wf.Icon,

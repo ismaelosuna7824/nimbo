@@ -87,6 +87,24 @@ func TestPutRejectsInvalid(t *testing.T) {
 	}
 }
 
+func TestPutNormalizesBestPracticeRules(t *testing.T) {
+	st, _ := Open(t.TempDir())
+	saved, err := st.Put(model.Settings{BestPractices: model.BestPracticeSettings{
+		DisabledRules: []string{"dk_no_restart", " bp_missing_tags", "dk_no_restart"},
+		EnabledRules:  []string{"dk_hardening", "dk_hardening"},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	bp := saved.BestPractices
+	if len(bp.DisabledRules) != 2 || bp.DisabledRules[0] != "bp_missing_tags" || bp.DisabledRules[1] != "dk_no_restart" || len(bp.EnabledRules) != 1 {
+		t.Errorf("best practices = %+v", bp)
+	}
+	if _, err := st.Put(model.Settings{BestPractices: model.BestPracticeSettings{EnabledRules: []string{"net_x"}}}); !errors.Is(err, ErrInvalid) {
+		t.Errorf("enabled net_x: err = %v", err)
+	}
+}
+
 func TestOpenKeepsValidFieldsOfBadFile(t *testing.T) {
 	home := t.TempDir()
 	data := `{"defaultMode":"pro","docker":"","images":{"aws":"BAD IMAGE","azure":"me/az:1"},"terraformImage":"tf:1.9","defaultAWSRegion":"nowhere"}`

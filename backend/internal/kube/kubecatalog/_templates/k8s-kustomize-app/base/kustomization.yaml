@@ -1,0 +1,16 @@
+# The app every environment shares; overlays/dev and overlays/prod change
+# the namespace, replicas, resources and the page.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+labels:
+  - pairs:
+      app.kubernetes.io/name: hello
+    includeSelectors: true
+resources:
+  - deployment.yaml
+  - service.yaml
+  - ingress.yaml
+configMapGenerator:
+  - name: site
+    files:
+      - index.html

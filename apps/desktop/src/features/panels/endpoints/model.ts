@@ -19,6 +19,7 @@ import {
   type LucideIcon,
 } from "lucide-react"
 import type { AccessKind, ResourceAccess } from "@/lib/api/types"
+import { nodeKind } from "@/features/kubernetes/deploy/kube-model"
 
 export interface KindGroup {
   id: string
@@ -68,6 +69,76 @@ export const KIND_GROUPS: KindGroup[] = [
     blurb: "Everything else that is running in your sandbox.",
     icon: Box,
     kinds: ["stream", "event-bus", "state-machine", "secret", "key", "parameter", "user-pool", "database", "cache", "kubernetes", "generic"],
+  },
+]
+
+/** Display order of a Docker workspace's Endpoints tab: one card per service that publishes ports. */
+export const DOCKER_KIND_GROUPS: KindGroup[] = [
+  {
+    id: "web",
+    title: "Web services",
+    blurb: "Containers answering HTTP on this machine: open them in your browser, curl, Postman or your app.",
+    icon: Globe,
+    kinds: ["web-service", "http-api"],
+  },
+  {
+    id: "data",
+    title: "Databases & caches",
+    blurb: "Connect with your usual client or the snippets below, using the credentials from the compose file.",
+    icon: Database,
+    kinds: ["database", "cache"],
+  },
+  {
+    id: "others",
+    title: "Other services",
+    blurb: "Every other port your containers publish on this machine.",
+    icon: Box,
+    kinds: ["generic", "queue", "topic", "bucket", "table", "stream", "event-bus", "state-machine", "secret", "key", "parameter", "user-pool", "kubernetes", "instance", "function", "function-url"],
+  },
+]
+
+const ROUTE_KINDS = ["Ingress", "HTTPRoute"]
+/** Kubernetes: the card of an Ingress/HTTPRoute (one URL per rule) rather than a Service's port-forward. */
+const isKubeRoute = (r: ResourceAccess) => !!r.nodeId && ROUTE_KINDS.includes(nodeKind(r.nodeId))
+const WEB_KINDS: AccessKind[] = ["web-service", "http-api"]
+const DATA_KINDS: AccessKind[] = ["database", "cache"]
+
+/**
+ * Display order of a Kubernetes workspace's Endpoints tab: Ingress URLs, then one card per forwarded Service.
+ * `match` decides membership (kinds alone can't tell an Ingress from the Service behind it).
+ */
+export const KUBE_KIND_GROUPS: (KindGroup & { match: (r: ResourceAccess) => boolean })[] = [
+  {
+    id: "ingress",
+    title: "Ingress URLs",
+    blurb: "Routes of your Ingress rules on the cluster's ingress port: send the Host header shown, or open them in your browser.",
+    icon: Globe,
+    kinds: [],
+    match: isKubeRoute,
+  },
+  {
+    id: "web",
+    title: "Web services",
+    blurb: "Services answering HTTP, forwarded to a port on this machine: open them in your browser, curl, Postman or your app.",
+    icon: Server,
+    kinds: WEB_KINDS,
+    match: (r) => !isKubeRoute(r) && WEB_KINDS.includes(r.kind),
+  },
+  {
+    id: "data",
+    title: "Databases & caches",
+    blurb: "Connect with your usual client through the forwarded port, using the credentials from your manifests or values.",
+    icon: Database,
+    kinds: DATA_KINDS,
+    match: (r) => !isKubeRoute(r) && DATA_KINDS.includes(r.kind),
+  },
+  {
+    id: "others",
+    title: "Other services",
+    blurb: "Every other Service port forwarded to this machine.",
+    icon: Boxes,
+    kinds: [],
+    match: (r) => !isKubeRoute(r) && !WEB_KINDS.includes(r.kind) && !DATA_KINDS.includes(r.kind),
   },
 ]
 

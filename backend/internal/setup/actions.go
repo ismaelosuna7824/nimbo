@@ -35,6 +35,8 @@ func (c *Checker) StartAction(action string) error {
 	switch action {
 	case model.SetupActionPullImages:
 		run = c.pullImages
+	case model.SetupActionPullKubeImage:
+		run = c.pullKubeImage
 	case model.SetupActionStartDocker:
 		run = c.startDocker
 	default:

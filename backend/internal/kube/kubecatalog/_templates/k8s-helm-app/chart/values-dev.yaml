@@ -1,0 +1,4 @@
+# Development: one replica, http://podinfo-dev.localhost
+message: Hello from Helm (dev)
+ingress:
+  host: podinfo-dev.localhost

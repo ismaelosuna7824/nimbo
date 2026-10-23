@@ -1,0 +1,9 @@
+.bundle
+vendor/bundle
+log
+tmp
+coverage
+.git
+.env*
+Dockerfile
+.dockerignore

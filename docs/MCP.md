@@ -73,6 +73,7 @@ tells the daemon what is open and the tools use it when no workflow is named.
 | Test a network | "Check my VPC design and tell me if the database is reachable from the internet." | "Revisa el diseño de mi VPC y dime si la base de datos es accesible desde internet." |
 | See traffic really flow | "Add a test instance to the public subnet, deploy, and prove port 80 is reachable." | "Agrega una instancia de prueba a la subred pública, despliega y demuestra que el puerto 80 es accesible." |
 | Test a deployed service | "Load test our staging API at https://staging.example.com using a connection." | "Haz una prueba de carga a nuestra API de staging en https://staging.example.com usando una conexión." |
+| Containers (Docker) | "Create a docker compose stack with an Express API, PostgreSQL and Redis, with healthchecks and credentials in .env." | "Crea un stack de docker compose con una API en Express, PostgreSQL y Redis, con healthchecks y credenciales en .env." |
 | Close finished work | "Archive the old demo workflows." | "Archiva los workflows de demo viejos." |
 
 ## Prompts
@@ -88,6 +89,8 @@ commands (e.g. `/mcp__nimbo__extend_workflow` in Claude Code).
 | `import_terraform_folder` | `dir` | `scan_terraform_folder` → `import_terraform` → summary of projects, diagnostics and Floci support |
 | `load_test` | `workflow?` (default `current`), `goal?` | Deploy if needed, choose targets, smoke test, then the profile that answers the goal; interpret the results |
 | `test_deployed_service` | `connection?` | Connections flow with explicit user confirmation before any traffic |
+| `create_docker_stack` | `request` | Template or `create_workflow kind "docker"` → data services from the palette → app services (starters or your Dockerfiles) → `connect_services` (service_healthy) → the Docker practices below → `review_docker` → `deploy` → endpoints + smoke load test + `get_docker_metrics` → summary |
+| `create_kubernetes_app` | `request` | Template, `convert_to_kubernetes` or `create_workflow kind "kubernetes"` → palette objects (images, charts, starters) → `connect_kubernetes` → the Kubernetes practices → `review_kubernetes` per environment → `deploy` → endpoints + smoke load test → summary |
 
 ## Recommended loop
 
@@ -298,6 +301,13 @@ state per environment, a workflow per layer for large designs) and call
   tool fails with a clear message; `get_open_workflow` reports it without
   failing. `list_workflows` flags the open one (`open: true`) and hides
   archived workflows unless `include_archived` is true.
+- **Edit in place.** Agents are told to change the workflow the user has
+  open when asked to build, change or redo a design, and to call
+  `create_workflow` only for a new or separate project. When a workflow is
+  created while another one is open, `create_workflow` returns a `notice`
+  and the desktop app shows *"Your AI agent created …"* with **Open** (from
+  Home it opens right away). Requests from the MCP server carry
+  `X-Nimbo-Client: mcp`; the `workflow.created` event reports `origin`.
 - **Nodes** are referenced by address (`aws_sqs_queue.jobs`,
   `data.aws_iam_policy_document.p`, `module.vpc`), ID, or a unique local name.
 - **Values** are HCL expressions: `"\"text\""`, `3`, `true`,
@@ -317,6 +327,217 @@ state per environment, a workflow per layer for large designs) and call
   `[redacted]`. `update_connection` changes only the given fields; omitted
   or blank secrets keep their stored value, `clear_secrets` removes them.
 
+## Docker workspaces
+
+A workflow with `kind: "docker"` is a docker-compose project: its compose files
+(overrides, `include`, `extends`, profiles, anchors, `.env` interpolation),
+Dockerfiles, `.env` and app code are the source of truth. `get_workflow`
+returns the derived view (services with image/build, stack hints, base images,
+ports, depends_on, networks, volumes, env with secrets redacted; edges;
+`dk_*` error diagnostics with `file:line`, why and fix; best-practice advice is
+summarized in `review` and listed by `review_docker`).
+
+| Tool | What it does |
+|---|---|
+| `create_workflow` | `kind: "docker"` (or a `docker-*` template) creates a docker workflow |
+| `list_docker_images` | Curated images (id, image:tag, category, icon, ports, env, volumes, healthcheck, connection variables) |
+| `get_compose` | Compose files (in `-f` order), Dockerfiles and `.env` (secret values redacted) with content |
+| `add_service` | From `catalog_id`, `image` or `build_context` (+ `starter` scaffolds a buildable Dockerfile) |
+| `update_service` | Partial patch (`null` deletes; lists replace); rename updates every reference; comments/formatting kept |
+| `remove_service` | Removes it and other services' references to it |
+| `connect_services` | Without `kind`/`recipe_id`: the options; else depends_on (condition), network, volume (target), env recipe |
+| `apply_terraform_code` | Kind-aware: writes any file of a docker workflow (`""` deletes); YAML/Dockerfile syntax errors are refused |
+| `review_docker` | Best-practice findings grouped by severity, each with `at` (file:line), why, fix and a docs link, plus the opt-in rules the user can turn on |
+| `get_docker_metrics` | `{workflow, service?}`: live usage from `docker stats` (CPU % of limit, memory vs limit, net/block I/O, PIDs, last-60 s CPU), start→healthy time, problems (OOM kills, restarts, exit codes, unhealthy), the latest build per service (time, cache hits/misses, size split into base/own layers, biggest layers, slowest uncached steps, delta vs previous, findings with `dk_*` rules) and the last load test's bottleneck verdict |
+
+`run_load_test` / `get_load_test` against a docker workflow's service also
+return `bottleneck` (e.g. "api reached 99% of its 0.25 CPU limit at 877 req/s —
+CPU-bound; raise limits or add replicas") and `containers` (peak CPU/memory,
+startup and verdict per service).
+
+Every mutating docker tool (`create_workflow`, `add_service`,
+`update_service`, `remove_service`, `connect_services`, `apply_terraform_code`)
+returns `best_practices`: only the findings its change introduced
+(`{severity, code, node, at, message, fix}`), so the agent fixes them right
+away; findings that were already there are left to `review_docker`.
+
+Terraform-only tools (`add_node`, `connect`, `get_terraform`, modules, network
+checks, `validate`, `plan`) answer an error for docker workflows; `deploy`,
+`destroy` and `get_deployed_state` run and read the compose project (step 7).
+
+### Flow
+
+1. **Pick or start the project.** Use `list_templates` (the `docker-*` ones)
+   or `create_workflow` with `kind: "docker"`. To bring in an existing repo,
+   import it in the app: compose projects are detected next to Terraform roots.
+2. **Read what is there.** `get_workflow` gives the services, edges and `dk_*`
+   findings. `get_compose` gives the files themselves.
+3. **Add services.** Call `list_docker_images` and pick a `catalog_id`, then
+   `add_service`. A catalog service comes with its ports, a named data
+   volume, a healthcheck, and its credentials in `.env` as `${VAR}`. For your
+   own code, call `add_service` with `build_context` (and `starter` when the
+   folder has no Dockerfile yet).
+4. **Wire them.** Call `connect_services` with `from`/`to` and no kind: it
+   lists the options. Then apply one:
+   - `depends_on` with `service_healthy` (it needs a healthcheck on the target);
+   - the env recipe, which writes connection URLs such as `DATABASE_URL`;
+   - a shared network;
+   - a volume mount.
+5. **Fine-tune.** Use `update_service` for partial patches (a rename updates
+   every reference). Use `apply_terraform_code` for anything else: any file,
+   including Dockerfiles and app sources. Comments and formatting of the
+   compose files are kept either way.
+6. **Check.** Fix every `dk_*` error and the `best_practices` each edit
+   returned, then call `review_docker` and fix its warnings and info (see
+   Docker best practices below).
+7. **Run it.** `deploy` runs `docker compose up` (build, wait until healthy)
+   in the workflow's own project and returns each service's state, health and
+   published host ports; pass `remap_ports: true` when a port is taken (the
+   compose files stay unchanged). `get_deployed_state` shows the same status
+   later, `get_endpoints` / `try_endpoint` and the load-test tools use the
+   published ports, and `destroy` runs `docker compose down`
+   (`remove_volumes: true` also deletes the named volumes). `validate` and
+   `plan` are Terraform-only: docker workflows are checked on every save.
+
+### Docker best practices
+
+The templates (`docker-*`), the palette and the build starters are worked
+examples of these practices; the MCP instructions and the
+`create_docker_stack` prompt give agents the same list, and the `dk_*`
+advice rules check them on every save (Problems → Best practices in the app,
+`review_docker` for agents). Rules are toggled in Settings → Best-practice
+checks; opt-in rules are off until turned on there.
+
+- **Images**: pinned tags (`postgres:16-alpine`, never `latest`/no tag) in
+  compose and every `FROM` (`dk_latest_tag`).
+- **Small, fast builds**: multi-stage builds for compiled code and bundles
+  (`dk_single_stage`) on slim/alpine/distroless/JRE runtimes
+  (`dk_heavy_base`); dependency manifests copied and installed before
+  `COPY .` (`dk_layer_order`); a `.dockerignore` for contexts with
+  `node_modules`/`.git`/`.venv`/`target` — the message gives their measured
+  size (`dk_dockerignore`); BuildKit cache mounts for package managers
+  (`dk_cache_mount`, opt-in); `apt-get --no-install-recommends` with the lists
+  removed in the same `RUN`, `pip --no-cache-dir`, `apk --no-cache`
+  (`dk_apt_install`, `dk_pip_cache`, `dk_apk_cache`); `COPY` not `ADD`
+  (`dk_add`); `WORKDIR` not `cd` (`dk_workdir`).
+- **Runtime**: exec-form `CMD`/`ENTRYPOINT` (`dk_shell_form`), `init: true`
+  for node/python (`dk_no_init`), healthchecks on servers and on the images
+  others depend on (`dk_missing_healthcheck`) every 5s or more with a timeout
+  below the interval (`dk_healthcheck_timing`), `depends_on` with
+  `service_healthy` on databases/caches/brokers (`dk_depends_healthy`,
+  `dk_no_healthcheck`), `restart: unless-stopped` (`dk_no_restart`), memory
+  and CPU limits (`dk_no_limits`, opt-in), rotated json-file logs
+  (`dk_log_rotation`), named volumes for data (`dk_anon_volume`), dependency
+  folders in volumes rather than bind mounts on macOS/Windows
+  (`dk_bind_deps`), published ports that match `EXPOSE` / the database's port
+  (`dk_expose_mismatch`).
+- **Security**: credentials in `.env` as `${VAR}` (`dk_secret_env`), build
+  secrets through `RUN --mount=type=secret` instead of `ARG`/`ENV`
+  (`dk_secret_build`), a non-root `USER` (`dk_root_user`), databases published
+  on `127.0.0.1` or not at all and data tiers on an `internal: true` network
+  (`dk_db_published`), no `docker.sock` mounts (`dk_docker_sock`), no
+  `privileged`/`network_mode: host`/`pid: host` (`dk_privileged`),
+  `read_only` + `cap_drop: [ALL]` + `no-new-privileges` (`dk_hardening`,
+  opt-in).
+
+Shared settings stay short with an extension field merged into every
+service, as the templates do:
+
+```yaml
+x-defaults: &defaults
+  restart: unless-stopped
+  logging:
+    driver: json-file
+    options: {max-size: "10m", max-file: "3"}
+services:
+  api:
+    <<: *defaults
+    init: true
+    deploy: {resources: {limits: {cpus: "1", memory: 256M}}}
+```
+
+The full rule table (severity, trigger, defaults) is in
+[ARCHITECTURE.md](ARCHITECTURE.md#docker-best-practice-rules).
+
+### Examples
+
+| Goal | English | Español |
+|---|---|---|
+| Create a stack | "Create a docker workflow with a Node API, PostgreSQL and Redis; the API must wait until the database is healthy." | "Crea un workflow de docker con una API en Node, PostgreSQL y Redis; la API debe esperar a que la base de datos esté sana." |
+| Start from a template | "Create a docker workflow from the FastAPI + PostgreSQL template and tell me which ports it publishes." | "Crea un workflow de docker desde la plantilla FastAPI + PostgreSQL y dime qué puertos publica." |
+| Add a service | "Add RabbitMQ to the open docker workflow and give the worker the connection settings." | "Agrega RabbitMQ al workflow de docker abierto y dale al worker los datos de conexión." |
+| Build your own code | "Add a Go service built from ./billing with a starter Dockerfile and publish it on port 8090." | "Agrega un servicio en Go construido desde ./billing con un Dockerfile inicial y publícalo en el puerto 8090." |
+| Change a service | "Give the api service 2 replicas, 512 MB of memory and a healthcheck on /health." | "Dale al servicio api 2 réplicas, 512 MB de memoria y un healthcheck en /health." |
+| Review | "Review the compose file and fix every warning: unpinned tags, passwords in environment, missing healthchecks." | "Revisa el compose y corrige todas las advertencias: tags sin fijar, contraseñas en environment, healthchecks faltantes." |
+| Run and try it | "Deploy the docker workflow (use free ports if one is taken), call the API's /health and smoke load test it." | "Despliega el workflow de docker (usa puertos libres si alguno está ocupado), llama al /health de la API y hazle una prueba de carga smoke." |
+
+## Kubernetes workspaces
+
+A workflow with kind `kubernetes` deploys plain manifests, Kustomize trees
+(`base` + `overlays/<env>`) and Helm charts (`values-<env>.yaml`) to the
+workflow's own local k3s cluster (Kubernetes 1.36, `nimbo-k8s-<id>`; the
+user's `~/.kube/config` is never touched). The files are the source of
+truth: `get_workflow` shows the rendered objects of the active environment
+(node ids `Deployment/shop/api`), their edges and the `k8s_*` errors; the
+`k8s_*` advice is in `review` and listed by `review_kubernetes`.
+`deploy`, `destroy` (`remove_volumes`, `delete_cluster`),
+`get_deployed_state` (rollouts, pods, problems, port-forwards, Ingress
+URLs), `get_endpoints`, `try_endpoint`, `list_load_targets` and
+`apply_terraform_code` are kind-aware; `update_workflow environment`
+switches the rendered overlay/values file.
+
+| Tool | Inputs | What it does |
+|---|---|---|
+| `list_kubernetes_catalog` | `query?`, `group?` (starter, image, chart), `category?` | The palette: 13 starters, 159 `image:<id>` workloads from the Docker image catalog (StatefulSet + headless Service + claims for data images, Deployment + Service otherwise; probes, resources, a Secret for credentials) and 14 pinned `chart:<id>` Helm charts |
+| `get_kubernetes` | `workflow`, `rendered?`, `environment?` | Sources, builds and the content of manifests, kustomizations, values files and chart templates; `rendered` adds the YAML `deploy` applies |
+| `add_kubernetes_object` | `workflow`, `catalog_id?` \| `yaml?`, `name?`, `namespace?`, `source?`, `file?` | Add palette entries (charts become a helm source with the chart vendored) or your own documents; returns the node ids and the findings the change introduced |
+| `update_kubernetes_object` | `workflow`, `node`, `set?`, `unset?` | Write fields where they come from (manifest, Kustomize patch, Helm values key, template literal), comments kept |
+| `remove_kubernetes_object` | `workflow`, `node` | Remove an object's document |
+| `get_kubernetes_fields` | `workflow`, `node` | Every field with its value, file:line, origin and whether it is editable |
+| `connect_kubernetes` | `workflow`, `from`, `to?`, `recipe_id?` \| `kind?`, `port?`, `path?`, `host?`, `key?` | List or apply wiring recipes: expose, selects, route, envFrom, volume, env, serviceaccount, scale |
+| `review_kubernetes` | `workflow` | `k8s_*` findings of the active environment grouped by severity, each with file:line, field, why, fix and docs; disabled and opt-in rules |
+| `get_kubernetes_logs` | `workflow`, `workload?` \| `pod?`, `container?`, `tail?` | Recent log lines of a workload's pods |
+| `restart_workload` | `workflow`, `workload?` | Rollout restart (one workload or all) and wait |
+| `kubernetes_cluster` | `workflow`, `action` (stop, start, delete) | Manage the workflow's local cluster |
+| `convert_to_kubernetes` | `workflow`, `format?` (manifests, kustomize, helm), `name?`, `namespace?`, `dry_run?` | Convert a docker workflow into a new Kubernetes workflow; returns it with a report (sources, builds, environments, objects, mappings, unmapped features); `dry_run` previews the files |
+
+Templates (`list_templates`, kind `kubernetes`): `k8s-webapp-postgres`
+(Node.js app built from `web/` + PostgreSQL StatefulSet, manifests),
+`k8s-kustomize-app` (base + dev/prod overlays), `k8s-helm-app` (podinfo
+chart with values-dev/prod), `k8s-microservices` (frontend + backend behind
+one Ingress, HPAs, Redis), `k8s-cronjob-worker` (CronJob producer + queue
+worker). Each renders without warnings in every environment and deploys
+healthy on the local cluster. Prompt `create_kubernetes_app` walks the
+whole loop.
+
+### Kubernetes best practices
+
+Errors (`kubernetes`, never toggleable): `k8s_yaml`, `k8s_render`,
+`k8s_load`, `k8s_dependency`, `k8s_object`, `k8s_schema` (Kubernetes 1.36
+OpenAPI: known kinds and fields, types, required fields, quantities,
+base64 Secret data; custom resources against a CRD of the workflow),
+`k8s_removed_api`, `k8s_duplicate`, `k8s_workload_selector`. Advice
+(toggle in Settings → Best-practice checks): reliability —
+`k8s_deprecated_api`, `k8s_no_requests`, `k8s_no_readiness_probe`,
+`k8s_probe_port`, `k8s_latest_tag`, `k8s_local_image`,
+`k8s_single_replica` (production-like environments only),
+`k8s_hpa_no_requests` (warnings); `k8s_no_memory_limit`,
+`k8s_no_liveness_probe`, `k8s_pvc_storage_class` (info); networking —
+`k8s_selector_mismatch`, `k8s_service_port`, `k8s_ingress_backend`,
+`k8s_unknown_ref` (warnings), `k8s_namespace_missing` (info),
+`k8s_default_namespace`, `k8s_network_policy` (opt-in); security —
+`k8s_secret_env`, `k8s_secret_in_configmap`, `k8s_privileged`,
+`k8s_host_namespaces`, `k8s_host_path` (warnings; info for DaemonSets),
+`k8s_run_as_root` (info), `k8s_hardening` (opt-in).
+
+### Examples
+
+| Goal | English | Español |
+|---|---|---|
+| Start from a template | "Create a Kubernetes workflow from the Kustomize template, switch to prod and review it." | "Crea un workflow de Kubernetes desde la plantilla de Kustomize, cambia a prod y revísalo." |
+| Add a database | "Add PostgreSQL from the palette to the shop namespace and give the api its DATABASE_URL." | "Agrega PostgreSQL desde la paleta al namespace shop y dale al api su DATABASE_URL." |
+| Run and try it | "Deploy it to the local cluster, open the Ingress URL and smoke load test it." | "Despliégalo en el clúster local, abre la URL del Ingress y hazle una prueba de carga smoke." |
+
 ## Tools
 
 All `workflow` arguments are optional and default to `current` (see
@@ -327,7 +548,7 @@ Conventions).
 | `list_workflows` | `include_archived?` | Workflows, most recent first; the open one is flagged |
 | `get_open_workflow` | — | The workflow open in the desktop app, like `get_workflow` (or a message when none is) |
 | `list_templates` | — | Starter templates |
-| `create_workflow` | `name`, `description?`, `template?` | New workflow, optionally from a template |
+| `create_workflow` | `name`, `description?`, `template?`, `kind?` | New workflow, optionally from a template; `kind: "docker"` (or a `docker-*` template) makes a docker-compose workflow |
 | `get_workflow` | `workflow` | Compact workflow: nodes, edges, variables, outputs, environments, diagnostics, and `structure` (layout, states, resources per state, modules, nesting, backend) |
 | `update_workflow` | `workflow`, `name?`, `description?`, `layout?` (`auto`/`single`/`environments`) | Rename a workflow, change its description or its export layout (only the given fields change; `description: ""` clears it); the Terraform is unchanged; returns the workflow with its `structure` |
 | `archive_workflow` / `unarchive_workflow` | `workflow` | Close a workflow (sandbox stopped keeping state, hidden, runs refused) or restore it |
@@ -346,7 +567,9 @@ Conventions).
 | `remove_output` | `workflow`, `name` | Remove an output |
 | `set_environment` | `workflow`, `name`, `values?`, `env_vars?`, `secret_keys?`, `activate?` | Create/update an environment |
 | `get_terraform` | `workflow` | Rendered Terraform files |
-| `review_terraform` | `workflow` | `structure` summary plus best-practice findings grouped by severity, with why and fix (see Code quality and Structure) |
+| `review_terraform` | `workflow` | `structure` summary plus best-practice findings grouped by severity, with why and fix (see Code quality and Structure); on a docker workflow it returns the `review_docker` result, on a Kubernetes one `review_kubernetes` |
+| `review_docker` | `workflow` | Docker best-practice findings grouped by severity, each with file:line, why, fix and docs; disabled and opt-in rules (see Docker best practices) |
+| `review_kubernetes` | `workflow` | Kubernetes best-practice findings of the active environment grouped by severity, each with file:line, field, why, fix and docs; disabled and opt-in rules (see Kubernetes best practices) |
 | `apply_terraform_code` | `workflow`, `files` | Edit by code (merged over current files; `""` deletes a file, and its blocks are gone unless the same call writes them to another file). Every block stays in the file it is written in; applying the same files again changes nothing |
 | `scan_terraform_folder` | `dir` | Terraform projects in a folder/repo (counts, providers, clouds, tfvars, backend, layout, environments, diagnostics) without importing; an `environments/<env>/` + `modules/<service>` tree is one project |
 | `import_terraform` | `dir?` \| `files?`, `projects?`, `name?` | Import Terraform as new workflows (default: the root only; `projects` from the scan, `"."` = root); an environments tree becomes one workflow with its environments |

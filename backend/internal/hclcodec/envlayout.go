@@ -1341,7 +1341,7 @@ func (l *envLayout) readme() []byte {
 		}
 	}
 	if len(required) > 0 {
-		line("Inputs the service module takes without a default (every root passes them: their values differ between environments, or the root reads them too and holds the default): " + strings.Join(required, ", ") + ".", "")
+		line("Inputs the service module takes without a default (every root passes them: their values differ between environments, or the root reads them too and holds the default): "+strings.Join(required, ", ")+".", "")
 	}
 	line("Secrets are never written to a variable file: export them as `TF_VAR_<name>` environment variables (each environment's `.env.example` lists the ones it needs).")
 	if len(secrets) > 0 {

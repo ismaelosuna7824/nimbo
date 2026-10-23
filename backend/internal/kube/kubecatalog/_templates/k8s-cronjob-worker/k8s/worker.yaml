@@ -1,0 +1,47 @@
+# The worker: no ports, so liveness checks that its loop keeps running
+# (it touches /tmp/heartbeat at least every 5 s).
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: worker
+  namespace: jobs
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: worker
+  template:
+    metadata:
+      labels:
+        app: worker
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 999
+      automountServiceAccountToken: false
+      containers:
+        - name: worker
+          image: redis:7.4-alpine
+          command: ["sh", "/scripts/work.sh"]
+          env:
+            - name: REDIS_HOST
+              value: redis.jobs
+          livenessProbe:
+            exec:
+              command: ["sh", "-c", "test $(( $(date +%s) - $(stat -c %Y /tmp/heartbeat) )) -lt 60"]
+            initialDelaySeconds: 15
+            periodSeconds: 20
+          resources:
+            requests:
+              cpu: 10m
+              memory: 16Mi
+            limits:
+              memory: 32Mi
+          volumeMounts:
+            - name: scripts
+              mountPath: /scripts
+              readOnly: true
+      volumes:
+        - name: scripts
+          configMap:
+            name: scripts

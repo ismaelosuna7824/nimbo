@@ -12,6 +12,20 @@ export function dirName(path: string): string {
   return i < 0 ? "" : path.slice(0, i)
 }
 
+/** A relative path ("./api", "../x/.env") resolved from a folder of the workflow; null when it leaves the workflow. */
+export function joinPath(dir: string, rel: string): string | null {
+  if (rel.startsWith("/")) return null
+  const out = dir ? dir.split("/") : []
+  for (const seg of rel.split("/")) {
+    if (seg === "" || seg === ".") continue
+    if (seg === "..") {
+      if (!out.length) return null
+      out.pop()
+    } else out.push(seg)
+  }
+  return out.join("/")
+}
+
 /** All ancestor directories of a file, outermost first ("a/b/c.tf" → ["a", "a/b"]). */
 export function ancestors(path: string): string[] {
   const out: string[] = []
@@ -104,6 +118,23 @@ export const LANGUAGE_LABEL: Record<WorkflowFile["language"], string> = {
   yaml: "YAML",
   markdown: "Markdown",
   shell: "Shell",
+  dockerfile: "Dockerfile",
+  java: "Java",
+  kotlin: "Kotlin",
+  csharp: "C#",
+  rust: "Rust",
+  php: "PHP",
+  ruby: "Ruby",
+  sql: "SQL",
+  toml: "TOML",
+  ini: "INI",
+  properties: "Properties",
+  xml: "XML",
+  html: "HTML",
+  css: "CSS",
+  nginx: "NGINX config",
+  makefile: "Makefile",
+  protobuf: "Protocol Buffers",
   text: "Plain text",
 }
 
@@ -117,8 +148,25 @@ export function languageOf(path: string): FileLanguage {
   const base = baseName(path).toLowerCase()
   if (base.endsWith(".tf.json") || base.endsWith(".tfvars.json")) return "json"
   if (base.endsWith(".env.example") || base === ".env" || base.startsWith(".env.")) return "shell"
+  if (/^(dockerfile|containerfile)(\.[\w.-]+)?$|\.dockerfile$/.test(base)) return "dockerfile"
+  const named = NAME_LANGUAGE[base]
+  if (named) return named
   const ext = base.includes(".") ? base.slice(base.lastIndexOf(".")) : ""
+  if (ext === ".conf") {
+    // nginx keeps its server blocks in nginx/… or conf.d/…; other .conf files are INI-like.
+    const dirs = path.toLowerCase().split("/").slice(0, -1)
+    return dirs.includes("nginx") || dirs.includes("conf.d") ? "nginx" : "ini"
+  }
   return EXT_LANGUAGE[ext] ?? "text"
+}
+
+const NAME_LANGUAGE: Record<string, FileLanguage> = {
+  gemfile: "ruby",
+  rakefile: "ruby",
+  makefile: "makefile",
+  gnumakefile: "makefile",
+  "nginx.conf": "nginx",
+  ".editorconfig": "ini",
 }
 
 const EXT_LANGUAGE: Record<string, FileLanguage> = {
@@ -143,6 +191,40 @@ const EXT_LANGUAGE: Record<string, FileLanguage> = {
   ".sh": "shell",
   ".bash": "shell",
   ".zsh": "shell",
+  ".java": "java",
+  ".kt": "kotlin",
+  ".kts": "kotlin",
+  ".cs": "csharp",
+  ".csx": "csharp",
+  ".rs": "rust",
+  ".php": "php",
+  ".phtml": "php",
+  ".rb": "ruby",
+  ".rake": "ruby",
+  ".gemspec": "ruby",
+  ".sql": "sql",
+  ".toml": "toml",
+  ".properties": "properties",
+  ".xml": "xml",
+  ".xsd": "xml",
+  ".xsl": "xml",
+  ".plist": "xml",
+  ".csproj": "xml",
+  ".fsproj": "xml",
+  ".vbproj": "xml",
+  ".props": "xml",
+  ".targets": "xml",
+  ".html": "html",
+  ".htm": "html",
+  ".css": "css",
+  ".scss": "css",
+  ".less": "css",
+  ".proto": "protobuf",
+  ".mk": "makefile",
+  ".nginx": "nginx",
+  ".ini": "ini",
+  ".cfg": "ini",
+  ".cnf": "ini",
 }
 
 /** File types the Code tab creates; names without an extension (Makefile) are accepted too. */
@@ -151,12 +233,16 @@ export const NEW_FILE_EXTENSIONS = [".tf", ".tfvars", ".tftpl", ".md", ".json", 
 /** HCL the format endpoint understands (terraform fmt). */
 export const isFormattable = (path: string) => /\.(tf|tfvars|hcl)$/.test(path)
 
+/** YAML the editor re-indents itself (⌥⇧F): comments, key order and values are kept. */
+export const isYaml = (path: string) => /\.ya?ml$/i.test(path)
+
 /**
  * Checks a name typed in the tree: a file or folder name, or a relative path of them ("modules/net/main.tf"),
  * without absolute paths, "..", hidden names or characters other systems reject; files need a supported type.
+ * Docker workspaces hold whole build contexts: any file type and dotfiles (.env, .dockerignore) are accepted.
  * Returns the problem, or undefined.
  */
-export function nameProblem(input: string, kind: "file" | "folder"): string | undefined {
+export function nameProblem(input: string, kind: "file" | "folder", docker = false): string | undefined {
   const name = input.trim()
   if (!name) return "Enter a name"
   if (name.startsWith("/") || /^[A-Za-z]:/.test(name)) return "Use a path relative to the workflow files"
@@ -165,11 +251,11 @@ export function nameProblem(input: string, kind: "file" | "folder"): string | un
   for (const s of segments) {
     if (!s) return "Folder names can't be empty"
     if (s === "." || s === "..") return "“.” and “..” are not allowed"
-    if (s.startsWith(".")) return "Hidden names (starting with “.”) are not exported"
+    if (s.startsWith(".") && !docker) return "Hidden names (starting with “.”) are not exported"
     if (/[:*?"<>|]/.test(s) || /\p{Cc}/u.test(s)) return 'Names can\'t contain : * ? " < > | or control characters'
     if (s.length > 128) return "Names can't be longer than 128 characters"
   }
-  if (kind === "folder") return undefined
+  if (kind === "folder" || docker) return undefined
   const base = segments[segments.length - 1].toLowerCase()
   if (/\.tfstate|^terraform\.tfstate/.test(base)) return "Terraform state is not stored with the workflow"
   const dot = base.lastIndexOf(".")

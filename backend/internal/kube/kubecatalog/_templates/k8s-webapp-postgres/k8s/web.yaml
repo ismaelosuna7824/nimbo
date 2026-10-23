@@ -1,0 +1,110 @@
+# The web app: built from web/ (Nimbo builds web:dev and loads it into the
+# local cluster), configured by a ConfigMap and a Secret, reached through
+# the Service and the Ingress (http://notes.localhost).
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: web
+  namespace: notes
+data:
+  GREETING: Hello from Kubernetes
+  PORT: "3000"
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: web-db
+  namespace: notes
+type: Opaque
+stringData:
+  DATABASE_URL: postgres://app:change-me@postgres:5432/notes
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: web
+  namespace: notes
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: web
+  template:
+    metadata:
+      labels:
+        app: web
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+      automountServiceAccountToken: false
+      initContainers:
+        # Start once PostgreSQL accepts connections (instead of crash-looping).
+        - name: wait-for-postgres
+          image: postgres:17-alpine
+          command: ["sh", "-c", "until pg_isready -h postgres -p 5432 -U app; do sleep 2; done"]
+          resources:
+            requests:
+              cpu: 10m
+              memory: 16Mi
+            limits:
+              memory: 32Mi
+      containers:
+        - name: web
+          image: web:dev
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: http
+              containerPort: 3000
+          envFrom:
+            - configMapRef:
+                name: web
+            - secretRef:
+                name: web-db
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: http
+            periodSeconds: 5
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            periodSeconds: 20
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              memory: 256Mi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: web
+  namespace: notes
+spec:
+  selector:
+    app: web
+  ports:
+    - name: http
+      port: 80
+      targetPort: http
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: web
+  namespace: notes
+spec:
+  rules:
+    - host: notes.localhost
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: web
+                port:
+                  name: http

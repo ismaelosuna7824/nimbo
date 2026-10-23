@@ -18,6 +18,8 @@ import { api, type CatalogQuery } from "@/lib/api/client"
 import { ALL_CLOUDS, type Cloud, type ResourceSummary } from "@/lib/api/types"
 import { cn } from "@/lib/utils"
 import { useWorkflowStore } from "@/state/workflow-store"
+import { DockerPalette } from "../docker/palette"
+import { KubernetesPalette } from "../kubernetes/palette"
 import { addResource, RESOURCE_DRAG_TYPE } from "../canvas/actions"
 
 const CLOUD_TAB_LABEL: Record<Cloud, string> = { aws: "AWS", azure: "Azure", gcp: "GCP", oci: "OCI" }
@@ -34,7 +36,13 @@ function useResources(q: CatalogQuery, enabled = true) {
   })
 }
 
+/** The left panel's catalog: cloud resources for Terraform workflows, images and building blocks for Docker and Kubernetes ones. */
 export function Palette() {
+  const kind = useWorkflowStore((s) => s.workflow?.kind)
+  return kind === "docker" ? <DockerPalette /> : kind === "kubernetes" ? <KubernetesPalette /> : <ResourcePalette />
+}
+
+function ResourcePalette() {
   const mode = useWorkflowStore((s) => s.mode)
   const workflowClouds = useWorkflowStore((s) => s.workflow?.clouds)
   const [cloud, setCloud] = useState<Cloud>(workflowClouds?.[0] ?? "aws")

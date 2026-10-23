@@ -1,0 +1,30 @@
+# One service built from the Dockerfile in this folder. Add databases and
+# other services under services:; they reach each other by service name.
+
+services:
+  app:
+    build:
+      context: .
+    restart: unless-stopped
+    init: true
+    ports:
+      - "8080:8080"
+    env_file:
+      - path: .env
+        required: false
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:8080/ >/dev/null || exit 1"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+      start_period: 10s
+    deploy:
+      resources:
+        limits:
+          cpus: "1"
+          memory: 512M
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"

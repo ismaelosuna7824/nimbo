@@ -1639,7 +1639,24 @@ export function deriveArchitecture(input: DeriveWorkflow, opts: DeriveOptions = 
   return { groups: sortGroups(groupList), cards, actors, edges: edgesOut, providers, regions: regionsUsed }
 }
 
-const GROUP_RANK: Record<GroupKind, number> = { cloud: 0, account: 1, region: 2, vpc: 3, az: 4, subnet: 5, logical: 6, other: 7, external: 8 }
+// Docker and Kubernetes kinds never occur in Terraform models (see docker.ts, kubernetes.ts); ranked last for completeness.
+const GROUP_RANK: Record<GroupKind, number> = {
+  cloud: 0,
+  account: 1,
+  region: 2,
+  vpc: 3,
+  az: 4,
+  subnet: 5,
+  logical: 6,
+  other: 7,
+  external: 8,
+  "docker-host": 9,
+  "compose-project": 10,
+  "docker-network": 11,
+  "k8s-cluster": 12,
+  "k8s-namespace": 13,
+  "k8s-data": 14,
+}
 
 /** Parents before children; siblings by kind (GCP's Global group before its regions), then logical order, then ID. */
 function sortGroups(groups: ArchGroup[]) {

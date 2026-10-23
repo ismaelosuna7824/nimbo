@@ -16,6 +16,8 @@ import {
 import { useRef, useState } from "react"
 import { AppLogo } from "@/components/app-logo"
 import { CloudBadge } from "@/components/cloud"
+import { contentCount, DockerBadge } from "@/features/docker/badge"
+import { KubernetesBadge } from "@/features/kubernetes/badge"
 import { ThemeToggle } from "@/components/theme-toggle"
 import { type IconTarget, WorkflowIconDialog } from "@/components/workflow-icon/icon-picker"
 import { WorkflowIconTile } from "@/components/workflow-icon/workflow-icon-tile"
@@ -96,7 +98,7 @@ export function Home() {
           </Button>
           <Button size="lg" variant="outline" onClick={() => openDialog("import")}>
             <UploadIcon />
-            Import Terraform
+            Import project
           </Button>
         </div>
 
@@ -194,11 +196,15 @@ function WorkflowCard({
           </span>
           {w.description && <span className="line-clamp-2 text-xs text-muted-foreground">{w.description}</span>}
           <span className="mt-auto flex flex-wrap items-center gap-1.5 pt-2">
-            {w.clouds.map((c) => (
-              <CloudBadge key={c} cloud={c} />
-            ))}
+            {w.kind === "docker" ? (
+              <DockerBadge />
+            ) : w.kind === "kubernetes" ? (
+              <KubernetesBadge />
+            ) : (
+              w.clouds.map((c) => <CloudBadge key={c} cloud={c} />)
+            )}
             <span className="text-xs text-muted-foreground">
-              {w.nodeCount} resource{w.nodeCount === 1 ? "" : "s"} · {timeAgo(w.updatedAt)}
+              {contentCount(w)} · {timeAgo(w.updatedAt)}
             </span>
           </span>
         </button>
@@ -269,7 +275,7 @@ function ArchivedSection({ workflows, onDelete }: { workflows: WorkflowSummary[]
               <div className="flex min-w-0 flex-1 flex-col">
                 <span className="truncate text-sm font-medium">{w.name}</span>
                 <span className="text-xs text-muted-foreground">
-                  {w.nodeCount} resource{w.nodeCount === 1 ? "" : "s"} · archived {timeAgo(w.updatedAt)}
+                  {contentCount(w)} · archived {timeAgo(w.updatedAt)}
                 </span>
               </div>
               <Button variant="outline" size="sm" onClick={() => void restoreWorkflow(w.id, w.name)}>

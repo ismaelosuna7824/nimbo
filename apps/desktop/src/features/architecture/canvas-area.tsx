@@ -4,6 +4,9 @@ import { Spinner } from "@/components/ui/spinner"
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group"
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip"
 import { Canvas } from "@/features/canvas/canvas"
+import { DockerCanvas } from "@/features/docker/canvas/docker-canvas"
+import { KubeCanvas } from "@/features/kubernetes/canvas/kube-canvas"
+import { useWorkflowStore } from "@/state/workflow-store"
 import { ExportImageDialog } from "./export-dialog"
 import { switchView, useCanvasView, VIEW_SHORTCUT, type CanvasView } from "./store"
 
@@ -13,6 +16,7 @@ const ArchitectureView = lazy(() => import("./view").then((m) => ({ default: m.A
 /** The editor's canvas area: the Build canvas or the Architecture diagram, with the switch between them. */
 export function CanvasArea() {
   const view = useCanvasView()
+  const kind = useWorkflowStore((s) => s.workflow?.kind)
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -28,7 +32,7 @@ export function CanvasArea() {
   return (
     <div className="relative h-full w-full" data-canvas-view={view}>
       {view === "build" ? (
-        <Canvas />
+        kind === "docker" ? <DockerCanvas /> : kind === "kubernetes" ? <KubeCanvas /> : <Canvas />
       ) : (
         <Suspense
           fallback={

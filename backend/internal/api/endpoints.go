@@ -126,20 +126,34 @@ func (s *Server) codeSources(wfID string) []string {
 	return out
 }
 
-func (s *Server) endpointsInput(r *http.Request, live bool) (*model.Workflow, *model.DeployedState, endpoints.Sandbox, error) {
-	wf, err := s.cfg.Store.Get(r.PathValue("id"))
-	if err != nil {
-		return nil, nil, endpoints.Sandbox{}, err
-	}
+func (s *Server) endpointsInput(r *http.Request, wf *model.Workflow, live bool) (*model.DeployedState, endpoints.Sandbox, error) {
 	st, err := s.cfg.Sandbox.State(r.Context(), wf)
 	if err != nil {
-		return nil, nil, endpoints.Sandbox{}, err
+		return nil, endpoints.Sandbox{}, err
 	}
-	return wf, st, s.endpointsSandbox(r.Context(), wf, st, live), nil
+	return st, s.endpointsSandbox(r.Context(), wf, st, live), nil
 }
 
 func (s *Server) getEndpoints(w http.ResponseWriter, r *http.Request) error {
-	wf, st, sb, err := s.endpointsInput(r, true)
+	wf, err := s.cfg.Store.Get(r.PathValue("id"))
+	if err != nil {
+		return err
+	}
+	switch {
+	case wf.IsDocker():
+		rt, err := s.composeRuntime(r.Context(), wf)
+		if err != nil {
+			return err
+		}
+		return ok(w, endpoints.BuildCompose(wf, rt))
+	case wf.IsKubernetes():
+		st, err := s.cfg.Sandbox.KubeStatus(r.Context(), wf.ID)
+		if err != nil {
+			return err
+		}
+		return ok(w, endpoints.BuildKube(wf, st))
+	}
+	st, sb, err := s.endpointsInput(r, wf, true)
 	if err != nil {
 		return err
 	}
@@ -154,11 +168,31 @@ func (s *Server) tryEndpoint(w http.ResponseWriter, r *http.Request) error {
 	if strings.TrimSpace(req.NodeID) == "" || strings.TrimSpace(req.Action) == "" {
 		return errorf(http.StatusBadRequest, "nodeId and action are required")
 	}
-	wf, st, sb, err := s.endpointsInput(r, false)
+	wf, err := s.cfg.Store.Get(r.PathValue("id"))
 	if err != nil {
 		return err
 	}
-	res, err := endpoints.Try(r.Context(), wf, st, sb, req)
+	var res model.TryResult
+	switch {
+	case wf.IsDocker():
+		rt, rerr := s.composeRuntime(r.Context(), wf)
+		if rerr != nil {
+			return rerr
+		}
+		res, err = endpoints.TryCompose(r.Context(), rt, req)
+	case wf.IsKubernetes():
+		st, serr := s.cfg.Sandbox.KubeStatus(r.Context(), wf.ID)
+		if serr != nil {
+			return serr
+		}
+		res, err = endpoints.TryKube(r.Context(), st, req)
+	default:
+		st, sb, ierr := s.endpointsInput(r, wf, false)
+		if ierr != nil {
+			return ierr
+		}
+		res, err = endpoints.Try(r.Context(), wf, st, sb, req)
+	}
 	var re *endpoints.RequestError
 	switch {
 	case errors.Is(err, endpoints.ErrNotFound):
@@ -172,11 +206,32 @@ func (s *Server) tryEndpoint(w http.ResponseWriter, r *http.Request) error {
 }
 
 func (s *Server) postmanCollection(w http.ResponseWriter, r *http.Request) error {
-	wf, st, sb, err := s.endpointsInput(r, false)
+	wf, err := s.cfg.Store.Get(r.PathValue("id"))
 	if err != nil {
 		return err
 	}
-	data, err := json.MarshalIndent(endpoints.Postman(wf, st, sb), "", "  ")
+	var col endpoints.PostmanCollection
+	switch {
+	case wf.IsDocker():
+		rt, err := s.composeRuntime(r.Context(), wf)
+		if err != nil {
+			return err
+		}
+		col = endpoints.PostmanCompose(wf, rt)
+	case wf.IsKubernetes():
+		st, err := s.cfg.Sandbox.KubeStatus(r.Context(), wf.ID)
+		if err != nil {
+			return err
+		}
+		col = endpoints.PostmanKube(wf, st)
+	default:
+		st, sb, err := s.endpointsInput(r, wf, false)
+		if err != nil {
+			return err
+		}
+		col = endpoints.Postman(wf, st, sb)
+	}
+	data, err := json.MarshalIndent(col, "", "  ")
 	if err != nil {
 		return err
 	}

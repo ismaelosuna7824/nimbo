@@ -1,4 +1,32 @@
 import type {
+  AddServiceRequest,
+  ComposeConnectRecipe,
+  ComposeConnectRequest,
+  ComposeLogLine,
+  ComposeNetworkRequest,
+  ComposeRunRequest,
+  ComposeBuild,
+  ComposeStats,
+  ComposeStatus,
+  ComposeVolumeRequest,
+  ConvertKubernetesRequest,
+  ConvertKubernetesResponse,
+  DockerImage,
+  FileTemplate,
+  PortConflict,
+  PortRemap,
+  ServicePatch,
+  KubeCatalogItem,
+  KubeConnectRecipe,
+  KubeConnectRequest,
+  KubeFields,
+  KubeObjectPatch,
+  KubeRendered,
+  KubeSchema,
+  KubeLogLine,
+  KubeRunRequest,
+  KubeStatus,
+  WorkflowKind,
   CodeProblem,
   CodeWorkspace,
   FunctionSignature,
@@ -137,7 +165,7 @@ export const api = {
 
   // workflows
   listWorkflows: () => request<WorkflowSummary[]>("GET", "/workflows"),
-  createWorkflow: (body: { name: string; description?: string; templateId?: string }) =>
+  createWorkflow: (body: { name: string; description?: string; templateId?: string; kind?: WorkflowKind }) =>
     request<Workflow>("POST", "/workflows", body),
   getWorkflow: (id: string) => request<Workflow>("GET", `/workflows/${id}`),
   saveWorkflow: (wf: Workflow) => request<Workflow>("PUT", `/workflows/${wf.id}`, wf),
@@ -266,6 +294,94 @@ export const api = {
   getSetup: () => request<SetupStatus>("GET", "/setup"),
   /** 202 when started; ApiError 409 if already running, 404 if unknown. */
   setupAction: (action: string) => request<void>("POST", `/setup/actions/${action}`),
+
+  // docker workspaces: graph edits write the compose files (comments and order kept) and return the workflow
+  dockerImages: () => request<DockerImage[]>("GET", "/catalog/docker/images"),
+  /** The Compose Specification JSON schema (draft-07) compose-go validates against. */
+  composeSchema: () => request<Record<string, unknown>>("GET", "/catalog/docker/compose-schema"),
+  /** Files of the Code tab's "New from template…" menu (docker and Kubernetes). */
+  fileTemplates: () => request<FileTemplate[]>("GET", "/catalog/file-templates"),
+  addService: (id: string, body: AddServiceRequest) =>
+    request<{ workflow: Workflow; nodeId: string }>("POST", `/workflows/${id}/compose/services`, body),
+  patchService: (id: string, name: string, patch: ServicePatch) =>
+    request<Workflow>("PATCH", `/workflows/${id}/compose/services/${encodeURIComponent(name)}`, patch),
+  deleteService: (id: string, name: string) =>
+    request<Workflow>("DELETE", `/workflows/${id}/compose/services/${encodeURIComponent(name)}`),
+  addNetwork: (id: string, body: ComposeNetworkRequest) =>
+    request<{ workflow: Workflow; nodeId: string }>("POST", `/workflows/${id}/compose/networks`, body),
+  patchNetwork: (id: string, name: string, body: Partial<ComposeNetworkRequest>) =>
+    request<Workflow>("PATCH", `/workflows/${id}/compose/networks/${encodeURIComponent(name)}`, body),
+  deleteNetwork: (id: string, name: string) =>
+    request<Workflow>("DELETE", `/workflows/${id}/compose/networks/${encodeURIComponent(name)}`),
+  addVolume: (id: string, body: ComposeVolumeRequest) =>
+    request<{ workflow: Workflow; nodeId: string }>("POST", `/workflows/${id}/compose/volumes`, body),
+  patchVolume: (id: string, name: string, body: Partial<ComposeVolumeRequest>) =>
+    request<Workflow>("PATCH", `/workflows/${id}/compose/volumes/${encodeURIComponent(name)}`, body),
+  deleteVolume: (id: string, name: string) =>
+    request<Workflow>("DELETE", `/workflows/${id}/compose/volumes/${encodeURIComponent(name)}`),
+  /** Ways to make `from` use `to` (depends_on, shared network, volume, env wiring). */
+  composeRecipes: (id: string, from: string, to: string) =>
+    request<ComposeConnectRecipe[]>("GET", `/workflows/${id}/compose/connect${qs({ from, to })}`),
+  composeConnect: (id: string, body: ComposeConnectRequest) =>
+    request<Workflow>("POST", `/workflows/${id}/compose/connect`, body),
+  /** Saves canvas positions (null forgets one: automatic layout again). */
+  composeLayout: (id: string, positions: Record<string, Position | null>) =>
+    request<Workflow>("PATCH", `/workflows/${id}/compose/layout`, { positions }),
+  /** docker compose up/down/build/pull/restart; 409 code "port_conflict" when fixed host ports are busy. */
+  startComposeRun: (id: string, body: ComposeRunRequest) => request<Run>("POST", `/workflows/${id}/runs`, body),
+  composeStatus: (id: string) => request<ComposeStatus>("GET", `/workflows/${id}/compose/status`),
+  /** Live usage per service (starts the `docker stats` stream when containers run; then "compose.stats" events). */
+  composeStats: (id: string) => request<ComposeStats>("GET", `/workflows/${id}/compose/stats`),
+  /** Build metrics of recent build/up runs, newest first (max 20 kept). */
+  composeBuilds: (id: string, limit?: number) =>
+    request<{ builds: ComposeBuild[] }>("GET", `/workflows/${id}/compose/builds${qs({ limit })}`),
+  composePorts: (id: string) =>
+    request<{ conflicts: PortConflict[]; remaps: PortRemap[] }>("GET", `/workflows/${id}/compose/ports`),
+  composeLogs: (id: string, service?: string, tail?: number) =>
+    request<{ lines: ComposeLogLine[] }>("GET", `/workflows/${id}/compose/logs${qs({ service, tail })}`),
+  /** Live logs (Server-Sent Events: "compose.log" per line, "end" when the containers stop). */
+  composeLogsStreamUrl: (id: string, service?: string, tail?: number) =>
+    `${baseUrl}/api/v1/workflows/${id}/compose/logs${qs({ service, tail, follow: true })}`,
+
+  // kubernetes workspaces: object edits write the manifests / kustomize resources / Helm values (comments kept)
+  /** Kubernetes v1.36 swagger definitions the k8s_schema rule validates against (editor completion/hover). */
+  kubernetesSchema: () => request<KubeSchema>("GET", "/catalog/kubernetes/schema"),
+  kubernetesCatalog: () => request<KubeCatalogItem[]>("GET", "/catalog/kubernetes"),
+  kubernetesCatalogYaml: (itemId: string, name?: string, namespace?: string) =>
+    request<{ yaml: string }>("GET", `/catalog/kubernetes/${encodeURIComponent(itemId)}/yaml${qs({ name, namespace })}`),
+  /** Adds a palette item (starter, image, Helm chart) to the workflow. */
+  addKubernetesItem: (id: string, body: { itemId: string; name?: string; namespace?: string; source?: number; position?: Position }) =>
+    request<{ workflow: Workflow; nodeIds: string[] }>("POST", `/workflows/${id}/kubernetes/catalog`, body),
+  kubernetesRender: (id: string, environment?: string) =>
+    request<KubeRendered>("GET", `/workflows/${id}/kubernetes/render${qs({ environment })}`),
+  /** Where each field of an object is written (manifest, Kustomize patch, Helm values key) or why it is read-only. */
+  kubernetesFields: (id: string, node: string) => request<KubeFields>("GET", `/workflows/${id}/kubernetes/fields${qs({ node })}`),
+  patchKubernetesObject: (id: string, patch: KubeObjectPatch) =>
+    request<Workflow>("PATCH", `/workflows/${id}/kubernetes/objects`, patch),
+  addKubernetesObjects: (id: string, body: { yaml: string; source?: number; file?: string }) =>
+    request<Workflow>("POST", `/workflows/${id}/kubernetes/objects`, body),
+  deleteKubernetesObject: (id: string, node: string) =>
+    request<Workflow>("DELETE", `/workflows/${id}/kubernetes/objects${qs({ node })}`),
+  /** Ways to make `from` use `to` (expose, selector, route, env/volume mounts, scale…); empty `to` = new object. */
+  kubernetesRecipes: (id: string, from: string, to: string) =>
+    request<KubeConnectRecipe[]>("GET", `/workflows/${id}/kubernetes/connect${qs({ from, to })}`),
+  kubernetesConnect: (id: string, body: KubeConnectRequest) =>
+    request<Workflow>("POST", `/workflows/${id}/kubernetes/connect`, body),
+  kubernetesLayout: (id: string, positions: Record<string, Position | null>) =>
+    request<Workflow>("PATCH", `/workflows/${id}/kubernetes/layout`, { positions }),
+  /** up/down/restart and cluster-stop/start/delete on the workflow's local cluster. */
+  startKubeRun: (id: string, body: KubeRunRequest) => request<Run>("POST", `/workflows/${id}/runs`, body),
+  kubeStatus: (id: string) => request<KubeStatus>("GET", `/workflows/${id}/kubernetes/status`),
+  /** Live usage per workload (`service` = workload node id); then "kube.stats" events. */
+  kubeStats: (id: string) => request<ComposeStats>("GET", `/workflows/${id}/kubernetes/stats`),
+  kubeLogs: (id: string, q: { workload?: string; pod?: string; container?: string; tail?: number }) =>
+    request<{ lines: KubeLogLine[] }>("GET", `/workflows/${id}/kubernetes/logs${qs(q)}`),
+  /** Live logs (Server-Sent Events: "kube.log" per line, "end" when the pods stop). */
+  kubeLogsStreamUrl: (id: string, q: { workload?: string; pod?: string; container?: string; tail?: number }) =>
+    `${baseUrl}/api/v1/workflows/${id}/kubernetes/logs${qs({ ...q, follow: true })}`,
+  /** Docker workflow → a new Kubernetes workflow (dryRun: preview the report and generated files). */
+  convertToKubernetes: (id: string, body: ConvertKubernetesRequest) =>
+    request<ConvertKubernetesResponse>("POST", `/workflows/${id}/convert/kubernetes`, body),
 }
 
 /** Subscribes to server events; returns an unsubscribe function. */
@@ -275,12 +391,18 @@ export function subscribeEvents(workflowId: string | undefined, onEvent: (e: Ser
   const types: ServerEvent["type"][] = [
     "workflow.updated",
     "workflow.deleted",
+    "workflow.created",
     "sandbox.status",
     "run.status",
     "run.log",
     "state.updated",
     "loadtest.sample",
     "loadtest.status",
+    "compose.status",
+    "compose.stats",
+    "compose.build",
+    "kube.status",
+    "kube.stats",
     "connections.updated",
     "setup.progress",
   ]

@@ -1,5 +1,5 @@
 import { useMutation, useQuery } from "@tanstack/react-query"
-import { FilePlus2Icon } from "lucide-react"
+import { CloudIcon, FilePlus2Icon } from "lucide-react"
 import { useState } from "react"
 import { toast } from "sonner"
 import { CloudBadge } from "@/components/cloud"
@@ -12,6 +12,8 @@ import { Label } from "@/components/ui/label"
 import { Skeleton } from "@/components/ui/skeleton"
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group"
 import { WorkflowIconTile } from "@/components/workflow-icon/workflow-icon-tile"
+import { techIcon } from "@/components/tech-icons"
+import { TechIcon } from "@/components/tech-icons/tech-icon"
 import { api } from "@/lib/api/client"
 import type { Template } from "@/lib/api/types"
 import { cn } from "@/lib/utils"
@@ -37,21 +39,35 @@ export function NewWorkflowDialog() {
   )
 }
 
+type Kind = "terraform" | "docker" | "kubernetes"
+
+const BLANK_NAME: Record<Kind, string> = { terraform: "Untitled workflow", docker: "Untitled stack", kubernetes: "Untitled cluster app" }
+
+/** Workflow kind → the dialog's kind ("" Terraform). */
+function dialogKind(kind: string | undefined): Kind {
+  return kind === "docker" || kind === "kubernetes" ? kind : "terraform"
+}
+
 /** Lives inside DialogContent, so its state resets every time the dialog opens. */
 function NewWorkflowForm() {
   const openDialog = useWorkflowStore((s) => s.openDialog)
   const templates = useQuery({ queryKey: ["templates"], queryFn: api.templates, staleTime: Infinity })
+  // From a Docker or Kubernetes workspace (its empty canvas, the switcher) the dialog starts on that kind's templates.
+  const [kind, setKind] = useState<Kind>(() => dialogKind(useWorkflowStore.getState().workflow?.kind))
   const [choice, setChoice] = useState<string>(BLANK)
   const [name, setName] = useState("")
   const [nameTouched, setNameTouched] = useState(false)
   const [level, setLevel] = useState<string>("all")
+  const docker = kind === "docker"
+  const kubernetes = kind === "kubernetes"
 
   const create = useMutation({
     mutationFn: async () => {
       const template = templates.data?.find((t) => t.id === choice)
       const wf = await api.createWorkflow({
-        name: name.trim() || template?.name || "Untitled workflow",
+        name: name.trim() || template?.name || BLANK_NAME[kind],
         templateId: template?.id,
+        ...(kind !== "terraform" ? { kind } : {}),
       })
       await useWorkflowStore.getState().open(wf.id)
     },
@@ -64,23 +80,54 @@ function NewWorkflowForm() {
     if (!nameTouched) setName(templates.data?.find((t) => t.id === id)?.name ?? "")
   }
 
-  const visible = (templates.data ?? []).filter((t) => level === "all" || t.difficulty === level)
+  const switchKind = (k: Kind) => {
+    setKind(k)
+    setChoice(BLANK)
+    if (!nameTouched) setName("")
+  }
+
+  const visible = (templates.data ?? []).filter((t) => dialogKind(t.kind) === kind && (level === "all" || t.difficulty === level))
 
   return (
     <>
         <DialogHeader>
           <DialogTitle>New workflow</DialogTitle>
           <DialogDescription>
-            Start from a ready-made architecture or an empty canvas. Everything runs on your machine.
+            {docker
+              ? "Containers from a docker compose file: see them as a diagram, edit them visually or as code, run them with Docker."
+              : kubernetes
+                ? "Kubernetes manifests, Kustomize or a Helm chart: see the objects as a diagram, edit them visually or as code, run them on a local cluster."
+                : "Start from a ready-made architecture or an empty canvas. Everything runs on your machine."}
           </DialogDescription>
         </DialogHeader>
+        <ToggleGroup
+          type="single"
+          variant="outline"
+          value={kind}
+          onValueChange={(v) => v && switchKind(v as Kind)}
+          aria-label="Workflow kind"
+          className="w-full"
+        >
+          <ToggleGroupItem value="terraform" className="flex-1 gap-2">
+            <CloudIcon />
+            Cloud (Terraform)
+          </ToggleGroupItem>
+          <ToggleGroupItem value="docker" className="flex-1 gap-2">
+            <TechIcon icon="docker" size={16} />
+            Containers (Docker)
+          </ToggleGroupItem>
+          <ToggleGroupItem value="kubernetes" className="flex-1 gap-2" data-testid="new-workflow-kind-kubernetes">
+            <TechIcon icon="kubernetes" size={16} />
+            Kubernetes
+          </ToggleGroupItem>
+        </ToggleGroup>
         <div className="flex flex-col gap-1.5">
           <Label htmlFor="wf-name">Name</Label>
           <Input
             id="wf-name"
             value={name}
             autoFocus
-            placeholder="e.g. Orders API"
+            placeholder={docker ? "e.g. Shop backend" : kubernetes ? "e.g. Shop on Kubernetes" : "e.g. Orders API"}
             onChange={(e) => {
               setName(e.target.value)
               setNameTouched(true)
@@ -102,14 +149,20 @@ function NewWorkflowForm() {
             <TemplateCard selected={choice === BLANK} onSelect={() => pick(BLANK)}>
               <div className="flex items-center gap-2 font-medium">
                 <FilePlus2Icon className="size-4" />
-                Blank canvas
+                {docker ? "Empty compose file" : kubernetes ? "Empty manifests" : "Blank canvas"}
               </div>
-              <p className="text-xs text-muted-foreground">Start empty and drag resources in from the palette.</p>
+              <p className="text-xs text-muted-foreground">
+                {docker
+                  ? "Start with no services and add images or your own Dockerfiles from the palette."
+                  : kubernetes
+                    ? "Start with an empty k8s/ folder and add workloads, images or Helm charts from the palette."
+                    : "Start empty and drag resources in from the palette."}
+              </p>
             </TemplateCard>
             {templates.isPending &&
               Array.from({ length: 5 }, (_, i) => <Skeleton key={i} className="h-32 rounded-xl" />)}
             {visible.map((t) => (
-              <TemplateCard key={t.id} selected={choice === t.id} onSelect={() => pick(t.id)} onConfirm={() => create.mutate()}>
+              <TemplateCard key={t.id} selected={choice === t.id} onSelect={() => pick(t.id)} onConfirm={() => create.mutate()} id={t.id}>
                 <div className="flex items-start justify-between gap-2">
                   <span className="flex items-center gap-2 font-medium">
                     <WorkflowIconTile icon={t.icon} size={24} />
@@ -121,7 +174,11 @@ function NewWorkflowForm() {
                 </div>
                 <p className="line-clamp-3 text-xs text-muted-foreground">{t.description}</p>
                 <div className="mt-auto flex flex-wrap items-center gap-1 pt-1">
-                  <CloudBadge cloud={t.cloud} />
+                  {t.kind === "docker" || t.kind === "kubernetes" ? (
+                    <StackIcons tags={t.tags} platform={t.kind} />
+                  ) : (
+                    t.cloud && <CloudBadge cloud={t.cloud} />
+                  )}
                   {t.tags.slice(0, 3).map((tag) => (
                     <Badge key={tag} variant="secondary" className="text-[10px]">
                       {tag}
@@ -140,10 +197,33 @@ function NewWorkflowForm() {
             Cancel
           </Button>
           <Button onClick={() => create.mutate()} disabled={create.isPending}>
-            {create.isPending ? "Creating…" : choice === BLANK ? "Create blank workflow" : "Create from template"}
+            {create.isPending
+              ? "Creating…"
+              : choice === BLANK
+                ? docker
+                  ? "Create empty stack"
+                  : kubernetes
+                    ? "Create empty app"
+                    : "Create blank workflow"
+                : "Create from template"}
           </Button>
         </DialogFooter>
     </>
+  )
+}
+
+/** Logos of the technologies a Docker/Kubernetes template's tags name (unknown tags are left to the text badges). */
+function StackIcons({ tags, platform }: { tags: string[]; platform: "docker" | "kubernetes" }) {
+  const icons = tags
+    .map((t) => techIcon(t.toLowerCase()))
+    .filter((i, n, all) => !i.generic && i.id !== platform && all.findIndex((x) => x.id === i.id) === n)
+  return (
+    <span className="mr-1 flex items-center gap-1">
+      <TechIcon icon={platform} size={16} />
+      {icons.slice(0, 4).map((i) => (
+        <TechIcon key={i.id} icon={i} size={16} />
+      ))}
+    </span>
   )
 }
 
@@ -151,11 +231,13 @@ function TemplateCard({
   selected,
   onSelect,
   onConfirm,
+  id,
   children,
 }: {
   selected: boolean
   onSelect: () => void
   onConfirm?: () => void
+  id?: string
   children: React.ReactNode
 }) {
   return (
@@ -164,6 +246,7 @@ function TemplateCard({
       onClick={onSelect}
       onDoubleClick={onConfirm}
       aria-pressed={selected}
+      data-template={id}
       className={cn(
         "flex min-h-32 flex-col gap-1.5 rounded-xl border bg-card p-3 text-left text-sm transition-colors hover:border-primary/40",
         selected && "border-primary ring-2 ring-primary/30",

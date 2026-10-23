@@ -1,0 +1,50 @@
+# The producer: a CronJob queues a batch of jobs every minute. Old runs
+# are cleaned up (3 successful, 1 failed kept) and runs never overlap.
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: enqueue
+  namespace: jobs
+spec:
+  schedule: "* * * * *"
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 1
+  jobTemplate:
+    spec:
+      backoffLimit: 2
+      activeDeadlineSeconds: 50
+      ttlSecondsAfterFinished: 600
+      template:
+        metadata:
+          labels:
+            app: enqueue
+        spec:
+          restartPolicy: Never
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 999
+          automountServiceAccountToken: false
+          containers:
+            - name: enqueue
+              image: redis:7.4-alpine
+              command: ["sh", "/scripts/enqueue.sh"]
+              env:
+                - name: REDIS_HOST
+                  value: redis.jobs
+                - name: BATCH_SIZE
+                  value: "3"
+              resources:
+                requests:
+                  cpu: 10m
+                  memory: 16Mi
+                limits:
+                  memory: 32Mi
+              volumeMounts:
+                - name: scripts
+                  mountPath: /scripts
+                  readOnly: true
+          volumes:
+            - name: scripts
+              configMap:
+                name: scripts

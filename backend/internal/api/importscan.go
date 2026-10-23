@@ -14,6 +14,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/ismaelosuna7824/nimbo/backend/internal/compose"
 	"github.com/ismaelosuna7824/nimbo/backend/internal/hclcodec"
 	"github.com/ismaelosuna7824/nimbo/backend/internal/model"
 	"github.com/ismaelosuna7824/nimbo/backend/internal/store"
@@ -61,6 +62,13 @@ type repoScan struct {
 	usedBy   map[string][]string // module dir -> directories calling it
 	groups   map[string]*envGroup
 	skipped  []string
+	// docker: compose files and Dockerfiles per directory (base names).
+	composeFiles map[string][]string
+	dockerfiles  map[string][]string
+	// limit is the folder a docker project may bring files from (absolute):
+	// importLimit of a scanned folder on disk, else root.
+	limit   string
+	layouts map[string]*composeLayout // by compose folder
 }
 
 // envGroup is a tree in the environments layout found by the scan:
@@ -120,7 +128,8 @@ func (rs *repoScan) inGroup(rel string) bool {
 
 // scanRepo walks root and parses every directory containing *.tf files.
 func scanRepo(root, rootName string) (*repoScan, error) {
-	rs := &repoScan{root: root, rootName: rootName, dirs: map[string]*tfDir{}, usedBy: map[string][]string{}}
+	rs := &repoScan{root: root, rootName: rootName, dirs: map[string]*tfDir{}, usedBy: map[string][]string{},
+		composeFiles: map[string][]string{}, dockerfiles: map[string][]string{}, limit: root, layouts: map[string]*composeLayout{}}
 	tfvars := map[string][]string{}
 	jsonFiles := map[string][]string{} // dir -> *.tf.json base names
 	files := 0
@@ -177,6 +186,10 @@ func scanRepo(root, rootName string) (*repoScan, error) {
 			}
 		case strings.HasSuffix(base, ".tf.json"):
 			jsonFiles[dir] = append(jsonFiles[dir], base)
+		case compose.IsComposeName(base):
+			rs.composeFiles[dir] = append(rs.composeFiles[dir], base)
+		case compose.IsDockerfileName(base):
+			rs.dockerfiles[dir] = append(rs.dockerfiles[dir], base)
 		}
 		return nil
 	})
@@ -461,6 +474,12 @@ func (rs *repoScan) result() model.ImportScan {
 	for _, rel := range rs.projects() {
 		out.Projects = append(out.Projects, rs.project(rel, names[rel]))
 	}
+	for _, dp := range rs.dockerProjects() {
+		out.Projects = append(out.Projects, rs.dockerSummary(dp, names))
+	}
+	for _, d := range rs.kubeProjects() {
+		out.Projects = append(out.Projects, rs.kubeSummary(d, names))
+	}
 	return out
 }
 
@@ -531,6 +550,18 @@ func (src importSource) open() (root, rootName string, cleanup func(), err error
 	return tmp, rootName, cleanup, nil
 }
 
+// scan walks the opened folder. A folder on disk lets docker projects bring
+// the files they reference from around it (a compose file in repo/docker
+// building ../services/api, see importLimit); uploads have nothing around
+// them.
+func (src importSource) scan(root, rootName string) (*repoScan, error) {
+	rs, err := scanRepo(root, rootName)
+	if err == nil && src.Dir != "" {
+		rs.limit = importLimit(root)
+	}
+	return rs, err
+}
+
 func (s *Server) scanImport(w http.ResponseWriter, r *http.Request) error {
 	var req importSource
 	if err := decode(w, r, maxImportBody, &req); err != nil {
@@ -541,7 +572,7 @@ func (s *Server) scanImport(w http.ResponseWriter, r *http.Request) error {
 		return err
 	}
 	defer cleanup()
-	rs, err := scanRepo(root, rootName)
+	rs, err := req.scan(root, rootName)
 	if err != nil {
 		return err
 	}
@@ -575,6 +606,8 @@ type importPlan struct {
 	modules []string          // local module dirs (scan-relative)
 	names   map[string]string // module dir -> name under modules/
 	extra   map[string]string // asset path -> scan-relative file, also copied
+	files   map[string][]byte // docker: every file of the project
+	exec    []string          // docker: files keeping an executable mode
 }
 
 func (s *Server) importWorkflow(w http.ResponseWriter, r *http.Request) error {
@@ -587,21 +620,37 @@ func (s *Server) importWorkflow(w http.ResponseWriter, r *http.Request) error {
 		return err
 	}
 	defer cleanup()
-	rs, err := scanRepo(root, rootName)
+	rs, err := req.scan(root, rootName)
 	if err != nil {
 		return err
 	}
 	projects := req.Projects
+	kubes := rs.kubeByKey()
+	docker := map[string]dockerProject{}
+	for _, dp := range rs.dockerProjects() {
+		docker[dp.key(rs)] = dp
+	}
 	if len(projects) == 0 {
 		switch {
 		case rs.dirs["."] != nil, rs.groups["."] != nil:
 			projects = []string{"."}
+		case docker["."].dir != "":
+			projects = []string{"."}
+		case kubes[kubePrefix+"."].Dir != "":
+			projects = []string{kubePrefix + "."}
 		default:
-			if found := rs.projects(); len(found) > 0 {
-				return errorf(http.StatusBadRequest, "no Terraform (*.tf) files at the folder root; it contains %d project(s) in subfolders (%s): scan the folder and pass projects",
+			found := rs.projects()
+			for _, dp := range rs.dockerProjects() {
+				found = append(found, dp.key(rs))
+			}
+			for key := range kubes {
+				found = append(found, key)
+			}
+			if len(found) > 0 {
+				return errorf(http.StatusBadRequest, "no project at the folder root; it contains %d project(s) in subfolders (%s): scan the folder and pass projects",
 					len(found), strings.Join(found[:min(len(found), 5)], ", "))
 			}
-			return errorf(http.StatusBadRequest, "no Terraform (*.tf) files found")
+			return errorf(http.StatusBadRequest, "no Terraform (*.tf) files, compose file, Dockerfile or Kubernetes manifests/kustomization/chart found")
 		}
 	}
 
@@ -614,8 +663,32 @@ func (s *Server) importWorkflow(w http.ResponseWriter, r *http.Request) error {
 			continue
 		}
 		seen[rel] = true
+		if d, ok := kubes[strings.TrimSpace(p)]; ok && isKubeKey(strings.TrimSpace(p)) {
+			name := strings.TrimSpace(req.Names[strings.TrimSpace(p)])
+			if name == "" && len(projects) == 1 {
+				name = strings.TrimSpace(req.Name)
+			}
+			plan, err := rs.planKube(d, orName(name, rs.kubeName(d, suggested)))
+			if err != nil {
+				return err
+			}
+			plans = append(plans, plan)
+			continue
+		}
+		if dp, ok := docker[strings.TrimSpace(p)]; ok && (rs.dirs[rel] == nil && rs.groups[rel] == nil || strings.HasPrefix(strings.TrimSpace(p), dockerPrefix)) {
+			name := strings.TrimSpace(req.Names[strings.TrimSpace(p)])
+			if name == "" && len(projects) == 1 {
+				name = strings.TrimSpace(req.Name)
+			}
+			plan, err := rs.planDocker(dp, orName(name, rs.dockerName(dp, suggested)))
+			if err != nil {
+				return err
+			}
+			plans = append(plans, plan)
+			continue
+		}
 		if rs.dirs[rel] == nil && rs.groups[rel] == nil {
-			return errorf(http.StatusBadRequest, "project %q has no Terraform (*.tf) files", p)
+			return errorf(http.StatusBadRequest, "project %q has no Terraform (*.tf) files nor a compose file or Dockerfile", p)
 		}
 		name := strings.TrimSpace(req.Names[rel])
 		if name == "" && len(projects) == 1 {
@@ -641,7 +714,17 @@ func (s *Server) importWorkflow(w http.ResponseWriter, r *http.Request) error {
 	for _, plan := range plans {
 		plan.wf.ID = store.NewID(plan.wf.Name)
 		plan.wf.Icon = s.randomIcon() // earlier ones of this batch are now the most recent
-		err := rs.write(plan, s.cfg.Store.AssetsDir(plan.wf.ID))
+		var err error
+		if !plan.wf.IsTerraform() {
+			err = s.writeAssets(plan.wf.ID, plan.files)
+			for _, rel := range plan.exec {
+				if err == nil {
+					err = os.Chmod(filepath.Join(s.cfg.Store.AssetsDir(plan.wf.ID), filepath.FromSlash(rel)), 0o755)
+				}
+			}
+		} else {
+			err = rs.write(plan, s.cfg.Store.AssetsDir(plan.wf.ID))
+		}
 		if err == nil {
 			err = s.save(plan.wf, plan.diags)
 		}
@@ -656,6 +739,9 @@ func (s *Server) importWorkflow(w http.ResponseWriter, r *http.Request) error {
 		}
 		created = append(created, plan.wf.ID)
 		out.Workflows = append(out.Workflows, *plan.wf)
+	}
+	for i := range out.Workflows {
+		s.announceCreated(r, &out.Workflows[i])
 	}
 	return writeJSON(w, http.StatusCreated, out)
 }

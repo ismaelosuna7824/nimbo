@@ -3,6 +3,8 @@
 // "plumbing" test (helper resources folded into their parent card).
 // Kept free of asset imports so plain runtimes (bun test) can load it.
 
+import type { TechIconId } from "@/components/tech-icons";
+
 export type ArchProvider = "aws" | "azure" | "gcp" | "oci";
 
 export type ArchCategory =
@@ -404,8 +406,40 @@ export function matchRule<V>(rules: readonly (readonly [string, V])[], t: string
   return undefined;
 }
 
+/**
+ * Terraform types of non-cloud providers that stand for a technology (Kubernetes, Helm,
+ * Docker, Vault…): drawn with that technology's icon instead of a cloud fallback. Cloud
+ * services keep their official icon (aws_eks_cluster is EKS, not Kubernetes).
+ */
+const TECH_TYPE_RULES: readonly (readonly [string, readonly [TechIconId, ArchCategory]])[] = [
+  ["kubernetes_", ["kubernetes", "containers"]],
+  ["kubectl_", ["kubernetes", "containers"]],
+  ["helm_", ["helm", "containers"]],
+  ["docker_", ["docker", "containers"]],
+  ["vault_", ["vault", "security"]],
+  ["consul_", ["consul", "networking"]],
+  ["keycloak_", ["keycloak", "identity"]],
+  ["grafana_", ["grafana", "monitoring"]],
+  ["kafka_", ["kafka", "integration"]],
+  ["rabbitmq_", ["rabbitmq", "integration"]],
+  ["postgresql_", ["postgres", "database"]],
+  ["mysql_", ["mysql", "database"]],
+  ["mongodbatlas_", ["mongodb", "database"]],
+  ["elasticstack_", ["elasticsearch", "analytics"]],
+  ["elasticsearch_", ["elasticsearch", "analytics"]],
+  ["opensearch_", ["opensearch", "analytics"]],
+  ["minio_", ["minio", "storage"]],
+];
+
+/** Technology icon and category of a non-cloud Terraform type (`kubernetes_deployment`, `helm_release`). */
+export function techTypeOf(resourceType: string): { icon: TechIconId; category: ArchCategory } | undefined {
+  const hit = matchRule(TECH_TYPE_RULES, baseType(resourceType));
+  return hit && { icon: hit[0], category: hit[1] };
+}
+
 export function archCategoryOf(provider: ArchProvider, resourceType: string): ArchCategory {
-  return matchRule(CATEGORY_RULES[provider], baseType(resourceType)) ?? "other";
+  const t = baseType(resourceType);
+  return matchRule(CATEGORY_RULES[provider], t) ?? techTypeOf(t)?.category ?? "other";
 }
 
 // Helper resources a reader does not need as their own card: associations,

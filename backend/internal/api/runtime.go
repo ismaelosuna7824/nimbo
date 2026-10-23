@@ -23,7 +23,11 @@ func (s *Server) syncLive(st model.SandboxStatus) {
 
 func (s *Server) sandboxStatus(w http.ResponseWriter, r *http.Request) error {
 	id := r.PathValue("id")
-	if _, err := s.cfg.Store.Get(id); err != nil {
+	wf, err := s.cfg.Store.Get(id)
+	if err != nil {
+		return err
+	}
+	if err := refuseDocker(wf, "The Floci sandbox"); err != nil {
 		return err
 	}
 	st, err := s.cfg.Sandbox.Status(r.Context(), id)
@@ -45,6 +49,9 @@ func (s *Server) sandboxAction(w http.ResponseWriter, r *http.Request) error {
 	id := r.PathValue("id")
 	wf, err := s.cfg.Store.Get(id)
 	if err != nil {
+		return err
+	}
+	if err := refuseDocker(wf, "The Floci sandbox"); err != nil {
 		return err
 	}
 	// Lifecycle operations must not be torn down halfway when the client
@@ -95,21 +102,24 @@ func environment(wf *model.Workflow, name string) (*model.Environment, error) {
 }
 
 func (s *Server) startRun(w http.ResponseWriter, r *http.Request) error {
-	var req struct {
-		Action      model.RunAction `json:"action"`
-		Environment string          `json:"environment"`
-	}
+	var req runRequest
 	if err := decode(w, r, maxBody, &req); err != nil {
 		return err
+	}
+	wf, err := s.cfg.Store.Get(r.PathValue("id"))
+	if err != nil {
+		return err
+	}
+	switch {
+	case wf.IsDocker():
+		return s.startComposeRun(w, r, wf, req)
+	case wf.IsKubernetes():
+		return s.startKubeRun(w, r, wf, req)
 	}
 	switch req.Action {
 	case model.ActionValidate, model.ActionPlan, model.ActionApply, model.ActionDestroy:
 	default:
 		return errorf(http.StatusBadRequest, "action must be validate, plan, apply or destroy")
-	}
-	wf, err := s.cfg.Store.Get(r.PathValue("id"))
-	if err != nil {
-		return err
 	}
 	if err := refuseArchived(wf); err != nil {
 		return err
@@ -180,6 +190,9 @@ func (s *Server) deployedState(w http.ResponseWriter, r *http.Request) error {
 	if err != nil {
 		return err
 	}
+	if err := refuseDocker(wf, "Terraform state (see /compose/status or /kubernetes/status)"); err != nil {
+		return err
+	}
 	st, err := s.cfg.Sandbox.State(r.Context(), wf)
 	if err != nil {
 		return err
@@ -191,6 +204,20 @@ func (s *Server) loadTargets(w http.ResponseWriter, r *http.Request) error {
 	wf, err := s.cfg.Store.Get(r.PathValue("id"))
 	if err != nil {
 		return err
+	}
+	switch {
+	case wf.IsDocker():
+		rt, err := s.composeRuntime(r.Context(), wf)
+		if err != nil {
+			return err
+		}
+		return ok(w, loadtest.SuggestCompose(rt.Status))
+	case wf.IsKubernetes():
+		st, err := s.cfg.Sandbox.KubeStatus(r.Context(), wf.ID)
+		if err != nil {
+			return err
+		}
+		return ok(w, loadtest.SuggestKube(st))
 	}
 	st, err := s.cfg.Sandbox.State(r.Context(), wf)
 	if err != nil {

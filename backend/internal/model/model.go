@@ -169,14 +169,22 @@ type NamedBlock struct {
 	Order int    `json:"order,omitempty"` // see Node.Order
 }
 
-// Workflow is the unit the user designs, tests and exports. It maps 1:1 to a
-// Terraform root module plus app-only data (positions, environments).
+// Workflow is the unit the user designs, tests and exports. A Terraform
+// workflow (Kind "") maps 1:1 to a Terraform root module plus app-only data
+// (positions, environments); a docker workflow (Kind WorkflowDocker) is a
+// docker-compose project whose files are its source of truth (Compose); a
+// Kubernetes workflow (Kind WorkflowKubernetes) deploys the manifests,
+// Kustomize trees and Helm charts of its files (Kubernetes). The
+// Terraform fields of docker and Kubernetes workflows stay empty.
 type Workflow struct {
-	ID          string    `json:"id"`
-	Name        string    `json:"name"`
-	Description string    `json:"description,omitempty"`
-	CreatedAt   time.Time `json:"createdAt"`
-	UpdatedAt   time.Time `json:"updatedAt"`
+	ID          string `json:"id"`
+	Name        string `json:"name"`
+	Description string `json:"description,omitempty"`
+	// Kind is "" (Terraform), WorkflowDocker or WorkflowKubernetes; it
+	// never changes.
+	Kind      string    `json:"kind,omitempty"`
+	CreatedAt time.Time `json:"createdAt"`
+	UpdatedAt time.Time `json:"updatedAt"`
 	// Archived hides the workflow from recents; its sandbox is stopped and
 	// runs/load tests are refused until it is restored.
 	Archived bool `json:"archived,omitempty"`
@@ -225,6 +233,11 @@ type Workflow struct {
 	// NodeFiles maps node ID -> the root .tf file export writes it to
 	// (Node.File, or the recommended layout when it is empty).
 	NodeFiles map[string]string `json:"nodeFiles,omitempty"`
+
+	// Compose is the compose project of a docker workflow (nil otherwise).
+	Compose *ComposeModel `json:"compose,omitempty"`
+	// Kubernetes is the deployment of a Kubernetes workflow (nil otherwise).
+	Kubernetes *KubernetesModel `json:"kubernetes,omitempty"`
 }
 
 // Export layouts (Workflow.Layout).
@@ -260,6 +273,7 @@ type WorkflowSummary struct {
 	ID          string        `json:"id"`
 	Name        string        `json:"name"`
 	Description string        `json:"description,omitempty"`
+	Kind        string        `json:"kind,omitempty"`
 	UpdatedAt   time.Time     `json:"updatedAt"`
 	NodeCount   int           `json:"nodeCount"`
 	Clouds      []Cloud       `json:"clouds"`
@@ -379,7 +393,9 @@ type Diagnostic struct {
 	// Detail explains the problem (best-practice findings: why it matters).
 	Detail string `json:"detail,omitempty"`
 	// Fix is a suggested change (best-practice findings).
-	Fix       string `json:"fix,omitempty"`
+	Fix string `json:"fix,omitempty"`
+	// Docs links to the documentation of the practice (docker findings).
+	Docs      string `json:"docs,omitempty"`
 	NodeID    string `json:"nodeId,omitempty"`
 	Attribute string `json:"attribute,omitempty"`
 	// File and Line locate code diagnostics (Terraform syntax errors) in
@@ -525,6 +541,11 @@ type CodeProblem struct {
 	Column    int      `json:"column"`
 	EndLine   int      `json:"endLine"`
 	EndColumn int      `json:"endColumn"`
+	// Attribute is the field path inside the object a k8s_* problem is
+	// about ("spec.template.spec.containers[0].image"); Fix is the
+	// diagnostic's fix text. Editors use them for quick fixes.
+	Attribute string `json:"attribute,omitempty"`
+	Fix       string `json:"fix,omitempty"`
 }
 
 // ConnectionRecipe is one way to connect two node types. Generic recipes set
@@ -541,13 +562,15 @@ type ConnectionRecipe struct {
 
 // Template is a starter workflow.
 type Template struct {
-	ID          string        `json:"id"`
-	Name        string        `json:"name"`
-	Description string        `json:"description"`
-	Cloud       Cloud         `json:"cloud"`
-	Difficulty  string        `json:"difficulty"` // beginner | intermediate | advanced
-	Tags        []string      `json:"tags"`
-	Icon        *WorkflowIcon `json:"icon,omitempty"`
+	ID          string `json:"id"`
+	Name        string `json:"name"`
+	Description string `json:"description"`
+	Cloud       Cloud  `json:"cloud"` // "" for docker templates
+	// Kind is WorkflowDocker for docker-compose templates.
+	Kind       string        `json:"kind,omitempty"`
+	Difficulty string        `json:"difficulty"` // beginner | intermediate | advanced
+	Tags       []string      `json:"tags"`
+	Icon       *WorkflowIcon `json:"icon,omitempty"`
 }
 
 // ---------------------------------------------------------------------------
@@ -586,7 +609,8 @@ type EmulatorStatus struct {
 	Services  map[string]string `json:"services,omitempty"` // floci service key -> running|available
 }
 
-// RunAction is a Terraform command.
+// RunAction is a Terraform command, or a docker compose command for docker
+// workflows (Workflow.Kind "docker").
 type RunAction string
 
 const (
@@ -594,7 +618,22 @@ const (
 	ActionPlan     RunAction = "plan"
 	ActionApply    RunAction = "apply"
 	ActionDestroy  RunAction = "destroy"
+
+	ActionUp      RunAction = "up"      // build + up -d --wait
+	ActionDown    RunAction = "down"    // remove containers (and volumes with Run.RemoveVolumes)
+	ActionBuild   RunAction = "build"   // build images
+	ActionPull    RunAction = "pull"    // pull images
+	ActionRestart RunAction = "restart" // restart containers
 )
+
+// ComposeAction reports whether a is a docker compose run action.
+func ComposeAction(a RunAction) bool {
+	switch a {
+	case ActionUp, ActionDown, ActionBuild, ActionPull, ActionRestart:
+		return true
+	}
+	return false
+}
 
 // RunStatus is the lifecycle of a Terraform run.
 type RunStatus string
@@ -634,7 +673,15 @@ type Run struct {
 	ExitCode    int          `json:"exitCode"`
 	Plan        *PlanSummary `json:"plan,omitempty"`
 	Error       string       `json:"error,omitempty"`
-	Log         []LogLine    `json:"log,omitempty"` // omitted in list responses
+	// Compose runs: the service the action was limited to ("" = all) and
+	// whether down also removed the named volumes (Kubernetes: the PVCs).
+	Service       string `json:"service,omitempty"`
+	RemoveVolumes bool   `json:"removeVolumes,omitempty"`
+	// Kubernetes runs: the workload node ID restart was limited to, and
+	// whether down also deleted the cluster.
+	Workload      string    `json:"workload,omitempty"`
+	DeleteCluster bool      `json:"deleteCluster,omitempty"`
+	Log           []LogLine `json:"log,omitempty"` // omitted in list responses
 }
 
 // DeployedState is the Terraform state of a sandbox mapped onto nodes.
@@ -1212,6 +1259,9 @@ type LoadTestRun struct {
 	Summary      *LoadSummary      `json:"summary,omitempty"`
 	Thresholds   []ThresholdResult `json:"thresholds,omitempty"`
 	Error        string            `json:"error,omitempty"`
+	// Resources: container usage and bottleneck verdicts of a run against
+	// a docker workflow's service.
+	Resources *LoadResources `json:"resources,omitempty"`
 }
 
 // ---------------------------------------------------------------------------
@@ -1301,19 +1351,26 @@ type Settings struct {
 }
 
 // BestPracticeSettings turns the best-practice checks off as a whole or per
-// rule. The zero value runs every rule.
+// rule. The zero value runs every rule that is on by default.
 type BestPracticeSettings struct {
 	Disabled      bool     `json:"disabled,omitempty"`
 	DisabledRules []string `json:"disabledRules"` // rule codes, e.g. "bp_missing_tags"
+	// EnabledRules turns on rules that are off by default (DefaultOff).
+	EnabledRules []string `json:"enabledRules,omitempty"`
 }
 
 // BestPracticeRule describes one best-practice check (GET /best-practices/rules).
 type BestPracticeRule struct {
-	Code        string   `json:"code"` // "bp_*"
+	Code        string   `json:"code"` // "bp_*" (Terraform) or "dk_*" (docker)
 	Title       string   `json:"title"`
-	Category    string   `json:"category"` // inputs | versions | hardcoding | tagging | naming | security | structure
+	Category    string   `json:"category"` // inputs | versions | hardcoding | tagging | naming | security | structure | docker-build | docker-compose | docker-security
 	Severity    Severity `json:"severity"` // default severity (some findings of a rule may be lower)
 	Description string   `json:"description"`
+	// Docs links to the documentation of the practice.
+	Docs string `json:"docs,omitempty"`
+	// DefaultOff rules only run when listed in EnabledRules (opt-in checks
+	// that would be noisy for most projects).
+	DefaultOff bool `json:"defaultOff,omitempty"`
 }
 
 // AgentClient is an AI agent application Nimbo can register its MCP server
@@ -1360,7 +1417,7 @@ type SetupFix struct {
 
 // SetupCheck is one requirement, explained for someone new to Docker.
 type SetupCheck struct {
-	ID       string           `json:"id"` // wsl (Windows) | docker-cli | docker-daemon | docker-permissions (Linux) | images | docker-socket | docker-memory | disk | internet
+	ID       string           `json:"id"` // wsl (Windows) | docker-cli | docker-daemon | docker-permissions (Linux) | images | docker-socket | docker-memory | docker-compose | disk | internet
 	Title    string           `json:"title"`
 	Status   SetupCheckStatus `json:"status"`
 	Required bool             `json:"required"`
@@ -1406,9 +1463,26 @@ type SetupProgress struct {
 // ---------------------------------------------------------------------------
 // Events (server-sent events on GET /api/v1/events)
 
+// ClientHeader names who sends an API request; ClientMCP marks the MCP
+// server (an AI agent), so events can say a workflow came from an agent.
+const (
+	ClientHeader = "X-Nimbo-Client"
+	ClientMCP    = "mcp"
+)
+
+// WorkflowCreated announces a new workflow. Origin is "mcp" when an AI agent
+// created it through the MCP server, else "app".
+type WorkflowCreated struct {
+	ID     string `json:"id"`
+	Name   string `json:"name"`
+	Kind   string `json:"kind,omitempty"`
+	Origin string `json:"origin"`
+}
+
 // Event types.
 const (
 	EventWorkflowUpdated    = "workflow.updated"    // Data: Workflow
+	EventWorkflowCreated    = "workflow.created"    // Data: WorkflowCreated (no WorkflowID: every subscriber gets it)
 	EventWorkflowDeleted    = "workflow.deleted"    // Data: {"id": string}
 	EventSandboxStatus      = "sandbox.status"      // Data: SandboxStatus
 	EventRunStatus          = "run.status"          // Data: Run (without Log)
@@ -1418,6 +1492,7 @@ const (
 	EventLoadTestStatus     = "loadtest.status"     // Data: LoadTestRun (without Timeline)
 	EventConnectionsUpdated = "connections.updated" // Data: {"id": string}; after create/update/delete
 	EventSetupProgress      = "setup.progress"      // Data: SetupProgress (no workflow ID)
+	EventComposeStatus      = "compose.status"      // Data: ComposeStatus; on container changes and after compose runs
 )
 
 // Event is pushed to SSE subscribers.
@@ -1447,7 +1522,9 @@ type ImportScan struct {
 	Skipped []string `json:"skipped"`
 }
 
-// ImportProject summarizes one importable Terraform root module.
+// ImportProject summarizes one importable Terraform root module or, with
+// Kind WorkflowDocker, one compose project (or a lone Dockerfile), or,
+// with Kind WorkflowKubernetes, one Kubernetes project.
 type ImportProject struct {
 	Path        string       `json:"path"` // slash path relative to Root; "." = Root itself
 	Name        string       `json:"name"` // suggested workflow name
@@ -1465,6 +1542,43 @@ type ImportProject struct {
 	// the folder holding environments/ and modules/. Else LayoutSingle.
 	Layout       string   `json:"layout"`
 	Environments []string `json:"environments,omitempty"`
+	// Docker projects: Kind WorkflowDocker, the compose files in -f order
+	// (empty for a lone Dockerfile, imported with a generated compose.yaml),
+	// how many services they declare and the Dockerfiles found.
+	Kind         string   `json:"kind,omitempty"`
+	ComposeFiles []string `json:"composeFiles,omitempty"`
+	Services     int      `json:"services,omitempty"`
+	Dockerfiles  []string `json:"dockerfiles,omitempty"`
+	// Outside lists what the compose files reference outside Path (build
+	// contexts, Dockerfiles, env_file, bind mounts, config/secret files,
+	// include/extends files). They are imported too: the workflow's root is
+	// their common ancestor with Path, so the compose files keep their
+	// relative place and stay byte-identical. Paths relative to Path.
+	Outside []ImportOutside `json:"outside,omitempty"`
+	// Members is, for a group of sibling folders that each hold a
+	// Dockerfile and no compose file (Path "dockerfiles:<parent>"), the
+	// paths of those folders' own projects, offered as an alternative: the
+	// group imports them as one workflow with a generated compose.yaml
+	// building one service per folder.
+	Members []string `json:"members,omitempty"`
+	// Kubernetes projects (Kind WorkflowKubernetes): the sources found
+	// (paths relative to Path) and how many objects they render (base,
+	// no environment). Environments lists the overlays/values files.
+	KubeSources []KubeSource `json:"kubeSources,omitempty"`
+	Objects     int          `json:"objects,omitempty"`
+	// Bytes and FileCount size what a docker workflow imports.
+	Bytes     int64 `json:"bytes,omitempty"`
+	FileCount int   `json:"fileCount,omitempty"`
+}
+
+// ImportOutside is a folder or file outside a docker project's folder that
+// its compose files reference.
+type ImportOutside struct {
+	Path  string   `json:"path"`  // relative to the project folder: "../services/api"
+	Kinds []string `json:"kinds"` // "build context", "Dockerfile", "env_file", "bind mount", "config", "secret", "compose file"
+	Dir   bool     `json:"dir"`
+	Bytes int64    `json:"bytes"`
+	Files int      `json:"files"`
 }
 
 // ImportResult is the response of POST /import: one workflow per project.
@@ -1621,6 +1735,18 @@ const (
 	// workflow has its own file of that name.
 	FileScaffold FileKind = "scaffold"
 	FileAsset    FileKind = "asset" // everything else: Lambda sources, templates, the lock file
+	// Docker workflows: compose files (Compose.Files and the files they
+	// include) and Dockerfiles.
+	FileCompose    FileKind = "compose"
+	FileDockerfile FileKind = "dockerfile"
+	// Kubernetes workflows: manifests (Kubernetes objects, also Kustomize
+	// resources and patches), kustomization files, Helm chart metadata
+	// (Chart.yaml), values files and templates.
+	FileManifest      FileKind = "manifest"
+	FileKustomization FileKind = "kustomization"
+	FileChart         FileKind = "chart"
+	FileValues        FileKind = "values"
+	FileHelmTemplate  FileKind = "helm-template"
 )
 
 // WorkflowFile is one file an export writes (GET /workflows/{id}/files).
@@ -1630,7 +1756,10 @@ const (
 // through PUT /workflows/{id}/files/content); ReadOnlyReason says why a
 // file is not editable. Movable files can be renamed, moved or deleted
 // there. Language names the syntax: "hcl", "json", "javascript",
-// "typescript", "python", "go", "yaml", "markdown", "shell" or "text".
+// "typescript", "python", "go", "yaml", "markdown", "shell", "dockerfile",
+// "java", "kotlin", "csharp", "rust", "php", "ruby", "sql", "toml", "ini",
+// "properties", "xml", "html", "css", "nginx", "makefile", "protobuf" or
+// "text".
 type WorkflowFile struct {
 	Path           string   `json:"path"` // slash-separated, relative to the export root
 	Size           int64    `json:"size"`

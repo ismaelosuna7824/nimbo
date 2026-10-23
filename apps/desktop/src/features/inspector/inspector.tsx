@@ -21,7 +21,9 @@ import { openExternal } from "@/components/open-external"
 import { ResourceIcon } from "@/components/resource-icon"
 import { WorkflowIconDialog } from "@/components/workflow-icon/icon-picker"
 import { WorkflowIconTile } from "@/components/workflow-icon/workflow-icon-tile"
+import { TechIcon } from "@/components/tech-icons/tech-icon"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
+import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Empty, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from "@/components/ui/empty"
 import { Input } from "@/components/ui/input"
@@ -36,6 +38,8 @@ import { useWorkflowStore } from "@/state/workflow-store"
 import { canvasHandle } from "../canvas/actions"
 import { openModuleView } from "../canvas/module-view-store"
 import { nodeAddress, nodeLabel, useNodeSchemas, useSchema } from "../canvas/catalog"
+import { DockerInspector, DockerOverviewHint } from "../docker/inspector/docker-inspector"
+import { KubeInspector, KubeOverviewHint, KubeSources } from "../kubernetes/inspector/kube-inspector"
 import { NetworkSection } from "../network/network-section"
 import { useEndpoints } from "../panels/endpoints/use-endpoints"
 import { AttrField } from "./attr-field"
@@ -68,6 +72,10 @@ const MODULE_VERSION: SchemaAttribute = {
 
 export function Inspector() {
   const hasWorkflow = useWorkflowStore((s) => s.workflow !== null)
+  const docker = useWorkflowStore((s) => s.workflow?.kind === "docker")
+  const dockerSelected = useWorkflowStore((s) => !!s.workflow?.compose?.graph.nodes.some((n) => n.id === s.selectedNodeId))
+  const kubernetes = useWorkflowStore((s) => s.workflow?.kind === "kubernetes")
+  const kubeSelected = useWorkflowStore((s) => !!s.workflow?.kubernetes?.graph.nodes.some((n) => n.id === s.selectedNodeId))
   const nodes = useWorkflowStore((s) => s.workflow?.nodes)
   const allDiagnostics = useWorkflowStore((s) => s.workflow?.diagnostics)
   const selectedNodeId = useWorkflowStore((s) => s.selectedNodeId)
@@ -92,6 +100,8 @@ export function Inspector() {
   )
 
   if (!hasWorkflow) return null
+  if (docker) return dockerSelected ? <DockerInspector /> : <WorkflowOverview />
+  if (kubernetes) return kubeSelected ? <KubeInspector /> : <WorkflowOverview />
   if (!node || !ctx) return <WorkflowOverview />
   return (
     <InspectorContext.Provider value={ctx}>
@@ -397,16 +407,41 @@ function WorkflowOverview() {
         <div className="flex min-w-0 flex-col gap-1.5">
           <h2 className="font-heading text-base font-medium">{wf.name}</h2>
           <div className="flex flex-wrap gap-1.5">
-            {(wf.clouds ?? []).map((c) => (
-              <CloudBadge key={c} cloud={c} />
-            ))}
+            {wf.kind === "docker" ? (
+              <Badge variant="secondary" className="gap-1">
+                <TechIcon icon="docker" size={12} />
+                Docker Compose
+              </Badge>
+            ) : wf.kind === "kubernetes" ? (
+              <Badge variant="secondary" className="gap-1">
+                <TechIcon icon="kubernetes" size={12} />
+                Kubernetes
+              </Badge>
+            ) : (
+              (wf.clouds ?? []).map((c) => <CloudBadge key={c} cloud={c} />)
+            )}
           </div>
         </div>
       </div>
       <WorkflowIconDialog workflow={pickingIcon ? wf : null} onClose={() => setPickingIcon(false)} />
-      <div className="grid grid-cols-3 gap-2 text-center">
-        <Stat label="Resources" value={wf.nodes.filter((n) => n.kind === "resource").length} />
-        <Stat label="Links" value={(wf.edges ?? []).length} />
+      <div className={cn("grid gap-2 text-center", wf.kind === "kubernetes" ? "grid-cols-4" : "grid-cols-3")}>
+        {wf.kind === "docker" ? (
+          <>
+            <Stat label="Services" value={(wf.compose?.graph.nodes ?? []).filter((n) => n.kind === "service").length} />
+            <Stat label="Networks" value={(wf.compose?.graph.nodes ?? []).filter((n) => n.kind === "network").length} />
+          </>
+        ) : wf.kind === "kubernetes" ? (
+          <>
+            <Stat label="Workloads" value={(wf.kubernetes?.graph.nodes ?? []).filter((n) => n.category === "workload").length} />
+            <Stat label="Services" value={(wf.kubernetes?.graph.nodes ?? []).filter((n) => n.kind === "Service").length} />
+            <Stat label="Objects" value={(wf.kubernetes?.graph.nodes ?? []).length} />
+          </>
+        ) : (
+          <>
+            <Stat label="Resources" value={wf.nodes.filter((n) => n.kind === "resource").length} />
+            <Stat label="Links" value={(wf.edges ?? []).length} />
+          </>
+        )}
         <Stat label="Errors" value={errors} danger={errors > 0} />
       </div>
       <div className="flex flex-col gap-1.5">
@@ -417,22 +452,29 @@ function WorkflowOverview() {
           id="wf-description"
           value={description}
           rows={3}
-          placeholder="What does this infrastructure do?"
+          placeholder={wf.kind === "docker" || wf.kind === "kubernetes" ? "What does this stack run?" : "What does this infrastructure do?"}
           onChange={(e) => setDescription(e.target.value)}
           onBlur={() => description !== (wf.description ?? "") && update((d) => ({ ...d, description }))}
         />
       </div>
-      <Empty className="border border-dashed">
-        <EmptyHeader>
-          <EmptyMedia variant="icon">
-            <MousePointerClickIcon />
-          </EmptyMedia>
-          <EmptyTitle>Select a resource</EmptyTitle>
-          <EmptyDescription>
-            Click a card on the canvas to configure it. Drag between the dots of two cards to connect them.
-          </EmptyDescription>
-        </EmptyHeader>
-      </Empty>
+      {wf.kind === "kubernetes" && <KubeSources sources={wf.kubernetes?.sources ?? []} />}
+      {wf.kind === "docker" ? (
+        <DockerOverviewHint />
+      ) : wf.kind === "kubernetes" ? (
+        <KubeOverviewHint />
+      ) : (
+        <Empty className="border border-dashed">
+          <EmptyHeader>
+            <EmptyMedia variant="icon">
+              <MousePointerClickIcon />
+            </EmptyMedia>
+            <EmptyTitle>Select a resource</EmptyTitle>
+            <EmptyDescription>
+              Click a card on the canvas to configure it. Drag between the dots of two cards to connect them.
+            </EmptyDescription>
+          </EmptyHeader>
+        </Empty>
+      )}
     </div>
   )
 }

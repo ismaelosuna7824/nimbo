@@ -3,10 +3,14 @@ import { create } from "zustand"
 import { api } from "@/lib/api/client"
 import type { HTTPEndpoint, ResourceAccess } from "@/lib/api/types"
 import { useWorkflowStore } from "@/state/workflow-store"
+import { composeKey } from "@/features/docker/deploy/compose-model"
+import { kubeKey } from "@/features/kubernetes/deploy/kube-model"
 
 /**
- * Endpoints of the open workflow. Refetched whenever the deployed state or the
- * sandbox (state, emulator addresses) changes; every caller shares one query.
+ * Endpoints of the open workflow. Refetched whenever the deployed state, the
+ * sandbox (state, emulator addresses), in a Docker workspace the containers
+ * (state, published ports) or in a Kubernetes workspace the cluster (workloads,
+ * port-forwards, ingress URLs) change; every caller shares one query.
  */
 export function useEndpoints() {
   const workflowId = useWorkflowStore((s) => s.workflow?.id)
@@ -14,8 +18,10 @@ export function useEndpoints() {
   const sandboxKey = useWorkflowStore(
     (s) => `${s.sandbox?.state ?? ""}|${s.sandbox?.emulators.map((e) => `${e.state}@${e.url}`).join(",") ?? ""}`,
   )
+  const containersKey = useWorkflowStore((s) => composeKey(s.compose))
+  const clusterKey = useWorkflowStore((s) => kubeKey(s.kube))
   return useQuery({
-    queryKey: ["endpoints", workflowId, deployedAt, sandboxKey],
+    queryKey: ["endpoints", workflowId, deployedAt, sandboxKey, containersKey, clusterKey],
     queryFn: () => api.endpoints(workflowId!),
     enabled: !!workflowId,
     // Keep showing the previous answer while refetching, but never another workflow's.

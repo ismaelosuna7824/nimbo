@@ -13,7 +13,9 @@ import {
   Trash2Icon,
   UploadIcon,
 } from "lucide-react"
-import { useEffect } from "react"
+import { useEffect, useState } from "react"
+import { Checkbox } from "@/components/ui/checkbox"
+import { TechIcon } from "@/components/tech-icons/tech-icon"
 import { ThemedIcon } from "@/components/arcade/themed-icon"
 import { ThemeToggle } from "@/components/theme-toggle"
 import { SettingsButton } from "@/features/settings/settings-button"
@@ -38,6 +40,7 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip
 import type { UserMode } from "@/state/workflow-store"
 import { useWorkflowStore } from "@/state/workflow-store"
 import { cn } from "@/lib/utils"
+import { ConvertKubernetesDialog } from "@/features/docker/convert-kubernetes-dialog"
 import { formatRelative } from "../panels/lib/format"
 import { closeFocusedFileTab } from "../panels/terraform/close-file-tab"
 import { MOD_KEY, runAction, useRunBusy } from "./actions"
@@ -170,7 +173,32 @@ function IconAction({ label, onClick, children, kbd }: { label: string; onClick:
   )
 }
 
+/** Docker workspaces: turns the compose project into a new Kubernetes workflow (manifests, Kustomize or Helm). */
+function ConvertKubernetesAction() {
+  const workflow = useWorkflowStore((s) => s.workflow)
+  const open = useUiStore((s) => s.convertKubernetes)
+  const setOpen = useUiStore((s) => s.setConvertKubernetes)
+  if (!workflow) return null
+  return (
+    <>
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <Button variant="ghost" size="sm" aria-label="Convert to Kubernetes" data-testid="convert-kubernetes" onClick={() => setOpen(true)}>
+            <TechIcon icon="kubernetes" size={16} />
+            <span className="hidden 2xl:inline">To Kubernetes</span>
+          </Button>
+        </TooltipTrigger>
+        <TooltipContent>Convert to Kubernetes: a new workflow with manifests, Kustomize or a Helm chart</TooltipContent>
+      </Tooltip>
+      <ConvertKubernetesDialog workflow={workflow} open={open} onOpenChange={setOpen} />
+    </>
+  )
+}
+
 export function TopBar() {
+  const kind = useWorkflowStore((s) => s.workflow?.kind)
+  const docker = kind === "docker"
+  const kube = kind === "kubernetes"
   const mode = useWorkflowStore((s) => s.mode)
   const setMode = useWorkflowStore((s) => s.setMode)
   const openDialog = useWorkflowStore((s) => s.openDialog)
@@ -253,29 +281,54 @@ export function TopBar() {
       </div>
 
       <div className="flex flex-1 items-center justify-end gap-1">
+        {docker && <ConvertKubernetesAction />}
+        {!docker && !kube && (
+          <>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Button variant="ghost" size="sm" disabled={busy} aria-label="Validate" onClick={() => void runAction("validate")}>
+                  <ThemedIcon icon={FileCheck2Icon} pixel="check" />
+                  <span className="hidden 2xl:inline">Validate</span>
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent>Check the Terraform for mistakes</TooltipContent>
+            </Tooltip>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Button variant="ghost" size="sm" disabled={busy} aria-label="Plan" onClick={() => void runAction("plan")}>
+                  <ThemedIcon icon={ListChecksIcon} pixel="list" />
+                  <span className="hidden 2xl:inline">Plan</span>
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent>Preview what a deploy would change</TooltipContent>
+            </Tooltip>
+          </>
+        )}
         <Tooltip>
           <TooltipTrigger asChild>
-            <Button variant="ghost" size="sm" disabled={busy} aria-label="Validate" onClick={() => void runAction("validate")}>
-              <ThemedIcon icon={FileCheck2Icon} pixel="check" />
-              <span className="hidden 2xl:inline">Validate</span>
+            <Button size="sm" disabled={busy} onClick={() => void runAction("apply")}>
+              {busy ? <Spinner /> : <ThemedIcon icon={CloudUploadIcon} glyph="rocket" />}
+              Deploy
             </Button>
           </TooltipTrigger>
-          <TooltipContent>Check the Terraform for mistakes</TooltipContent>
+          <TooltipContent>
+            {kube
+              ? "Apply every source to this workflow's local Kubernetes cluster (creates it when needed)"
+              : docker
+                ? "Build and start every service on this machine (docker compose up)"
+                : "Create everything in your local sandbox"}
+          </TooltipContent>
         </Tooltip>
-        <Tooltip>
-          <TooltipTrigger asChild>
-            <Button variant="ghost" size="sm" disabled={busy} aria-label="Plan" onClick={() => void runAction("plan")}>
-              <ThemedIcon icon={ListChecksIcon} pixel="list" />
-              <span className="hidden 2xl:inline">Plan</span>
-            </Button>
-          </TooltipTrigger>
-          <TooltipContent>Preview what a deploy would change</TooltipContent>
-        </Tooltip>
-        <Button size="sm" disabled={busy} onClick={() => void runAction("apply")}>
-          {busy ? <Spinner /> : <ThemedIcon icon={CloudUploadIcon} glyph="rocket" />}
-          Deploy
-        </Button>
-        <IconAction label="Destroy everything in the sandbox" onClick={() => setConfirmDestroy(true)}>
+        <IconAction
+          label={
+            kube
+              ? "Delete what Deploy applied to the local cluster"
+              : docker
+                ? "Stop and remove the containers (docker compose down)"
+                : "Destroy everything in the sandbox"
+          }
+          onClick={() => setConfirmDestroy(true)}
+        >
           <ThemedIcon icon={Trash2Icon} pixel="trash" />
         </IconAction>
         <Tooltip>
@@ -289,10 +342,10 @@ export function TopBar() {
         </Tooltip>
         <Separator orientation="vertical" className="mx-1 h-5" />
         <ProblemsBadge />
-        <IconAction label="Import Terraform" onClick={() => openDialog("import")}>
+        <IconAction label="Import a project (Terraform, Docker Compose or Kubernetes)" onClick={() => openDialog("import")}>
           <ThemedIcon icon={UploadIcon} pixel="upload" />
         </IconAction>
-        <IconAction label="Export Terraform" onClick={() => openDialog("export")}>
+        <IconAction label={docker || kube ? "Export the project files" : "Export Terraform"} onClick={() => openDialog("export")}>
           <ThemedIcon icon={DownloadIcon} pixel="download" />
         </IconAction>
         <ThemeToggle />
@@ -309,20 +362,72 @@ export function DestroyDialog() {
   const open = useUiStore((s) => s.confirmDestroy)
   const setOpen = useUiStore((s) => s.setConfirmDestroy)
   const name = useWorkflowStore((s) => s.workflow?.name)
+  const kind = useWorkflowStore((s) => s.workflow?.kind)
+  const docker = kind === "docker"
+  const kube = kind === "kubernetes"
+  const [removeVolumes, setRemoveVolumes] = useState(false)
+  const [deleteCluster, setDeleteCluster] = useState(false)
   return (
-    <AlertDialog open={open} onOpenChange={setOpen}>
+    <AlertDialog
+      open={open}
+      onOpenChange={(o) => {
+        setOpen(o)
+        // Deleting data is opt-in every time.
+        if (!o) {
+          setRemoveVolumes(false)
+          setDeleteCluster(false)
+        }
+      }}
+    >
       <AlertDialogContent>
         <AlertDialogHeader>
-          <AlertDialogTitle>Destroy everything in “{name}”?</AlertDialogTitle>
+          <AlertDialogTitle>
+            {docker ? `Stop “${name}”?` : kube ? `Remove “${name}” from the cluster?` : `Destroy everything in “${name}”?`}
+          </AlertDialogTitle>
           <AlertDialogDescription>
-            Terraform will delete every deployed resource from your local sandbox. Your design stays untouched and you can
-            deploy again at any time.
+            {docker
+              ? "docker compose down stops and removes this workspace's containers and networks. Your compose files stay untouched and you can deploy again at any time."
+              : kube
+                ? "Deletes every object Deploy applied (and uninstalls Helm releases) from this workflow's local cluster. Your manifests stay untouched and you can deploy again at any time."
+                : "Terraform will delete every deployed resource from your local sandbox. Your design stays untouched and you can deploy again at any time."}
           </AlertDialogDescription>
         </AlertDialogHeader>
+        {docker && (
+          <label className="flex items-center gap-2 text-sm">
+            <Checkbox checked={removeVolumes} onCheckedChange={(c) => setRemoveVolumes(c === true)} />
+            Also delete the volumes (database data and other saved files)
+          </label>
+        )}
+        {kube && (
+          <div className="flex flex-col gap-2">
+            <label className="flex items-center gap-2 text-sm">
+              <Checkbox
+                checked={removeVolumes}
+                onCheckedChange={(c) => setRemoveVolumes(c === true)}
+                data-testid="kube-remove-volumes"
+              />
+              Also delete the PersistentVolumeClaims (database data and other saved files)
+            </label>
+            <label className="flex items-center gap-2 text-sm">
+              <Checkbox
+                checked={deleteCluster}
+                onCheckedChange={(c) => setDeleteCluster(c === true)}
+                data-testid="kube-delete-cluster"
+              />
+              Also delete the cluster (the next Deploy creates a fresh one)
+            </label>
+          </div>
+        )}
         <AlertDialogFooter>
           <AlertDialogCancel>Cancel</AlertDialogCancel>
-          <AlertDialogAction variant="destructive" onClick={() => void runAction("destroy")}>
-            Destroy
+          <AlertDialogAction
+            variant="destructive"
+            data-testid="destroy-confirm"
+            onClick={() =>
+              void runAction("destroy", docker ? { removeVolumes } : kube ? { removeVolumes, deleteCluster } : {})
+            }
+          >
+            {docker ? "Stop and remove" : kube ? (deleteCluster ? "Remove and delete cluster" : "Remove") : "Destroy"}
           </AlertDialogAction>
         </AlertDialogFooter>
       </AlertDialogContent>

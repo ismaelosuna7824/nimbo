@@ -1,0 +1,37 @@
+# Defaults for every environment; values-dev.yaml and values-prod.yaml
+# override them (switch environments in Nimbo to render one or the other).
+replicaCount: 1
+
+image:
+  repository: ghcr.io/stefanprodan/podinfo
+  tag: "6.15.0"
+  pullPolicy: IfNotPresent
+
+# Text shown on the home page.
+message: Hello from Helm
+
+service:
+  type: ClusterIP
+  port: 80
+
+ingress:
+  enabled: true
+  className: ""
+  host: podinfo.localhost
+
+resources:
+  requests:
+    cpu: 25m
+    memory: 32Mi
+  limits:
+    memory: 64Mi
+
+autoscaling:
+  enabled: false
+  minReplicas: 2
+  maxReplicas: 5
+  targetCPUUtilizationPercentage: 70
+
+podDisruptionBudget:
+  enabled: false
+  minAvailable: 1

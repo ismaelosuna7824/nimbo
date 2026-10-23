@@ -8,8 +8,12 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip"
 import { errorMessage } from "@/components/errors"
 import { api } from "@/lib/api/client"
-import type { LoadTestRun, ThresholdResult } from "@/lib/api/types"
+import type { KubeWorkloadStatus, LoadTestRun, ThresholdResult } from "@/lib/api/types"
 import { cn } from "@/lib/utils"
+import { useWorkflowStore } from "@/state/workflow-store"
+import { LoadResourcesDetail, LoadVerdictBanner } from "@/features/docker/perf/load-resources"
+import { timeDomain } from "@/features/docker/perf/model"
+import { relabelResources, workloadLabels } from "@/features/kubernetes/deploy/kube-model"
 import { StatusBadge } from "../components/status-badge"
 import { formatDuration, formatMs, formatNumber, formatPercent } from "../lib/format"
 import { DENSE_TABLE } from "../variables/blocks-editors"
@@ -18,6 +22,7 @@ import { useLoadRun } from "./use-load-run"
 
 // recharts loads with the first run shown, not with the tab.
 const LoadCharts = lazy(() => import("./charts").then((m) => ({ default: m.LoadCharts })))
+const ResourceCharts = lazy(() => import("./charts").then((m) => ({ default: m.ResourceCharts })))
 
 const TONE_TEXT = {
   ok: "text-emerald-600 dark:text-emerald-400",
@@ -98,9 +103,13 @@ function Breakdown({ title, counts, total }: { title: string; counts: Record<str
   )
 }
 
+const NO_WORKLOADS: KubeWorkloadStatus[] = []
+
 export function RunResults({ runId }: { runId: string }) {
   const { run, samples, loading } = useLoadRun(runId)
   const [stopping, setStopping] = useState(false)
+  // Kubernetes: usage is keyed by workload node id; verdicts, peaks and charts show workload names.
+  const kubeWorkloads = useWorkflowStore((s) => (s.workflow?.kind === "kubernetes" ? (s.kube?.workloads ?? NO_WORKLOADS) : undefined))
 
   if (!run) {
     return <div className="flex h-full items-center justify-center">{loading ? <Spinner /> : "Run not found."}</div>
@@ -112,6 +121,14 @@ export function RunResults({ runId }: { runId: string }) {
   const stability = stabilityLabel(kpis.stability)
   const planned = totalDuration(run.spec.profile.stages)
   const elapsed = runDurationSec(run)
+  const resources = run.resources && kubeWorkloads ? relabelResources(run.resources, workloadLabels(kubeWorkloads)) : run.resources
+  // Container usage shares the traffic charts' seconds axis.
+  const domain = resources ? timeDomain(samples, resources) : undefined
+  const chartFallback = (
+    <div className="flex h-full items-center justify-center rounded-lg border">
+      <Spinner />
+    </div>
+  )
 
   const stop = async () => {
     setStopping(true)
@@ -141,6 +158,7 @@ export function RunResults({ runId }: { runId: string }) {
       </div>
       {running && <PixelProgress value={planned > 0 ? (elapsed / planned) * 100 : undefined} label="Load test progress" />}
       {run.error && <p className="text-xs text-destructive">{run.error}</p>}
+      {resources && <LoadVerdictBanner resources={resources} />}
 
       <div className="grid grid-cols-2 gap-2 sm:grid-cols-4 xl:grid-cols-8">
         <Kpi label="Requests" value={formatNumber(kpis.requests)} hint={EXPLAIN.requests} />
@@ -186,17 +204,20 @@ export function RunResults({ runId }: { runId: string }) {
             )}
           </div>
         ) : (
-          <Suspense
-            fallback={
-              <div className="flex h-full items-center justify-center rounded-lg border">
-                <Spinner />
-              </div>
-            }
-          >
-            <LoadCharts samples={samples} mode={run.spec.profile.mode} />
+          <Suspense fallback={chartFallback}>
+            <LoadCharts samples={samples} mode={run.spec.profile.mode} domain={domain} />
           </Suspense>
         )}
       </div>
+
+      {resources && resources.services.some((s) => s.timeline.length > 0) && (
+        <div className="h-56 shrink-0">
+          <Suspense fallback={chartFallback}>
+            <ResourceCharts resources={resources} domain={domain} />
+          </Suspense>
+        </div>
+      )}
+      {resources && <LoadResourcesDetail resources={resources} />}
 
       {(run.thresholds?.length || run.summary) && (
         <div className="grid grid-cols-1 gap-2 lg:grid-cols-3">

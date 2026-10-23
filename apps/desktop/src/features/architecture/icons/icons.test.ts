@@ -87,6 +87,22 @@ describe("architecture icon registry", () => {
     expect(archIconFor("aws", "aws_totally_unknown").generic).toBe(true);
   });
 
+  test("non-cloud technology types get their technology icon, cloud services keep theirs", () => {
+    const k8s = archIconFor("aws", "kubernetes_deployment");
+    expect(k8s).toMatchObject({ service: "Kubernetes", category: "containers", generic: false });
+    expect(k8s.src).toMatch(/tech-icons\/assets\/kubernetes\.svg$/);
+    expect(existsSync(fileURLToPath(k8s.src))).toBe(true);
+    expect(archIconFor("aws", "data.kubernetes_namespace").src).toBe(k8s.src);
+    expect(archIconFor("gcp", "kubectl_manifest").src).toBe(k8s.src);
+    expect(archIconFor("aws", "helm_release").src).toMatch(/tech-icons\/assets\/helm\.svg$/);
+    expect(archIconFor("azure", "docker_container").src).toMatch(/tech-icons\/assets\/docker\.svg$/);
+    expect(archIconFor("aws", "vault_kv_secret_v2")).toMatchObject({ service: "HashiCorp Vault", category: "security" });
+    expect(archIconFor("aws", "postgresql_database").src).toMatch(/tech-icons\/assets\/postgres\.svg$/);
+    expect(archIconFor("aws", "aws_eks_cluster").src).toMatch(/architecture\/icons\/assets\/aws-eks\.svg$/);
+    expect(archIconFor("azure", "azurerm_kubernetes_cluster").src).toMatch(/architecture\/icons\/assets\/azure-aks\.svg$/);
+    expect(archIconFor("aws", "aws_db_instance").src).not.toContain("tech-icons");
+  });
+
   test("plumbing folds helpers but keeps primary services", () => {
     expect(isPlumbing("aws", "aws_iam_role_policy_attachment")).toBe(true);
     expect(isPlumbing("aws", "aws_lambda_permission")).toBe(true);

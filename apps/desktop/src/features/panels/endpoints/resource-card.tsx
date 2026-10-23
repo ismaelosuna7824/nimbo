@@ -1,4 +1,4 @@
-import { useState } from "react"
+import { useState, type ReactNode } from "react"
 import { ChevronRight, ExternalLink, FlaskConical, Pencil, TriangleAlert } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible"
@@ -33,6 +33,7 @@ export function ResourceCard({
   highlighted,
   tryOpen,
   setTryOpen,
+  media,
 }: {
   resource: ResourceAccess
   workflowId: string
@@ -41,6 +42,8 @@ export function ResourceCard({
   highlighted?: boolean
   tryOpen: boolean
   setTryOpen: (open: boolean) => void
+  /** Replaces the kind icon (Kubernetes: the backing workload's technology). */
+  media?: ReactNode
 }) {
   const Icon = KIND_ICON[r.kind] ?? KIND_ICON.generic
   const endpoints = r.endpoints ?? []
@@ -64,7 +67,7 @@ export function ResourceCard({
     >
       <header className="flex items-start gap-2.5">
         <span className="flex size-8 shrink-0 items-center justify-center rounded-lg bg-primary/10 text-primary">
-          <Icon className="size-4" />
+          {media ?? <Icon className="size-4" />}
         </span>
         <div className="min-w-0 flex-1">
           <div className="flex min-w-0 items-baseline gap-2">

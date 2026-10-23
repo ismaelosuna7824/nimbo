@@ -1,0 +1,29 @@
+  # A service built from the Dockerfile in this folder. Adjust the port and
+  # the healthcheck to the app (distroless images have no wget: use a
+  # command the image has, or the Dockerfile's HEALTHCHECK).
+  app:
+    build:
+      context: .
+    restart: unless-stopped
+    init: true
+    ports:
+      - "8080:8080"
+    env_file:
+      - path: .env
+        required: false
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:8080/ >/dev/null || exit 1"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+      start_period: 10s
+    deploy:
+      resources:
+        limits:
+          cpus: "1"
+          memory: 512M
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"

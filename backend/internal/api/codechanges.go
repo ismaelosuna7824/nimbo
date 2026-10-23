@@ -43,14 +43,23 @@ type fileMove struct {
 
 // fileRules says what the files of a workflow's export layout are: which
 // paths are Terraform code (re-imported), which generated code is fixed,
-// and where a new asset is stored.
+// and where a new asset is stored. Docker and Kubernetes workflows have
+// no Terraform code: every file is stored as is (dotfiles such as .env
+// included).
 type fileRules struct {
 	layout string
 	svc    string   // environments layout: the service module
 	envs   []string // environments layout: the environment roots, sorted
+	kind   string   // the workflow's kind
 }
 
+// filesOnly reports a workflow whose files are stored as is.
+func (r fileRules) filesOnly() bool { return r.kind != "" }
+
 func newFileRules(wf *model.Workflow) (fileRules, error) {
+	if !wf.IsTerraform() {
+		return fileRules{layout: model.LayoutSingle, kind: wf.Kind}, nil
+	}
 	layout, err := hclcodec.ResolveLayout(wf)
 	if err != nil {
 		return fileRules{}, &httpError{status: http.StatusBadRequest, msg: err.Error()}
@@ -81,6 +90,9 @@ func (r fileRules) envRoot(p string) (env, base string, ok bool) {
 // files Terraform loads (single layout), or the service module's and the
 // environment roots' (environments layout).
 func (r fileRules) isCode(p string) bool {
+	if r.filesOnly() {
+		return false
+	}
 	dir, base := path.Split(p)
 	if hclcodec.ValidFileName(base) != nil {
 		return false
@@ -151,15 +163,17 @@ func (r fileRules) assetPath(dst string) (string, error) {
 		dst, r.serviceDir(), hclcodec.ModulesDir)
 }
 
-// newFilePath validates the path of a file created or moved by the Code tab.
-func newFilePath(p string) (string, error) {
+// newFilePath validates the path of a file created or moved by the Code
+// tab. Docker and Kubernetes workflows may hold dotfiles (.env,
+// .dockerignore, .helmignore).
+func (r fileRules) newFilePath(p string) (string, error) {
 	p, err := cleanFilePath(p)
 	if err != nil {
 		return "", err
 	}
 	for _, seg := range strings.Split(p, "/") {
 		switch {
-		case strings.HasPrefix(seg, "."):
+		case strings.HasPrefix(seg, ".") && (!r.filesOnly() || seg == ".git"):
 			return "", errorf(http.StatusBadRequest, "%s: hidden names (starting with .) are not exported", p)
 		case skipImport(seg):
 			return "", errorf(http.StatusBadRequest, "%s: Terraform state and working data are not stored", p)
@@ -300,7 +314,7 @@ func (s *Server) applyFileChanges(cur *model.Workflow, req codeRequest) ([]model
 		if err != nil {
 			return nil, err
 		}
-		to, err := newFilePath(m.To)
+		to, err := rules.newFilePath(m.To)
 		if err != nil {
 			return nil, err
 		}
@@ -353,7 +367,7 @@ func (s *Server) applyFileChanges(cur *model.Workflow, req codeRequest) ([]model
 		if why := locked[p]; why != "" {
 			return nil, errorf(http.StatusConflict, "%s", why)
 		}
-		p, err := newFilePath(p)
+		p, err := rules.newFilePath(p)
 		if err != nil {
 			return nil, err
 		}
@@ -395,6 +409,12 @@ func (s *Server) applyFileChanges(cur *model.Workflow, req codeRequest) ([]model
 		} else {
 			syntax = append(syntax, hclcodec.CheckSyntax(p, e.data)...)
 		}
+	}
+	switch rules.kind {
+	case model.WorkflowDocker:
+		syntax = append(syntax, dockerSyntax(cur, entries)...)
+	case model.WorkflowKubernetes:
+		syntax = append(syntax, kubeSyntax(cur, entries)...)
 	}
 	if len(syntax) > 0 {
 		return nil, &httpError{status: http.StatusBadRequest, msg: "the code has syntax errors; nothing was saved", diagnostics: syntax}
@@ -440,6 +460,12 @@ func (s *Server) applyFileChanges(cur *model.Workflow, req codeRequest) ([]model
 	}
 	if err := s.storeAssets(cur.ID, rules, assets, owned, entries, asset); err != nil {
 		return nil, err
+	}
+	switch rules.kind {
+	case model.WorkflowDocker:
+		followComposeFiles(cur, entries)
+	case model.WorkflowKubernetes:
+		followKubeSources(cur, entries)
 	}
 	*cur = *next
 	return diags, nil

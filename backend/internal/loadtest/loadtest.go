@@ -50,11 +50,14 @@ type ConnectionResolver interface {
 
 // EngineConfig configures an Engine. Resolver may be nil when only plain
 // host URLs are tested; Connections may be nil when no connection is used.
+// Monitor (optional) samples the containers of docker workflows during
+// their runs (LoadTestRun.Resources).
 type EngineConfig struct {
 	Home        string
 	Events      model.Publisher
 	Resolver    Resolver
 	Connections ConnectionResolver
+	Monitor     ResourceMonitor
 }
 
 const (
@@ -88,13 +91,14 @@ type Engine struct {
 	events      model.Publisher
 	resolver    Resolver
 	connections ConnectionResolver
+	monitor     ResourceMonitor
 
 	mu   sync.Mutex
 	runs map[string]*runner // running, plus finished runs that could not be saved
 }
 
 func NewEngine(cfg EngineConfig) *Engine {
-	return &Engine{home: cfg.Home, events: cfg.Events, resolver: cfg.Resolver, connections: cfg.Connections, runs: map[string]*runner{}}
+	return &Engine{home: cfg.Home, events: cfg.Events, resolver: cfg.Resolver, connections: cfg.Connections, monitor: cfg.Monitor, runs: map[string]*runner{}}
 }
 
 // Start validates spec, then runs it in the background on behalf of the
@@ -306,6 +310,7 @@ func (e *Engine) list(dir string, own func(*model.LoadTestRun) bool) []model.Loa
 			continue
 		}
 		run.Timeline = []model.LoadSample{}
+		run.Resources = resourcesSummary(run.Resources)
 		out = append(out, *run)
 	}
 	slices.SortFunc(out, func(a, b model.LoadTestRun) int {

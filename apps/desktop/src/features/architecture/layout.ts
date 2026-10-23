@@ -140,7 +140,7 @@ function routeOf(e: ElkExtendedEdge, dx: number, dy: number): Point[] | undefine
  * A pair joined by data one way and only by dashed lines the other way is laid out along the data
  * (the load balancer's group before the services it feeds, not after the identities they use);
  * children holding an entry the Users reach from outside the container (a Global group with DNS and
- * the load balancer) come first, between the Users and the rest.
+ * the load balancer) come first, between the Users and the rest, unless another child feeds them.
  */
 export function containerLinks(model: ArchModel) {
   const parentOf = new Map(modelItems(model).flatMap((i) => (i.pinned ? [] : [[i.id, i.parent ?? ""] as const])))
@@ -153,7 +153,7 @@ export function containerLinks(model: ArchModel) {
   }
   return (container: string) => {
     const ends = model.edges.map((e) => ({ e, s: childOf(e.source, container), t: childOf(e.target, container) }))
-    const first = new Set(ends.flatMap(({ e, s, t }) => (usersActors.has(e.source) && !s && t ? [t] : [])))
+    const reached = new Set(ends.flatMap(({ e, s, t }) => (usersActors.has(e.source) && !s && t ? [t] : [])))
     const dataPairs = new Set(ends.flatMap(({ e, s, t }) => (s && t && s !== t && e.kind === "data" ? [`${s}->${t}`] : [])))
     const edges = new Map<string, ElkExtendedEdge>()
     for (const { e, s, t } of ends) {
@@ -163,6 +163,10 @@ export function containerLinks(model: ArchModel) {
       const eid = direct ? e.id : `stand-in:${s}->${t}`
       if (!edges.has(eid)) edges.set(eid, { id: eid, sources: [s], targets: [t] })
     }
+    // A child another child feeds cannot sit in the first layer too (ELK rejects that layering): it
+    // follows its feeder instead (a published cache the published app also calls).
+    const fed = new Set([...edges.values()].map((e) => e.targets[0]))
+    const first = new Set([...reached].filter((id) => !fed.has(id)))
     return { first, edges: [...edges.values()] }
   }
 }

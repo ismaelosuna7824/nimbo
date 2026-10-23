@@ -12,13 +12,16 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"slices"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/ismaelosuna7824/nimbo/backend/internal/agents"
 	"github.com/ismaelosuna7824/nimbo/backend/internal/catalog"
+	"github.com/ismaelosuna7824/nimbo/backend/internal/compose"
 	"github.com/ismaelosuna7824/nimbo/backend/internal/events"
+	"github.com/ismaelosuna7824/nimbo/backend/internal/kube/kubecatalog"
 	"github.com/ismaelosuna7824/nimbo/backend/internal/loadtest"
 	"github.com/ismaelosuna7824/nimbo/backend/internal/model"
 	"github.com/ismaelosuna7824/nimbo/backend/internal/sandbox"
@@ -120,6 +123,13 @@ func (s *Server) routes() {
 	h("GET "+p+"/catalog/types", s.catalogTypes)
 	h("GET "+p+"/catalog/schemas", s.catalogSchemas)
 	h("GET "+p+"/catalog/functions", s.catalogFunctions)
+	h("GET "+p+"/catalog/docker/images", s.dockerImages)
+	h("GET "+p+"/catalog/docker/compose-schema", s.composeSchema)
+	h("GET "+p+"/catalog/kubernetes", s.kubeCatalog)
+	h("GET "+p+"/catalog/kubernetes/schema", s.kubeSchema)
+	h("GET "+p+"/catalog/kubernetes/{item}/yaml", s.kubeCatalogYAML)
+	h("POST "+p+"/workflows/{id}/kubernetes/catalog", s.addKubeCatalogItem)
+	h("GET "+p+"/catalog/file-templates", s.fileTemplates)
 
 	h("GET "+p+"/workflows", s.listWorkflows)
 	h("POST "+p+"/workflows", s.createWorkflow)
@@ -129,15 +139,15 @@ func (s *Server) routes() {
 	h("POST "+p+"/workflows/{id}/duplicate", s.duplicateWorkflow)
 	h("POST "+p+"/workflows/{id}/archive", s.archiveWorkflow)
 	h("POST "+p+"/workflows/{id}/unarchive", s.unarchiveWorkflow)
-	h("POST "+p+"/workflows/{id}/nodes", s.addNode)
-	h("PATCH "+p+"/workflows/{id}/nodes/{nodeId}", s.patchNode)
-	h("DELETE "+p+"/workflows/{id}/nodes/{nodeId}", s.deleteNode)
-	h("GET "+p+"/workflows/{id}/connections", s.connections)
-	h("POST "+p+"/workflows/{id}/connections", s.connect)
+	h("POST "+p+"/workflows/{id}/nodes", s.terraformOnly("Terraform nodes", "use /compose/services", s.addNode))
+	h("PATCH "+p+"/workflows/{id}/nodes/{nodeId}", s.terraformOnly("Terraform nodes", "use /compose/services, or /compose/layout for positions", s.patchNode))
+	h("DELETE "+p+"/workflows/{id}/nodes/{nodeId}", s.terraformOnly("Terraform nodes", "use DELETE /compose/services/{name}", s.deleteNode))
+	h("GET "+p+"/workflows/{id}/connections", s.terraformOnly("Terraform connection recipes", "use /compose/connect", s.connections))
+	h("POST "+p+"/workflows/{id}/connections", s.terraformOnly("Terraform connection recipes", "use /compose/connect", s.connect))
 
-	h("GET "+p+"/workflows/{id}/terraform", s.getTerraform)
+	h("GET "+p+"/workflows/{id}/terraform", s.terraformOnly("Generated Terraform", "read the files with /files", s.getTerraform))
 	h("PUT "+p+"/workflows/{id}/terraform", s.putTerraform)
-	h("GET "+p+"/workflows/{id}/terraform/workspace", s.codeWorkspace)
+	h("GET "+p+"/workflows/{id}/terraform/workspace", s.terraformOnly("The Terraform code workspace", "read the files with /files", s.codeWorkspace))
 	h("POST "+p+"/workflows/{id}/terraform/check", s.checkCode)
 	h("POST "+p+"/workflows/{id}/export", s.exportDir)
 	h("GET "+p+"/workflows/{id}/export.zip", s.exportZip)
@@ -147,14 +157,38 @@ func (s *Server) routes() {
 	h("GET "+p+"/workflows/{id}/files/raw", s.getFileRaw)
 	h("POST "+p+"/import", s.importWorkflow)
 	h("POST "+p+"/import/scan", s.scanImport)
-	h("GET "+p+"/workflows/{id}/modules", s.moduleTree)
-	h("GET "+p+"/workflows/{id}/modules/{nodeId}", s.moduleView)
-	h("POST "+p+"/workflows/{id}/modules/extract", s.extractModule)
-	h("POST "+p+"/workflows/{id}/modules/extract/preview", s.previewExtract)
-	h("POST "+p+"/workflows/{id}/modules/{nodeId}/inline", s.inlineModule)
-	h("GET "+p+"/workflows/{id}/structure", s.structure)
-	h("POST "+p+"/workflows/{id}/modules/scaffold", s.moduleScaffold)
+	h("GET "+p+"/workflows/{id}/modules", s.terraformOnly("Terraform modules", "", s.moduleTree))
+	h("GET "+p+"/workflows/{id}/modules/{nodeId}", s.terraformOnly("Terraform modules", "", s.moduleView))
+	h("POST "+p+"/workflows/{id}/modules/extract", s.terraformOnly("Terraform modules", "", s.extractModule))
+	h("POST "+p+"/workflows/{id}/modules/extract/preview", s.terraformOnly("Terraform modules", "", s.previewExtract))
+	h("POST "+p+"/workflows/{id}/modules/{nodeId}/inline", s.terraformOnly("Terraform modules", "", s.inlineModule))
+	h("GET "+p+"/workflows/{id}/structure", s.terraformOnly("The Terraform structure summary", "", s.structure))
+	h("POST "+p+"/workflows/{id}/modules/scaffold", s.terraformOnly("Terraform modules", "", s.moduleScaffold))
 	h("POST "+p+"/terraform/format", s.formatCode)
+
+	h("POST "+p+"/workflows/{id}/compose/services", s.addComposeService)
+	h("PATCH "+p+"/workflows/{id}/compose/services/{name}", s.patchComposeService)
+	h("DELETE "+p+"/workflows/{id}/compose/services/{name}", s.deleteComposeService)
+	h("POST "+p+"/workflows/{id}/compose/networks", s.addComposeTop("network"))
+	h("PATCH "+p+"/workflows/{id}/compose/networks/{name}", s.patchComposeTop("network"))
+	h("DELETE "+p+"/workflows/{id}/compose/networks/{name}", s.deleteComposeTop("network"))
+	h("POST "+p+"/workflows/{id}/compose/volumes", s.addComposeTop("volume"))
+	h("PATCH "+p+"/workflows/{id}/compose/volumes/{name}", s.patchComposeTop("volume"))
+	h("DELETE "+p+"/workflows/{id}/compose/volumes/{name}", s.deleteComposeTop("volume"))
+	h("GET "+p+"/workflows/{id}/compose/connect", s.composeConnectRecipes)
+	h("POST "+p+"/workflows/{id}/compose/connect", s.composeConnect)
+	h("PATCH "+p+"/workflows/{id}/compose/layout", s.composeLayout)
+	h("PATCH "+p+"/workflows/{id}/compose/stages/{nodeId}", s.patchComposeStage)
+
+	// kubernetes (engine)
+	h("PATCH "+p+"/workflows/{id}/kubernetes/layout", s.kubeLayout)
+	h("GET "+p+"/workflows/{id}/kubernetes/render", s.kubeRender)
+	h("GET "+p+"/workflows/{id}/kubernetes/fields", s.kubeFields)
+	h("POST "+p+"/workflows/{id}/kubernetes/objects", s.addKubeObject)
+	h("PATCH "+p+"/workflows/{id}/kubernetes/objects", s.patchKubeObject)
+	h("DELETE "+p+"/workflows/{id}/kubernetes/objects", s.deleteKubeObject)
+	h("GET "+p+"/workflows/{id}/kubernetes/connect", s.kubeConnectRecipes)
+	h("POST "+p+"/workflows/{id}/kubernetes/connect", s.kubeConnect)
 
 	h("GET "+p+"/workflows/{id}/sandbox", s.sandboxStatus)
 	h("POST "+p+"/workflows/{id}/sandbox/{action}", s.sandboxAction)
@@ -163,12 +197,21 @@ func (s *Server) routes() {
 	h("GET "+p+"/runs/{runId}", s.getRun)
 	h("POST "+p+"/runs/{runId}/cancel", s.cancelRun)
 	h("GET "+p+"/workflows/{id}/state", s.deployedState)
+	h("GET "+p+"/workflows/{id}/compose/status", s.composeStatus)
+	h("GET "+p+"/workflows/{id}/compose/ports", s.composePorts)
+	h("GET "+p+"/workflows/{id}/compose/logs", s.composeLogs)
+	h("GET "+p+"/workflows/{id}/compose/stats", s.composeStats)
+	h("GET "+p+"/workflows/{id}/compose/builds", s.composeBuilds)
+	h("GET "+p+"/workflows/{id}/kubernetes/status", s.kubeStatus)
+	h("GET "+p+"/workflows/{id}/kubernetes/logs", s.kubeLogs)
+	h("GET "+p+"/workflows/{id}/kubernetes/stats", s.kubeStats)
+	h("POST "+p+"/workflows/{id}/convert/kubernetes", s.convertToKubernetes)
 	h("GET "+p+"/workflows/{id}/endpoints", s.getEndpoints)
 	h("POST "+p+"/workflows/{id}/endpoints/try", s.tryEndpoint)
 	h("GET "+p+"/workflows/{id}/endpoints/postman.json", s.postmanCollection)
-	h("GET "+p+"/workflows/{id}/network", s.getNetwork)
-	h("POST "+p+"/workflows/{id}/network/reachability", s.networkReachability)
-	h("POST "+p+"/workflows/{id}/network/test-instance", s.addTestInstance)
+	h("GET "+p+"/workflows/{id}/network", s.terraformOnly("Network analysis", "", s.getNetwork))
+	h("POST "+p+"/workflows/{id}/network/reachability", s.terraformOnly("Network analysis", "", s.networkReachability))
+	h("POST "+p+"/workflows/{id}/network/test-instance", s.terraformOnly("Network analysis", "", s.addTestInstance))
 
 	h("GET "+p+"/workflows/{id}/loadtests/targets", s.loadTargets)
 	h("POST "+p+"/workflows/{id}/loadtests", s.startLoadTest)
@@ -251,6 +294,7 @@ type httpError struct {
 	msg         string
 	code        string // machine-readable, e.g. "confirmation_required"
 	diagnostics []model.Diagnostic
+	conflicts   []model.PortConflict // code "port_conflict"
 }
 
 func (e *httpError) Error() string { return e.msg }
@@ -279,6 +323,9 @@ func (s *Server) writeError(w http.ResponseWriter, r *http.Request, err error) {
 	}
 	if len(he.diagnostics) > 0 {
 		body["diagnostics"] = he.diagnostics
+	}
+	if len(he.conflicts) > 0 {
+		body["conflicts"] = he.conflicts
 	}
 	writeJSON(w, he.status, body)
 }
@@ -375,8 +422,10 @@ func (s *Server) resourceSchema(w http.ResponseWriter, r *http.Request) error {
 	return ok(w, sch)
 }
 
+// templates lists the Terraform templates, then the docker ones (kind
+// "docker") and the Kubernetes ones (kind "kubernetes").
 func (s *Server) templates(w http.ResponseWriter, r *http.Request) error {
-	return ok(w, nonNil(s.cfg.Catalog.Templates()))
+	return ok(w, slices.Concat(nonNil(s.cfg.Catalog.Templates()), compose.Templates(), kubecatalog.Templates()))
 }
 
 func (s *Server) loadPresets(w http.ResponseWriter, r *http.Request) error {

@@ -3,8 +3,11 @@ package api
 import (
 	"errors"
 	"net/http"
+	"slices"
 
 	"github.com/ismaelosuna7824/nimbo/backend/internal/agents"
+	"github.com/ismaelosuna7824/nimbo/backend/internal/compose"
+	"github.com/ismaelosuna7824/nimbo/backend/internal/kube/kuberules"
 	"github.com/ismaelosuna7824/nimbo/backend/internal/lint"
 	"github.com/ismaelosuna7824/nimbo/backend/internal/model"
 	"github.com/ismaelosuna7824/nimbo/backend/internal/settings"
@@ -24,9 +27,18 @@ func (s *Server) settingsDefaults(w http.ResponseWriter, r *http.Request) error 
 }
 
 // bestPracticeRules is GET /best-practices/rules: every best-practice check
-// (Settings → Best-practice checks lists them with a toggle each).
+// (Settings → Best-practice checks lists them with a toggle each): the
+// Terraform bp_* rules, the docker dk_* and the Kubernetes k8s_* advice
+// (warning/info; their errors are problems docker compose or the
+// Kubernetes API refuse and can't be turned off).
 func (s *Server) bestPracticeRules(w http.ResponseWriter, r *http.Request) error {
-	return ok(w, lint.Rules())
+	rules := lint.Rules()
+	for _, rule := range slices.Concat(compose.Rules(), kuberules.Rules()) {
+		if rule.Severity != model.SeverityError {
+			rules = append(rules, rule)
+		}
+	}
+	return ok(w, rules)
 }
 
 // putSettings validates and stores the settings, then applies them: sandbox

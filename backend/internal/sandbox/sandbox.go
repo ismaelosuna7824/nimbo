@@ -68,6 +68,18 @@ type sandbox struct {
 	last   *model.SandboxStatus
 	busy   *model.SandboxStatus // set while a lifecycle operation runs
 	active *runState
+
+	// Docker workflows (compose.go), guarded by Manager.mu.
+	composeServices []ComposeService     // services of the files, for status refreshes
+	composeLast     *model.ComposeStatus // last published status (UpdatedAt zeroed)
+	composeWatch    context.CancelFunc   // stops the `docker events` watcher
+	// perf is the docker stats stream, usage history and startup times
+	// (compose_stats.go); it has its own lock.
+	perf composePerf
+
+	// Kubernetes workflows (kube*.go): cluster clients, informers,
+	// port-forwards and the cgroup sampler; it has its own lock.
+	kube kubeState
 }
 
 // New validates cfg, applies defaults and creates the home directory.

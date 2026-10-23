@@ -11,6 +11,7 @@ import {
   useReactFlow,
   type Edge,
   type EdgeProps,
+  type FitViewOptions,
   type Node,
   type NodeChange,
   type NodeProps,
@@ -21,6 +22,7 @@ import { memo, useCallback, useEffect, useMemo, useRef } from "react"
 import { Button } from "@/components/ui/button"
 import { Spinner } from "@/components/ui/spinner"
 import { useSyncedState } from "@/components/use-synced-state"
+import { isDocker, isKubernetes } from "@/lib/api/types"
 import { useWorkflowStore } from "@/state/workflow-store"
 import { ACTOR_H, BORDER_CARD_H, BORDER_CARD_W, CARD_H, CARD_W, polylinePath, type Point } from "./geometry"
 import type { ItemKind } from "./layout"
@@ -29,7 +31,7 @@ import { groupIconWidth } from "./scene"
 import { registerArchScene, useArchUi } from "./store"
 import { legendHeight, type CardText, type LegendEntry } from "./styles"
 import { ActorShape, CardShape, DiagramDefs, EdgeShape, GroupShape, HeaderShape, LegendShape } from "./svg"
-import { useScene, type Scene } from "./use-scene"
+import { useDockerScene, useKubernetesScene, useScene, type Scene } from "./use-scene"
 
 type ArchNodeData =
   | { kind: "group"; group: ArchGroup; icon?: string }
@@ -50,6 +52,8 @@ const hiddenHandle = "!pointer-events-none !opacity-0"
 const PRO_OPTIONS = { hideAttribution: true }
 /** The diagram is a document: a white surface whatever the app theme. */
 const SURFACE_STYLE = { backgroundColor: "#ffffff" }
+/** Fit with room at the top for the Build / Architecture switch and Export button floating over the diagram. */
+const FIT_VIEW: FitViewOptions<ArchNode> = { padding: { top: "64px", x: 0.08, bottom: 0.08 }, maxZoom: 1.1 }
 
 function Handles() {
   return (
@@ -66,7 +70,7 @@ const GroupNode = memo(function GroupNode({ data, selected, width, height }: Nod
   return (
     <div style={{ width, height }} data-testid="arch-group" data-group-kind={g.kind} aria-label={g.label}>
       <svg width={width} height={height} className="block overflow-visible">
-        <GroupShape width={width ?? 0} height={height ?? 0} kind={g.kind} tier={g.tier} label={g.label} sublabel={g.sublabel} icon={data.icon} iconWidth={groupIconWidth(g)} selected={selected} />
+        <GroupShape width={width ?? 0} height={height ?? 0} kind={g.kind} tier={g.tier} scope={g.scope} label={g.label} sublabel={g.sublabel} icon={data.icon} iconWidth={groupIconWidth(g)} selected={selected} />
       </svg>
       <Handles />
     </div>
@@ -204,7 +208,7 @@ function sceneEdges(scene: Scene): FlowEdge[] {
   }))
 }
 
-/** The workflow node a diagram item stands for: a card's resource (or module call), a group's VPC/subnet. */
+/** The workflow node a diagram item stands for: a card's resource (or module call, or compose service), a group's VPC/subnet/network. */
 function nodeIdOf(n: ArchNode) {
   return n.data.kind === "card" ? n.data.nodeId : n.data.kind === "group" ? n.data.group.nodeId : undefined
 }
@@ -220,17 +224,32 @@ function carryNodeState(next: ArchNode[], current: ArchNode[]): ArchNode[] {
 
 export function ArchitectureView() {
   const workflowId = useWorkflowStore((s) => s.workflow?.id)
+  const kind = useWorkflowStore((s) => (isDocker(s.workflow) ? "docker" : isKubernetes(s.workflow) ? "kubernetes" : "terraform"))
   if (!workflowId) return null
+  // Docker workspaces are drawn from their compose graph, Kubernetes ones from their rendered objects,
+  // Terraform ones from their resources: one scene hook per kind, each in its own component (hooks
+  // cannot be chosen conditionally).
   return (
     <ReactFlowProvider key={workflowId}>
-      <ArchitectureInner />
+      {kind === "docker" ? <DockerDiagram /> : kind === "kubernetes" ? <KubernetesDiagram /> : <TerraformDiagram />}
     </ReactFlowProvider>
   )
 }
 
+function TerraformDiagram() {
+  return <ArchitectureInner scene={useScene()} empty="Add resources in Build to see them here." />
+}
+
+function DockerDiagram() {
+  return <ArchitectureInner scene={useDockerScene()} empty="Add services in Build to see them here." />
+}
+
+function KubernetesDiagram() {
+  return <ArchitectureInner scene={useKubernetesScene()} empty="Add workloads in Build to see them here." />
+}
+
 /** The read-only diagram: pan, zoom, select a card to inspect it, export it as an image. Build edits the design. */
-function ArchitectureInner() {
-  const scene = useScene()
+function ArchitectureInner({ scene, empty }: { scene: Scene | null; empty: string }) {
   const select = useWorkflowStore((s) => s.select)
   const selectedNodeId = useWorkflowStore((s) => s.selectedNodeId)
   const openExport = useArchUi((s) => s.openExport)
@@ -265,7 +284,7 @@ function ArchitectureInner() {
   useEffect(() => {
     if (!scene || fitted.current) return
     fitted.current = true
-    window.requestAnimationFrame(() => void flow.fitView({ padding: 0.08, maxZoom: 1.1 }))
+    window.requestAnimationFrame(() => void flow.fitView(FIT_VIEW))
   }, [scene, flow])
 
   const onNodeClick = useCallback((_: unknown, n: ArchNode) => select(nodeIdOf(n) ?? null), [select])
@@ -295,6 +314,7 @@ function ArchitectureInner() {
         colorMode="light"
         minZoom={0.1}
         maxZoom={2.5}
+        fitViewOptions={FIT_VIEW}
         proOptions={PRO_OPTIONS}
         style={SURFACE_STYLE}
       >
@@ -315,7 +335,7 @@ function ArchitectureInner() {
       )}
       {scene && scene.model.cards.length === 0 && scene.model.groups.length === 0 && (
         <div className="pointer-events-none absolute inset-0 flex items-center justify-center text-sm text-slate-500">
-          Add resources in Build to see them here.
+          {empty}
         </div>
       )}
     </div>

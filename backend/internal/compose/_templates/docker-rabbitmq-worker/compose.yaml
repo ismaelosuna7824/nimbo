@@ -1,0 +1,82 @@
+# A producer API publishes jobs to RabbitMQ; a worker consumes them.
+# POST /jobs on the producer, then watch the worker's logs.
+# RabbitMQ's management UI is on http://localhost:15672 (this machine only).
+
+# Settings every service shares: restart after crashes, rotated logs.
+x-defaults: &defaults
+  restart: unless-stopped
+  logging:
+    driver: json-file
+    options:
+      max-size: "10m"
+      max-file: "3"
+
+services:
+  producer:
+    <<: *defaults
+    build: ./producer
+    init: true
+    ports:
+      - "8185:8000"
+    environment:
+      AMQP_URL: amqp://${RABBITMQ_USER}:${RABBITMQ_PASS}@broker:5672/
+      QUEUE: jobs
+    depends_on:
+      broker:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health')\""]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    deploy:
+      resources:
+        limits:
+          cpus: "0.5"
+          memory: 128M
+
+  worker:
+    <<: *defaults
+    build: ./worker
+    init: true
+    environment:
+      AMQP_URL: amqp://${RABBITMQ_USER}:${RABBITMQ_PASS}@broker:5672/
+      QUEUE: jobs
+    depends_on:
+      broker:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "test -f /tmp/worker-ready"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    deploy:
+      resources:
+        limits:
+          cpus: "0.5"
+          memory: 128M
+
+  broker:
+    <<: *defaults
+    image: rabbitmq:3.13-management-alpine
+    ports:
+      - "127.0.0.1:15672:15672"
+    environment:
+      RABBITMQ_DEFAULT_USER: ${RABBITMQ_USER}
+      RABBITMQ_DEFAULT_PASS: ${RABBITMQ_PASS}
+    volumes:
+      - rabbitmqdata:/var/lib/rabbitmq
+    healthcheck:
+      test: ["CMD-SHELL", "rabbitmq-diagnostics -q ping"]
+      interval: 10s
+      timeout: 10s
+      retries: 12
+      start_period: 20s
+    deploy:
+      resources:
+        limits:
+          cpus: "1"
+          memory: 512M
+
+volumes:
+  rabbitmqdata:

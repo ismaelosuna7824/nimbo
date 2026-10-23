@@ -12,6 +12,7 @@ import { errorMessage } from "@/components/errors"
 import { api } from "@/lib/api/client"
 import type { TryAction, TryResult } from "@/lib/api/types"
 import { cn } from "@/lib/utils"
+import { useWorkflowStore } from "@/state/workflow-store"
 import { formatMs } from "../lib/format"
 import { HTTP_METHODS } from "../loadtest/targets"
 import { CopyButton } from "./bits"
@@ -19,8 +20,9 @@ import { CodeInput, HighlightedCode } from "./code"
 import type { HeaderRow, HttpDraft } from "./model"
 
 /**
- * "Try it" for one resource: runs its actions in the sandbox through the daemon
- * and shows the response. HTTP actions get a small request builder.
+ * "Try it" for one resource: runs its actions in the sandbox (or against a
+ * Docker workspace's containers) through the daemon and shows the response.
+ * HTTP actions get a small request builder.
  */
 export function TryIt({
   workflowId,
@@ -40,6 +42,9 @@ export function TryIt({
   startsFunction?: boolean
 }) {
   const [actionId, setActionId] = useState(actions[0]?.id ?? "")
+  const kind = useWorkflowStore((s) => s.workflow?.kind)
+  const docker = kind === "docker"
+  const kube = kind === "kubernetes"
   /** Edited inputs per action; untouched actions use their default. */
   const [inputs, setInputs] = useState<Record<string, string>>({})
   const [results, setResults] = useState<Record<string, TryResult>>({})
@@ -106,12 +111,15 @@ export function TryIt({
           <Tooltip>
             <TooltipTrigger asChild>
               <Badge variant="outline" className="h-4.5 gap-1 border-amber-500/40 text-[10px] text-amber-700 dark:text-amber-400">
-                <Database /> Adds data to your sandbox
+                <Database /> {kube ? "Adds data to your cluster" : docker ? "Adds data to your containers" : "Adds data to your sandbox"}
               </Badge>
             </TooltipTrigger>
             <TooltipContent className="max-w-60">
-              Running this stores something in your local sandbox (never in your real cloud account). Reset the sandbox
-              to start clean.
+              {kube
+                ? "Running this stores something in your local cluster. Destroy with “Also delete PVCs” starts clean."
+                : docker
+                  ? "Running this stores something in your local containers. Down with “Also delete volumes” starts clean."
+                  : "Running this stores something in your local sandbox (never in your real cloud account). Reset the sandbox to start clean."}
             </TooltipContent>
           </Tooltip>
         )}

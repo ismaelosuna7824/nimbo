@@ -35,8 +35,12 @@ import type { Diagnostic, ImportProject, ImportScan } from "@/lib/api/types"
 import { queryClient } from "@/lib/query-client"
 import { cn } from "@/lib/utils"
 import { useWorkflowStore } from "@/state/workflow-store"
+import { DockerBadge } from "@/features/docker/badge"
+import { KubernetesBadge } from "@/features/kubernetes/badge"
 import { DiagnosticRow } from "../components/diagnostic-row"
+import { formatBytes } from "../lib/format"
 import { ImportTooLargeError, readFileList, useImportSource, type PendingImport } from "./import-source"
+import { initialSelection, selectAll, toggleProject } from "./import-selection"
 
 type Failure = { message: string; diagnostics: Diagnostic[] }
 
@@ -75,8 +79,8 @@ export function ImportDialog({ open, onOpenChange }: { open: boolean; onOpenChan
     try {
       const res = await api.scanImport(p.source)
       setScan(res)
-      // Every project is preselected except reusable modules nothing calls.
-      setSelected(Object.fromEntries(res.projects.map((pr) => [pr.path, !pr.diagnostics.some((d) => d.code === "unused_module")])))
+      // Every project is preselected except reusable modules nothing calls and the folders of a Dockerfile group.
+      setSelected(initialSelection(res.projects))
       setNames(Object.fromEntries(res.projects.map((pr) => [pr.path, pr.name])))
     } catch (err) {
       setError(toFailure(err))
@@ -97,7 +101,7 @@ export function ImportDialog({ open, onOpenChange }: { open: boolean; onOpenChan
   )
 
   const pickFolder = async () => {
-    const picked = await openDialog({ directory: true, multiple: false, title: "Choose a Terraform folder" })
+    const picked = await openDialog({ directory: true, multiple: false, title: "Choose a Terraform, Docker Compose or Kubernetes folder" })
     if (typeof picked === "string") void runScan({ source: { dir: picked }, label: picked.split(/[\\/]/).pop() || picked })
   }
 
@@ -105,7 +109,9 @@ export function ImportDialog({ open, onOpenChange }: { open: boolean; onOpenChan
     try {
       const p = await read()
       if (!p) {
-        toast.error("No Terraform files found", { description: "Choose a folder that contains .tf files." })
+        toast.error("No project files found", {
+          description: "Choose a folder with .tf files, a compose file, a Dockerfile, Kubernetes manifests, a kustomization or a Helm chart.",
+        })
         return
       }
       void runScan(p)
@@ -134,7 +140,15 @@ export function ImportDialog({ open, onOpenChange }: { open: boolean; onOpenChan
       const problems = workflows.reduce((n, wf) => n + wf.diagnostics.filter((d) => d.severity !== "info").length, 0)
       const review = problems ? ` · ${plural(problems, "problem")} to review` : ""
       if (workflows.length === 1) {
-        toast.success(`Imported “${first.name}”`, { description: `${plural(first.nodes.length, "node")}${review}` })
+        toast.success(`Imported “${first.name}”`, {
+          description: `${
+            first.kind === "docker"
+              ? plural(first.compose?.graph.nodes.filter((n) => n.kind === "service").length ?? 0, "service")
+              : first.kind === "kubernetes"
+                ? plural(first.kubernetes?.graph.nodes.length ?? 0, "object")
+                : plural(first.nodes.length, "node")
+          }${review}`,
+        })
       } else {
         toast.success(`Imported ${workflows.length} workflows`, {
           description: `Opened “${first.name}”; ${workflows.length - 1 === 1 ? `“${workflows[1].name}” is` : `the other ${workflows.length - 1} are`} on Home${review}`,
@@ -160,10 +174,10 @@ export function ImportDialog({ open, onOpenChange }: { open: boolean; onOpenChan
     <Dialog open={open} onOpenChange={close}>
       <DialogContent className={cn(step === "review" ? "sm:max-w-3xl" : "sm:max-w-lg")}>
         <DialogHeader>
-          <DialogTitle>Import Terraform</DialogTitle>
+          <DialogTitle>Import project</DialogTitle>
           <DialogDescription>
             {step === "source"
-              ? "Pick the folder of an existing Terraform repository. Each project (a folder you run terraform in) becomes a workflow; local modules come along."
+              ? "Pick the folder of an existing Terraform repository, Docker Compose project or Kubernetes app. Each Terraform project (a folder you run terraform in), each compose project and each set of Kubernetes manifests, Kustomize tree or Helm chart becomes a workflow; local modules and build contexts come along."
               : "Choose which projects to import. Each one becomes its own workflow."}
           </DialogDescription>
         </DialogHeader>
@@ -226,7 +240,7 @@ export function ImportDialog({ open, onOpenChange }: { open: boolean; onOpenChan
           </div>
         ) : busy === "scan" ? (
           <div className="flex items-center justify-center gap-2 py-12 text-sm text-muted-foreground">
-            <Spinner /> Looking for Terraform projects in {source?.label}…
+            <Spinner /> Looking for Terraform, Docker Compose and Kubernetes projects in {source?.label}…
           </div>
         ) : scan ? (
           <ScanResults
@@ -235,8 +249,8 @@ export function ImportDialog({ open, onOpenChange }: { open: boolean; onOpenChan
             omitted={source?.omitted ?? 0}
             selected={selected}
             names={names}
-            onSelect={(path, on) => setSelected((s) => ({ ...s, [path]: on }))}
-            onSelectAll={(on) => setSelected(Object.fromEntries(scan.projects.map((p) => [p.path, on])))}
+            onSelect={(path, on) => setSelected((s) => toggleProject(scan.projects, s, path, on))}
+            onSelectAll={(on) => setSelected(selectAll(scan.projects, on))}
             onName={(path, name) => setNames((n) => ({ ...n, [path]: name }))}
           />
         ) : null}
@@ -284,10 +298,14 @@ interface ScanResultsProps {
 
 function ScanResults({ scan, label, omitted, selected, names, onSelect, onSelectAll, onName }: ScanResultsProps) {
   const count = scan.projects.filter((p) => selected[p.path]).length
+  const selectable = Object.values(selectAll(scan.projects, true)).filter(Boolean).length
   if (scan.projects.length === 0) {
     return (
       <p className="rounded-md border border-dashed px-4 py-8 text-center text-sm text-muted-foreground">
-        No Terraform projects in {label}. Pick a folder that contains <code>.tf</code> files.
+        No projects in {label}. Pick a folder that contains Terraform (<code>.tf</code> files), a Docker Compose project
+        (<code>compose.yaml</code>, <code>docker-compose.yml</code> or a <code>Dockerfile</code>) or Kubernetes manifests (
+        <code>*.yaml</code> with <code>apiVersion</code>/<code>kind</code>, <code>kustomization.yaml</code> or a Helm{" "}
+        <code>Chart.yaml</code>).
       </p>
     )
   }
@@ -296,7 +314,7 @@ function ScanResults({ scan, label, omitted, selected, names, onSelect, onSelect
       <div className="flex items-center gap-2 text-sm">
         <Checkbox
           aria-label="Select all projects"
-          checked={count === scan.projects.length ? true : count === 0 ? false : "indeterminate"}
+          checked={count >= selectable ? true : count === 0 ? false : "indeterminate"}
           onCheckedChange={(v) => onSelectAll(v === true)}
         />
         <span>
@@ -384,11 +402,15 @@ function ProjectRow({
   const unusedModule = p.diagnostics.find((d) => d.code === "unused_module")
   const errors = problems.filter((d) => d.severity === "error").length
   const layered = p.layout === "environments"
-  const envs = layered
-    ? (p.environments ?? [])
-    : p.tfvarsFiles.map((f) => f.replace(/^.*\//, "").replace(/(\.auto)?\.tfvars$/, "").replace(/^terraform$/, "default"))
+  const docker = p.kind === "docker"
+  const kubernetes = p.kind === "kubernetes"
+  const envs = docker
+    ? []
+    : layered || kubernetes
+      ? (p.environments ?? [])
+      : (p.tfvarsFiles ?? []).map((f) => f.replace(/^.*\//, "").replace(/(\.auto)?\.tfvars$/, "").replace(/^terraform$/, "default"))
   return (
-    <Collapsible className={cn("flex flex-col gap-2 px-3 py-2.5", !checked && "opacity-60")}>
+    <Collapsible className={cn("flex flex-col gap-2 px-3 py-2.5", !checked && "opacity-60")} data-testid="import-project" data-kind={p.kind ?? "terraform"}>
       <div className="flex items-center gap-3">
         <Checkbox checked={checked} onCheckedChange={(v) => onCheck(v === true)} aria-label={`Import ${p.path}`} />
         <div className="flex min-w-0 flex-1 flex-col gap-0.5">
@@ -400,17 +422,95 @@ function ProjectRow({
             className="h-7 max-w-64 text-sm font-medium"
           />
           <span className="truncate font-mono text-[11px] text-muted-foreground">
-            {p.path === "." ? "folder root" : p.path}
+            {p.members?.length
+              ? `${p.members.join(", ")} as one workflow`
+              : p.path === "." || p.path === "kubernetes:."
+                ? "folder root"
+                : p.path.replace(/^kubernetes:/, "")}
           </span>
+          {p.outside && p.outside.length > 0 && (
+            <span className="truncate font-mono text-[11px] text-muted-foreground" data-testid="import-outside">
+              also imports{" "}
+              {p.outside.map((o) => `${o.path}${o.dir ? "/" : ""} (${formatBytes(o.bytes)})`).join(", ")}
+            </span>
+          )}
         </div>
         <div className="flex flex-wrap items-center justify-end gap-1">
-          {p.clouds.map((c) => (
-            <CloudBadge key={c} cloud={c} />
-          ))}
-          <Stat icon={LayersIcon} tip={p.dataSources ? `${plural(p.dataSources, "data source")} too` : undefined}>
-            {plural(p.resources, "resource")}
-          </Stat>
-          {p.modules > 0 && <Stat icon={PackageIcon}>{plural(p.modules, "module")}</Stat>}
+          {kubernetes ? (
+            <>
+              <KubernetesBadge />
+              <Stat icon={LayersIcon}>{plural(p.objects ?? 0, "object")}</Stat>
+              {(p.kubeSources ?? []).map((s) => (
+                <Stat
+                  key={`${s.kind}:${s.path}`}
+                  icon={s.kind === "helm" ? PackageIcon : FileCode2Icon}
+                  tip={
+                    s.kind === "helm"
+                      ? `Helm chart ${s.chart ? `${s.chart.name} ${s.chart.version}` : ""} in ${s.path}/, deployed as release ${s.release || s.chart?.name || s.path}`
+                      : s.kind === "kustomize"
+                        ? `Kustomization in ${s.path}/ (kustomize build)`
+                        : `Manifests in ${s.path}`
+                  }
+                >
+                  {s.kind === "helm" ? `Helm ${s.chart?.name ?? s.path}` : s.kind === "kustomize" ? "Kustomize" : "Manifests"}
+                </Stat>
+              ))}
+              {p.bytes !== undefined && <Stat icon={PackageIcon}>{formatBytes(p.bytes)}</Stat>}
+            </>
+          ) : docker ? (
+            <>
+              <DockerBadge />
+              <Stat icon={LayersIcon}>{plural(p.services ?? 0, "service")}</Stat>
+              <Stat
+                icon={FileCode2Icon}
+                tip={
+                  p.members?.length
+                    ? `A compose.yaml is created in ${p.path.replace(/^dockerfiles:/, "")}/ building one service per folder: ${(p.dockerfiles ?? []).join(", ")}. Or import each folder on its own below.`
+                    : p.composeFiles?.length
+                      ? `Compose files, in order: ${p.composeFiles.join(", ")}${p.dockerfiles?.length ? `. Dockerfiles: ${p.dockerfiles.join(", ")}` : ""}`
+                      : "No compose file: a compose.yaml building this Dockerfile is created"
+                }
+              >
+                {p.members?.length
+                  ? plural(p.members.length, "Dockerfile")
+                  : p.composeFiles?.length
+                    ? plural(p.composeFiles.length, "compose file")
+                    : "Dockerfile only"}
+              </Stat>
+              {p.outside && p.outside.length > 0 && (
+                <Stat
+                  icon={FolderOpenIcon}
+                  tip={
+                    <>
+                      Referenced by the compose files from outside this folder, imported with it. The workflow keeps the folder
+                      layout from their common parent, so the compose files stay unchanged:
+                      <ul className="mt-1 font-mono text-[11px]">
+                        {p.outside.map((o) => (
+                          <li key={o.path}>
+                            {o.path}
+                            {o.dir ? "/" : ""} · {o.kinds.join(", ")} · {plural(o.files, "file")}, {formatBytes(o.bytes)}
+                          </li>
+                        ))}
+                      </ul>
+                    </>
+                  }
+                >
+                  {plural(p.outside.length, "outside path")}
+                </Stat>
+              )}
+              {p.bytes !== undefined && <Stat icon={PackageIcon}>{formatBytes(p.bytes)}</Stat>}
+            </>
+          ) : (
+            <>
+              {p.clouds.map((c) => (
+                <CloudBadge key={c} cloud={c} />
+              ))}
+              <Stat icon={LayersIcon} tip={p.dataSources ? `${plural(p.dataSources, "data source")} too` : undefined}>
+                {plural(p.resources, "resource")}
+              </Stat>
+              {p.modules > 0 && <Stat icon={PackageIcon}>{plural(p.modules, "module")}</Stat>}
+            </>
+          )}
           {envs.length > 0 && (
             <Stat
               icon={FileCode2Icon}
@@ -420,6 +520,8 @@ function ProjectRow({
                     One root per environment calling one service module: imported as one workflow with the environments{" "}
                     {envs.join(", ")} (values from each root's terraform.tfvars); exported in the same layout.
                   </>
+                ) : kubernetes ? (
+                  <>Kustomize overlays and Helm values files become environments: {envs.join(", ")}</>
                 ) : (
                   <>Each .tfvars file becomes an environment: {p.tfvarsFiles.join(", ")}</>
                 )

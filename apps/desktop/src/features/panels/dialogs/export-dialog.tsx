@@ -34,6 +34,10 @@ const LAYOUT_HELP: Record<WorkflowLayout, string> = {
 export function ExportDialog({ open, onOpenChange }: { open: boolean; onOpenChange: (open: boolean) => void }) {
   const workflow = useWorkflowStore((s) => s.workflow)
   const tauri = isTauri()
+  const kubernetes = workflow?.kind === "kubernetes"
+  // Docker and Kubernetes workspaces export their files as they are.
+  const asIs = workflow?.kind === "docker" || kubernetes
+  const what = asIs ? "Project" : "Terraform"
   const [environments, setEnvironments] = useState(true)
   const [busy, setBusy] = useState(false)
   const [written, setWritten] = useState<{ dir: string; files: string[] } | null>(null)
@@ -67,7 +71,7 @@ export function ExportDialog({ open, onOpenChange }: { open: boolean; onOpenChan
 
   const exportToFolder = async () => {
     if (!workflow) return
-    const dir = await openDialog({ directory: true, multiple: false, title: "Export Terraform to folder" })
+    const dir = await openDialog({ directory: true, multiple: false, title: `Export ${what.toLowerCase()} to folder` })
     if (typeof dir !== "string") return
     setBusy(true)
     try {
@@ -93,7 +97,7 @@ export function ExportDialog({ open, onOpenChange }: { open: boolean; onOpenChan
       a.download = `${workflow.name.replace(/[^\w.-]+/g, "-") || workflow.id}.zip`
       a.click()
       URL.revokeObjectURL(url)
-      toast.success("Terraform exported", { description: a.download })
+      toast.success(`${what} exported`, { description: a.download })
       close(false)
     } catch (err) {
       toast.error("Export failed", { description: errorMessage(err) })
@@ -108,10 +112,24 @@ export function ExportDialog({ open, onOpenChange }: { open: boolean; onOpenChan
     <Dialog open={open && !!workflow} onOpenChange={close}>
       <DialogContent className="sm:max-w-lg">
         <DialogHeader>
-          <DialogTitle>Export Terraform</DialogTitle>
+          <DialogTitle>{asIs ? "Export project" : "Export Terraform"}</DialogTitle>
           <DialogDescription>
-            Clean, cloud-ready Terraform: no sandbox settings are included, so the same code deploys to your real
-            account with <code>terraform apply</code>.
+            {kubernetes ? (
+              <>
+                The manifests, kustomizations, Helm charts and Dockerfiles as they are, ready for <code>kubectl apply</code>,{" "}
+                <code>kustomize build</code> or <code>helm install</code> on any cluster. Nothing Nimbo-specific is added.
+              </>
+            ) : asIs ? (
+              <>
+                The compose files, Dockerfiles and build contexts as they are, ready for <code>docker compose up</code>{" "}
+                anywhere. Nothing Nimbo-specific is added.
+              </>
+            ) : (
+              <>
+                Clean, cloud-ready Terraform: no sandbox settings are included, so the same code deploys to your real
+                account with <code>terraform apply</code>.
+              </>
+            )}
           </DialogDescription>
         </DialogHeader>
 
@@ -129,6 +147,8 @@ export function ExportDialog({ open, onOpenChange }: { open: boolean; onOpenChan
               ))}
             </ul>
           </div>
+        ) : asIs ? (
+          <TreePreview files={preview.data?.files} loading={preview.isPending} error={preview.error} />
         ) : (
           <div className="flex flex-col gap-4">
             <div className="grid gap-1.5">

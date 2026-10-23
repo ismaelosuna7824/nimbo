@@ -24,9 +24,12 @@ export const useImportSource = create<ImportSourceState>((set) => ({
 /** Directory names never read: same set the daemon skips (plus every hidden directory). */
 const SKIPPED_DIRS: Record<string, true> = { node_modules: true, vendor: true, ".terragrunt-cache": true }
 const skippedDir = (name: string) => name.startsWith(".") || SKIPPED_DIRS[name] === true
-/** Text files worth sending to the daemon from a browser upload; binaries (zips, images) are left out. */
+/**
+ * Text files worth sending to the daemon from a browser upload (Terraform, Docker build contexts: compose files,
+ * Dockerfiles, app sources, and Kubernetes manifests, kustomizations, Helm charts); binaries (zips, images) are left out.
+ */
 const TEXT_FILE =
-  /\.(tf|tfvars|hcl|json|ya?ml|sh|bash|ps1|py|js|mjs|cjs|ts|go|rb|java|cs|txt|md|tpl|tftpl|toml|ini|cfg|conf|sql|xml|html|css|example|env)$|(^|\/)(Dockerfile|Makefile|requirements\.txt)$/i
+  /\.(tf|tfvars|hcl|json|ya?ml|sh|bash|ps1|py|js|mjs|cjs|jsx|ts|tsx|vue|svelte|go|mod|sum|rb|java|kt|kts|gradle|properties|cs|csproj|fsproj|sln|razor|cshtml|rs|php|txt|md|tpl|tftpl|toml|lock|ini|cfg|conf|sql|xml|html|css|scss|example|env|dockerignore|gitignore|helmignore|dockerfile)$|(^|\/)(Dockerfile(\.[\w.-]+)?|Containerfile|Makefile|Gemfile|Procfile|requirements\.txt)$/i
 const MAX_FILE_BYTES = 1 << 20
 const MAX_TOTAL_BYTES = 18 << 20
 const MAX_FILES = 5000
@@ -121,9 +124,14 @@ export async function readDataTransfer(dt: DataTransfer): Promise<PendingImport 
   return { source: { files }, label: roots.length === 1 ? roots[0].name : `${roots.length} items`, omitted }
 }
 
-/** Source for a path dropped onto the desktop window: a folder, or the folder of a dropped .tf file. */
+/**
+ * Source for a path dropped onto the desktop window: a folder, or the folder of a dropped .tf, compose file, Dockerfile,
+ * Chart.yaml or kustomization.yaml.
+ */
 export function pendingFromPath(path: string): PendingImport {
   const clean = path.replace(/[\\/]+$/, "")
-  const dir = /\.(tf|tfvars)$/i.test(clean) ? clean.replace(/[\\/][^\\/]+$/, "") : clean
+  const dir = /\.(tf|tfvars)$|(^|[\\/])((docker-)?compose[\w.-]*\.ya?ml|Dockerfile[\w.-]*|Chart\.ya?ml|kustomization\.ya?ml)$/i.test(clean)
+    ? clean.replace(/[\\/][^\\/]+$/, "")
+    : clean
   return { source: { dir }, label: dir.split(/[\\/]/).pop() || dir }
 }

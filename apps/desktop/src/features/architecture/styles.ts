@@ -1,6 +1,6 @@
 // Colors, fonts and text fitting of the Architecture diagram (a light document whatever the app theme).
 import { CARD_W, FONT_FAMILY, wrapParts } from "./geometry"
-import type { GroupKind, SubnetTier } from "./model"
+import type { GroupKind, NetworkScope, SubnetTier } from "./model"
 
 export const INK = "#0f172a"
 export const MUTED = "#475569"
@@ -23,10 +23,16 @@ interface GroupStyle {
   dash?: string
 }
 
-/** Light grey nested containers: translucent fills darken with depth; subnets carry their tier's tint. */
-export function groupStyle(kind: GroupKind, tier?: SubnetTier): GroupStyle {
+/**
+ * Light grey nested containers: translucent fills darken with depth; subnets carry their tier's tint,
+ * Docker networks a blue tint (violet when internal, dashed grey when external), Kubernetes
+ * namespaces a lighter blue and their data tiers amber.
+ */
+export function groupStyle(kind: GroupKind, tier?: SubnetTier, scope?: NetworkScope): GroupStyle {
   switch (kind) {
     case "cloud":
+    case "docker-host":
+    case "k8s-cluster":
       return { fill: "#ffffff", stroke: "#b9c3ce" }
     case "account":
       return { fill: "rgba(15,23,42,0.025)", stroke: "#c3ccd6", dash: "6 4" }
@@ -44,6 +50,18 @@ export function groupStyle(kind: GroupKind, tier?: SubnetTier): GroupStyle {
           : { fill: "rgba(15,23,42,0.04)", stroke: "#c3cbd4" }
     case "external":
       return { fill: "rgba(15,23,42,0.02)", stroke: "#b9c3ce", dash: "6 4" }
+    case "compose-project":
+      return { fill: "rgba(15,23,42,0.03)", stroke: "#b8c2cd" }
+    case "docker-network":
+      return scope === "external"
+        ? { fill: "rgba(15,23,42,0.02)", stroke: "#a3b1bf", dash: "6 4" }
+        : scope === "internal"
+          ? { fill: "rgba(124,58,237,0.06)", stroke: "#c4b5fd" }
+          : { fill: "rgba(29,99,237,0.06)", stroke: "#a9c1e3" }
+    case "k8s-namespace":
+      return { fill: "rgba(29,99,237,0.05)", stroke: "#a9c1e3" }
+    case "k8s-data":
+      return { fill: "rgba(217,119,6,0.06)", stroke: "#f2c88c" }
     default:
       return { fill: "rgba(15,23,42,0.035)", stroke: "rgba(15,23,42,0.06)" }
   }
@@ -55,7 +73,7 @@ export function cardLines(parts: string[]) {
 }
 
 export interface LegendEntry {
-  kind: "data" | "control" | "public" | "private"
+  kind: "data" | "control" | "public" | "private" | "internal-network" | "external-network"
   label: string
 }
 

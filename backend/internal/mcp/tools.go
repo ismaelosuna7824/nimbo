@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -37,7 +38,7 @@ func registerTools(r *registry, t *tools) {
 	addTool(r, "list_workflows", "List workflows", "List workflows (ID, name, node count, clouds), most recently updated first. Archived workflows are hidden unless include_archived=true.", t.listWorkflows)
 	addTool(r, "get_open_workflow", "Get open workflow", "Get the workflow currently open in the Nimbo desktop app (compact view with structure, like get_workflow), or a message when none is open. Every workflow argument also accepts \"current\" (or can be omitted) to mean this workflow.", t.getOpenWorkflow)
 	addTool(r, "list_templates", "List templates", "List starter templates that can seed create_workflow (e.g. aws-queue-worker, aws-serverless-api).", t.listTemplates)
-	addTool(r, "create_workflow", "Create workflow", "Create a workflow, optionally from a template ID (see list_templates). Returns the compact workflow; use its id in every other tool.", t.createWorkflow)
+	addTool(r, "create_workflow", "Create workflow", "Create a NEW workflow, optionally from a template ID (see list_templates). Only when the user asks for a new or separate workflow or nothing is open: to change the design the user has open (get_open_workflow), edit that one instead. Returns the compact workflow (with a notice when the user has another workflow open); use its id in every other tool.", t.createWorkflow)
 	addTool(r, "get_workflow", "Get workflow", "Get a compact view of a workflow: nodes (address, type, attributes as HCL expressions, nested blocks), derived edges (source.attr -> target.attribute), variables, outputs, locals, providers, environments (secret values redacted), diagnostics, the export layout and a structure summary (states, resources per state, modules with nesting, backend). Call this before editing.", t.getWorkflow)
 	addTool(r, "update_workflow", "Update workflow", "Change a workflow's name, description and/or export layout; pass only the fields that change (description \"\" clears it). layout: \"environments\" exports modules/<service> plus one root (and state, backend.tf) per environment under environments/<env>; \"single\" one root with a tfvars file per environment; \"auto\" picks environments from two environments up. Its Terraform is unchanged. Returns the compact workflow with its structure.", t.updateWorkflow)
 	addTool(r, "archive_workflow", "Archive workflow", "Archive (close) a workflow: its sandbox is stopped keeping state, it is hidden from list_workflows and runs/load tests are refused until unarchive_workflow.", t.archiveWorkflow)
@@ -64,7 +65,7 @@ func registerTools(r *registry, t *tools) {
 	r.group = groupTerraform
 	addTool(r, "get_terraform", "Get Terraform code", "Render the workflow as Terraform files. Imported projects keep their own files; new content follows Nimbo's layout: versions.tf, providers.tf, variables.tf, locals.tf, outputs.tf, data.tf, one file per service category (network.tf, compute.tf, storage.tf, messaging.tf, api.tf, iam.tf, ...) and main.tf for module calls (small projects: one main.tf). Move a node with update_node file.", t.getTerraform)
 	addTool(r, "review_terraform", "Review Terraform", "Check the workflow against Terraform best practices and return its structure (export layout, states, resources per state, modules with nesting, backend) and the findings grouped by severity (warnings: security, unpinned versions, providers in modules, oversized states; info: documentation, versions, hardcoded values, tags, naming, structure, modules, environments), each with why it matters and how to fix it. Local module contents are checked too. Call it before finishing any change; mutating tools already return the findings their change introduced as best_practices. Findings never block deploys.", t.reviewTerraform)
-	addTool(r, "apply_terraform_code", "Apply Terraform code", "Edit the workflow by writing Terraform code. files maps file name -> full content and is merged over the current files from get_terraform; an empty string deletes that file. The code is re-imported; node IDs, positions and environments are kept by address. Use for complex blocks that are awkward with update_node.", t.applyTerraformCode)
+	addTool(r, "apply_terraform_code", "Apply Terraform code", "Edit the workflow by writing code. Docker workflows: files maps any file path (compose.yaml, api/Dockerfile, .env, app sources) -> full content, \"\" deletes it; YAML/Dockerfile syntax errors are refused with file:line and the graph is re-derived. Terraform workflows: files maps file name -> full content and is merged over the current files from get_terraform; an empty string deletes that file. The code is re-imported; node IDs, positions and environments are kept by address. Use for complex blocks that are awkward with update_node.", t.applyTerraformCode)
 	addTool(r, "scan_terraform_folder", "Scan Terraform folder", "Scan a local folder (e.g. a repository) for Terraform projects without importing: every directory with *.tf files, with resource/data/module counts, providers, clouds, tfvars files, backend, layout and parse diagnostics. Directories used only as local modules are not separate projects, and an environments tree (environments/<env>/ roots that each only call one ../../modules/<service>) is one project with layout \"environments\" and its environments. Pass the chosen paths to import_terraform as projects.", t.scanTerraformFolder)
 	addTool(r, "import_terraform", "Import Terraform", "Import existing Terraform as new workflows, from a local directory or from files (relative path -> content). Local modules (source = \"./modules/x\") are kept as assets and can be opened in the app. An environments tree (as export_terraform writes it) becomes one workflow: the service module's content with one environment per environments/<env> root. By default only the root folder is imported; pass projects (paths from scan_terraform_folder, \".\" = root) to import several projects, one workflow each.", t.importTerraform)
 	addTool(r, "export_terraform", "Export Terraform", "Write the workflow's Terraform (plus assets such as Lambda sources, local modules and the dependency lock file) to a local directory, in the workflow's layout (structure.layout from get_workflow). Single layout: one root; with environments=true each environment's values go to the variable file it was imported from (e.g. terraform.tfvars), else environments/<name>.tfvars, plus .env.example files. Environments layout (auto from two environments): modules/<service>/ with the workflow's resources, its local modules under modules/, and one root per environment under environments/<env>/ (backend.tf with its own state, main.tf calling the service module, providers.tf, versions.tf, variables.tf, outputs.tf; environments=true adds terraform.tfvars and .env.example), plus README.md, .gitignore and a Makefile. Comments are kept.", t.exportTerraform)
@@ -76,10 +77,10 @@ func registerTools(r *registry, t *tools) {
 	addTool(r, "sandbox_reset", "Reset sandbox", "Wipe the sandbox's emulator state and Terraform state (everything deployed is gone).", t.sandboxAction("reset"))
 	addTool(r, "validate", "Validate", "Run `terraform validate` in the sandbox and wait for the result (status, last log lines).", t.runAction(model.ActionValidate))
 	addTool(r, "plan", "Plan", "Run `terraform plan` against the sandbox and wait for the result (planned add/change/destroy counts, last log lines).", t.runAction(model.ActionPlan))
-	addTool(r, "deploy", "Deploy", "Run `terraform apply` against the local sandbox and wait. On success returns the deployed resources (ids, ARNs, URLs) and outputs.", t.runAction(model.ActionApply))
-	addTool(r, "destroy", "Destroy", "Run `terraform destroy` against the sandbox and wait for the result.", t.runAction(model.ActionDestroy))
+	addTool(r, "deploy", "Deploy", "Terraform workflows: run `terraform apply` against the local sandbox and wait; on success returns the deployed resources (ids, ARNs, URLs) and outputs. Docker workflows: `docker compose up` (build, wait for healthy) in the workflow's own project and return the container status; remap_ports publishes on free host ports when the compose ports are taken. Kubernetes workflows: create/start the workflow's local k3s cluster, build and load the local images, apply every source for the environment (server-side apply / helm upgrade --install), wait for rollouts and return the cluster status (workloads, port-forwards, Ingress URLs, problems).", t.runAction(model.ActionApply))
+	addTool(r, "destroy", "Destroy", "Terraform workflows: run `terraform destroy` against the sandbox. Docker workflows: `docker compose down` of the workflow's project (remove_volumes also deletes its named volumes). Kubernetes workflows: delete what deploy applied (remove_volumes also deletes PersistentVolumeClaims, delete_cluster the cluster).", t.runAction(model.ActionDestroy))
 	addTool(r, "get_run", "Get run", "Get a Terraform run's status and last log lines (use after a run tool returned while still running).", t.getRun)
-	addTool(r, "get_deployed_state", "Get deployed state", "Show what is deployed in the sandbox: resources with key values (id, arn, name, url) and outputs. Pass address to get every value of matching resources.", t.getDeployedState)
+	addTool(r, "get_deployed_state", "Get deployed state", "Terraform workflows: what is deployed in the sandbox, resources with key values (id, arn, name, url) and outputs; pass address to get every value of matching resources. Docker workflows: the compose project's containers per service (state, health, published host ports, port remaps). Kubernetes workflows: the cluster, each workload's rollout and pods (restarts, OOM kills, crash loops), port-forwards, Ingress URLs, problems and warning events.", t.getDeployedState)
 	addTool(r, "get_endpoints", "Get endpoints", "Explain how to use what is deployed: sandbox address and env settings, then per resource a plain summary, host URLs (API routes, function URLs), identifiers (queue URL, ARN, bucket, table…), a ready-to-run snippet and the try_endpoint actions. Deploy first.", t.getEndpoints)
 	addTool(r, "try_endpoint", "Try endpoint", "Call a deployed resource in the local sandbox: send an HTTP request to an API route, invoke a function, send/peek queue messages, publish to a topic, list/put/get bucket files, scan/put table items, … (actions from get_endpoints). Sandbox only; returns status, latency and the response body.", t.tryEndpoint)
 
@@ -101,6 +102,9 @@ func registerTools(r *registry, t *tools) {
 	addTool(r, "delete_connection", "Delete connection", "Delete a saved connection and its load test history.", t.deleteConnection)
 	addTool(r, "test_connection", "Test connection", "Check that a connection is reachable (one lightweight request: HTTP GET of the base URL, a database ping/version query, or AWS STS GetCallerIdentity). Pass connection for a saved one, fields for an unsaved draft, or both to try edits (blank secrets come from the saved one). This contacts the real service: confirm with the user first if it is not local.", t.testConnection)
 	addTool(r, "list_connection_targets", "List connection targets", "List load-test targets suggested for a saved connection (HTTP endpoints, SQL/Redis/Mongo read probes, AWS resources found in the account). Listing AWS resources makes read-only API calls to the real account; confirm with the user first.", t.listConnectionTargets)
+	registerDockerTools(r, t)
+	registerKubeTools(r, t)
+	r.group = groupConnections
 	addTool(r, "run_connection_load_test", "Run connection load test", "Run a load test against a saved connection (no workflow needed): target is an index from list_connection_targets or a target object; preset (smoke, load, stress, spike, soak) or custom stages; optional thresholds. confirm_external must be true. Waits for the result by default."+externalWarning, t.runConnectionLoadTest)
 }
 
@@ -145,6 +149,12 @@ func (t *tools) getOpenWorkflow(ctx context.Context, _ struct{}) (any, error) {
 	}
 	if err != nil {
 		return nil, err
+	}
+	if wf.IsDocker() {
+		return viewDocker(wf), nil
+	}
+	if wf.IsKubernetes() {
+		return viewKube(wf), nil
 	}
 	return t.viewWithStructure(ctx, wf)
 }
@@ -198,17 +208,43 @@ type createWorkflowIn struct {
 	Name        string `json:"name" jsonschema:"human readable workflow name"`
 	Description string `json:"description,omitempty"`
 	Template    string `json:"template,omitempty" jsonschema:"optional template ID from list_templates"`
+	Kind        string `json:"kind,omitempty" jsonschema:"\"docker\" for a docker-compose workflow, \"kubernetes\" for manifests/Kustomize/Helm on a local cluster (implied by a docker-*/k8s-* template); omit for Terraform"`
 }
 
 func (t *tools) createWorkflow(ctx context.Context, in createWorkflowIn) (any, error) {
+	// What the user is looking at before this one exists.
+	var session struct {
+		OpenWorkflowID *string `json:"openWorkflowId"`
+	}
+	_ = t.c.get(ctx, "/session", &session)
 	var wf model.Workflow
-	body := map[string]string{"name": in.Name, "description": in.Description, "templateId": in.Template}
+	body := map[string]string{"name": in.Name, "description": in.Description, "templateId": in.Template, "kind": in.Kind}
 	if err := t.c.do(ctx, http.MethodPost, "/workflows", body, &wf); err != nil {
 		return nil, err
 	}
-	v := viewWorkflow(&wf)
-	v.BestPractices = bpDelta(nil, &wf)
-	return v, nil
+	var out any
+	switch {
+	case wf.IsDocker():
+		out = dockerResult(nil, &wf)
+	case wf.IsKubernetes():
+		out = kubeResult(nil, &wf)
+	default:
+		v := viewWorkflow(&wf)
+		v.BestPractices = bpDelta(nil, &wf)
+		out = v
+	}
+	if session.OpenWorkflowID == nil || *session.OpenWorkflowID == wf.ID {
+		return out, nil
+	}
+	openName := *session.OpenWorkflowID
+	var open model.Workflow
+	if t.c.get(ctx, "/workflows/"+pathEscape(openName), &open) == nil {
+		openName = open.Name
+	}
+	return struct {
+		Workflow any    `json:"workflow"`
+		Notice   string `json:"notice"`
+	}{out, fmt.Sprintf("The user still has %q open in Nimbo; the app shows a notification offering to open %q. If they meant to change %q, edit that workflow instead and archive this one (archive_workflow).", openName, wf.Name, openName)}, nil
 }
 
 type updateWorkflowIn struct {
@@ -216,11 +252,12 @@ type updateWorkflowIn struct {
 	Name        *string `json:"name,omitempty" jsonschema:"new human readable name"`
 	Description *string `json:"description,omitempty" jsonschema:"new description; \"\" clears it"`
 	Layout      *string `json:"layout,omitempty" jsonschema:"export layout: auto (default: environments from two environments up), single or environments"`
+	Environment *string `json:"environment,omitempty" jsonschema:"Kubernetes workflows: the active environment (a Kustomize overlay or Helm values file; \"\" = base) the graph, rules and deploy render"`
 }
 
 func (t *tools) updateWorkflow(ctx context.Context, in updateWorkflowIn) (any, error) {
-	if in.Name == nil && in.Description == nil && in.Layout == nil {
-		return nil, errors.New("pass name, description and/or layout")
+	if in.Name == nil && in.Description == nil && in.Layout == nil && in.Environment == nil {
+		return nil, errors.New("pass name, description, layout and/or environment")
 	}
 	wf, err := t.c.workflow(ctx, in.Workflow)
 	if err != nil {
@@ -235,6 +272,18 @@ func (t *tools) updateWorkflow(ctx context.Context, in updateWorkflowIn) (any, e
 	}
 	if in.Description != nil {
 		wf.Description = strings.TrimSpace(*in.Description)
+	}
+	if in.Layout != nil && !wf.IsTerraform() {
+		return nil, fmt.Errorf("%s workflows have no export layout", model.KindLabel(wf.Kind))
+	}
+	if in.Environment != nil {
+		if !wf.IsKubernetes() {
+			return nil, errors.New("environment switches the rendered overlay/values of Kubernetes workflows; Terraform runs take environment per run")
+		}
+		if *in.Environment != "" && !slices.ContainsFunc(wf.Environments, func(e model.Environment) bool { return e.Name == *in.Environment }) {
+			return nil, fmt.Errorf("environment %q is not one of %v", *in.Environment, envNames(wf))
+		}
+		wf.ActiveEnvironment = *in.Environment
 	}
 	if in.Layout != nil {
 		layout := strings.TrimSpace(*in.Layout)
@@ -253,6 +302,18 @@ func (t *tools) updateWorkflow(ctx context.Context, in updateWorkflowIn) (any, e
 		Layout string `json:"layout"`
 	}{wf, wf.Layout}
 	var out model.Workflow
+	if wf.IsDocker() {
+		if err := t.c.do(ctx, http.MethodPut, "/workflows/"+pathEscape(wf.ID), wf, &out); err != nil {
+			return nil, err
+		}
+		return viewDocker(&out), nil
+	}
+	if wf.IsKubernetes() {
+		if err := t.c.do(ctx, http.MethodPut, "/workflows/"+pathEscape(wf.ID), wf, &out); err != nil {
+			return nil, err
+		}
+		return kubeResult(wf, &out), nil
+	}
 	if err := t.c.do(ctx, http.MethodPut, "/workflows/"+pathEscape(wf.ID), body, &out); err != nil {
 		return nil, err
 	}
@@ -263,6 +324,12 @@ func (t *tools) getWorkflow(ctx context.Context, in workflowArg) (any, error) {
 	wf, err := t.c.workflow(ctx, in.Workflow)
 	if err != nil {
 		return nil, err
+	}
+	if wf.IsDocker() {
+		return viewDocker(wf), nil
+	}
+	if wf.IsKubernetes() {
+		return viewKube(wf), nil
 	}
 	return t.viewWithStructure(ctx, wf)
 }
@@ -845,6 +912,9 @@ func (t *tools) applyTerraformCode(ctx context.Context, in applyCodeIn) (any, er
 	if err != nil {
 		return nil, err
 	}
+	if !wf.IsTerraform() {
+		return t.applyFileChanges(ctx, wf, in.Files)
+	}
 	files, err := t.terraformFiles(ctx, wf.ID)
 	if err != nil {
 		return nil, err
@@ -976,12 +1046,29 @@ func (t *tools) sandboxAction(action string) func(context.Context, workflowArg) 
 
 type runIn struct {
 	Workflow    string `json:"workflow,omitempty" jsonschema:"workflow ID or name; omit or \"current\" for the workflow open in the Nimbo app"`
-	Environment string `json:"environment,omitempty" jsonschema:"environment name; defaults to the active environment"`
+	Environment string `json:"environment,omitempty" jsonschema:"environment name; defaults to the active environment (Terraform and Kubernetes workflows)"`
 	WaitSeconds int    `json:"wait_seconds,omitempty" jsonschema:"max seconds to wait for completion (default 600); the run keeps going after that, poll with get_run"`
+	// Docker workflows only.
+	RemapPorts    bool `json:"remap_ports,omitempty" jsonschema:"docker deploy: publish on free host ports when the compose ports are taken (the compose files stay unchanged)"`
+	RemoveVolumes bool `json:"remove_volumes,omitempty" jsonschema:"docker/Kubernetes destroy: also delete the named volumes / PersistentVolumeClaims (their data is lost)"`
+	// Kubernetes workflows only.
+	DeleteCluster bool `json:"delete_cluster,omitempty" jsonschema:"Kubernetes destroy: also delete the local cluster"`
 }
 
 func terminalRun(s model.RunStatus) bool {
 	return s == model.RunSucceeded || s == model.RunFailed || s == model.RunCanceled
+}
+
+// dockerAction is the compose action a Terraform run tool stands for in a
+// docker workflow: deploy → up, destroy → down. Validate and plan have none.
+func dockerAction(action model.RunAction) (model.RunAction, bool) {
+	switch action {
+	case model.ActionApply:
+		return model.ActionUp, true
+	case model.ActionDestroy:
+		return model.ActionDown, true
+	}
+	return "", false
 }
 
 func (t *tools) runAction(action model.RunAction) func(context.Context, runIn) (any, error) {
@@ -990,8 +1077,22 @@ func (t *tools) runAction(action model.RunAction) func(context.Context, runIn) (
 		if err != nil {
 			return nil, err
 		}
-		var run model.Run
 		body := map[string]any{"action": action, "environment": in.Environment}
+		if wf.IsKubernetes() {
+			a, ok := dockerAction(action)
+			if !ok {
+				return nil, fmt.Errorf("%s is a Terraform action; Kubernetes workflows are rendered and checked against the Kubernetes %s API on every save (see get_workflow diagnostics, review_kubernetes) and run with deploy (apply to the local cluster) and destroy", action, "1.36")
+			}
+			return t.kubeRun(ctx, wf, map[string]any{"action": a, "environment": in.Environment, "removeVolumes": in.RemoveVolumes, "deleteCluster": in.DeleteCluster}, in.WaitSeconds)
+		}
+		if wf.IsDocker() {
+			a, ok := dockerAction(action)
+			if !ok {
+				return nil, fmt.Errorf("%s is a Terraform action; docker workflows are checked on every save (see get_workflow diagnostics) and run with deploy (docker compose up) and destroy (down)", action)
+			}
+			body = map[string]any{"action": a, "remapPorts": in.RemapPorts, "removeVolumes": in.RemoveVolumes}
+		}
+		var run model.Run
 		if err := t.c.do(ctx, http.MethodPost, "/workflows/"+pathEscape(wf.ID)+"/runs", body, &run); err != nil {
 			return nil, err
 		}
@@ -999,8 +1100,22 @@ func (t *tools) runAction(action model.RunAction) func(context.Context, runIn) (
 		if wait <= 0 {
 			wait = 600 * time.Second
 		}
-		return t.waitRun(ctx, wf.ID, run.ID, wait)
+		v, err := t.waitRun(ctx, wf.ID, run.ID, wait)
+		if err != nil || !wf.IsDocker() {
+			return v, err
+		}
+		var st model.ComposeStatus
+		if err := t.c.get(ctx, "/workflows/"+pathEscape(wf.ID)+"/compose/status", &st); err != nil {
+			return v, nil
+		}
+		return dockerRunView{runView: v, Compose: &st}, nil
 	}
+}
+
+// dockerRunView is a docker run with the project's container status after it.
+type dockerRunView struct {
+	runView
+	Compose *model.ComposeStatus `json:"compose,omitempty"`
 }
 
 func (t *tools) waitRun(ctx context.Context, wfID, runID string, wait time.Duration) (runView, error) {
@@ -1054,6 +1169,16 @@ func (t *tools) getDeployedState(ctx context.Context, in stateIn) (any, error) {
 	wf, err := t.c.workflow(ctx, in.Workflow)
 	if err != nil {
 		return nil, err
+	}
+	if wf.IsDocker() {
+		var st model.ComposeStatus
+		if err := t.c.get(ctx, "/workflows/"+pathEscape(wf.ID)+"/compose/status", &st); err != nil {
+			return nil, err
+		}
+		return st, nil
+	}
+	if wf.IsKubernetes() {
+		return t.kubeStatus(ctx, wf)
 	}
 	var st model.DeployedState
 	if err := t.c.get(ctx, "/workflows/"+pathEscape(wf.ID)+"/state", &st); err != nil {

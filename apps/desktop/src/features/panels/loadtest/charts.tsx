@@ -1,6 +1,6 @@
 import type { ReactNode } from "react"
 import { Info } from "lucide-react"
-import { Bar, BarChart, CartesianGrid, Line, LineChart, XAxis, YAxis } from "recharts"
+import { Bar, BarChart, CartesianGrid, Line, LineChart, ReferenceLine, XAxis, YAxis } from "recharts"
 import { useArcade } from "@/components/arcade/arcade-store"
 import {
   ChartContainer,
@@ -11,22 +11,26 @@ import {
   type ChartConfig,
 } from "@/components/ui/chart"
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip"
-import type { LoadMode, LoadSample } from "@/lib/api/types"
+import type { LoadMode, LoadResources, LoadSample } from "@/lib/api/types"
+import { formatPct, resourceRows } from "@/features/docker/perf/model"
 import { compactTick, EXPLAIN, modeUnit, SERIES_COLORS } from "./metrics"
 
-
-const xAxis = (
-  <XAxis
-    dataKey="t"
-    type="number"
-    domain={["dataMin", "dataMax"]}
-    tickLine={false}
-    axisLine={false}
-    tickMargin={4}
-    minTickGap={24}
-    tickFormatter={(t: number) => `${Math.round(t)}s`}
-  />
-)
+/** Seconds axis; a fixed `domain` keeps several charts of one run aligned. */
+function timeAxis(domain?: [number, number]) {
+  return (
+    <XAxis
+      dataKey="t"
+      type="number"
+      domain={domain ?? ["dataMin", "dataMax"]}
+      allowDataOverflow={!!domain}
+      tickLine={false}
+      axisLine={false}
+      tickMargin={4}
+      minTickGap={24}
+      tickFormatter={(t: number) => `${Math.round(t)}s`}
+    />
+  )
+}
 
 const secondsLabel = (_: unknown, payload: readonly { payload?: { t?: number } }[]) =>
   payload[0]?.payload?.t !== undefined ? `t = ${Math.round(payload[0].payload.t)}s` : ""
@@ -56,7 +60,8 @@ function ChartCard({ title, hint, children }: { title: string; hint?: string; ch
   )
 }
 
-export function LoadCharts({ samples, mode }: { samples: LoadSample[]; mode: LoadMode }) {
+export function LoadCharts({ samples, mode, domain }: { samples: LoadSample[]; mode: LoadMode; domain?: [number, number] }) {
+  const xAxis = timeAxis(domain)
   const unit = modeUnit(mode)
   // Arcade plots hard steps with pixel markers; the default keeps smooth curves.
   const arcade = useArcade()
@@ -111,6 +116,87 @@ export function LoadCharts({ samples, mode }: { samples: LoadSample[]; mode: Loa
             <ChartTooltip content={<ChartTooltipContent labelFormatter={secondsLabel} />} />
             <Bar dataKey="errors" fill="var(--color-errors)" isAnimationActive={false} radius={arcade ? 0 : [2, 2, 0, 0]} />
           </BarChart>
+        </ChartContainer>
+      </ChartCard>
+    </div>
+  )
+}
+
+/** One colour per service of a resource chart (the targeted service is drawn thicker). */
+const SERVICE_SERIES = [
+  SERIES_COLORS.rps,
+  SERIES_COLORS.b,
+  SERIES_COLORS.p50,
+  SERIES_COLORS.p95,
+  { light: "oklch(0.6 0.12 200)", dark: "oklch(0.72 0.12 200)" },
+  SERIES_COLORS.target,
+]
+
+/**
+ * CPU (% of each service's limit) and memory (MiB) of the workflow's services during a load test, on the same
+ * seconds axis as the traffic and latency charts.
+ */
+export function ResourceCharts({ resources, domain }: { resources: LoadResources; domain?: [number, number] }) {
+  const arcade = useArcade()
+  const curve = arcade ? "stepAfter" : "monotone"
+  const dot = arcade ? PixelDot : false
+  const { rows, series } = resourceRows(resources)
+  const cpu: ChartConfig = {}
+  const mem: ChartConfig = {}
+  series.forEach((s, i) => {
+    const theme = SERVICE_SERIES[i % SERVICE_SERIES.length]
+    cpu[s.cpuKey] = { label: s.service, theme }
+    mem[s.memKey] = { label: s.service, theme }
+  })
+  const peakCpu = Math.max(100, ...resources.services.map((s) => s.peakCpuOfLimit * 100))
+  const xAxis = timeAxis(domain)
+  return (
+    <div className="grid h-full min-h-44 grid-cols-1 gap-2 md:grid-cols-2" data-testid="loadtest-resources-chart">
+      <ChartCard title="CPU (% of each service's limit)" hint="docker stats CPU divided by the service's CPU limit (host CPUs when unlimited). 100% = the limit is saturated.">
+        <ChartContainer config={cpu} className="aspect-auto h-full min-h-32 w-full">
+          <LineChart data={rows} margin={{ left: 0, right: 8, top: 4, bottom: 0 }}>
+            <CartesianGrid vertical={false} />
+            {xAxis}
+            <YAxis tickLine={false} axisLine={false} width={40} domain={[0, Math.ceil(peakCpu / 10) * 10]} tickFormatter={(v: number) => formatPct(v)} />
+            <ReferenceLine y={100} stroke="var(--destructive)" strokeDasharray="4 3" strokeOpacity={0.6} />
+            <ChartTooltip content={<ChartTooltipContent labelFormatter={secondsLabel} />} />
+            <ChartLegend content={<ChartLegendContent />} />
+            {series.map((s) => (
+              <Line
+                key={s.cpuKey}
+                dataKey={s.cpuKey}
+                type={curve}
+                stroke={`var(--color-${s.cpuKey})`}
+                strokeWidth={s.target ? 2.5 : 1.5}
+                dot={dot}
+                connectNulls
+                isAnimationActive={false}
+              />
+            ))}
+          </LineChart>
+        </ChartContainer>
+      </ChartCard>
+      <ChartCard title="Memory (MiB)" hint="Memory used by each service's containers during the test.">
+        <ChartContainer config={mem} className="aspect-auto h-full min-h-32 w-full">
+          <LineChart data={rows} margin={{ left: 0, right: 8, top: 4, bottom: 0 }}>
+            <CartesianGrid vertical={false} />
+            {xAxis}
+            <YAxis tickLine={false} axisLine={false} width={40} tickFormatter={compactTick} />
+            <ChartTooltip content={<ChartTooltipContent labelFormatter={secondsLabel} />} />
+            <ChartLegend content={<ChartLegendContent />} />
+            {series.map((s) => (
+              <Line
+                key={s.memKey}
+                dataKey={s.memKey}
+                type={curve}
+                stroke={`var(--color-${s.memKey})`}
+                strokeWidth={s.target ? 2.5 : 1.5}
+                dot={dot}
+                connectNulls
+                isAnimationActive={false}
+              />
+            ))}
+          </LineChart>
         </ChartContainer>
       </ChartCard>
     </div>
