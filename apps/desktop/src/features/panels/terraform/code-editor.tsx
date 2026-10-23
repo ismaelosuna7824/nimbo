@@ -23,6 +23,7 @@ import {
   highlightActiveLineGutter,
   keymap,
   lineNumbers,
+  tooltips,
 } from "@codemirror/view"
 import type { FileLanguage, Severity } from "@/lib/api/types"
 import { cn } from "@/lib/utils"
@@ -251,6 +252,10 @@ export function CodeEditor({
         search({ top: true }),
         keymap.of([...closeBracketsKeymap, ...defaultKeymap, ...historyKeymap, ...searchKeymap, ...foldKeymap, indentWithTab]),
         baseTheme,
+        // Completion, hover and lint tooltips live on <body>: inside the bottom panel (overflow hidden) one opened
+        // on the last visible lines was cut off. From there CodeMirror also flips it above the cursor when the
+        // window has no room below.
+        tooltips({ parent: document.body, position: "fixed" }),
         EditorState.tabSize.of(2),
         EditorView.contentAttributes.of({ "aria-label": `Contents of ${id}` }),
         c.language.of([]),

@@ -30,20 +30,26 @@ export function CommitInput({
   onCommit,
   validate,
   className,
+  width,
   ...rest
 }: Omit<React.ComponentProps<typeof Input>, "value" | "onChange" | "onBlur"> & {
   value: string
   onCommit: (v: string) => void
   /** Problem with the text, shown under the field; commits wait until it is fixed. */
   validate?: (v: string) => string | undefined
+  /**
+   * Preferred width of a short field next to a flexible one (a Tailwind basis class, e.g. "basis-36"). It shrinks
+   * on narrow panels instead of overlapping its neighbour: the box is sized, the input always fills it.
+   */
+  width?: string
 }) {
   const [text, setText] = useSyncedState(value)
   const problem = validate?.(text)
   return (
-    <div className="flex min-w-0 flex-1 flex-col gap-1">
+    <div className={cn("flex flex-col gap-1", width ? cn("min-w-14 max-w-[45%] shrink grow-0", width) : "min-w-12 flex-1")}>
       <Input
         {...rest}
-        className={cn("h-8 text-xs", className)}
+        className={cn("h-8 w-full min-w-0 text-xs", className)}
         value={text}
         aria-invalid={!!problem || undefined}
         onChange={(e) => setText(e.target.value)}

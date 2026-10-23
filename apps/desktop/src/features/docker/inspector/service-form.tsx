@@ -156,7 +156,7 @@ export function ServiceForm({ node }: { node: ComposeNode }) {
             const secret = e.secret || SECRET_KEY.test(e.key)
             return (
               <>
-                <CommitInput aria-label="Name" className="w-36 flex-none font-mono" placeholder="NAME" value={e.key} validate={(v) => (/^[A-Za-z_][\w.-]*$/.test(v) || v === "" ? undefined : "Letters, digits and “_”")} onCommit={(key) => update({ ...e, key })} />
+                <CommitInput aria-label="Name" width="basis-36" className="font-mono" placeholder="NAME" value={e.key} validate={(v) => (/^[A-Za-z_][\w.-]*$/.test(v) || v === "" ? undefined : "Letters, digits and “_”")} onCommit={(key) => update({ ...e, key })} />
                 {secret ? (
                   <SecretInput label={`Value of ${e.key}`} value={e.raw ?? e.value ?? ""} placeholder={e.secret && e.value === undefined ? "•••••• (unchanged)" : "value"} onCommit={(value) => update({ key: e.key, value })} />
                 ) : (

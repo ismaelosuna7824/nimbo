@@ -97,7 +97,7 @@ export function WorkloadForm({ node }: { node: KubeNode }) {
             render={(v, update) =>
               EDITABLE_VOLUME[v.kind] ? (
                 <>
-                  <CommitInput aria-label="Volume name" className="w-28 flex-none font-mono" placeholder="name" value={v.name} validate={(x) => (x === "" || NAME_RE.test(x) ? undefined : "lowercase, digits, “-”")} onCommit={(name) => update({ ...v, name })} />
+                  <CommitInput aria-label="Volume name" width="basis-28" className="font-mono" placeholder="name" value={v.name} validate={(x) => (x === "" || NAME_RE.test(x) ? undefined : "lowercase, digits, “-”")} onCommit={(name) => update({ ...v, name })} />
                   <Select value={v.kind} onValueChange={(kind) => update({ ...v, kind: kind as KubeVolume["kind"], source: undefined })}>
                     <SelectTrigger size="sm" className="h-8 w-28 text-xs" aria-label="Volume kind">
                       <SelectValue />
@@ -191,7 +191,7 @@ function ContainerSections({
             onChange={(ports) => setList(`${at}.ports`, containerPorts(ports))}
             render={(p, update) => (
               <>
-                <CommitInput aria-label="Port name" className="w-24 flex-none font-mono" placeholder="name" value={p.name ?? ""} onCommit={(name) => update({ ...p, name: name || undefined })} />
+                <CommitInput aria-label="Port name" width="basis-24" className="font-mono" placeholder="name" value={p.name ?? ""} onCommit={(name) => update({ ...p, name: name || undefined })} />
                 <CommitInput aria-label="Container port" className="font-mono" value={String(p.containerPort)} validate={(v) => (PORT_RE.test(v) ? undefined : "A port")} onCommit={(v) => update({ ...p, containerPort: Number(v) })} />
                 <Select value={p.protocol ?? "TCP"} onValueChange={(protocol) => update({ ...p, protocol: protocol === "TCP" ? undefined : protocol })}>
                   <SelectTrigger size="sm" className="h-8 w-20 text-xs" aria-label="Protocol">
@@ -275,7 +275,7 @@ function ContainerSections({
                   </SelectContent>
                 </Select>
                 <CommitInput aria-label="Name" className="font-mono" list={e.kind === "Secret" ? "k8s-secrets" : "k8s-configmaps"} placeholder="name" value={e.name} onCommit={(name) => update({ ...e, name })} />
-                <CommitInput aria-label="Prefix" className="w-20 flex-none font-mono" placeholder="prefix" value={e.prefix ?? ""} onCommit={(prefix) => update({ ...e, prefix: prefix || undefined })} />
+                <CommitInput aria-label="Prefix" width="basis-20" className="font-mono" placeholder="prefix" value={e.prefix ?? ""} onCommit={(prefix) => update({ ...e, prefix: prefix || undefined })} />
               </>
             )}
           />
@@ -359,7 +359,7 @@ function ProbeEditor({ label, probe, defaultPort, onChange }: { label: string; p
         {probe.type === "exec" ? (
           <CommitInput aria-label={`${label} command`} className="font-mono" placeholder="command" value={probe.command ?? ""} onCommit={(command) => set({ command })} />
         ) : (
-          <CommitInput aria-label={`${label} port`} className="w-20 flex-none font-mono" placeholder="port" value={probe.port ?? ""} onCommit={(port) => set({ port })} />
+          <CommitInput aria-label={`${label} port`} width="basis-20" className="font-mono" placeholder="port" value={probe.port ?? ""} onCommit={(port) => set({ port })} />
         )}
         <Button type="button" variant="ghost" size="icon-xs" aria-label={`Remove ${label.toLowerCase()} probe`} onClick={() => onChange(undefined)}>
           <XIcon />
@@ -409,7 +409,7 @@ function EnvRow({ env: e, update, configMaps, secrets }: { env: KubeEnv; update:
   return (
     <div className="flex min-w-0 flex-1 flex-col gap-1">
       <div className="flex min-w-0 items-start gap-1.5">
-        <CommitInput aria-label="Name" className="w-32 flex-none font-mono" placeholder="NAME" value={e.name} validate={(v) => (/^[A-Za-z_][\w.-]*$/.test(v) || v === "" ? undefined : "Letters, digits and “_”")} onCommit={(name) => update({ ...e, name })} />
+        <CommitInput aria-label="Name" width="basis-32" className="font-mono" placeholder="NAME" value={e.name} validate={(v) => (/^[A-Za-z_][\w.-]*$/.test(v) || v === "" ? undefined : "Letters, digits and “_”")} onCommit={(name) => update({ ...e, name })} />
         <Select
           value={source}
           onValueChange={(v) => update(v === "value" ? { name: e.name, value: "" } : { name: e.name, from: { kind: v as "ConfigMap" | "Secret", name: (v === "Secret" ? secrets : configMaps)[0] ?? "", key: "" } })}

@@ -53,12 +53,12 @@ export function ServiceForm({ node }: { node: KubeNode }) {
             onChange={(ports) => (ports.length ? patch({ "spec.ports": servicePorts(ports) }) : patch(undefined, ["spec.ports"]))}
             render={(p, update) => (
               <>
-                <CommitInput aria-label="Port name" className="w-20 flex-none font-mono" placeholder="name" value={p.name ?? ""} onCommit={(name) => update({ ...p, name: name || undefined })} />
+                <CommitInput aria-label="Port name" width="basis-20" className="font-mono" placeholder="name" value={p.name ?? ""} onCommit={(name) => update({ ...p, name: name || undefined })} />
                 <CommitInput aria-label="Port" className="font-mono" value={String(p.port)} validate={(v) => (PORT_RE.test(v) ? undefined : "A port")} onCommit={(v) => update({ ...p, port: Number(v) })} />
                 <span className="mt-1.5 text-xs text-muted-foreground">→</span>
                 <CommitInput aria-label="Target port" className="font-mono" placeholder="same" value={p.targetPort ?? ""} onCommit={(targetPort) => update({ ...p, targetPort: targetPort || undefined })} />
                 {svc.type === "NodePort" && (
-                  <CommitInput aria-label="Node port" className="w-20 flex-none font-mono" placeholder="node" value={p.nodePort ? String(p.nodePort) : ""} validate={(v) => (v === "" || PORT_RE.test(v) ? undefined : "A port")} onCommit={(v) => update({ ...p, nodePort: v ? Number(v) : undefined })} />
+                  <CommitInput aria-label="Node port" width="basis-20" className="font-mono" placeholder="node" value={p.nodePort ? String(p.nodePort) : ""} validate={(v) => (v === "" || PORT_RE.test(v) ? undefined : "A port")} onCommit={(v) => update({ ...p, nodePort: v ? Number(v) : undefined })} />
                 )}
               </>
             )}
@@ -129,12 +129,12 @@ export function IngressForm({ node }: { node: KubeNode }) {
               <div className="flex min-w-0 flex-1 flex-col gap-1">
                 <div className="flex min-w-0 items-start gap-1.5">
                   <CommitInput aria-label="Host" className="font-mono" placeholder="any host" value={r.host ?? ""} onCommit={(host) => update({ ...r, host: host || undefined })} />
-                  <CommitInput aria-label="Path" className="w-24 flex-none font-mono" value={r.path ?? "/"} validate={(v) => (v.startsWith("/") ? undefined : "Starts with /")} onCommit={(path) => update({ ...r, path })} />
+                  <CommitInput aria-label="Path" width="basis-24" className="font-mono" value={r.path ?? "/"} validate={(v) => (v.startsWith("/") ? undefined : "Starts with /")} onCommit={(path) => update({ ...r, path })} />
                 </div>
                 <div className="flex min-w-0 items-start gap-1.5">
                   <span className="mt-1.5 text-xs text-muted-foreground">→</span>
                   <CommitInput aria-label="Service" className="font-mono" list="k8s-services" placeholder="service" value={r.service} onCommit={(service) => update({ ...r, service })} />
-                  <CommitInput aria-label="Service port" className="w-20 flex-none font-mono" placeholder={String(firstPort(r.service))} value={r.port ?? ""} onCommit={(port) => update({ ...r, port: port || undefined })} />
+                  <CommitInput aria-label="Service port" width="basis-20" className="font-mono" placeholder={String(firstPort(r.service))} value={r.port ?? ""} onCommit={(port) => update({ ...r, port: port || undefined })} />
                 </div>
               </div>
             )}
