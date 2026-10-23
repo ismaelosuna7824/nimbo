@@ -141,6 +141,7 @@ func TestRulesOnBadApp(t *testing.T) {
 		"info:k8s_hardening@app.yaml:26",
 		"info:k8s_network_policy@app.yaml:14",
 		"info:k8s_hardening@app.yaml:14", // API token mounted
+		"info:k8s_recommended_labels@app.yaml:3",
 	}
 	if len(got) != len(want) {
 		t.Errorf("got %d findings, want %d", len(got), len(want))
@@ -176,6 +177,11 @@ kind: Deployment
 metadata:
   name: api
   namespace: shop
+  labels:
+    app.kubernetes.io/name: api
+    app.kubernetes.io/instance: api
+    app.kubernetes.io/part-of: shop
+    app.kubernetes.io/version: "1.0"
 spec:
   replicas: 2
   selector:
@@ -184,6 +190,12 @@ spec:
     metadata:
       labels: {app: api, tier: backend}
     spec:
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: kubernetes.io/hostname
+          whenUnsatisfiable: ScheduleAnyway
+          labelSelector:
+            matchLabels: {app: api}
       securityContext:
         runAsNonRoot: true
         runAsUser: 10001

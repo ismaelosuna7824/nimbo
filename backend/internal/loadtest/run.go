@@ -23,6 +23,10 @@ const minPreflightTimeout = 30 * time.Second
 // virtual users hitting a dead target back off instead of spinning.
 const failurePacing = 10 * time.Millisecond
 
+// elsewhereTimeout bounds rendering the workflow's other environments for
+// the no-HPA verdict.
+const elsewhereTimeout = 20 * time.Second
+
 type runner struct {
 	e          *Engine
 	sched      schedule
@@ -31,7 +35,7 @@ type runner struct {
 	timeout    time.Duration
 	maxWorkers int
 	col        *collector
-	resources  *resourceRecorder // docker workflow targets; nil otherwise
+	resources  *resourceRecorder // docker and Kubernetes workflow targets; nil otherwise
 
 	ctx     context.Context
 	cancel  context.CancelFunc
@@ -308,10 +312,14 @@ func (r *runner) finish(preflightErr error) {
 
 	if r.resources != nil && preflightErr == nil {
 		r.mu.Lock()
-		timeline, sum := slices.Clone(r.run.Timeline), r.run.Summary
+		timeline, sum, secs, env := slices.Clone(r.run.Timeline), r.run.Summary, slices.Clone(r.secs), r.run.Environment
 		r.mu.Unlock()
 		if sum != nil {
 			res := r.resources.result(timeline, sum)
+			if res != nil {
+				res.Scaling = r.resources.scaling(secs, env, r.elsewhere(env))
+				foldScaling(res)
+			}
 			r.mu.Lock()
 			r.run.Resources = res
 			r.mu.Unlock()
@@ -331,4 +339,18 @@ func (r *runner) finish(preflightErr error) {
 	}
 	r.e.publishStatus(r)
 	r.e.forget(r)
+}
+
+// elsewhere lists the workflow's other environments that autoscale a
+// workload (nil without a workflow inspector).
+func (r *runner) elsewhere(env string) func(kind, name string) []string {
+	w := r.e.workflows
+	if w == nil || r.run.WorkflowID == "" {
+		return nil
+	}
+	return func(kind, name string) []string {
+		ctx, cancel := context.WithTimeout(context.Background(), elsewhereTimeout)
+		defer cancel()
+		return w.AutoscaledIn(ctx, r.run.WorkflowID, env, kind, name)
+	}
 }

@@ -79,11 +79,12 @@ func TestPresetsHaveExpectedShapes(t *testing.T) {
 		requests float64
 		peak     float64
 	}{
-		"smoke":  {10, 50, 5},
-		"load":   {100, 30*25 + 60*50 + 10*25, 50},
-		"stress": {150, 30 * (25 + 50 + 100 + 200 + 400), 400},
-		"spike":  {50, 20*10 + 10*155 + 20*10, 300},
-		"soak":   {600, 600 * 20, 20},
+		"smoke":     {10, 50, 5},
+		"load":      {100, 30*25 + 60*50 + 10*25, 50},
+		"stress":    {150, 30 * (25 + 50 + 100 + 200 + 400), 400},
+		"spike":     {50, 20*10 + 10*155 + 20*10, 300},
+		"soak":      {600, 600 * 20, 20},
+		"autoscale": {270, 120*100 + 120*200 + 30*100, 200},
 	}
 	for _, p := range Presets() {
 		w, ok := want[p.Preset]

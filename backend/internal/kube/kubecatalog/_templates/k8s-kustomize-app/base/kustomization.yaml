@@ -2,10 +2,17 @@
 # the namespace, replicas, resources and the page.
 apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
+# Recommended labels (kubernetes.io/docs/concepts/overview/working-with-objects/common-labels/);
+# only name and instance select pods, the version changes on upgrades.
 labels:
   - pairs:
       app.kubernetes.io/name: hello
+      app.kubernetes.io/instance: hello
     includeSelectors: true
+  - pairs:
+      app.kubernetes.io/version: 1.30-alpine
+      app.kubernetes.io/managed-by: kustomize
+    includeTemplates: false
 resources:
   - deployment.yaml
   - service.yaml

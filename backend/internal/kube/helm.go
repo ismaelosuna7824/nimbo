@@ -41,6 +41,55 @@ type helmRender struct {
 	// subFiles maps a subchart path ("charts/redis") to the workflow file
 	// holding it when it is an archive ("<chart>/charts/redis-1.2.3.tgz").
 	subArchives map[string]string
+	// thirdParty are the enabled dependencies with a remote repository by
+	// subchart path ("charts/redis"): their objects are grouped on the
+	// canvas.
+	thirdParty map[string]thirdPartyChart
+}
+
+// thirdPartyChart is a vendored dependency pulled from a chart repository.
+type thirdPartyChart struct {
+	name, version, appVersion, repository string
+}
+
+// remoteRepository reports a dependency repository Helm downloads from
+// (https, oci, "@name"/"alias:name" repo references), as opposed to a
+// local subchart ("" or file://).
+func remoteRepository(repo string) bool {
+	return repo != "" && !strings.HasPrefix(repo, "file://")
+}
+
+// thirdPartyCharts finds the remote dependencies of a chart (meta, as
+// loaded) that render: the enabled subcharts of rendered (the same chart
+// with its dependencies processed, renamed to their aliases).
+func thirdPartyCharts(meta, rendered *chart.Chart) map[string]thirdPartyChart {
+	out := map[string]thirdPartyChart{}
+	for _, d := range meta.Metadata.Dependencies {
+		if !remoteRepository(d.Repository) {
+			continue
+		}
+		key := d.Name
+		if d.Alias != "" {
+			key = d.Alias
+		}
+		for _, sub := range rendered.Dependencies() {
+			if sub.Name() == key {
+				out["charts/"+key] = thirdPartyChart{name: d.Name, version: sub.Metadata.Version, appVersion: sub.Metadata.AppVersion, repository: d.Repository}
+			}
+		}
+	}
+	return out
+}
+
+// thirdPartyOf returns the subchart path of the remote dependency that
+// renders a template ("charts/redis" for "charts/redis/templates/x.yaml").
+func (h *helmRender) thirdPartyOf(template string) (string, bool) {
+	for sub := range h.thirdParty {
+		if strings.HasPrefix(template, sub+"/") {
+			return sub, true
+		}
+	}
+	return "", false
 }
 
 // chartFiles reads the files of the chart in dir, honoring .helmignore.
@@ -280,6 +329,7 @@ func (p *Project) renderHelm(r *Rendered, env string) {
 		return
 	}
 	h.templates = tpls
+	h.thirdParty = thirdPartyCharts(meta, c)
 	var out []byte
 	// CRDs first, like helm install.
 	for _, crd := range c.CRDObjects() {

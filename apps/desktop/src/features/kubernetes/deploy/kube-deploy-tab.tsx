@@ -31,7 +31,7 @@ import { RunLog } from "@/features/panels/deploy/run-log"
 import { ComposeRunRow } from "@/features/docker/deploy/compose-deploy-tab"
 import { ComposeResources, type ResourceRow } from "@/features/docker/perf/compose-resources"
 import { cpuLimitLabel, formatBytes, TONE_CLASS } from "@/features/docker/perf/model"
-import { KubeEnvironmentSwitch } from "../environment-switch"
+import { EnvironmentSwitch } from "@/features/environments/environment-switch"
 import { ClusterDetails, ClusterStateLabel, KubeAccess, type ClusterAction } from "./kube-cluster"
 import { KubeEvents } from "./kube-events"
 import { ALL, KubeLogs, type LogSelection } from "./kube-logs"
@@ -156,7 +156,7 @@ export function KubeDeployTab() {
             <ClusterStateLabel state={clusterState} className="ml-auto shrink-0 text-xs" />
           </div>
           <div className="flex min-w-0 items-center gap-1.5">
-            <KubeEnvironmentSwitch className="h-6 min-w-0 flex-1" />
+            <EnvironmentSwitch className="h-6 min-w-0 flex-1" />
             <Tooltip>
               <TooltipTrigger asChild>
                 <span

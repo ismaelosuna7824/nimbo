@@ -4,6 +4,10 @@ kind: Deployment
 metadata:
   name: orders
   namespace: edge-gateway
+  labels:
+    app.kubernetes.io/name: orders
+    app.kubernetes.io/instance: orders
+    app.kubernetes.io/part-of: edge-gateway
 spec:
   selector:
     matchLabels:

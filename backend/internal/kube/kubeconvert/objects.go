@@ -365,7 +365,9 @@ func sortStrings(s []string) {
 }
 
 func (b *builder) template(u *unit) *yaml.Node {
-	meta := mapping("labels", b.selectorWithPartOf(u))
+	labels := b.selectorWithPartOf(u)
+	set(labels, "app.kubernetes.io/version", b.version(u))
+	meta := mapping("labels", labels)
 	if b.v.helm() {
 		ann := mapping()
 		for _, cfg := range u.cfgs {
@@ -377,7 +379,11 @@ func (b *builder) template(u *unit) *yaml.Node {
 			set(meta, "annotations", ann)
 		}
 	}
-	return mapping("metadata", meta, "spec", b.podSpec(u))
+	spec := b.podSpec(u)
+	if u.stateless() {
+		set(spec, "topologySpreadConstraints", b.spread(u))
+	}
+	return mapping("metadata", meta, "spec", spec)
 }
 
 func (b *builder) selectorWithPartOf(u *unit) *yaml.Node {
@@ -387,7 +393,9 @@ func (b *builder) selectorWithPartOf(u *unit) *yaml.Node {
 }
 
 func (b *builder) workload(u *unit) *yaml.Node {
-	meta := b.meta(u.k8s, b.labels(u.k8s))
+	labels := b.labels(u.k8s)
+	set(labels, "app.kubernetes.io/version", b.version(u))
+	meta := b.meta(u.k8s, labels)
 	var d *yaml.Node
 	switch u.kind {
 	case kindJob:
@@ -406,17 +414,19 @@ func (b *builder) workload(u *unit) *yaml.Node {
 		}
 		d = doc("apps/v1", "StatefulSet", meta, "spec", mapping(
 			"serviceName", u.k8s+"-headless",
-			"replicas", b.v.scalar(u.key+".replicaCount", num(int64(u.replicas))),
+			"replicas", b.replicas(u),
 			"selector", mapping("matchLabels", b.selector(u)),
 			"template", b.template(u),
 			"volumeClaimTemplates", claims,
 		))
 		return comment(d, b.origin(u), "A data service with its own named volumes: a StatefulSet whose volumeClaimTemplates keep the data across restarts.")
 	}
-	spec := mapping("replicas", b.v.scalar(u.key+".replicaCount", num(int64(u.replicas))))
+	spec := mapping("replicas", b.replicas(u))
 	set(spec, "selector", mapping("matchLabels", b.selector(u)))
 	if u.recreate {
 		set(spec, "strategy", mapping("type", "Recreate"))
+	} else {
+		set(spec, "strategy", rollingUpdate())
 	}
 	set(spec, "template", b.template(u))
 	d = doc("apps/v1", "Deployment", meta, "spec", spec)
@@ -577,7 +587,7 @@ func helmFile(kind, name string) string {
 	short := map[string]string{
 		"Deployment": "deployment", "StatefulSet": "statefulset", "Job": "job", "Service": "service",
 		"ConfigMap": "configmap", "Secret": "secret", "PersistentVolumeClaim": "pvc",
-		"PodDisruptionBudget": "pdb", "Ingress": "ingress",
+		"PodDisruptionBudget": "pdb", "Ingress": "ingress", "HorizontalPodAutoscaler": "hpa",
 	}[kind]
 	if name == short || strings.HasSuffix(name, "-"+short) {
 		return name + ".yaml"

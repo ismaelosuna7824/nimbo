@@ -6,6 +6,7 @@ import (
 	"time"
 
 	appsv1 "k8s.io/api/apps/v1"
+	autoscalingv2 "k8s.io/api/autoscaling/v2"
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
 	discoveryv1 "k8s.io/api/discovery/v1"
@@ -66,6 +67,11 @@ func (l kubeListers) endpointSlices(ns, svc string) []*discoveryv1.EndpointSlice
 	return out
 }
 
+// hpas of the user namespaces (load test autoscaling samples).
+func (l kubeListers) hpas() []*autoscalingv2.HorizontalPodAutoscaler {
+	return userOnly(listAll[*autoscalingv2.HorizontalPodAutoscaler](l.factory.Autoscaling().V2().HorizontalPodAutoscalers().Lister()))
+}
+
 // clusterStatus describes the cluster the client talks to.
 func (m *Manager) clusterStatus(wfID string, kc *kubeClient, state model.KubeClusterState, msg string) model.KubeClusterStatus {
 	cs := model.KubeClusterStatus{Name: model.KubeClusterName(wfID), State: state, Image: KubeNodeImage, Message: msg}
@@ -118,6 +124,9 @@ func (m *Manager) watchKube(sb *sandbox, kc *kubeClient) {
 	} {
 		_, _ = inf.AddEventHandler(h)
 	}
+	// Load tests sample HPAs (kubeProbe.Scaling); the status is not built
+	// from them, so their 15 s status updates need no refresh.
+	f.Autoscaling().V2().HorizontalPodAutoscalers().Informer()
 	f.Start(ctx.Done())
 	k.forwards.setConnector(newKubeConnector(kc, l))
 

@@ -89,6 +89,41 @@ func TestKubernetesKustomizeEnvironments(t *testing.T) {
 	}
 }
 
+// TestKubernetesChartLayout: a chart vendored from a repository is one
+// KubeChartGroup whose collapsed position PATCH /kubernetes/layout saves and
+// later renders keep.
+func TestKubernetesChartLayout(t *testing.T) {
+	e := newEnv(t)
+	var wf model.Workflow
+	e.mustCall(http.StatusCreated, "POST", "/workflows", map[string]string{"kind": "kubernetes", "name": "obs"}, &wf)
+	files := map[string]string{
+		"charts/obs/Chart.yaml":                       "apiVersion: v2\nname: obs\nversion: 0.1.0\ndependencies:\n  - name: grafana\n    version: 1.0.0\n    repository: oci://registry.example.com/charts\n",
+		"charts/obs/charts/grafana/Chart.yaml":        "apiVersion: v2\nname: grafana\nversion: 1.0.0\n",
+		"charts/obs/charts/grafana/templates/cm.yaml": "apiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: grafana\ndata: {a: b}\n",
+	}
+	for rel, data := range files {
+		p := filepath.Join(e.st.AssetsDir(wf.ID), filepath.FromSlash(rel))
+		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(p, []byte(data), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	wf.Kubernetes.Sources = []model.KubeSource{{Kind: model.KubeHelm, Path: "charts/obs", Namespace: "obs"}}
+	e.mustCall(http.StatusOK, "PUT", "/workflows/"+wf.ID, wf, &wf)
+	const id = "chart:charts/obs/charts/grafana"
+	if g := wf.Kubernetes.Graph; len(g.Charts) != 1 || g.Charts[0].ID != id || g.Charts[0].Objects != 1 || len(g.Nodes) != 1 || g.Nodes[0].Chart != id {
+		t.Fatalf("graph %+v", g)
+	}
+	e.mustCall(http.StatusOK, "PATCH", "/workflows/"+wf.ID+"/kubernetes/layout", map[string]any{"positions": map[string]any{id: map[string]int{"x": 10, "y": 20}}}, &wf)
+	e.mustCall(http.StatusOK, "PUT", "/workflows/"+wf.ID, wf, &wf)
+	if p := wf.Kubernetes.Graph.Charts[0].Position; p == nil || p.X != 10 || p.Y != 20 {
+		t.Fatalf("chart position %+v", p)
+	}
+	e.mustCall(http.StatusBadRequest, "PATCH", "/workflows/"+wf.ID+"/kubernetes/layout", map[string]any{"positions": map[string]any{"chart:nope": map[string]int{"x": 1, "y": 1}}}, nil)
+}
+
 // TestKubernetesImportScan detects a chart, a kustomize tree and a manifests
 // folder next to a compose project, and imports the kustomize tree.
 func TestKubernetesImportScan(t *testing.T) {

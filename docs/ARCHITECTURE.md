@@ -852,13 +852,19 @@ func NewEngine(cfg EngineConfig) *Engine
 type EngineConfig struct {
     Home string; Events model.Publisher; Resolver Resolver
     Connections ConnectionResolver // saved connections, secrets in clear
+    Monitor ResourceMonitor        // container/pod usage probes (sandbox.Manager)
+    Workflows WorkflowInspector    // Kubernetes environments (cmd/nimbo loadTestWorkflows: store + kube.Open)
+}
+type WorkflowInspector interface {
+    KubeEnvironment(wfID string) (string, bool)                            // recorded as LoadTestRun.environment
+    AutoscaledIn(ctx context.Context, wfID, env, kind, name string) []string // other environments with an HPA for the workload (no_hpa hint)
 }
 type Resolver interface {
     EmulatorURL(wfID string, cloud model.Cloud) (string, bool)
     HostURL(wfID, emulatorURL string) string
 }
 type ConnectionResolver interface { Connection(id string) (model.Connection, bool) }
-func Presets() []model.LoadProfile
+func Presets() []model.LoadProfile // smoke, load, stress, spike, soak, autoscale (4.5 min: 2 min ramp to 200 req/s, 2 min hold, 30 s down)
 func Suggest(wf *model.Workflow, st *model.DeployedState, r Resolver, instances map[string]sandbox.InstanceAccess) []model.LoadTarget // instances: sandbox.Manager.Instances (nil: none); EC2 instances get "GET / · <name>:<port>" on each published HTTP port (sandbox.HTTPAppPorts, InstanceAccess.URL — the Endpoints card's Host URL)
 func SuggestCompose(st model.ComposeStatus) []model.LoadTarget // docker workflows: "GET / · <service>:<port>" (replicas: "<service>-N") per sandbox.ComposeHTTPPort of running containers, URL http://127.0.0.1:<host>/ (loopback: preflight warmup applies)
 func (e *Engine) Start(ctx context.Context, wfID string, spec model.LoadTestSpec) (*model.LoadTestRun, error) // async; ErrTooManyRuns when 3 are running
@@ -1362,6 +1368,36 @@ distroless runtime.
   timeline second, and `correlate` derives per-service verdicts (cpu-bound when
   the 2-second average reaches 90 % of the limit, single-core, memory-bound,
   oom, restarted, ok) and a headline stored in `LoadTestRun.resources`.
+- **Autoscaling (Kubernetes runs, `internal/loadtest/scaling.go`)**: a probe
+  that also implements `Scaling()` (the kube probe) is sampled at the same
+  instants for the targeted workload and every workload an autoscaling/v2
+  HPA scales: desired (spec.replicas) and Ready replicas from the informers,
+  and the HPA's bounds, CPU target, `currentMetrics` CPU utilization and
+  conditions (an HPA informer with no status handler). At the end
+  `analyzeScaling` builds `LoadResources.scaling` (`model/scaling.go`): per
+  workload a timeline on the latency axis and a verdict. Degraded seconds
+  use the breaking-point rule (`degradations`: p95 > 4× the baseline and
+  +10 ms, or errors > 5 %). Kinds, in order: `no_hpa` (target without an
+  HPA; names other environments that autoscale it, rendered with
+  `kube.Project.Autoscales`), `no_metrics` (ScalingActive=False in ≥ 50 % of
+  samples, or no CPU reading over ≥ 60 s; the condition message picks the
+  fix: missing cpu request vs metrics API), `too_short` (no scale-up in a run
+  < 60 s, or a scale-up < 30 s before the end), `maxed` (desired reached
+  maxReplicas and, from the moment those pods were Ready, a CPU reading taken
+  ≥ 30 s later stayed above target × 1.1 — the HPA tolerance — or latency
+  degraded > 10 s), `scaled` (new pods Ready with ≤ 10 s of degradation
+  before them), `late` (more than 10 s degraded before new pods were Ready,
+  pods never Ready, or no scale-up despite CPU above target × 1.1 or a
+  non-CPU degradation), `not_needed`. The headline ranks maxed > late >
+  no_metrics > no_hpa > too_short > scaled > not_needed (target first on
+  ties) and replaces the resource headline when it is late, maxed,
+  no_metrics or scaled and no container crashed. `LoadTestRun.environment`
+  is the workflow's active Kubernetes environment at start. The desktop
+  shows verdict cards and per-workload charts (replicas steps vs p95, HPA
+  CPU vs target) on the run's seconds axis, environment badges on runs, and
+  offers the Autoscaling test preset (with a short-run hint) only for
+  Kubernetes targets; MCP `run_load_test`/`get_load_test` return
+  `environment` and `autoscaling` lines.
 
 ### Build canvas (`apps/desktop/src/features/docker/canvas`)
 
@@ -1583,6 +1619,24 @@ namespace?, valuesFiles?, environments?}`.
   objects,connect}`, the Code tab (YAML syntax gate, render problems,
   sources follow moves) and import scan (`kube.Detect`: charts, Kustomize
   base and overlays, manifest folders).
+- **Vendored charts** (`KubeGraph.charts`, `KubeNode.chart`). A Helm
+  dependency with a remote repository (https, oci, a repo name — not
+  `file://` or empty) vendored in the chart's `charts/` is third-party:
+  its rendered objects get `chart` = the `KubeChartGroup` id
+  (`chart:<source path>/charts/<alias or name>`), which also carries the
+  chart name/version/repository, release, namespace, values files, object
+  count and the collapsed node's `position` (kept across renders;
+  `PATCH /kubernetes/layout` takes chart ids). The source's own templates
+  (converter charts, local subcharts) are never grouped. The Build canvas
+  draws each chart as one release card (objects by kind, ready/total
+  workloads, problems; its objects' edges re-attached once per pair) until
+  expanded into a frame of its objects, laid out on their own with ELK at
+  the card's spot; expanded ids live in localStorage
+  (`nimbo.k8s.expandedCharts.<workflow>`, collapsed by default). Selecting
+  an object of a collapsed chart (Problems, ⌘K "Go to", the chart's
+  inspector) expands it and focuses the object. The Architecture view
+  always draws a chart as one card. Palette chart adds answer `nodeIds`
+  with the chart id.
 
 ### Kubernetes runtime (`internal/sandbox/kube*.go`)
 
@@ -1647,7 +1701,9 @@ namespace?, valuesFiles?, environments?}`.
   (`kube.stats`, `GET …/kubernetes/stats`; workload node IDs as services).
   The load test probe labels workloads by name and maps them back to node
   IDs (`describedProbe`), so `loadtest.correlate`'s verdicts are reused
-  unchanged. metrics-server stays installed for HPAs.
+  unchanged. metrics-server stays installed for HPAs; during load tests the
+  probe also samples replicas and HPAs (`kubeProbe.Scaling`, see Docker
+  performance › Autoscaling).
 - **Setup doctor**: check `kubernetes` (node image present, ≥ 3 GB free),
   fix action `pull-kube-image` with `setup.progress` layer events.
 - **Tests**: unit (apply order, preparation, build plan, status mapping,
@@ -1694,6 +1750,18 @@ is info; limits alone count as requests; LimitRange defaults count.
 | `k8s_privileged`, `k8s_host_namespaces`, `k8s_host_path` | warning (info for DaemonSets) | privileged, privilege escalation, ALL/SYS_ADMIN/NET_ADMIN caps; hostNetwork/PID/IPC; hostPath |
 | `k8s_run_as_root` | info | no runAsNonRoot/runAsUser>0 |
 | `k8s_hardening`, `k8s_network_policy`, `k8s_default_namespace` | info, opt-in | restricted PSS settings / no NetworkPolicy selects the pods / objects in default |
+| `k8s_topology_spread` | warning | prod-like environment: Deployment/StatefulSet with 2+ replicas (HPA `minReplicas` counts) without topologySpreadConstraints or podAntiAffinity on `kubernetes.io/hostname` / `topology.kubernetes.io/zone` whose labelSelector selects its own pods |
+| `k8s_pdb` | warning | PDB selecting workloads that allows no eviction: `maxUnavailable: 0`/`0%`, `minAvailable: 100%`, or `minAvailable` (percentages round up) ≥ the selected workloads' fewest replicas (single replica included, any environment); a pod covered by two PDBs (selecting nothing stays `k8s_selector_mismatch`) |
+| `k8s_rollout_strategy` | warning (error / info) | prod-like: Deployment with 2+ replicas using Recreate without a ReadWriteOnce claim, or `maxUnavailable` (rounded down) ≥ replicas; error in any environment: `maxSurge` and `maxUnavailable` both 0; info: StatefulSet `updateStrategy: OnDelete` in prod |
+| `k8s_recommended_labels` | info | workload metadata without `app.kubernetes.io/name` or `instance` (part-of/version listed in the same finding) |
+| `k8s_resource_quota`, `k8s_image_digest` | info, opt-in | prod-like: namespace with workloads but no ResourceQuota / LimitRange; image not pinned by `@sha256:` digest (locally built images skipped) |
+
+Categories: `kubernetes` (errors), `kubernetes-reliability`,
+`kubernetes-security`, `kubernetes-networking`, `kubernetes-hygiene`
+(labels, quotas, digests). The palette starters/images and every template
+carry `app.kubernetes.io/name`/`instance`; the kustomize and Helm template
+prod environments spread replicas over nodes (ScheduleAnyway) and roll out
+with `maxUnavailable: 0`.
 
 Palette (`GET /catalog/kubernetes`, `POST /workflows/{id}/kubernetes/catalog`,
 `GET /catalog/kubernetes/{item}/yaml`): 13 starters, 159 images from the
@@ -1704,14 +1772,304 @@ dependency vendored, so rendering and `up` work offline. Templates live in
 `kubecatalog/_templates` and render without warnings in every environment
 (tested); `-tags network` fetches and renders every chart.
 
+### Monitoring (`internal/monitoring`, `api/monitoring.go`)
+
+`GET /workflows/{id}/monitoring` previews (`model.MonitoringSummary`:
+components, files, alerts, scrape targets, dashboards, cost, Grafana
+credentials, local links once deployed); `POST` adds it or, when present,
+regenerates the generated files (`model.MonitoringResult{workflow,
+summary}`). Never duplicates: generated files carry the marker "Generated by
+Nimbo (Add monitoring)" and a user file at a generated path is a 409.
+Desktop: `features/monitoring` (top bar action, command palette, dialog via
+`openMonitoringDialog()`); MCP: `add_monitoring` (`preview=true` = GET).
+
+- **Kubernetes**: a helm source `charts/kube-prometheus-stack` (palette
+  chart vendored through `kubecatalog.AddChart`, namespace `monitoring`,
+  values `monitoring.KubeValues()`: every-namespace selectors
+  (`*SelectorNilUsesHelmValues: false`), 7d/4GB retention on a 5Gi PVC,
+  requests/limits on every component, Alertmanager on with the chart's null
+  receiver, k3s in-process scrapes off) whose wrapper template
+  `templates/grafana-admin.yaml` holds the Grafana admin Secret (random
+  password, kept on update; `grafana.admin.existingSecret`). It goes before
+  the first other source with `monitoring.coreos.com` objects (else last),
+  and the manifests source `monitoring/` right after it: `rules.yaml` (one
+  PrometheusRule, a group per Deployment/StatefulSet/DaemonSet of every
+  environment: memory > 90% of limit, CPU throttled > 50%, OOMKilled,
+  restarts, down, unavailable replicas, HPA at maxReplicas with CPU above
+  target — complements kubernetes-mixin; joins
+  `namespace_workload_pod:kube_pod_owner:relabel`), `scrape.yaml`
+  (ServiceMonitor for labelled Services with a port named `metrics`/
+  `*-metrics` or `prometheus.io/*` annotations, PodMonitor when the Service
+  has no labels or for annotated pod templates; nothing else is scraped) and
+  `dashboards.yaml` (ConfigMap `grafana_dashboard: "1"`, "Workloads
+  overview": replicas vs HPA, CPU/memory vs requests/limits, CPU % vs HPA
+  target, restarts, network). Grafana/Prometheus/Alertmanager are reached
+  through the Service forwards (Endpoints). Objects rendered from vendored
+  chart dependencies (`Template` under `charts/`) have their rule warnings
+  capped at info (`kuberules` `object.vendored`). The sandbox applies a
+  chart's `crds/` itself and waits until Established before Helm installs
+  (`applyChartCRDs`; Helm's own CRD wait follows the HookOnly strategy).
+- **Docker**: `<project dir>/monitoring/compose.yaml` appended to
+  `Compose.Files` with `prometheus`, `grafana`, `cadvisor` (palette pins,
+  healthchecks, limits/reservations, read-only, cap_drop ALL, log
+  rotation; host ports 9090/3000 or the next free one, kept on update),
+  `monitoring/prometheus/{prometheus.yml,alerts.yml}` (cAdvisor filtered to
+  the project `nimbo-dk-<id>`, services labelled `prometheus.io/scrape:
+  "true"` + `prometheus.io/port`/`path` via DNS SD; container alerts and a
+  ContainerDown per long-running service) and Grafana provisioning with the
+  "Containers" dashboard. `GRAFANA_ADMIN_PASSWORD` is generated into `.env`.
+  A user service named prometheus/grafana/cadvisor is a 409.
+- **HTTP alerts** (`monitoring/http.go`): per workload, recording rules
+  `workload:http_requests:rate5m`, `workload:http_errors:rate5m` (0 rather
+  than absent while requests flow) and
+  `workload:http_request_duration_seconds:p95_5m` labelled
+  `namespace, workload, workload_type, source`, one set per source that
+  measures it; `WorkloadHTTPErrorRateHigh` (critical, 5xx share above
+  `errorPercent` for 5m) and `WorkloadHTTPLatencyHigh` (warning, p95 above
+  `latencyP95Ms` for 10m), both guarded by `minRequestsPerSecond`
+  (defaults 5 %, 500 ms, 0.5 req/s; `POST` body `{thresholds}` / MCP
+  `error_percent`, `latency_p95_ms`, `min_requests_per_second`; written as
+  a `# http-thresholds:` line in the rules file and kept by later updates).
+  Sources (`summary.http` lists them per workload; none = no HTTP alert):
+  `traefik` for Services an Ingress of class ""/traefik/nginx routes to
+  (k3s' Traefik already exports `traefik_service_*` on its `metrics`
+  entrypoint, port 9100; a generated PodMonitor `traefik` scrapes
+  kube-system's `app.kubernetes.io/name: traefik` pods; service label
+  `<ns>-<svc>-<port as the Ingress names it>@kubernetes`, verified on the
+  local cluster; elsewhere Traefik's chart has
+  `metrics.prometheus.serviceMonitor`), `ingress-nginx` for class nginx
+  (`nginx_ingress_controller_*` with `exported_namespace`/`exported_service`,
+  the ServiceMonitor's default honorLabels false; needs
+  `controller.metrics.enabled` and its ServiceMonitor), `otel` for workloads
+  with a scraped metrics endpoint (OpenTelemetry HTTP semantic conventions:
+  `http_server_request_duration_seconds_{count,bucket}` with
+  `http_response_status_code`, joined to the workload through
+  `namespace_workload_pod:kube_pod_owner:relabel`). Docker: services
+  labelled for scraping get the same rules on `service:http_*` (job = the
+  service). Proxies (Traefik, HAProxy, Kong) are not rewired: exporting
+  their metrics needs their own config. The Workloads overview / Containers
+  dashboards add Requests/s, 5xx ratio and p95 panels when any source
+  exists. `TestHTTPAlertsPromtool` runs `promtool test rules` (pinned
+  `prom/prometheus` image; skipped without Docker) on synthetic series:
+  fires above, quiet below, quiet under the traffic guard.
+
+### Production readiness (`internal/kube/kubeready`)
+
+`GET /workflows/{id}/kubernetes/readiness[?environment=]` →
+`model.KubeReadiness{workflowId, activeEnvironment, environments[]}`.
+`kubeready.Report` renders every environment with `kube.Open(…,
+Options{Environment})` (the workflow's active environment is untouched; a
+workflow without environments has one entry `""`, its base checked as
+`production`), runs `kuberules.Check` with every opt-in rule on (rules
+turned off in Settings stay off and their items show "Turned off in
+Settings") and folds the findings into groups of items (`pass`, `info`,
+`warn`, `fail`, `todo`, `skip`):
+
+- **Reliability**: manifests apply (every error rule and render
+  problem), replicas + PDBs, probes, requests/limits, rollout strategy,
+  topology spread, wiring. Production-only items are `skip` elsewhere.
+- **Scaling**: autoscaling (stateless Deployments with an HPA via
+  `kuberules.Workloads`; none in prod is a warning, fixed-replica ones are
+  info) and the latest finished load test whose `LoadTestRun.Environment`
+  is that environment: its `LoadResources.Scaling` worst workload kind
+  (maxed/late/no_metrics warn, no_hpa warn in prod, too_short todo,
+  scaled/not_needed pass unless thresholds failed); no run is `todo`
+  "Not tested yet".
+- **Monitoring**: `kubeready.Monitoring` — ServiceMonitor/PrometheusRule
+  (`monitoring.coreos.com`) objects or a helm source whose chart or
+  dependency is kube-prometheus-stack; else warn in prod (info elsewhere)
+  with the `add_monitoring` action.
+- **Security** (secrets, privileges, NetworkPolicies) and **Hygiene**
+  (labels, image pinning, namespaces/quotas).
+
+Every k8s_* rule maps to exactly one item (tested). Status: any `fail` →
+`blocked`, any `warn`/`todo` → `needs_work`, else `ready`; score =
+passed + ½·(warn, todo) over the non-skipped items. Actions:
+`open_problem` (first finding's file:line), `run_load_test` (the UI
+switches the active environment and opens Deploy when it differs),
+`open_load_test` (`runId`), `add_monitoring`. Desktop: the Kubernetes-only
+**Readiness** bottom tab (`features/kubernetes/readiness`) lists the
+environments with status and score, refetches when the workflow is saved
+or a load test finishes. MCP: `production_readiness {workflow,
+environment?}`.
+
+### Kubernetes environments (`internal/kube/environments.go`, `envsettings.go`, `envcompare.go`)
+
+Environments are files on top of a source's base: a Kustomize overlay
+directory or a Helm values file (`KubeSource.EnvPaths`, derived; explicit
+`KubeSource.Environments` entries are kept in sync). Routes shared with
+docker workflows (`api/environments.go` validates names — DNS label, not
+`base`, unique — and dispatches by kind to `api/environments_kube.go` or
+`api/environments_compose.go`):
+
+- `GET /workflows/{id}/environments` → `model.EnvironmentsView` (environments
+  with `files`, `prodLike` from `model.ProdLike`, sources with
+  `supported`). Switching stays `PUT /workflows/{id}` `activeEnvironment`.
+- `POST …/environments {name, from?}` → `kube.CreateEnvironment` returns an
+  `EnvPlan` (files, sources, emptied dirs) applied inside `mutate`, for
+  every Kustomize/Helm source: `from` copies the overlay directory (as a
+  sibling) or values file (`values-prod.yaml` → `values-staging.yaml`,
+  also `values.<env>.yaml`, `values/<env>.yaml`) through `renameEnvText`
+  (whole-word env name, image/tag lines kept); without `from` (or when a
+  source lacks it) a kustomization referencing the base (`relPath`), placed
+  next to the existing overlays (else `overlays/` beside a `base` dir), with
+  `<prefix>-<name>` namespace + Namespace object when the overlays follow
+  that convention; Helm gets a comment-only values file.
+- `PATCH …/environments/{name} {name}` moves files named after the
+  environment (contents rewritten), renames `Workflow.Environments` and the
+  active one; `DELETE` removes them (never the source path, a directory
+  holding another environment, `values.yaml` or `ValuesFiles`), the base
+  becomes active, emptied directories are pruned.
+- `GET …/environments/compare` → `kube.CompareEnvironments`: `kube.Open`
+  per environment (active untouched, like `kubeready`), workloads matched by
+  `envKey` (kind + name before Kustomize prefixes/hashes, source index when
+  several sources); rows: namespace, replicas, autoscaling, image and
+  requests/limits per container, PDB, topology spread, Ingress hosts, plus
+  env vars and ConfigMap keys only when they differ.
+- `GET/PATCH …/environments/{name}/settings` → `kube.EnvSettings` /
+  `Editor.SetEnvSettings`: knobs `replicas`, `hpa.min|max|cpu`,
+  `image:<c>` (tag), `cpu|memory.request|limit:<c>`. Writes stay in the
+  environment: Kustomize uses `fieldSources` — a field the overlay already
+  sets (its `replicas`/`images` transformers, patches, resources) is
+  written there through `Editor.write`; otherwise a `replicas`/`images`
+  entry or a strategic-merge patch `<kind>-<name>-patch.yaml` (an existing
+  overlay patch for the object is reused; HPA metrics are written whole).
+  Helm uses the source map's values keys (falling back to the base render
+  when the field isn't rendered, e.g. replicas next to an HPA) and sets
+  them in the environment's values file; a value equal to what the lower
+  files give removes the override; fields not mapped to values are
+  read-only. `null` resets (deletes the transformer entry / patch key /
+  values key). Every change saves through `mutate`, so the graph, rules,
+  Readiness and Deploy re-derive.
+
+Desktop: bottom tab **Environments** (`features/kubernetes/environments`,
+docker and Kubernetes only; Terraform keeps Variables & Environments):
+environment list (active marker, switch, duplicate, rename, delete,
+Readiness link via `showReadiness`), Compare matrix (cells differing from
+the base highlighted, "only differences") and Edit pane per workload. The
+canvas/Deploy switch is the shared `features/environments/environment-switch.tsx`.
+MCP: `list_environments`, `create_environment`, `rename_environment`,
+`delete_environment`, `compare_environments`, `get_environment_settings`,
+`set_environment_values` (`mcp/environments.go`).
+
+### Docker environments (`internal/compose/environments.go`)
+
+The official compose pattern. The base is the compose files plus the
+project directory's `.env`, shared by every environment. An environment
+`<env>` is an override file next to the first compose file
+(`compose.<env>.yaml`, or `docker-compose.<env>.yml` following that file's
+spelling) and/or an env file in the project directory, `.env.<env>` or
+`<env>.env` (either file alone is enough; user files are used as named,
+never renamed). `compose.override.yaml` and overrides listed in
+`compose.files` stay part of the base. Discovery is by file name
+(`compose.Environments`):
+
+- Names must be DNS labels and not `base`; other names are ignored with a
+  `dk_environment_file` info finding.
+- Sample files (`.env.example`, `.env.sample`, `.env.template`,
+  `.env.dist`, `.env.defaults`, `prod.example.env`…) are never
+  environments, silently.
+- Local-only files (`.env.local`, `.env.<env>.local`, `<env>.local.env`,
+  the dotenv convention for untracked machine overrides) are not
+  environments and runs don't read them; one `dk_environment_file` info
+  finding names them.
+- Files a service names in `env_file` are service-scoped, never
+  environments.
+- With both `.env.<env>` and `<env>.env`, `.env.<env>` is used and the
+  other gets a `dk_environment_file` info finding.
+
+`derive` fills `compose.environments` (`file` absent for an env-file-only
+environment), `compose.environment` (the active one when it exists) and
+the names in `wf.Environments`, so `update_workflow environment` and the
+shared switch work as for Kubernetes.
+
+- **Loading**: `compose.Open(…, Options{Environment})` loads the base files,
+  then the override when there is one (`Project.Override`, else ""), and
+  `.env` then the environment's env file (later values win and see
+  earlier ones). Merging is compose-go's, so it
+  matches `docker compose config` (a test compares both when docker is
+  installed): scalars replace, mappings (`environment`, labels,
+  `deploy.resources`) merge per key, `ports`/`expose`/`volumes` append
+  unless tagged `!override`, `command`/`entrypoint`/`healthcheck.test`
+  replace, `!reset` removes. The graph, `dk_*` rules, monitoring and
+  endpoints all use the active environment.
+- **Runs** pass the override with `-f` when there is one; with an env file
+  they pass `--env-file .env --env-file <its env file>`
+  (`compose.RunFiles`: one `--env-file` stops docker compose reading
+  `.env` itself), so an env-file-only environment runs the base files
+  with its variables. The project
+  name does not change, so switching and running Up replaces the
+  containers. `Run.environment` and `LoadTestRun.environment` record the
+  environment (`WorkflowInspector.ActiveEnvironment`).
+- **Inspector edits** (`compose.Editor`) go to the file that sets the
+  attribute last: what the override sets is written there, everything
+  else to the base files. `ServiceFacts.overrides` lists the attributes
+  the active override sets (`image`, `ports`, `deploy.replicas`…), which
+  the inspector marks “<env> override”. Deletions (`null`, an emptied
+  field, a removed env key, `resources: null`) only touch the override
+  when it sets the attribute (`Editor.deleteDocs`), so the base value
+  applies again and other environments are untouched. A list the override
+  writes on top of a base list is rewritten whole and tagged `!override`
+  (`Editor.appends`; emptied: `!override []`), so edits never duplicate
+  or keep base items. `PATCH …/compose/services/{name}
+  {resetOverrides: ["deploy.replicas", …]}` removes attributes from the
+  override (`Editor.ResetOverrides`); without an active environment it
+  is refused.
+- **Environment routes** (`api/environments_compose.go`): the list view
+  carries `baseFiles` (compose files, then `.env` when it exists). Create
+  writes a commented empty override (`compose.NewOverride`, valid on its
+  own) or copies what another environment has (override and/or env file;
+  Nimbo names new env files `.env.<env>`); rename moves both, keeping the
+  env file's style (`dev.env` → `qa.env`, `compose.RenamedEnvFile`); delete
+  removes both (the base becomes active). Compare opens every
+  environment on its own (`compose.Compare`): per service image/build,
+  replicas, CPU and memory limits, ports, healthcheck and every
+  environment variable (secret values masked). Settings (`image`,
+  `replicas`, `cpus`, `memory`) write minimal keys into the override only
+  (`compose.SetSettings`; `null` removes the key and empty parents; an
+  env-file-only environment gets its override file with the first value);
+  replicas above 1 on a fixed host port also write `ports: !override
+  ["3100-3101:3000"]` so each replica gets a port. Every edit must still
+  load before it is written. Variables (`PUT/DELETE
+  …/environments/{name}/variables/{key}`) edit the environment's env file
+  as named (`compose.EnvFileOf`: `.env.<env>` or `<env>.env`; a first
+  variable creates `.env.<env>`), deleted with the last variable (an
+  environment that was only that file disappears); secret-looking keys
+  (`compose.IsSecretKey`) are listed without values (`inBase` tells
+  whether `.env` sets them).
+- **Convert to Kubernetes** uses the base files as the base and turns each
+  environment into `overlays/<env>` or `values-<env>.yaml` with only its
+  differences (replicas, image/resources patches, env generators with
+  `behavior: merge`); production-like ones (`model.ProdLike`) get HPAs,
+  PDBs and the nginx ingress class. Without environments the output keeps
+  the fixed dev + prod pair.
+
+Desktop: the shared Environments tab lists the base row with its files
+(`compose.yaml, .env`) and each environment with its own; the empty state
+says `.env` is the base and that `.env.<env>` / `<env>.env` files become
+environments. It adds a **Variables** pane for docker
+(`features/docker/environments/variables-pane.tsx`: the env file's values,
+inherited `.env` values as placeholders, secrets revealed on demand by
+reading the env file); the switch sits on the docker canvas and in the
+Deploy tab, which also shows the environment the running containers were
+started with (amber when it differs from the active one). The inspector's
+`OverrideMark` (`features/docker/inspector/override-mark.tsx`) shows the
+marker and its reset; the convert dialog lists the overlays/values files
+per environment (`formatDescription`).
+
 ### Convert to Kubernetes (`internal/kube/kubeconvert`)
 
 `POST /workflows/{id}/convert/kubernetes {format, name?, namespace?,
-dryRun?}` turns a docker workflow into a **new** Kubernetes workflow (the
-docker one is untouched; `dryRun` returns the report and generated files for
-the dialog's preview). The UI is `features/docker/convert-kubernetes-dialog.tsx`
-(format, name, namespace, live preview of objects, mapping table, what
-couldn't be mapped, files); the MCP tool is `convert_to_kubernetes`.
+dryRun?, sizeFromLoadTest?, loadTestRunId?, autoscaling?: {enabled?,
+maxReplicas?, targetCpu?}}` turns a docker workflow into a **new** Kubernetes
+workflow (the docker one is untouched; `dryRun` returns the report and
+generated files for the dialog's preview). The UI is
+`features/docker/convert-kubernetes-dialog.tsx` (format, name, namespace,
+"Size from load test" toggle with the run's date/peak rps, autoscaling
+controls, live preview: per-service sizing table, objects, mapping table, what
+couldn't be mapped, files); the MCP tool is `convert_to_kubernetes`
+(`size_from_load_test`, `load_test_run_id`, `autoscaling`, `max_replicas`,
+`target_cpu`).
 
 `kubeconvert.Convert(*compose.Project, Options)` works on compose-go's
 effective model plus the derived service facts (Dockerfile USER, EXPOSE,
@@ -1727,7 +2085,7 @@ HEALTHCHECK) and the image catalog:
 | loopback-only / data-service published ports | Service only (Endpoints port-forward) |
 | environment, env_file, `.env` interpolation | ConfigMap `<svc>-env` + Secret `<svc>-secret` via envFrom; credentials, URLs with `user:pass@`, `password=` and values interpolating secret variables go to the Secret |
 | healthcheck / HEALTHCHECK | readiness + startup probes (HTTP GET when the check fetches `http://127.0.0.1…`, else exec with the same command); liveness = TCP on the port (a dependency outage must not restart the app); no healthcheck → TCP probes |
-| deploy.resources (limits/reservations), mem_limit, cpus | limits; requests = reservations, else cpu ¼ of the limit (≥ 50m) and memory = limit; defaults when missing |
+| deploy.resources (limits/reservations), mem_limit, cpus | explicit values are the source of truth; what's missing is sized from the last load test (below), else defaulted: cpu request ¼ of the limit (≥ 50m), memory request = limit, limits 0.5 CPU / 256Mi (1 CPU / 512Mi for data services) |
 | user / Dockerfile USER | `runAsNonRoot` + numeric `runAsUser` (UID from the Dockerfile's `useradd -u`, base-image users, official images that run as their own user: postgres, mysql, redis, rabbitmq…), `fsGroup` with volumes; `allowPrivilegeEscalation: false`, drop ALL when non-root, RuntimeDefault seccomp, no SA token, no service links |
 | named volume | volumeClaimTemplate (StatefulSet) or PVC + `strategy: Recreate` |
 | bind mount of workflow files | ConfigMap from the file/folder (read-only; Kustomize `configMapGenerator`, Helm `.Files.Get`) |
@@ -1746,10 +2104,53 @@ Formats: manifests → `k8s/<service>.yaml` + `namespace.yaml` +
 `ingress.yaml` (source `manifests k8s`); Kustomize → `k8s/base` (generators
 with content hashes) + `overlays/dev` + `overlays/prod` (source `kustomize
 k8s/base`); Helm → `chart/` with `values.yaml` (image, replicaCount,
-resources, env, secretEnv, persistence, pdb, ingress per service),
+resources, env, secretEnv, persistence, pdb, autoscaling, ingress per service),
 `values-dev.yaml`, `values-prod.yaml`, checksum annotations and NOTES.txt
-(source `helm chart`, release = name). Prod scales stateless Deployments to
-2 replicas with a PodDisruptionBudget; data services keep one replica.
+(source `helm chart`, release = name).
+
+**Sizing from a load test** (`sizing.go`). The API picks the newest run of
+the docker workflow (`loadtest.Engine.List`, then `Get` for the full
+timelines) that `kubeconvert.UsableRun` accepts: finished, with recorded
+container usage, its target service still in the compose project and at least
+one current service measured for ≥ 5 s of load (stale runs are skipped;
+`loadTestRunId` picks one, 400 when unusable). `measure` reads each
+service's per-second usage under load (T > 0, divided by its containers) and
+`recommend` — one pure function, VPA-recommender style — sizes it: CPU
+request = p90 × 1.15 (VPA's safety margin) rounded up to 10m, ≥ 50m; CPU
+limit = max(peak × 1.5, 2 × request) rounded up to 50m; memory request /
+limit = peak working set × 1.2 / × 1.5, rounded up to a MiB, ≥ 64Mi.
+Censored measurements are lower bounds: a service CPU-bound at its Docker CPU
+limit (or memory-bound / OOM-killed at its memory limit) gets a request ≥
+that limit and a limit twice it; a single-core one at least one core.
+`resolve` merges per value: explicit compose values win (an info issue
+suggests the measured value when they differ 2× or more), measurements
+replace defaults, defaults fill the rest; requests never exceed limits. The
+report carries `loadTest` (run id, date, rps, services, `used`), `sizing[]`
+(requests, limits, `source` load_test | compose | default, `measured`,
+`censored`, a provenance `detail` like "from load test 12 Oct 14:02 at 180
+rps: p90 CPU 0.27, …") and the mapping line of each sized service says the
+same.
+
+**Autoscaling** (`autoscaling.go`). Prod (Kustomize `overlays/prod/hpa.yaml`,
+Helm `templates/<svc>-hpa.yaml` under `{{- if .Values.<svc>.autoscaling.enabled }}`,
+enabled in `values-prod.yaml`) gets an `autoscaling/v2`
+HorizontalPodAutoscaler for every stateless Deployment that isn't a data
+service: minReplicas = max(compose replicas, 2), maxReplicas (option, default
+5, raised to the minimum), CPU `averageUtilization` (option, default 70 % of
+the request), behavior scale-up 100 % or 4 pods per 15 s without
+stabilization, scale-down 300 s stabilization then ≤ 50 % per minute. The HPA
+owns `spec.replicas`: the Kustomize prod overlay removes it with a JSON6902
+patch (dev keeps the compose count), Helm wraps it in
+`{{- if not .Values.<svc>.autoscaling.enabled }}`. Every stateless
+Deployment (all formats) rolls with `RollingUpdate maxUnavailable 0 /
+maxSurge 1` and spreads with a `kubernetes.io/hostname`
+topologySpreadConstraint (`ScheduleAnyway`, the pod selector); workloads carry
+`app.kubernetes.io/version` (image tag) and `managed-by` (Helm,
+kustomize). Prod still runs data services that are Deployments at 2 fixed
+replicas and every stateless one behind a PodDisruptionBudget. Plain
+manifests mirror compose (one environment): no HPA or PDB, and an info issue
+says to pick Kustomize or Helm.
+
 Tests: every docker template × format × environment renders through the
 engine and passes the `k8s_*` rules with no warning; `go test -tags docker
 -run TestDeployConvertedTemplates ./internal/kube/kubeconvert` deploys them

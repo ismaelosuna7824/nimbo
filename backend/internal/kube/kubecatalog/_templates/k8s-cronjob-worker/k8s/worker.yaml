@@ -5,6 +5,10 @@ kind: Deployment
 metadata:
   name: worker
   namespace: jobs
+  labels:
+    app.kubernetes.io/name: worker
+    app.kubernetes.io/instance: worker
+    app.kubernetes.io/part-of: jobs
 spec:
   replicas: 1
   selector:

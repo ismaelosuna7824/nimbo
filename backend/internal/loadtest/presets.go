@@ -54,5 +54,20 @@ func Presets() []model.LoadProfile {
 			Mode:        model.ModeRPS,
 			Stages:      hold(600, 20),
 		},
+		{
+			// An HPA reacts in 30-90 s (15 s metrics, 15 s sync, pod
+			// startup): the slow ramp and the hold give it time to add
+			// pods while latency is measured, and the ramp down shows
+			// whether the run stayed healthy throughout.
+			Preset:      "autoscale",
+			Label:       "Autoscaling test",
+			Description: "Ramps to 200 requests per second over 2 minutes and holds it for 2 more, long enough for a Kubernetes autoscaler to add pods.",
+			Mode:        model.ModeRPS,
+			Stages: []model.LoadStage{
+				{DurationSec: 120, Target: 200},
+				{DurationSec: 120, Target: 200},
+				{DurationSec: 30, Target: 0},
+			},
+		},
 	}
 }

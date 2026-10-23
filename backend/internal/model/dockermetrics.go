@@ -211,6 +211,9 @@ type LoadResources struct {
 	Verdicts []ResourceVerdict      `json:"verdicts"`
 	Verdict  string                 `json:"verdict"` // one-line headline
 	Note     string                 `json:"note,omitempty"`
+	// Scaling: Kubernetes workflow runs only; replicas and HPA status of
+	// the workloads in the run's scope and the autoscaling verdict.
+	Scaling *LoadScaling `json:"scaling,omitempty"`
 }
 
 // LoadServiceResources is one service's usage during a load test.

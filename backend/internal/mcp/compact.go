@@ -507,8 +507,13 @@ type loadRunView struct {
 	// container (peak CPU of its limit, memory, startup time).
 	Bottleneck string   `json:"bottleneck,omitempty"`
 	Containers []string `json:"containers,omitempty"`
-	Error      string   `json:"error,omitempty"`
-	Hint       string   `json:"hint,omitempty"`
+	// Kubernetes workflow targets: the environment the run was recorded
+	// under and, per workload in scope (the target and every workload with
+	// an HPA), its replicas and autoscaling verdict.
+	Environment string   `json:"environment,omitempty"`
+	Autoscaling []string `json:"autoscaling,omitempty"`
+	Error       string   `json:"error,omitempty"`
+	Hint        string   `json:"hint,omitempty"`
 }
 
 func viewLoadRun(r *model.LoadTestRun) loadRunView {
@@ -516,7 +521,7 @@ func viewLoadRun(r *model.LoadTestRun) loadRunView {
 	if r.Spec.Profile.Label != "" {
 		profile = r.Spec.Profile.Label
 	}
-	v := loadRunView{ID: r.ID, Status: r.Status, Target: r.Spec.Target.Label, Profile: profile, Summary: r.Summary, Thresholds: r.Thresholds, Error: r.Error}
+	v := loadRunView{ID: r.ID, Status: r.Status, Target: r.Spec.Target.Label, Profile: profile, Summary: r.Summary, Thresholds: r.Thresholds, Environment: r.Environment, Error: r.Error}
 	if res := r.Resources; res != nil {
 		v.Bottleneck = res.Verdict
 		for i, s := range res.Services {
@@ -531,6 +536,21 @@ func viewLoadRun(r *model.LoadTestRun) loadRunView {
 				line += " — " + res.Verdicts[i].Message
 			}
 			v.Containers = append(v.Containers, line)
+		}
+		if sc := res.Scaling; sc != nil {
+			for _, w := range sc.Workloads {
+				line := fmt.Sprintf("%s [%s]: peak %d ready pods", w.Workload, w.Kind, w.PeakReplicas)
+				if h := w.HPA; h != nil {
+					line += fmt.Sprintf(", HPA %d–%d", h.Min, h.Max)
+					if h.TargetCPU > 0 {
+						line += fmt.Sprintf(" at %d%% CPU", h.TargetCPU)
+					}
+				}
+				if w.PeakCPU != nil {
+					line += fmt.Sprintf(", peak CPU %d%% of requests", *w.PeakCPU)
+				}
+				v.Autoscaling = append(v.Autoscaling, line+" — "+w.Message)
+			}
 		}
 	}
 	return v

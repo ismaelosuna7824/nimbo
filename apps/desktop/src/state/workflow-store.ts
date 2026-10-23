@@ -18,7 +18,7 @@ import type {
   WorkflowSummary,
 } from "@/lib/api/types"
 
-export type BottomTab = "terraform" | "variables" | "deploy" | "endpoints" | "loadtest" | "problems"
+export type BottomTab = "terraform" | "variables" | "environments" | "deploy" | "endpoints" | "loadtest" | "problems" | "readiness"
 export type AppDialog = "import" | "export" | "new-workflow" | null
 export type UserMode = "guided" | "pro"
 
@@ -39,6 +39,8 @@ interface WorkflowStoreState {
   selectedNodeId: string | null
   bottomTab: BottomTab
   bottomOpen: boolean
+  /** Kubernetes: environment the Readiness tab shows first when it opens (set by "Readiness" links, then cleared). */
+  readinessEnvironment: string | null
   dialog: AppDialog
   mode: UserMode
 
@@ -78,6 +80,8 @@ interface WorkflowStoreState {
   select: (nodeId: string | null) => void
   showBottom: (tab: BottomTab) => void
   setBottomOpen: (open: boolean) => void
+  /** Opens the Readiness tab on one environment ("" = base). */
+  showReadiness: (environment: string) => void
   openDialog: (d: AppDialog) => void
   setMode: (m: UserMode) => void
   /** Uses the app-wide default (Settings) until the user picks a mode on this machine. */
@@ -135,6 +139,7 @@ export const useWorkflowStore = create<WorkflowStoreState>((set, get) => ({
   selectedNodeId: null,
   bottomTab: "terraform",
   bottomOpen: true,
+  readinessEnvironment: null,
   dialog: null,
   mode: (localStorage.getItem("nimbo.mode") as UserMode | null) ?? "guided",
   sandbox: null,
@@ -250,6 +255,7 @@ export const useWorkflowStore = create<WorkflowStoreState>((set, get) => ({
   select: (nodeId) => set({ selectedNodeId: nodeId }),
   showBottom: (tab) => set({ bottomTab: tab, bottomOpen: true }),
   setBottomOpen: (open) => set({ bottomOpen: open }),
+  showReadiness: (environment) => set({ readinessEnvironment: environment, bottomTab: "readiness", bottomOpen: true }),
   openDialog: (d) => set({ dialog: d }),
   setMode(m) {
     localStorage.setItem("nimbo.mode", m)
@@ -495,11 +501,14 @@ function shareWorkflow(prev: Workflow | null, next: Workflow): Workflow {
     out.compose = { ...out.compose, graph: same ? prev.compose.graph : graph }
   }
   if (out.kubernetes && prev.kubernetes && out.kubernetes !== prev.kubernetes) {
+    const next = out.kubernetes.graph
     const graph = {
-      nodes: shareById(prev.kubernetes.graph.nodes, out.kubernetes.graph.nodes),
-      edges: shareById(prev.kubernetes.graph.edges, out.kubernetes.graph.edges),
+      ...next,
+      nodes: shareById(prev.kubernetes.graph.nodes, next.nodes),
+      edges: shareById(prev.kubernetes.graph.edges, next.edges),
+      charts: next.charts && shareById(prev.kubernetes.graph.charts ?? [], next.charts),
     }
-    const same = graph.nodes === prev.kubernetes.graph.nodes && graph.edges === prev.kubernetes.graph.edges
+    const same = graph.nodes === prev.kubernetes.graph.nodes && graph.edges === prev.kubernetes.graph.edges && graph.charts === prev.kubernetes.graph.charts
     out.kubernetes = { ...out.kubernetes, graph: same ? prev.kubernetes.graph : graph }
   }
   return out

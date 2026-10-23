@@ -22,6 +22,14 @@ spec:
         seccompProfile:
           type: RuntimeDefault
       automountServiceAccountToken: false
+      # Spread replicas over nodes; ScheduleAnyway still schedules on one node.
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: kubernetes.io/hostname
+          whenUnsatisfiable: ScheduleAnyway
+          labelSelector:
+            matchLabels:
+              {{- include "podinfo.selectorLabels" . | nindent 14 }}
       containers:
         - name: podinfo
           image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"

@@ -11,6 +11,9 @@ import (
 	"strings"
 	"time"
 
+	autoscalingv2 "k8s.io/api/autoscaling/v2"
+	corev1 "k8s.io/api/core/v1"
+
 	"github.com/ismaelosuna7824/nimbo/backend/internal/model"
 )
 
@@ -299,6 +302,63 @@ func (p *kubeProbe) Containers() map[string]model.ContainerFacts {
 		out[p.label(w.NodeID)] = f
 	}
 	return out
+}
+
+// Scaling samples the replicas of the targeted workload and of every
+// workload an HPA scales, with the HPA's bounds, CPU target, current CPU
+// utilization and conditions (from the informers' caches).
+func (p *kubeProbe) Scaling() []model.WorkloadScale {
+	k := &p.sb.kube
+	k.mu.Lock()
+	st, l := k.last, k.listers
+	k.mu.Unlock()
+	if st == nil {
+		return []model.WorkloadScale{}
+	}
+	byWorkload := map[string]*autoscalingv2.HorizontalPodAutoscaler{}
+	if l != nil {
+		for _, h := range l.hpas() {
+			ref := h.Spec.ScaleTargetRef
+			byWorkload[model.KubeNodeID(ref.Kind, h.Namespace, ref.Name)] = h
+		}
+	}
+	out := []model.WorkloadScale{}
+	for _, w := range st.Workloads {
+		h := byWorkload[w.NodeID]
+		label := p.label(w.NodeID)
+		if h == nil && (p.target == "" || label != p.target) {
+			continue
+		}
+		ws := model.WorkloadScale{NodeID: w.NodeID, Workload: label, Desired: w.Desired, Ready: w.Ready}
+		if h != nil {
+			ws.HPA = hpaStatus(h)
+		}
+		out = append(out, ws)
+	}
+	return out
+}
+
+// hpaStatus reads an autoscaling/v2 HPA's bounds, CPU target and status.
+func hpaStatus(h *autoscalingv2.HorizontalPodAutoscaler) *model.HPAStatus {
+	s := &model.HPAStatus{
+		HPAPolicy:       model.HPAPolicy{Name: h.Name, Min: int(ptrOr(h.Spec.MinReplicas, 1)), Max: int(h.Spec.MaxReplicas)},
+		DesiredReplicas: int(h.Status.DesiredReplicas),
+	}
+	for _, m := range h.Spec.Metrics {
+		if m.Type == autoscalingv2.ResourceMetricSourceType && m.Resource != nil && m.Resource.Name == corev1.ResourceCPU && m.Resource.Target.AverageUtilization != nil {
+			s.TargetCPU = int(*m.Resource.Target.AverageUtilization)
+		}
+	}
+	for _, m := range h.Status.CurrentMetrics {
+		if m.Type == autoscalingv2.ResourceMetricSourceType && m.Resource != nil && m.Resource.Name == corev1.ResourceCPU && m.Resource.Current.AverageUtilization != nil {
+			v := int(*m.Resource.Current.AverageUtilization)
+			s.CPUUtilization = &v
+		}
+	}
+	for _, c := range h.Status.Conditions {
+		s.Conditions = append(s.Conditions, model.HPACondition{Type: string(c.Type), Status: string(c.Status), Reason: c.Reason, Message: c.Message})
+	}
+	return s
 }
 
 // workloadLabels names workloads by name, else namespace/name, else node

@@ -2,11 +2,14 @@ import type {
   BuildStep,
   ComposeBuild,
   ComposeProblem,
+  HPAPolicy,
   LoadResources,
   LoadSample,
   LoadVerdict,
+  ScalingKind,
   ServiceBuildStats,
   ServiceUsage,
+  WorkloadScaling,
 } from "@/lib/api/types"
 
 const MINUS = "\u2212"
@@ -210,7 +213,7 @@ export function verdictTone(v: Pick<LoadVerdict, "kind" | "bottleneck">): Tone {
   return "ok"
 }
 
-/** Worst tone of every verdict (the headline's colour). */
+/** Worst tone of every verdict; an autoscaling problem that became the headline (late, maxed, no metrics) warns too. */
 export function resourcesTone(r: LoadResources): Tone {
   let tone: Tone = "ok"
   for (const v of r.verdicts) {
@@ -218,7 +221,72 @@ export function resourcesTone(r: LoadResources): Tone {
     if (t === "error") return "error"
     if (t === "warning") tone = "warning"
   }
+  const s = r.scaling
+  if (s && r.verdict === s.verdict && s.workloads.some((w) => w.message === s.verdict && scalingTone(w.kind) === "warning")) {
+    tone = "warning"
+  }
   return tone
+}
+
+export const SCALING_LABEL: Record<ScalingKind, string> = {
+  scaled: "Scaled in time",
+  late: "Scaled too late",
+  maxed: "Hit max replicas",
+  no_hpa: "No autoscaler",
+  no_metrics: "No metrics",
+  not_needed: "No scaling needed",
+  too_short: "Run too short",
+}
+
+/** Autoscaling verdict tone: problems warn, a missing HPA or a short run is information. */
+export function scalingTone(kind: ScalingKind): Tone | "info" {
+  switch (kind) {
+    case "scaled":
+    case "not_needed":
+      return "ok"
+    case "late":
+    case "maxed":
+    case "no_metrics":
+      return "warning"
+    default:
+      return "info"
+  }
+}
+
+/** "HPA 2–5 pods · 70% CPU". */
+export function hpaLabel(h: HPAPolicy): string {
+  return `HPA ${h.min}–${h.max} pods${h.targetCpu ? ` · ${h.targetCpu}% CPU` : ""}`
+}
+
+export interface ScalingRow {
+  t: number
+  desired?: number
+  ready?: number
+  /** HPA CPU utilization (% of requests). */
+  cpu?: number
+  p95?: number
+}
+
+/**
+ * One row per second with a workload's desired/ready replicas and HPA CPU reading, and the run's p95, for the
+ * scaling chart (the replicas and latency share the seconds axis).
+ */
+export function scalingRows(w: Pick<WorkloadScaling, "timeline">, samples: Pick<LoadSample, "t" | "p95">[]): ScalingRow[] {
+  const byT = new Map<number, ScalingRow>()
+  const row = (t: number) => {
+    let r = byT.get(t)
+    if (!r) byT.set(t, (r = { t }))
+    return r
+  }
+  for (const p of w.timeline) {
+    const r = row(p.t)
+    r.desired = p.desired
+    r.ready = p.ready
+    if (p.cpuUtilization !== undefined) r.cpu = p.cpuUtilization
+  }
+  // p95 is 0 in seconds without a successful request: no point rather than a dip to zero.
+  for (const s of samples) if (s.p95 > 0) row(s.t).p95 = s.p95
+  return [...byT.values()].sort((a, b) => a.t - b.t)
 }
 
 /** Worst severity of a service's problems, or undefined without problems. */

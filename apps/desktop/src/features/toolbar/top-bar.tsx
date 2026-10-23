@@ -41,6 +41,7 @@ import type { UserMode } from "@/state/workflow-store"
 import { useWorkflowStore } from "@/state/workflow-store"
 import { cn } from "@/lib/utils"
 import { ConvertKubernetesDialog } from "@/features/docker/convert-kubernetes-dialog"
+import { MonitoringAction } from "@/features/monitoring/monitoring-action"
 import { formatRelative } from "../panels/lib/format"
 import { closeFocusedFileTab } from "../panels/terraform/close-file-tab"
 import { MOD_KEY, runAction, useRunBusy } from "./actions"
@@ -281,6 +282,7 @@ export function TopBar() {
       </div>
 
       <div className="flex flex-1 items-center justify-end gap-1">
+        {(docker || kube) && <MonitoringAction />}
         {docker && <ConvertKubernetesAction />}
         {!docker && !kube && (
           <>

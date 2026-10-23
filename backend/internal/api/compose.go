@@ -43,10 +43,18 @@ func (s *Server) deriveDocker(wf *model.Workflow, extra []model.Diagnostic) {
 	ensureSlices(wf)
 }
 
-// openCompose reads a docker workflow's project (content overrides unsaved
-// files).
+// openCompose reads a docker workflow's project in its active environment
+// (content overrides unsaved files): service edits go to the file that
+// sets the attribute last, so the override file's attributes are edited
+// there and everything else in the base files.
 func (s *Server) openCompose(wf *model.Workflow, content map[string][]byte) *compose.Project {
-	return compose.Open(context.Background(), s.cfg.Store.AssetsDir(wf.ID), wf.Compose.Files, wf.Compose.Profiles, compose.Options{Content: content})
+	return compose.Open(context.Background(), s.cfg.Store.AssetsDir(wf.ID), wf.Compose.Files, wf.Compose.Profiles, compose.Options{Content: content, Environment: wf.Compose.Environment})
+}
+
+// openComposeEnv reads a docker workflow's project in environment env ("" =
+// the base files).
+func (s *Server) openComposeEnv(wf *model.Workflow, env string) *compose.Project {
+	return compose.Open(context.Background(), s.cfg.Store.AssetsDir(wf.ID), wf.Compose.Files, wf.Compose.Profiles, compose.Options{Environment: env})
 }
 
 // writeAssets writes files (slash paths) into the workflow's assets
@@ -147,8 +155,9 @@ func (s *Server) newDockerWorkflow(wf *model.Workflow, templateID string) error 
 }
 
 // putDocker applies PUT /workflows/{id} to a docker workflow: name,
-// description, icon and the compose files/profiles; the graph is derived
-// from the files (positions change through PATCH /compose/layout).
+// description, icon, the compose files/profiles and the active
+// environment (one of the override files, "" = the base); the graph is
+// derived from the files (positions change through PATCH /compose/layout).
 func putDocker(cur *model.Workflow, in model.Workflow) error {
 	if strings.TrimSpace(in.Name) == "" {
 		return errorf(http.StatusBadRequest, "name is required")
@@ -160,6 +169,10 @@ func putDocker(cur *model.Workflow, in model.Workflow) error {
 		cur.Icon = in.Icon
 	}
 	cur.Name, cur.Description = in.Name, in.Description
+	if in.ActiveEnvironment != "" && compose.FindEnvironment(cur.Compose, in.ActiveEnvironment) == nil {
+		return errorf(http.StatusBadRequest, "unknown environment %q: create it in the Environments tab first", in.ActiveEnvironment)
+	}
+	cur.ActiveEnvironment = in.ActiveEnvironment
 	if in.Compose != nil {
 		if len(in.Compose.Files) == 0 {
 			return errorf(http.StatusBadRequest, "compose.files needs at least one compose file")

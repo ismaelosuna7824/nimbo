@@ -4,6 +4,10 @@ kind: Deployment
 metadata:
   name: backend
   namespace: shop
+  labels:
+    app.kubernetes.io/name: backend
+    app.kubernetes.io/instance: backend
+    app.kubernetes.io/part-of: shop
 spec:
   selector:
     matchLabels:

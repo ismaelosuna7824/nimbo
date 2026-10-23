@@ -16,7 +16,9 @@ import type {
 import { useWorkflowStore } from "@/state/workflow-store"
 import { patchService } from "../actions"
 import { loadDockerImages } from "../intel"
+import { overridden } from "../environments/model"
 import { CommitInput, Field, ListEditor, SecretInput, Section } from "./fields"
+import { OverrideMark, useActiveComposeEnvironment } from "./override-mark"
 
 const NAME_RE = /^[a-zA-Z0-9][a-zA-Z0-9_.-]*$/
 const PORT_RE = /^\d{1,5}(-\d{1,5})?$/
@@ -49,9 +51,27 @@ export function ServiceForm({ node }: { node: ComposeNode }) {
   const volumes = (graph?.nodes ?? []).filter((n) => n.kind === "volume" || (n.kind === "external" && n.externalKind === "volume")).map((n) => n.name)
   const images = useQuery({ queryKey: ["docker-images"], queryFn: loadDockerImages, staleTime: Infinity })
   const patch = (p: ServicePatch) => void patchService(node.name, p)
+  const env = useActiveComposeEnvironment()
+  const mark = (...attrs: string[]) => <OverrideMark facts={svc} attrs={attrs} onReset={(resetOverrides) => patch({ resetOverrides })} />
 
   return (
     <div className="flex flex-col gap-5">
+      {env && (
+        <p className="rounded-md bg-muted/60 px-2 py-1.5 text-[11px] text-muted-foreground" data-testid="docker-env-edit-hint">
+          <span className="font-medium text-foreground">{env.name}</span> is active:{" "}
+          {env.file ? (
+            <>
+              fields marked “{env.name} override” are written to <span className="font-mono">{env.file}</span>; the others to
+              the base files, shared by every environment.
+            </>
+          ) : (
+            <>
+              it only changes variables (<span className="font-mono">{env.envFile}</span>), so edits here go to the base files,
+              shared by every environment.
+            </>
+          )}
+        </p>
+      )}
       <Section title="Container" icon={<BoxIcon className="size-3.5" />}>
         <Field label="Service name" htmlFor="svc-name" hint="Other services reach it by this name on shared networks.">
           <CommitInput
@@ -78,7 +98,7 @@ export function ServiceForm({ node }: { node: ComposeNode }) {
         </ToggleGroup>
         {svc.build ? (
           <div className="grid grid-cols-2 gap-2">
-            <Field label="Context" htmlFor="svc-context">
+            <Field label="Context" htmlFor="svc-context" badge={mark("build")}>
               <CommitInput id="svc-context" className="font-mono" value={svc.build.context} onCommit={(context) => patch({ build: { ...svc.build!, context } })} />
             </Field>
             <Field label="Dockerfile" htmlFor="svc-dockerfile">
@@ -92,7 +112,7 @@ export function ServiceForm({ node }: { node: ComposeNode }) {
             </Field>
           </div>
         ) : (
-          <Field label="Image" htmlFor="svc-image">
+          <Field label="Image" htmlFor="svc-image" badge={mark("image")}>
             <CommitInput id="svc-image" className="font-mono" list="docker-image-options" value={svc.image?.ref ?? ""} placeholder="nginx:1.27-alpine" onCommit={(image) => patch({ image: image || null })} />
             <datalist id="docker-image-options">
               {(images.data ?? []).map((i) => (
@@ -104,13 +124,13 @@ export function ServiceForm({ node }: { node: ComposeNode }) {
           </Field>
         )}
         {pro && (
-          <Field label="Command" htmlFor="svc-command" hint="Overrides the image's CMD (shell form).">
+          <Field label="Command" htmlFor="svc-command" hint="Overrides the image's CMD (shell form)." badge={mark("command")}>
             <CommitInput id="svc-command" className="font-mono" value={svc.command ?? ""} placeholder="from the image" onCommit={(command) => patch({ command: command || null })} />
           </Field>
         )}
       </Section>
 
-      <Section title="Ports" icon={<PlugIcon className="size-3.5" />}>
+      <Section title="Ports" icon={<PlugIcon className="size-3.5" />} action={mark("ports")}>
         <ListEditor<ComposePortMapping>
           items={svc.ports}
           empty="Not published: only other services on its networks can reach it."
@@ -136,7 +156,7 @@ export function ServiceForm({ node }: { node: ComposeNode }) {
         />
       </Section>
 
-      <Section title="Environment" icon={<VariableIcon className="size-3.5" />}>
+      <Section title="Environment" icon={<VariableIcon className="size-3.5" />} action={mark("environment")}>
         <ListEditor<ComposeEnvVar>
           items={svc.environment.filter((e) => !e.fromFile)}
           empty="No variables."
@@ -169,7 +189,7 @@ export function ServiceForm({ node }: { node: ComposeNode }) {
         {svc.envFiles && svc.envFiles.length > 0 && <p className="text-[11px] text-muted-foreground">Also from {svc.envFiles.join(", ")} (edit in the Code tab).</p>}
       </Section>
 
-      <Section title="Volumes" icon={<HardDriveIcon className="size-3.5" />}>
+      <Section title="Volumes" icon={<HardDriveIcon className="size-3.5" />} action={mark("volumes")}>
         <ListEditor<ComposeMount>
           items={svc.volumes}
           empty="Nothing mounted: data is lost when the container is recreated."
@@ -206,7 +226,7 @@ export function ServiceForm({ node }: { node: ComposeNode }) {
         </datalist>
       </Section>
 
-      <Section title="Depends on" icon={<LinkIcon className="size-3.5" />}>
+      <Section title="Depends on" icon={<LinkIcon className="size-3.5" />} action={mark("depends_on")}>
         <ListEditor<ComposeDependency>
           items={svc.dependsOn}
           empty="Starts without waiting for other services."
@@ -246,13 +266,13 @@ export function ServiceForm({ node }: { node: ComposeNode }) {
         />
       </Section>
 
-      <Section title="Health check" icon={<ActivityIcon className="size-3.5" />}>
+      <Section title="Health check" icon={<ActivityIcon className="size-3.5" />} action={mark("healthcheck")}>
         <HealthcheckFields hc={svc.healthcheck} fromDockerfile={svc.healthcheckFrom === "dockerfile"} onChange={(healthcheck) => patch({ healthcheck })} />
       </Section>
 
       <Section title="Restart & resources" icon={<RotateCwIcon className="size-3.5" />}>
         <div className="grid grid-cols-2 gap-2">
-          <Field label="Restart">
+          <Field label="Restart" badge={mark("restart")}>
             <Select value={svc.restart ?? NONE} onValueChange={(v) => patch({ restart: v === NONE ? null : v })}>
               <SelectTrigger size="sm" className="h-8 w-full text-xs" aria-label="Restart policy">
                 <SelectValue />
@@ -267,25 +287,27 @@ export function ServiceForm({ node }: { node: ComposeNode }) {
               </SelectContent>
             </Select>
           </Field>
-          <Field label="Replicas" htmlFor="svc-replicas">
+          <Field label="Replicas" htmlFor="svc-replicas" badge={mark("deploy.replicas")}>
             <CommitInput
               id="svc-replicas"
               inputMode="numeric"
               value={String(svc.replicas ?? 1)}
               validate={(v) => (/^\d+$/.test(v) && Number(v) <= 50 ? undefined : "0–50")}
-              onCommit={(v) => patch({ replicas: v === "1" ? null : Number(v) })}
+              // 1 is compose's default: dropped from the file, unless the environment's override sets it (dropping it
+              // there would bring back the base's count).
+              onCommit={(v) => patch({ replicas: v === "1" && !overridden(svc, "deploy.replicas") ? null : Number(v) })}
             />
           </Field>
-          <Field label="CPUs" htmlFor="svc-cpus">
+          <Field label="CPUs" htmlFor="svc-cpus" badge={mark("deploy.resources")}>
             <CommitInput id="svc-cpus" className="font-mono" placeholder="no limit" value={svc.resources?.cpus ?? ""} validate={(v) => (v === "" || /^\d+(\.\d+)?$/.test(v) ? undefined : "e.g. 0.5")} onCommit={(cpus) => patch({ resources: cpus || svc.resources?.memory ? { ...svc.resources, cpus: cpus || undefined } : null })} />
           </Field>
-          <Field label="Memory" htmlFor="svc-memory">
+          <Field label="Memory" htmlFor="svc-memory" badge={mark("deploy.resources")}>
             <CommitInput id="svc-memory" className="font-mono" placeholder="no limit" value={svc.resources?.memory ?? ""} validate={(v) => (v === "" || /^\d+(\.\d+)?[bkmg]?b?$/i.test(v) ? undefined : "e.g. 512M")} onCommit={(memory) => patch({ resources: memory || svc.resources?.cpus ? { ...svc.resources, memory: memory || undefined } : null })} />
           </Field>
         </div>
       </Section>
 
-      <Section title="Networks" icon={<NetworkIcon className="size-3.5" />}>
+      <Section title="Networks" icon={<NetworkIcon className="size-3.5" />} action={mark("networks")}>
         {networks.length === 0 ? (
           <p className="text-[11px] text-muted-foreground">On the project's default network with every other service. Add a network from the palette to separate them.</p>
         ) : (

@@ -50,7 +50,7 @@ type addKubeCatalogRequest struct {
 
 // addKubeCatalogItem is POST /workflows/{id}/kubernetes/catalog: add a
 // palette entry to a Kubernetes workflow. It answers 201 {workflow,
-// nodeIds} (the objects added).
+// nodeIds} (the objects added; for a chart, its KubeChartGroup IDs).
 func (s *Server) addKubeCatalogItem(w http.ResponseWriter, r *http.Request) error {
 	var req addKubeCatalogRequest
 	if err := decode(w, r, maxBody, &req); err != nil {
@@ -137,23 +137,36 @@ func (s *Server) addKubeChart(r *http.Request, id string, item kubecatalog.Item,
 	if err != nil {
 		return nil, nil, err
 	}
+	// The canvas shows a vendored chart as one release node: that node is
+	// what was added (and what a drop position places).
 	var nodes []string
+	for _, c := range wf.Kubernetes.Graph.Charts {
+		if c.Source == index {
+			nodes = append(nodes, c.ID)
+		}
+	}
 	for _, n := range wf.Kubernetes.Graph.Nodes {
-		if n.Source == index {
+		if n.Source == index && n.Chart == "" {
 			nodes = append(nodes, n.ID)
 		}
 	}
 	return wf, nodes, nil
 }
 
-// placeKubeNodes puts the first added node at pos and the others below it
-// (the canvas lays out nodes without a position).
+// placeKubeNodes puts the first added node (or collapsed chart) at pos and
+// the others below it (the canvas lays out nodes without a position).
 func (s *Server) placeKubeNodes(id string, nodes []string, pos model.Position) (*model.Workflow, error) {
 	return s.editKube(id, func(wf *model.Workflow, _ *kube.Project, _ *kube.Editor, _ map[string][]byte) error {
 		for i, nodeID := range nodes {
+			at := &model.Position{X: pos.X, Y: pos.Y + float64(i)*120}
 			for j := range wf.Kubernetes.Graph.Nodes {
 				if n := &wf.Kubernetes.Graph.Nodes[j]; n.ID == nodeID {
-					n.Position = &model.Position{X: pos.X, Y: pos.Y + float64(i)*120}
+					n.Position = at
+				}
+			}
+			for j := range wf.Kubernetes.Graph.Charts {
+				if c := &wf.Kubernetes.Graph.Charts[j]; c.ID == nodeID {
+					c.Position = at
 				}
 			}
 		}

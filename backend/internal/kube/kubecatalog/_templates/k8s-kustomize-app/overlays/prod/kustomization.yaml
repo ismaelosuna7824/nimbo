@@ -1,6 +1,6 @@
-# Production: two replicas (a PodDisruptionBudget keeps one up during
-# node drains), an autoscaler and more memory, in hello-prod,
-# http://hello-prod.localhost
+# Production: two replicas spread over nodes (a PodDisruptionBudget keeps
+# one up during node drains), zero-downtime rollouts, an autoscaler and
+# more memory, in hello-prod, http://hello-prod.localhost
 apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
 namespace: hello-prod
@@ -19,6 +19,7 @@ replicas:
     count: 2
 patches:
   - path: resources.yaml
+  - path: spread.yaml
   - target:
       kind: Ingress
       name: web

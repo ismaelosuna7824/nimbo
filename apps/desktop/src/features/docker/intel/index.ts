@@ -12,7 +12,8 @@ import { autocompletion, type CompletionContext, type CompletionResult } from "@
 import type { Extension } from "@codemirror/state"
 import { hoverTooltip } from "@codemirror/view"
 import { api } from "@/lib/api/client"
-import type { ComposeGraph, DockerImage } from "@/lib/api/types"
+import type { ComposeEnvironment, ComposeGraph, DockerImage } from "@/lib/api/types"
+import { envFileComposeFiles, envFileOfCompose } from "@/features/docker/environments/model"
 import { definitionExtension } from "@/features/code-intel/definition"
 import { checkLinter, intelTheme } from "@/features/code-intel/lint"
 import { dirName } from "@/features/panels/terraform/file-model"
@@ -41,8 +42,8 @@ export interface DockerIntelOptions {
   path: string
   /** Unsaved text of the other files (checks see the project as edited). */
   buffers: () => Record<string, string>
-  /** The workflow's compose files and derived graph (names declared in the other files). */
-  compose: () => { files: string[]; graph: ComposeGraph } | undefined
+  /** The workflow's compose files, environments (override files and .env.<env>) and derived graph. */
+  compose: () => { files: string[]; graph: ComposeGraph; environments?: ComposeEnvironment[] } | undefined
   /** Every workflow path (stored and pending). */
   files: () => string[]
   /** A workflow file's current text (unsaved buffer or stored content). */
@@ -136,8 +137,9 @@ export function dockerIntel(opts: DockerIntelOptions): Extension[] | null {
   }
 
   if (kind === "env") {
+    // .env feeds the base files and every environment's override; .env.<env> the base files and its override.
     const envOf = async (): Promise<EnvFileEnv> => {
-      const files = composeFiles()
+      const files = envFileComposeFiles(opts.compose(), opts.path)
       const texts = await Promise.all(files.map((f) => opts.read(f).catch(() => "")))
       return { compose: Object.fromEntries(files.map((f, i) => [f, texts[i]])), images: await images() }
     }
@@ -157,7 +159,9 @@ export function dockerIntel(opts: DockerIntelOptions): Extension[] | null {
   }
 
   void loadComposeSchema().catch(() => {})
-  refresh([...composeFiles().filter((f) => f !== opts.path), `${dirName(opts.path) ? `${dirName(opts.path)}/` : ""}.env`])
+  // An environment's override reads its .env.<env> first, then the shared .env.
+  const envFile = envFileOfCompose(opts.compose(), opts.path)
+  refresh([...composeFiles().filter((f) => f !== opts.path), `${dirName(opts.path) ? `${dirName(opts.path)}/` : ""}.env`, ...(envFile ? [envFile] : [])])
   const env = async (): Promise<ComposeEnv | null> => {
     const schema = await loadComposeSchema().catch(() => null)
     if (!schema) return null
@@ -180,6 +184,7 @@ export function dockerIntel(opts: DockerIntelOptions): Extension[] | null {
           graph: opts.compose()?.graph,
           exists,
           read: (p) => opts.buffers()[p] ?? contents[p],
+          envFile,
         }),
       opts.openFile,
     ),

@@ -2,9 +2,12 @@
 // cluster, one group per namespace (with a data tier for databases, caches, queues and their
 // volume claims), Ingress/HTTPRoute entries and one card per workload. Services, autoscalers,
 // ConfigMaps and Secrets are lines on their workload's card, not cards of their own: requests go
-// Ingress → workload and workload → workload through the Services that select them.
+// Ingress → workload and workload → workload through the Services that select them. A chart
+// vendored from a repository (kube-prometheus-stack…) is always one card in its release's
+// namespace, so exports stay readable.
 import { k8sIcon, k8sIconFor } from "@/components/k8s-icons"
-import { techIcon, techIconFor, type TechCategory } from "@/components/tech-icons"
+import { techIcon, techIconFor, type TechCategory, type TechIconInfo } from "@/components/tech-icons"
+import { chartSummaries, kindsText, type ChartSummary } from "@/features/kubernetes/canvas/model"
 import type { KubeEdge, KubeNode, KubeScaler, KubeSourceKind, KubeStatus, Workflow } from "@/lib/api/types"
 import type { ArchCard, ArchGroup, ArchModel } from "./model"
 import { cardLines, type CardText, type LegendEntry } from "./styles"
@@ -23,6 +26,20 @@ const DATA_CATEGORIES: Partial<Record<TechCategory, true>> = { database: true, c
 const EXPOSED_TYPES: Record<string, true> = { LoadBalancer: true, NodePort: true }
 /** Graph edges that are requests or reads/writes: entry → Service, workload → Service (env URLs), workload → claim. */
 const REQUEST_EDGES: Partial<Record<KubeEdge["kind"], true>> = { routes: true, inferred: true, env: true, pvc: true }
+/** Card category of a chart from the technology its icon shows. */
+const CHART_CATEGORY: Partial<Record<TechCategory, ArchCard["category"]>> = {
+  database: "database",
+  cache: "database",
+  search: "database",
+  messaging: "integration",
+  storage: "storage",
+  security: "security",
+  observability: "monitoring",
+  web: "networking",
+  devtools: "devops",
+}
+/** Card type of a vendored chart. */
+export const CHART_CARD_TYPE = "Helm chart"
 
 const SOURCE_LABEL: Record<KubeSourceKind, string> = { manifests: "Manifests", kustomize: "Kustomize", helm: "Helm" }
 
@@ -34,17 +51,21 @@ type KubeWorkflow = Pick<Workflow, "id" | "name" | "kubernetes">
  * and the claims they mount in the namespace's data tier. Services fold into the workloads they
  * select (a Service selecting nothing stays a card), so routes and env references become
  * Ingress → workload and workload → workload requests. The Users reach every entry and every
- * workload behind a LoadBalancer/NodePort Service. `status` adds the workloads' rollout state.
+ * workload behind a LoadBalancer/NodePort Service. Vendored charts are one card each, the requests
+ * to and from their objects drawn to it. `status` adds the workloads' rollout state.
  */
 export function deriveKubernetesArchitecture(wf: KubeWorkflow, status?: KubeStatus | null): ArchModel {
   const model: ArchModel = { groups: [], cards: [], actors: [], edges: [], providers: [], regions: [] }
-  const nodes = wf.kubernetes?.graph.nodes ?? []
-  const graphEdges = wf.kubernetes?.graph.edges ?? []
+  const graph = wf.kubernetes?.graph ?? { nodes: [], edges: [] }
+  const charts = chartSummaries(graph, status)
+  const chartOf = new Map(charts.flatMap((c) => c.members.map((id) => [id, c.group.id] as const)))
+  const nodes = graph.nodes.filter((n) => !chartOf.has(n.id))
+  const graphEdges = graph.edges
   const workloads = nodes.filter((n) => n.workload)
   const entries = nodes.filter((n) => Object.hasOwn(ENTRY_KINDS, n.kind) || !!n.routes?.length)
-  if (workloads.length === 0 && entries.length === 0) return model
+  if (workloads.length === 0 && entries.length === 0 && charts.length === 0) return model
 
-  const byId = new Map(nodes.map((n) => [n.id, n]))
+  const byId = new Map(graph.nodes.map((n) => [n.id, n]))
   const workloadIds = new Set(workloads.map((w) => w.id))
   // Service → the workloads it selects.
   const selected = new Map<string, string[]>()
@@ -62,7 +83,7 @@ export function deriveKubernetesArchitecture(wf: KubeWorkflow, status?: KubeStat
   // Namespaces in the order their objects come, data tiers only where data stores live.
   const nsOf = (n: KubeNode) => n.namespace || "default"
   const drawn = [...entries, ...workloads, ...standaloneServices, ...claims]
-  const namespaces = [...new Set(drawn.map(nsOf))]
+  const namespaces = [...new Set([...drawn.map(nsOf), ...charts.map((c) => c.group.namespace)])]
   const dataNamespaces = new Set([...workloads.filter((w) => isData.get(w.id)).map(nsOf), ...claims.map(nsOf)])
 
   model.groups.push(clusterGroup(wf, status))
@@ -96,10 +117,15 @@ export function deriveKubernetesArchitecture(wf: KubeWorkflow, status?: KubeStat
     model.cards.push(card(w, data ? dataTierGroupId(nsOf(w)) : namespaceGroupId(nsOf(w)), data ? "database" : "containers", facts))
   }
   for (const c of claims) model.cards.push(card(c, dataTierGroupId(nsOf(c)), "storage", claimFacts(c)))
+  for (const c of charts) model.cards.push(chartCard(c))
 
-  // A drawn object stands for itself; a folded Service for the workloads it selects.
+  // A drawn object stands for itself; a folded Service for the workloads it selects; a chart's object for the chart.
   const cardIds = new Set(model.cards.map((c) => c.id))
-  const drawnFor = (id: string) => (cardIds.has(id) ? [id] : (selected.get(id) ?? []))
+  const drawnFor = (id: string) => {
+    const chart = chartOf.get(id)
+    if (chart) return [chart]
+    return cardIds.has(id) ? [id] : (selected.get(id) ?? [])
+  }
 
   const exposed = services.filter((s) => Object.hasOwn(EXPOSED_TYPES, s.service!.type))
   const users = [...new Set([...entries.map((n) => n.id), ...exposed.flatMap((s) => drawnFor(s.id))])]
@@ -111,15 +137,32 @@ export function deriveKubernetesArchitecture(wf: KubeWorkflow, status?: KubeStat
 
   const seen = new Set<string>()
   for (const e of graphEdges) {
-    if (!REQUEST_EDGES[e.kind] || !cardIds.has(e.source)) continue
+    const source = chartOf.get(e.source) ?? e.source
+    if (!REQUEST_EDGES[e.kind] || !cardIds.has(source)) continue
     for (const target of drawnFor(e.target)) {
-      const id = `${e.source}->${target}`
-      if (target === e.source || seen.has(id)) continue
+      const id = `${source}->${target}`
+      if (target === source || seen.has(id)) continue
       seen.add(id)
-      model.edges.push({ id, source: e.source, target, kind: "data" })
+      model.edges.push({ id, source, target, kind: "data" })
     }
   }
   return model
+}
+
+/** A vendored chart's card: version, release, its objects by kind and live state. */
+function chartCard(c: ChartSummary): ArchCard {
+  const g = c.group
+  const live = c.live ? [`${c.live.ready}/${c.live.total} ready`, c.live.problems ? `${c.live.problems} failing` : ""].filter(Boolean).join(" · ") : ""
+  return {
+    id: g.id,
+    parent: namespaceGroupId(g.namespace),
+    nodeId: g.id,
+    type: CHART_CARD_TYPE,
+    kind: "resource",
+    category: CHART_CATEGORY[techIconFor({ image: g.chart }).category] ?? "containers",
+    name: g.chart,
+    details: [[g.version, `release ${g.release}`].filter(Boolean).join(" · "), live, kindsText(c.kinds, 3)].filter(Boolean),
+  }
 }
 
 /** StatefulSets and workloads running a database, cache, queue or search engine image. */
@@ -230,14 +273,16 @@ function liveFact(live: KubeStatus["workloads"][number] | undefined) {
 
 /**
  * Icon and text of a card: a workload is the technology its first container runs (the object's
- * kind icon when the image is unknown); entries, Services and claims are their kind.
+ * kind icon when the image is unknown); entries, Services and claims are their kind; a chart is
+ * `chartIcon` (see canvas/charts chartIcon), else Helm.
  */
-export function kubeCardScene(card: ArchCard, node: KubeNode | undefined): { icon: string; text: CardText } {
+export function kubeCardScene(card: ArchCard, node: KubeNode | undefined, chartIcon?: TechIconInfo): { icon: string; text: CardText } {
   const container = node?.workload?.containers[0]
   const tech = node?.workload ? techIconFor({ image: container?.image, stack: node.stack, kind: "service" }) : undefined
   const kind = k8sIconFor(node?.kind ?? card.type)
+  const icon = card.type === CHART_CARD_TYPE ? (chartIcon ?? techIcon("helm")).src : tech && !tech.generic ? tech.src : kind.src
   return {
-    icon: tech && !tech.generic ? tech.src : kind.src,
+    icon,
     text: {
       title: card.name,
       lines: cardLines([card.type, ...card.details]),

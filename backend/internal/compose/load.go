@@ -11,6 +11,7 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"maps"
 	"os"
 	"path"
 	"path/filepath"
@@ -86,8 +87,21 @@ type Project struct {
 	// Files, then the files they include or extend from, in Order.
 	Docs  map[string]*Doc
 	Order []string
-	// Env is the project's .env.
+	// Env are the interpolation variables: the env files (EnvFiles) read in
+	// order, later files winning.
 	Env map[string]string
+	// EnvFiles are the env files read, slash paths relative to Dir: the
+	// project directory's .env, then the environment's .env.<env> or
+	// <env>.env.
+	EnvFiles []string
+	// Environment is the environment opened ("" = the base files alone);
+	// Override is its override file, the last of Files ("" when the
+	// environment is an env file alone).
+	Environment string
+	Override    string
+	// Environments are the override and env files of the project directory
+	// (see Environments).
+	Environments []model.ComposeEnvironment
 	// Model is the effective project docker compose runs (nil when the
 	// files can't be loaded; Diagnostics say why). Every service is in
 	// Model.Services; services of inactive profiles are listed in Inactive.
@@ -106,6 +120,10 @@ type Options struct {
 	// Content overrides files (slash paths relative to the dir) with unsaved
 	// content; a nil value marks a deleted file.
 	Content map[string][]byte
+	// Environment opens the project as `docker compose -f <files> [-f
+	// compose.<env>.yaml] --env-file .env --env-file <env file>` would ("" =
+	// the base). An environment with neither file is an error.
+	Environment string
 }
 
 // Open reads the compose project of dir. It never fails: problems are
@@ -138,20 +156,61 @@ func Open(ctx context.Context, dir string, files, profiles []string, opts Option
 		p.diag(model.SeverityError, "dk_load", "", 0, "", "The workflow has no compose file", "Add a compose.yaml (Code tab) or create the workflow again from a template.")
 		return p
 	}
-	envFile := path.Join(p.ProjectDir, ".env")
-	if data, err := p.read(envFile); err == nil {
-		env, err := dotenv.UnmarshalBytesWithLookup(data, nil)
-		if err != nil {
-			p.diag(model.SeverityError, "dk_env_syntax", envFile, envErrLine(err), "", fmt.Sprintf("%s: %v", envFile, err), "Write one KEY=value per line.")
-		} else {
-			p.Env = env
-		}
-	}
 	ok := true
 	for _, f := range files {
 		if !p.readDoc(f, true) {
 			ok = false
 		}
+	}
+	names := p.list(p.ProjectDir)
+	for rel, data := range opts.Content {
+		if path.Dir(rel) != path.Clean(p.ProjectDir) {
+			continue
+		}
+		if data == nil {
+			names = slices.DeleteFunc(names, func(n string) bool { return n == path.Base(rel) })
+		} else if !slices.Contains(names, path.Base(rel)) {
+			names = append(names, path.Base(rel))
+		}
+	}
+	var notes []model.Diagnostic
+	p.Environments, notes = Environments(names, p.ProjectDir, files, p.serviceEnvFiles())
+	for _, n := range notes {
+		p.diag(n.Severity, n.Code, n.File, 0, "", n.Message, n.Fix)
+	}
+	envFiles := []string{path.Join(p.ProjectDir, ".env")}
+	if opts.Environment != "" {
+		i := slices.IndexFunc(p.Environments, func(e model.ComposeEnvironment) bool { return e.Name == opts.Environment })
+		if i < 0 {
+			p.diag(model.SeverityError, "dk_environment", "", 0, "", fmt.Sprintf("Environment %s has no override file (%s) or env file (%s)", opts.Environment, path.Join(p.ProjectDir, "compose."+opts.Environment+".yaml"), EnvFile(p.ProjectDir, opts.Environment)), "Create the environment again in the Environments tab, or switch to another one.")
+			return p
+		}
+		env := p.Environments[i]
+		p.Environment, p.Override = env.Name, env.File
+		if env.File != "" {
+			p.Files = append(slices.Clone(files), env.File)
+			if !p.readDoc(env.File, true) {
+				ok = false
+			}
+		}
+		if env.EnvFile != "" {
+			envFiles = append(envFiles, env.EnvFile)
+		}
+	}
+	for _, envFile := range envFiles {
+		data, err := p.read(envFile)
+		if err != nil {
+			continue
+		}
+		p.EnvFiles = append(p.EnvFiles, envFile)
+		// Later files see the values of earlier ones, like docker compose's
+		// --env-file list.
+		env, err := dotenv.UnmarshalBytesWithLookup(data, p.lookup)
+		if err != nil {
+			p.diag(model.SeverityError, "dk_env_syntax", envFile, envErrLine(err), "", fmt.Sprintf("%s: %v", envFile, err), "Write one KEY=value per line.")
+			continue
+		}
+		maps.Copy(p.Env, env)
 	}
 	if !ok {
 		return p
@@ -168,6 +227,37 @@ func Open(ctx context.Context, dir string, files, profiles []string, opts Option
 		p.check()
 	}
 	return p
+}
+
+// serviceEnvFiles are the files the services of the compose files read so
+// far name in env_file (slash paths relative to Dir; ${VAR}s left as
+// written): service-scoped, never environments.
+func (p *Project) serviceEnvFiles() []string {
+	var out []string
+	for _, rel := range p.Order {
+		d := p.Docs[rel]
+		for _, svc := range mapKeys(d, "services") {
+			_, v := d.Get("services", svc, "env_file")
+			v = Resolve(v)
+			if v == nil {
+				continue
+			}
+			items := []*yaml.Node{v}
+			if v.Kind == yaml.SequenceNode {
+				items = v.Content
+			}
+			for _, it := range items {
+				it = Resolve(it)
+				if it.Kind == yaml.MappingNode {
+					_, it = mapGet(it, "path")
+				}
+				if it != nil && it.Kind == yaml.ScalarNode && it.Value != "" {
+					out = append(out, path.Join(path.Dir(rel), it.Value))
+				}
+			}
+		}
+	}
+	return out
 }
 
 // ProjectDir is the project directory of a compose file list: the folder

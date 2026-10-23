@@ -4,6 +4,10 @@ kind: Deployment
 metadata:
   name: users
   namespace: edge-gateway
+  labels:
+    app.kubernetes.io/name: users
+    app.kubernetes.io/instance: users
+    app.kubernetes.io/part-of: edge-gateway
 spec:
   selector:
     matchLabels:

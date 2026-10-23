@@ -1,4 +1,4 @@
-import { useMemo, useState, type ReactNode } from "react"
+import { useEffect, useMemo, useState, type ReactNode } from "react"
 import { Gauge, ShieldAlert } from "lucide-react"
 import { Badge } from "@/components/ui/badge"
 import { Empty, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from "@/components/ui/empty"
@@ -13,6 +13,7 @@ import { Configure } from "./configure"
 import { INITIAL_DRAFT, type LoadDraft } from "./draft"
 import { History } from "./history"
 import { RunResults } from "./run-results"
+import { useLoadTestRequest } from "./reveal"
 import { LoadRunsContext } from "./runs-context"
 import { useWorkflowTarget } from "./use-workflow-target"
 import { WorkflowTargetStep } from "./workflow-target"
@@ -43,6 +44,7 @@ export function LoadTestTab() {
   const loadTests = useWorkflowStore((s) => s.loadTests)
   const loadSamples = useWorkflowStore((s) => s.loadSamples)
   const pro = useWorkflowStore((s) => s.mode === "pro")
+  const kube = useWorkflowStore((s) => s.workflow?.kind === "kubernetes")
   const [view, setView] = useState<View>("configure")
   const [draft, setDraft] = useState<LoadDraft>(INITIAL_DRAFT)
   const [runId, setRunId] = useState<string | null>(null)
@@ -50,6 +52,16 @@ export function LoadTestTab() {
   const resolved = useWorkflowTarget(draft, setDraft)
   const connections = useConnections()
   const source = useMemo(() => ({ runs: loadTests, samples: loadSamples }), [loadTests, loadSamples])
+  // Another panel (Readiness) asked for a run's results or a new test.
+  const request = useLoadTestRequest((s) => (s.request?.workflowId === workflowId ? s.request : null))
+  useEffect(() => {
+    if (!request) return
+    useLoadTestRequest.setState({ request: null })
+    if (request.runId) {
+      setRunId(request.runId)
+      setView("results")
+    } else setView("configure")
+  }, [request])
 
   if (!workflowId) return null
 
@@ -118,6 +130,7 @@ export function LoadTestTab() {
                 setRunId(run.id)
                 setView("results")
               }}
+              autoscaling={kube && !resolved.external}
             />
           )}
           {view === "results" &&

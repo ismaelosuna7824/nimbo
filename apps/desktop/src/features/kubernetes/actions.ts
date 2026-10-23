@@ -4,6 +4,7 @@ import { undoable } from "@/features/docker/actions"
 import { api } from "@/lib/api/client"
 import type { KubeConnectRecipe, KubeConnectRequest, KubeNode, Position, Workflow } from "@/lib/api/types"
 import { useWorkflowStore } from "@/state/workflow-store"
+import { setChartExpanded } from "./canvas/charts"
 
 /** MIME type of palette entries dragged onto the Kubernetes canvas (JSON: a KubePaletteDrag). */
 export const KUBE_DRAG_TYPE = "application/x-nimbo-kubernetes"
@@ -17,9 +18,13 @@ export interface KubePaletteDrag {
 /** Inputs some connection recipes take (Ingress host/path/port, mount path, env var name). */
 export type KubeRecipeInputs = Pick<KubeConnectRequest, "port" | "path" | "host" | "key">
 
-/** Imperative Kubernetes canvas operations for the command palette. */
+/** Imperative Kubernetes canvas operations (command palette, inspector). */
 export interface KubeCanvasHandle {
   tidy: () => Promise<void>
+  /** Expands a vendored chart with its objects laid out, then focuses it (or `focus`, one of its objects). */
+  expandChart: (chartId: string, focus?: string) => Promise<void>
+  /** Brings an object or chart into view, expanding the collapsed chart holding it. */
+  reveal: (id: string) => Promise<void>
 }
 
 let handle: KubeCanvasHandle | null = null
@@ -34,6 +39,30 @@ export function kubeCanvasHandle() {
 
 function current(): Workflow | null {
   return useWorkflowStore.getState().workflow
+}
+
+/** Expands a vendored chart: on the canvas when it is shown, else remembered for the next time it is. */
+export async function expandChart(chartId: string) {
+  const wf = current()
+  if (!wf) return
+  if (handle) await handle.expandChart(chartId)
+  else setChartExpanded(wf.id, chartId, true)
+}
+
+/** Selects an object or chart and brings it into view on the canvas (expanding the collapsed chart holding it). */
+export async function showObject(id: string) {
+  useWorkflowStore.getState().select(id)
+  await handle?.reveal(id)
+}
+
+/** Collapses a vendored chart into its release node, which takes over the selection of its objects. */
+export function collapseChart(chartId: string) {
+  const store = useWorkflowStore.getState()
+  const wf = store.workflow
+  if (!wf) return
+  setChartExpanded(wf.id, chartId, false)
+  const selected = wf.kubernetes?.graph.nodes.find((n) => n.id === store.selectedNodeId)
+  if (selected?.chart === chartId) store.select(chartId)
 }
 
 /** Text files an object edit can touch (manifests, kustomizations, values, Helm templates): what Undo writes back. */

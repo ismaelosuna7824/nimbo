@@ -16,7 +16,7 @@ import { formatDuration, formatMs, formatNumber, formatPercent, formatRelative }
 import { DENSE_TABLE } from "../variables/blocks-editors"
 import type { CompareRow } from "./charts"
 import { computeKpis, EXPLAIN, runDurationSec, type Kpis } from "./metrics"
-import { Verdict } from "./run-results"
+import { EnvironmentBadge, Verdict } from "./run-results"
 
 // recharts loads with the first comparison, not with the tab.
 const CompareCharts = lazy(() => import("./charts").then((m) => ({ default: m.CompareCharts })))
@@ -108,6 +108,7 @@ export function History({ compare, setCompare, onOpen }: HistoryProps) {
                         External
                       </Badge>
                     )}
+                    {r.environment && <EnvironmentBadge env={r.environment} className="mr-1" />}
                     {r.spec.name}
                   </TableCell>
                   <TableCell>

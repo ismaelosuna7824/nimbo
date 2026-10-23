@@ -72,6 +72,11 @@ var rules = []Rule{
 		".env must hold KEY=value lines.", "https://docs.docker.com/compose/how-tos/environment-variables/variable-interpolation/#env-file",
 		"docker compose reads .env to interpolate the compose files; a line it can't parse stops it."),
 
+	// Environments.
+	rule("dk_environment_file", "Environment files", catCompose, model.SeverityInfo,
+		"Env and override files named like an environment must give a usable environment.", "https://docs.docker.com/compose/how-tos/environment-variables/variable-interpolation/#env-file",
+		"Nimbo turns compose.<env>.yaml, .env.<env> and <env>.env into environments; files it can't use that way (an invalid name, two env files for one environment, local-only .env.local files) are ignored, so their values never reach a run."),
+
 	// Docker Compose services.
 	rule("dk_unresolved_var", "Variables without a value", catCompose, model.SeverityWarning,
 		"${VAR} used in a compose file should have a value in .env or a default.", "https://docs.docker.com/compose/how-tos/environment-variables/variable-interpolation/",

@@ -15,12 +15,16 @@ import (
 )
 
 func TestComposeCmdArgs(t *testing.T) {
-	c := composeCmd{project: "nimbo-dk-shop-ab12cd", dir: "/h/wf/compose", files: []string{"compose.yaml", "ops/compose.prod.yaml"}, profiles: []string{"debug"}, override: composeOverride}
+	c := composeCmd{project: "nimbo-dk-shop-ab12cd", dir: "/h/wf/compose", files: []string{"compose.yaml", "compose.prod.yaml"}, envFiles: []string{".env", ".env.prod"}, profiles: []string{"debug"}, override: composeOverride}
 	got := strings.Join(c.args("up", "--detach"), " ")
+	// An environment: the base files, its override last (before Nimbo's own
+	// port override), then .env and .env.<env> so the environment's values win.
 	want := "compose --ansi never --progress plain -p nimbo-dk-shop-ab12cd --project-directory /h/wf/compose" +
 		" -f " + filepath.Join("/h/wf/compose", "compose.yaml") +
-		" -f " + filepath.Join("/h/wf/compose", "ops", "compose.prod.yaml") +
+		" -f " + filepath.Join("/h/wf/compose", "compose.prod.yaml") +
 		" -f " + filepath.Join("/h/wf/compose", ".nimbo", "compose.override.yaml") +
+		" --env-file " + filepath.Join("/h/wf/compose", ".env") +
+		" --env-file " + filepath.Join("/h/wf/compose", ".env.prod") +
 		" --profile debug up --detach"
 	if got != want {
 		t.Errorf("args =\n%s\nwant\n%s", got, want)
@@ -64,24 +68,27 @@ func TestComposeCommandValidation(t *testing.T) {
 	m := &Manager{}
 	dir := t.TempDir()
 	for _, files := range [][]string{{"../compose.yaml"}, {"/etc/compose.yaml"}, {""}} {
-		_, err := m.composeCommand("wf", dir, files, nil)
+		_, err := m.composeCommand("wf", dir, files, nil, nil)
 		var inv *InvalidComposeError
 		if !errors.As(err, &inv) {
 			t.Errorf("files %q: err = %v, want InvalidComposeError", files, err)
 		}
 	}
-	if _, err := m.composeCommand("wf", dir, nil, nil); err == nil || !strings.Contains(err.Error(), "no compose file") {
+	if _, err := m.composeCommand("wf", dir, nil, nil, nil); err == nil || !strings.Contains(err.Error(), "no compose file") {
 		t.Errorf("no files: %v", err)
 	}
-	if _, err := m.composeCommand("wf", dir, []string{"compose.yaml"}, []string{"bad profile"}); err == nil {
+	if _, err := m.composeCommand("wf", dir, []string{"compose.yaml"}, nil, []string{"bad profile"}); err == nil {
 		t.Error("invalid profile accepted")
+	}
+	if _, err := m.composeCommand("wf", dir, []string{"compose.yaml"}, []string{"../.env"}, nil); err == nil {
+		t.Error("env file outside the project accepted")
 	}
 	for _, f := range []string{"docker-compose.yml", "docker-compose.override.yaml"} {
 		if err := os.WriteFile(filepath.Join(dir, f), []byte("services: {}\n"), 0o644); err != nil {
 			t.Fatal(err)
 		}
 	}
-	c, err := m.composeCommand("wf", dir, nil, nil)
+	c, err := m.composeCommand("wf", dir, nil, nil, nil)
 	if err != nil || !slices.Equal(c.files, []string{"docker-compose.yml", "docker-compose.override.yaml"}) || c.project != "nimbo-dk-wf" {
 		t.Errorf("defaults = %+v, %v", c, err)
 	}

@@ -130,6 +130,37 @@ type KubeBuild struct {
 type KubeGraph struct {
 	Nodes []KubeNode `json:"nodes"`
 	Edges []KubeEdge `json:"edges"`
+	// Charts are the third-party charts vendored in Helm sources; the
+	// canvas collapses each into one release node (KubeNode.Chart).
+	Charts []KubeChartGroup `json:"charts,omitempty"`
+}
+
+// KubeChartGroup is a third-party chart a Helm source renders: a
+// dependency with a remote repository (https, oci or a helm repo name)
+// vendored in the chart's charts/ folder, like the wrapper charts the
+// palette adds. The source's own templates (a converter chart, file://
+// subcharts) are not grouped.
+type KubeChartGroup struct {
+	// ID is "chart:<vendored subchart path>"
+	// ("chart:charts/monitoring/charts/kube-prometheus-stack").
+	ID         string `json:"id"`
+	Source     int    `json:"source"`
+	SourcePath string `json:"sourcePath"`
+	// Chart, Version and AppVersion are the vendored chart's (aliased
+	// dependencies keep the chart's own name).
+	Chart      string `json:"chart"`
+	Version    string `json:"version,omitempty"`
+	AppVersion string `json:"appVersion,omitempty"`
+	Repository string `json:"repository,omitempty"`
+	Release    string `json:"release"`
+	Namespace  string `json:"namespace"`
+	// ValuesFiles are the files its values come from, in merge order
+	// (the source chart's values.yaml first).
+	ValuesFiles []string `json:"valuesFiles,omitempty"`
+	// Objects counts the rendered objects of the chart.
+	Objects int `json:"objects"`
+	// Position is the collapsed node's saved canvas position.
+	Position *Position `json:"position,omitempty"`
 }
 
 // Node categories (KubeNode.Category).
@@ -205,6 +236,9 @@ type KubeNode struct {
 	Data []string `json:"data,omitempty"`
 	// Custom: a custom resource (its CRD may be absent).
 	Custom bool `json:"custom,omitempty"`
+	// Chart is the KubeChartGroup ID of the vendored chart that renders
+	// the object ("" for the workflow's own objects).
+	Chart string `json:"chart,omitempty"`
 }
 
 // KubeWorkload describes a workload's pod template.

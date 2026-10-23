@@ -1262,18 +1262,21 @@ const (
 // it (even when the target uses a connection); runs started from the
 // Connections library belong to the connection.
 type LoadTestRun struct {
-	ID           string            `json:"id"`
-	WorkflowID   string            `json:"workflowId,omitempty"`
-	ConnectionID string            `json:"connectionId,omitempty"`
-	External     bool              `json:"external,omitempty"` // traffic left the local sandbox
-	Spec         LoadTestSpec      `json:"spec"`
-	Status       LoadTestStatus    `json:"status"`
-	StartedAt    time.Time         `json:"startedAt"`
-	EndedAt      *time.Time        `json:"endedAt,omitempty"`
-	Timeline     []LoadSample      `json:"timeline"`
-	Summary      *LoadSummary      `json:"summary,omitempty"`
-	Thresholds   []ThresholdResult `json:"thresholds,omitempty"`
-	Error        string            `json:"error,omitempty"`
+	ID           string `json:"id"`
+	WorkflowID   string `json:"workflowId,omitempty"`
+	ConnectionID string `json:"connectionId,omitempty"`
+	// Environment is the docker or Kubernetes workflow's active environment
+	// when the run started ("" for other workflows or the base).
+	Environment string            `json:"environment,omitempty"`
+	External    bool              `json:"external,omitempty"` // traffic left the local sandbox
+	Spec        LoadTestSpec      `json:"spec"`
+	Status      LoadTestStatus    `json:"status"`
+	StartedAt   time.Time         `json:"startedAt"`
+	EndedAt     *time.Time        `json:"endedAt,omitempty"`
+	Timeline    []LoadSample      `json:"timeline"`
+	Summary     *LoadSummary      `json:"summary,omitempty"`
+	Thresholds  []ThresholdResult `json:"thresholds,omitempty"`
+	Error       string            `json:"error,omitempty"`
 	// Resources: container usage and bottleneck verdicts of a run against
 	// a docker workflow's service.
 	Resources *LoadResources `json:"resources,omitempty"`

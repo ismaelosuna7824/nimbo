@@ -90,7 +90,7 @@ commands (e.g. `/mcp__nimbo__extend_workflow` in Claude Code).
 | `load_test` | `workflow?` (default `current`), `goal?` | Deploy if needed, choose targets, smoke test, then the profile that answers the goal; interpret the results |
 | `test_deployed_service` | `connection?` | Connections flow with explicit user confirmation before any traffic |
 | `create_docker_stack` | `request` | Template or `create_workflow kind "docker"` → data services from the palette → app services (starters or your Dockerfiles) → `connect_services` (service_healthy) → the Docker practices below → `review_docker` → `deploy` → endpoints + smoke load test + `get_docker_metrics` → summary |
-| `create_kubernetes_app` | `request` | Template, `convert_to_kubernetes` or `create_workflow kind "kubernetes"` → palette objects (images, charts, starters) → `connect_kubernetes` → the Kubernetes practices → `review_kubernetes` per environment → `deploy` → endpoints + smoke load test → summary |
+| `create_kubernetes_app` | `request` | Template, `convert_to_kubernetes` or `create_workflow kind "kubernetes"` → palette objects (images, charts, starters) → `connect_kubernetes` → the Kubernetes practices → `review_kubernetes` per environment → `deploy` → endpoints + smoke load test → `production_readiness` → summary |
 
 ## Recommended loop
 
@@ -353,7 +353,16 @@ summarized in `review` and listed by `review_docker`).
 `run_load_test` / `get_load_test` against a docker workflow's service also
 return `bottleneck` (e.g. "api reached 99% of its 0.25 CPU limit at 877 req/s —
 CPU-bound; raise limits or add replicas") and `containers` (peak CPU/memory,
-startup and verdict per service).
+startup and verdict per service). Against a Kubernetes workflow they also
+return `environment` (the active environment when the run started) and
+`autoscaling`: one line per workload in scope (the target and every workload
+with a HorizontalPodAutoscaler) with its verdict `scaled`, `late`, `maxed`,
+`no_hpa`, `no_metrics`, `not_needed` or `too_short`, peak Ready pods, HPA
+bounds and CPU, e.g. "web [late]: peak 4 ready pods, HPA 2–5 at 70% CPU —
+p95 above 4× its baseline for 25 s before 2 new pods of web were Ready at
+52 s — lower the HPA's CPU target (70%) or raise minReplicas (2)…". Use preset
+`autoscale` (2 min ramp to 200 req/s, 2 min hold): runs under a minute are
+too short for an HPA to react.
 
 Every mutating docker tool (`create_workflow`, `add_service`,
 `update_service`, `remove_service`, `connect_services`, `apply_terraform_code`)
@@ -496,10 +505,11 @@ switches the rendered overlay/values file.
 | `get_kubernetes_fields` | `workflow`, `node` | Every field with its value, file:line, origin and whether it is editable |
 | `connect_kubernetes` | `workflow`, `from`, `to?`, `recipe_id?` \| `kind?`, `port?`, `path?`, `host?`, `key?` | List or apply wiring recipes: expose, selects, route, envFrom, volume, env, serviceaccount, scale |
 | `review_kubernetes` | `workflow` | `k8s_*` findings of the active environment grouped by severity, each with file:line, field, why, fix and docs; disabled and opt-in rules |
+| `production_readiness` | `workflow`, `environment?` | Production readiness checklist per environment (each rendered on its own; the active one is unchanged): status ready / needs_work / blocked, a 0-100 score, the open items of reliability (manifests, replicas + PDBs, probes, requests/limits, rollout, topology spread, wiring), scaling (HPAs, the latest load test of that environment and its autoscaling verdict), monitoring, security and hygiene, each with findings and the tool that resolves it. Call it before declaring a workflow production-ready |
 | `get_kubernetes_logs` | `workflow`, `workload?` \| `pod?`, `container?`, `tail?` | Recent log lines of a workload's pods |
 | `restart_workload` | `workflow`, `workload?` | Rollout restart (one workload or all) and wait |
 | `kubernetes_cluster` | `workflow`, `action` (stop, start, delete) | Manage the workflow's local cluster |
-| `convert_to_kubernetes` | `workflow`, `format?` (manifests, kustomize, helm), `name?`, `namespace?`, `dry_run?` | Convert a docker workflow into a new Kubernetes workflow; returns it with a report (sources, builds, environments, objects, mappings, unmapped features); `dry_run` previews the files |
+| `convert_to_kubernetes` | `workflow`, `format?` (manifests, kustomize, helm), `name?`, `namespace?`, `dry_run?`, `size_from_load_test?`, `load_test_run_id?`, `autoscaling?`, `max_replicas?`, `target_cpu?` | Convert a docker workflow into a new Kubernetes workflow; returns it with a report (sources, builds, environments, objects, mappings, unmapped features, `loadTest`, `sizing` with each service's requests/limits and their provenance, `autoscaling` HPAs); requests/limits not set in compose are sized from the newest load test (p90/peak usage), and kustomize/helm prod autoscales stateless services with HPAs; `dry_run` previews the files |
 
 Templates (`list_templates`, kind `kubernetes`): `k8s-webapp-postgres`
 (Node.js app built from `web/` + PostgreSQL StatefulSet, manifests),
@@ -522,15 +532,22 @@ base64 Secret data; custom resources against a CRD of the workflow),
 (toggle in Settings → Best-practice checks): reliability —
 `k8s_deprecated_api`, `k8s_no_requests`, `k8s_no_readiness_probe`,
 `k8s_probe_port`, `k8s_latest_tag`, `k8s_local_image`,
-`k8s_single_replica` (production-like environments only),
-`k8s_hpa_no_requests` (warnings); `k8s_no_memory_limit`,
-`k8s_no_liveness_probe`, `k8s_pvc_storage_class` (info); networking —
+`k8s_single_replica`, `k8s_topology_spread` (2+ replicas spread over nodes
+or zones), `k8s_rollout_strategy` (no Recreate or maxUnavailable ≥
+replicas; error when maxSurge and maxUnavailable are both 0) — those three
+in production-like environments only — `k8s_pdb` (a PodDisruptionBudget
+must allow one eviction; one budget per pod), `k8s_hpa_no_requests`
+(warnings); `k8s_no_memory_limit`, `k8s_no_liveness_probe`,
+`k8s_pvc_storage_class` (info); networking —
 `k8s_selector_mismatch`, `k8s_service_port`, `k8s_ingress_backend`,
 `k8s_unknown_ref` (warnings), `k8s_namespace_missing` (info),
 `k8s_default_namespace`, `k8s_network_policy` (opt-in); security —
 `k8s_secret_env`, `k8s_secret_in_configmap`, `k8s_privileged`,
 `k8s_host_namespaces`, `k8s_host_path` (warnings; info for DaemonSets),
-`k8s_run_as_root` (info), `k8s_hardening` (opt-in).
+`k8s_run_as_root` (info), `k8s_hardening` (opt-in); hygiene —
+`k8s_recommended_labels` (info: app.kubernetes.io/name and instance),
+`k8s_resource_quota`, `k8s_image_digest` (opt-in, production-like
+environments). `production_readiness` evaluates the opt-in rules too.
 
 ### Examples
 
@@ -539,6 +556,47 @@ base64 Secret data; custom resources against a CRD of the workflow),
 | Start from a template | "Create a Kubernetes workflow from the Kustomize template, switch to prod and review it." | "Crea un workflow de Kubernetes desde la plantilla de Kustomize, cambia a prod y revísalo." |
 | Add a database | "Add PostgreSQL from the palette to the shop namespace and give the api its DATABASE_URL." | "Agrega PostgreSQL desde la paleta al namespace shop y dale al api su DATABASE_URL." |
 | Run and try it | "Deploy it to the local cluster, open the Ingress URL and smoke load test it." | "Despliégalo en el clúster local, abre la URL del Ingress y hazle una prueba de carga smoke." |
+
+## Environments (docker and Kubernetes)
+
+Docker and Kubernetes workflows keep their environments (dev, staging,
+prod, …) as files on top of the base: Kustomize overlays
+(`overlays/<env>/kustomization.yaml`) and Helm values files
+(`values-<env>.yaml`) for Kubernetes; for docker the official compose
+pattern on top of the base (the compose files and `.env`): an override file
+next to the first compose file (`compose.<env>.yaml`) and/or an env file
+(`.env.<env>` or `<env>.env`, used as named) read after `.env`; either
+alone is an environment (runs use `docker compose -f compose.yaml [-f
+compose.<env>.yaml] --env-file .env --env-file <env file>`). Sample files
+(`.env.example`, `.env.sample`…), local-only files (`.env.local`,
+`.env.<env>.local`) and files a service reads with `env_file` are never
+environments; invalid names and a second env file for one environment get
+a `dk_environment_file` info finding. The active one
+(`update_workflow environment`, `""` = base) is what the graph, rules,
+deploy, load tests (`environment` on the run) and `production_readiness`
+use. Terraform workflows keep `set_environment`.
+
+Docker edits with an active environment: `update_service` writes a key to
+the override when the override sets it (lists tagged `!override`, so
+items are never duplicated) and to the base files otherwise; `null`
+removes a key from the override only, and `resetOverrides` drops keys
+from it so the base values apply. `get_workflow` lists per service the
+`overrides` the active environment sets.
+
+| Tool | Inputs | What it does |
+|---|---|---|
+| `list_environments` | `workflow` | Environments (`name`, `active`, `prodLike`, the `files` each renders) and the sources that take environments (plain manifests don't); docker adds `baseFiles` (compose files and `.env`) |
+| `create_environment` | `workflow`, `name`, `from?` | New environment for every Kustomize/Helm source: `from` copies that environment's overlay directory / values file with its name rewritten in namespaces, hosts and labels (`hello-prod` → `hello-staging`; image tags kept); without `from` a new overlay referencing the base (following the overlays' namespace convention) or an empty values file. Docker: a commented empty `compose.<name>.yaml` (`from` copies that environment's override and `.env.<env>`). Names: lowercase DNS labels, not `base` |
+| `rename_environment` | `workflow`, `name`, `new_name` | Moves the overlay directory / values file (contents follow), updates explicit `environments` entries; docker moves the override and the env file keeping its style (`dev.env` → `qa.env`); the active environment follows |
+| `delete_environment` | `workflow`, `name` | Deletes its overlay directory / values file (never the base, a source's own path or shared values files); the base becomes active when it was |
+| `compare_environments` | `workflow` | Base and every environment rendered on their own, per workload: namespace, replicas, autoscaling (`2–5 @ 70% CPU`), images, CPU/memory requests/limits, PodDisruptionBudget, topology spread, Ingress hosts, and the env vars / ConfigMap keys that differ (`differs` per row; `errors` per environment). Docker, per service: image/build, replicas, CPU and memory limits, ports, healthcheck and every environment variable (secret values masked) |
+| `get_environment_settings` | `workflow`, `environment`, `target?` | The knobs of one workload (Kubernetes: `replicas`, `hpa.min`, `hpa.max`, `hpa.cpu`, and per container `image:<c>` (tag), `cpu.request:<c>`, `cpu.limit:<c>`, `memory.request:<c>`, `memory.limit:<c>`; docker, per service: `image`, `replicas`, `cpus`, `memory`) with the value there, the base's, `overridden`, `editable`/`reason` and the `file` edits go to |
+| `set_environment_values` | `workflow`, `environment`, `target?`, `values` | Writes knobs into that environment's files only (`null` drops its override): Kustomize — where the overlay already sets the field (its `replicas`/`images` entries, patches, resources), else a new `replicas`/`images` entry or a strategic-merge patch `<kind>-<name>-patch.yaml` listed in its `patches`; Helm — the values key the chart renders the field from, in `values-<env>.yaml` (fields the chart doesn't expose as values are not editable; a value equal to the base's removes the override); docker — minimal keys in `compose.<env>.yaml` (replicas above 1 on a fixed host port also give each replica a port: `ports: !override ["3100-3101:3000"]`) |
+| `set_environment_variable` | `workflow`, `environment`, `key`, `value?`, `secret?`, `unset?` | Docker: a variable of the environment's env file as named (`.env.<env>` or `<env>.env`; the first variable creates `.env.<env>`; removing the last deletes the file, and an environment that was only that file with it); it wins over `.env` in that environment |
+
+Example: "Duplicate prod as staging, give it 3 replicas and nginx 1.29, compare, switch to staging and deploy" → `create_environment {name: staging, from: prod}`, `set_environment_values {environment: staging, target: Deployment/web, values: {replicas: "3", "image:nginx": "1.29-alpine"}}`, `compare_environments`, `update_workflow {environment: staging}`, `deploy`.
+
+Docker example: "Add dev and prod; prod runs 2 api replicas with 0.5 CPU and LOG_LEVEL=warn; deploy prod" → `create_environment {name: dev}`, `create_environment {name: prod}`, `set_environment_values {environment: prod, target: api, values: {replicas: "2", cpus: "0.5"}}`, `set_environment_variable {environment: prod, key: LOG_LEVEL, value: warn}` (the compose file reads `${LOG_LEVEL:-debug}`), `update_workflow {environment: prod}`, `deploy`. `convert_to_kubernetes` then writes `overlays/dev` and `overlays/prod` (prod with an HPA).
 
 ## Tools
 
@@ -552,7 +610,7 @@ Conventions).
 | `list_templates` | — | Starter templates (`id`, `name`, `description`, `kind`, `cloud`, `difficulty`, `tags`); edge patterns add `category: "edge-patterns"` and `pattern` (`reverse-proxy`, `api-gateway`, `load-balancer`), one of each per kind and cloud |
 | `create_workflow` | `name`, `description?`, `template?`, `kind?` | New workflow, optionally from a template; `kind: "docker"` (or a `docker-*` template) makes a docker-compose workflow |
 | `get_workflow` | `workflow` | Compact workflow: nodes, edges, variables, outputs, environments, diagnostics, and `structure` (layout, states, resources per state, modules, nesting, backend) |
-| `update_workflow` | `workflow`, `name?`, `description?`, `layout?` (`auto`/`single`/`environments`) | Rename a workflow, change its description or its export layout (only the given fields change; `description: ""` clears it); the Terraform is unchanged; returns the workflow with its `structure` |
+| `update_workflow` | `workflow`, `name?`, `description?`, `layout?` (`auto`/`single`/`environments`), `environment?` | Rename a workflow, change its description or its export layout (only the given fields change; `description: ""` clears it); the Terraform is unchanged; returns the workflow with its `structure`. `environment` (docker and Kubernetes) switches the active environment (`""` = base; see Environments) |
 | `archive_workflow` / `unarchive_workflow` | `workflow` | Close a workflow (sandbox stopped keeping state, hidden, runs refused) or restore it |
 | `search_resources` | `query`, `cloud?`, `kind?`, `supported_only?`, `limit?` | Search the resource catalog |
 | `describe_resource` | `type`, `kind?` | Required/optional attributes, nested blocks, exported attributes, Floci support |

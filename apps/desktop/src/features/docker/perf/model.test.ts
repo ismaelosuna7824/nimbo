@@ -1,6 +1,9 @@
 import { describe, expect, test } from "bun:test"
 import type { BuildStep, ComposeBuild, ComposeProblem, LoadResources, ServiceBuildStats, ServiceUsage } from "@/lib/api/types"
 import {
+  hpaLabel,
+  scalingRows,
+  scalingTone,
   cpuLimitLabel,
   cpuOfLimit,
   formatBytes,
@@ -226,6 +229,21 @@ describe("tones", () => {
     expect(resourcesTone(r(["cpu-bound", "oom"]))).toBe("error")
   })
 
+  test("an autoscaling problem in the headline warns", () => {
+    const scaled = (kind: "late" | "scaled" | "no_hpa"): LoadResources => ({
+      services: [],
+      verdict: "web: headline",
+      verdicts: [{ service: "web", kind: "ok", bottleneck: false, message: "" }],
+      scaling: { verdict: "web: headline", workloads: [{ nodeId: "Deployment/a/web", workload: "web", kind, message: "web: headline", timeline: [], peakReplicas: 2 }] },
+    })
+    expect(resourcesTone(scaled("late"))).toBe("warning")
+    expect(resourcesTone(scaled("scaled"))).toBe("ok")
+    expect(resourcesTone(scaled("no_hpa"))).toBe("ok")
+    expect(scalingTone("maxed")).toBe("warning")
+    expect(scalingTone("not_needed")).toBe("ok")
+    expect(scalingTone("too_short")).toBe("info")
+  })
+
   test("usageTone", () => {
     expect(usageTone(50)).toBe("ok")
     expect(usageTone(70)).toBe("warning")
@@ -302,5 +320,35 @@ describe("resource chart", () => {
     expect(timeDomain([{ t: 1 }, { t: 5 }], resources)).toEqual([0, 5])
     expect(timeDomain([{ t: 1 }, { t: 5 }])).toEqual([1, 5])
     expect(timeDomain([])).toBeUndefined()
+  })
+})
+
+describe("scaling", () => {
+  test("scalingRows merges replicas, HPA CPU and p95 by second", () => {
+    const rows = scalingRows(
+      {
+        timeline: [
+          { t: 0, desired: 2, ready: 2 },
+          { t: 1, desired: 2, ready: 2, cpuUtilization: 90 },
+          { t: 2, desired: 4, ready: 2, cpuUtilization: 90 },
+        ],
+      },
+      [
+        { t: 1, p95: 12 },
+        { t: 2, p95: 0 },
+        { t: 3, p95: 40 },
+      ],
+    )
+    expect(rows).toEqual([
+      { t: 0, desired: 2, ready: 2 },
+      { t: 1, desired: 2, ready: 2, cpu: 90, p95: 12 },
+      { t: 2, desired: 4, ready: 2, cpu: 90 },
+      { t: 3, p95: 40 },
+    ])
+  })
+
+  test("hpaLabel", () => {
+    expect(hpaLabel({ name: "web", min: 2, max: 5, targetCpu: 70 })).toBe("HPA 2–5 pods · 70% CPU")
+    expect(hpaLabel({ name: "web", min: 1, max: 3 })).toBe("HPA 1–3 pods")
   })
 })

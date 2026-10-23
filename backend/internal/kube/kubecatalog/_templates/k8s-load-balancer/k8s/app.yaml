@@ -4,6 +4,10 @@ kind: Deployment
 metadata:
   name: app
   namespace: edge-lb
+  labels:
+    app.kubernetes.io/name: app
+    app.kubernetes.io/instance: app
+    app.kubernetes.io/part-of: edge-lb
 spec:
   replicas: 3
   selector:

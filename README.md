@@ -35,12 +35,14 @@ account. AI agents can do the same through the built-in MCP server.
   Python), a built-in *Try it* (send requests and messages, read them back)
   and a one-click Postman collection export. The sandbox address and test
   credentials stay the same across restarts, so saved URLs keep working.
-- **Load test**: smoke / load / stress / spike / soak presets or custom
-  stages, open (req/s) or closed (virtual users) model, against HTTP
+- **Load test**: smoke / load / stress / spike / soak / autoscale presets or
+  custom stages, open (req/s) or closed (virtual users) model, against HTTP
   endpoints (API Gateway, Lambda URLs, any URL) or AWS operations (SQS,
   S3, DynamoDB, Lambda, SNS, Kinesis, EventBridge, Step Functions). Live
   latency percentiles, error kinds, stability score, breaking point,
-  thresholds with pass/fail, history and run comparison.
+  thresholds with pass/fail, history and run comparison. Kubernetes runs
+  chart each autoscaled workload's replicas against p95 and say whether the
+  HPA added Ready pods in time (scaled, late, maxed, no metrics, no HPA).
 - **Connections**: a global library of services that already exist
   elsewhere — any HTTP/HTTPS API (headers, bearer/basic/API-key auth),
   PostgreSQL, MySQL, Redis, MongoDB, or a real AWS account via an AWS

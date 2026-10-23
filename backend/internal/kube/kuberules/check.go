@@ -17,6 +17,11 @@ type object struct {
 	// explicitNS: the namespace was set by the document, a kustomization
 	// or the source (not defaulted to "default").
 	explicitNS bool
+	// vendored: a dependency chart vendored in a wrapper chart's charts/
+	// folder rendered the object (a palette chart): its advice is the
+	// chart maintainers' choice, tuned through values, so it is capped at
+	// info and never a warning in Problems.
+	vendored bool
 	// locate maps a field path to the file:line that produced it.
 	locate func(path string) (string, int)
 }
@@ -55,6 +60,10 @@ type checker struct {
 func (c *checker) diag(sev model.Severity, code string, o *object, path, msg, fix string) {
 	r := ruleByCode[code]
 	file, line := o.locate(path)
+	if o.vendored && sev == model.SeverityWarning {
+		sev = model.SeverityInfo
+		fix = strings.TrimSpace(fix + " The object comes from a vendored chart: set it through the wrapper chart's values.yaml.")
+	}
 	c.diags = append(c.diags, model.Diagnostic{
 		Severity: sev, Code: code, Message: msg, Detail: r.Why, Fix: fix, Docs: r.Docs,
 		NodeID: o.id, Attribute: path, File: file, Line: line,
@@ -109,6 +118,12 @@ func run(in input) []model.Diagnostic {
 		}
 	}
 	c.checkReplicas()
+	c.checkTopologySpread()
+	c.checkDisruptionBudgets()
+	c.checkRolloutStrategy()
+	c.checkRecommendedLabels()
+	c.checkQuotas()
+	c.checkImageDigests()
 	c.checkNetworkPolicies()
 	return c.diags
 }

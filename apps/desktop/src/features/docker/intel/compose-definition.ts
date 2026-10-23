@@ -2,7 +2,8 @@
 // extends, volumes_from), networks, named volumes, secrets and configs to
 // their declaration (this file or another compose file of the project), and
 // paths (build contexts, dockerfile, env_file, include, secret/config files)
-// to the file they name. ${VAR} goes to its line in the project's .env.
+// to the file they name. ${VAR} goes to its line in the project's .env (an
+// environment's override file: its .env.<env> first, where the key is set).
 
 import type { ComposeGraph } from "@/lib/api/types"
 import type { DefinitionTarget } from "@/features/code-intel/definition"
@@ -18,6 +19,8 @@ export interface ComposeDefinitionEnv {
   exists: (path: string) => boolean
   /** Text of a workflow file, when available (unsaved buffer or loaded content). */
   read?: (path: string) => string | undefined
+  /** The .env.<env> of an environment's override file, read before .env. */
+  envFile?: string
 }
 
 type Section = "services" | "networks" | "volumes" | "secrets" | "configs"
@@ -63,11 +66,14 @@ function envVarTarget(text: string, pos: number, env: ComposeDefinitionEnv): Def
     if (pos < from || pos > from + m[0].length) continue
     if (line[m.index - 1] === "$") return null
     const name = m[1] ?? m[2]
+    const setsName = new RegExp(`^\\s*(export\\s+)?${name}\\s*=`)
     const dotenv = joinPath(dirName(env.path), ".env")
-    if (dotenv === null || !env.exists(dotenv)) return null
-    const content = env.read?.(dotenv)
-    const no = content?.split("\n").findIndex((l) => new RegExp(`^\\s*(export\\s+)?${name}\\s*=`).test(l))
-    return { file: dotenv, line: no !== undefined && no >= 0 ? no + 1 : 1 }
+    for (const file of [env.envFile, dotenv]) {
+      if (!file || !env.exists(file)) continue
+      const no = env.read?.(file)?.split("\n").findIndex((l) => setsName.test(l))
+      if (no !== undefined && no >= 0) return { file, line: no + 1 }
+    }
+    return dotenv !== null && env.exists(dotenv) ? { file: dotenv, line: 1 } : null
   }
   return null
 }

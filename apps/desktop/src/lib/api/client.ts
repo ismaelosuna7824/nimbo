@@ -11,6 +11,12 @@ import type {
   ComposeVolumeRequest,
   ConvertKubernetesRequest,
   ConvertKubernetesResponse,
+  EnvCompare,
+  EnvironmentsView,
+  EnvSettings,
+  MonitoringRequest,
+  MonitoringResult,
+  MonitoringSummary,
   DockerImage,
   FileTemplate,
   PortConflict,
@@ -20,6 +26,7 @@ import type {
   KubeConnectRecipe,
   KubeConnectRequest,
   KubeFields,
+  KubeReadiness,
   KubeObjectPatch,
   KubeRendered,
   KubeSchema,
@@ -354,6 +361,8 @@ export const api = {
     request<{ workflow: Workflow; nodeIds: string[] }>("POST", `/workflows/${id}/kubernetes/catalog`, body),
   kubernetesRender: (id: string, environment?: string) =>
     request<KubeRendered>("GET", `/workflows/${id}/kubernetes/render${qs({ environment })}`),
+  /** Production readiness checklist of every environment (each rendered on its own). */
+  kubernetesReadiness: (id: string) => request<KubeReadiness>("GET", `/workflows/${id}/kubernetes/readiness`),
   /** Where each field of an object is written (manifest, Kustomize patch, Helm values key) or why it is read-only. */
   kubernetesFields: (id: string, node: string) => request<KubeFields>("GET", `/workflows/${id}/kubernetes/fields${qs({ node })}`),
   patchKubernetesObject: (id: string, patch: KubeObjectPatch) =>
@@ -382,6 +391,33 @@ export const api = {
   /** Docker workflow → a new Kubernetes workflow (dryRun: preview the report and generated files). */
   convertToKubernetes: (id: string, body: ConvertKubernetesRequest) =>
     request<ConvertKubernetesResponse>("POST", `/workflows/${id}/convert/kubernetes`, body),
+  /** What Add monitoring adds (or added) to a docker/Kubernetes workflow, with the local URLs once deployed. */
+  monitoring: (id: string) => request<MonitoringSummary>("GET", `/workflows/${id}/monitoring`),
+  /** Adds Prometheus, Grafana and alerting (again: regenerates the generated files, never duplicates; thresholds are kept). */
+  addMonitoring: (id: string, body?: MonitoringRequest) => request<MonitoringResult>("POST", `/workflows/${id}/monitoring`, body),
+
+  // environments of docker and Kubernetes workflows (files: overlays, values files, compose overrides, .env.<env>)
+  listEnvironments: (id: string) => request<EnvironmentsView>("GET", `/workflows/${id}/environments`),
+  /** New environment from the base (`from` empty) or a copy of `from`. */
+  createEnvironment: (id: string, body: { name: string; from?: string }) =>
+    request<Workflow>("POST", `/workflows/${id}/environments`, body),
+  renameEnvironment: (id: string, name: string, newName: string) =>
+    request<Workflow>("PATCH", `/workflows/${id}/environments/${encodeURIComponent(name)}`, { name: newName }),
+  deleteEnvironment: (id: string, name: string) =>
+    request<Workflow>("DELETE", `/workflows/${id}/environments/${encodeURIComponent(name)}`),
+  /** Each environment rendered on its own (the active one is not changed), side by side per workload/service. */
+  compareEnvironments: (id: string) => request<EnvCompare>("GET", `/workflows/${id}/environments/compare`),
+  /** The common knobs of one workload/service in one environment (empty target: the first). */
+  environmentSettings: (id: string, env: string, target?: string) =>
+    request<EnvSettings>("GET", `/workflows/${id}/environments/${encodeURIComponent(env)}/settings${qs({ target })}`),
+  /** Writes knobs into that environment's own files; null drops the environment's override. */
+  setEnvironmentSettings: (id: string, env: string, body: { target: string; values: Record<string, string | null> }) =>
+    request<Workflow>("PATCH", `/workflows/${id}/environments/${encodeURIComponent(env)}/settings`, body),
+  /** Docker: sets a variable of the environment's env file. */
+  setEnvironmentVariable: (id: string, env: string, key: string, body: { value: string; secret?: boolean }) =>
+    request<Workflow>("PUT", `/workflows/${id}/environments/${encodeURIComponent(env)}/variables/${encodeURIComponent(key)}`, body),
+  deleteEnvironmentVariable: (id: string, env: string, key: string) =>
+    request<Workflow>("DELETE", `/workflows/${id}/environments/${encodeURIComponent(env)}/variables/${encodeURIComponent(key)}`),
 }
 
 /** Subscribes to server events; returns an unsubscribe function. */

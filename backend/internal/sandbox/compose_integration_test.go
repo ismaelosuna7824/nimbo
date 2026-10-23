@@ -205,7 +205,7 @@ func TestComposeRuntime(t *testing.T) {
 	}
 
 	// 1. The busy port is reported, no run is created.
-	pre, err := m.ComposePorts(ctx, wf.ID, src, req.Files, nil)
+	pre, err := m.ComposePorts(ctx, wf.ID, src, req.Files, nil, nil)
 	if err != nil || len(pre.Conflicts) != 1 || pre.Conflicts[0].HostPort != busyPort || pre.Conflicts[0].Service != "web" || pre.Conflicts[0].SuggestedPort == 0 {
 		t.Fatalf("ports pre-check = %+v, %v", pre, err)
 	}

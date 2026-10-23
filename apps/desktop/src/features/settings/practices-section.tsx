@@ -28,6 +28,7 @@ const CATEGORIES: { id: BestPracticeRule["category"]; label: string }[] = [
   { id: "kubernetes-reliability", label: "Kubernetes reliability" },
   { id: "kubernetes-security", label: "Kubernetes security" },
   { id: "kubernetes-networking", label: "Kubernetes networking" },
+  { id: "kubernetes-hygiene", label: "Kubernetes hygiene" },
 ]
 
 /** Settings → Best-practice checks: the master switch and one switch per rule. */

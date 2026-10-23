@@ -157,11 +157,32 @@ func (e *Editor) setField(svc, field string, v *yaml.Node) error {
 	return d.Set([]string{"services", svc, field}, v)
 }
 
-// deleteField removes a service attribute from every file; an attribute
-// only inherited through a merge key is reset (!reset).
+// deleteDocs are the files a deletion of a service attribute edits: the
+// active environment's override file alone when it sets the attribute
+// (sets reports that), so the base value applies again there and the
+// base files, shared by every environment, keep theirs; else every file
+// declaring the service.
+func (e *Editor) deleteDocs(svc string, sets func(d *Doc) bool) []*Doc {
+	docs := e.serviceDocs(svc)
+	if o := e.p.Docs[e.p.Override]; o != nil && slices.Contains(docs, o) && sets(o) {
+		return []*Doc{o}
+	}
+	return docs
+}
+
+// deleteField removes a service attribute from every file (only from the
+// active environment's override when it sets it, see deleteDocs); an
+// attribute only inherited through a merge key is reset (!reset).
 func (e *Editor) deleteField(svc string, field ...string) error {
-	for _, d := range e.serviceDocs(svc) {
-		path := append([]string{"services", svc}, field...)
+	path := append([]string{"services", svc}, field...)
+	sets := func(d *Doc) bool {
+		if k, _ := d.Get(path...); k != nil {
+			return true
+		}
+		_, sv := d.Get("services", svc)
+		return len(field) == 1 && sv != nil && mergedGet(sv, field[0]) != nil
+	}
+	for _, d := range e.deleteDocs(svc, sets) {
 		if k, _ := d.Get(path...); k != nil {
 			e.mark(d.Path)
 			if err := d.Delete(path, true); err != nil {
@@ -177,6 +198,35 @@ func (e *Editor) deleteField(svc string, field ...string) error {
 					return err
 				}
 			}
+		}
+	}
+	return nil
+}
+
+// ResetOverrides makes the active environment's override file stop
+// setting attributes of service svc (named like ServiceFacts.Overrides:
+// "image", "ports", "deploy.replicas"…), so the base files' values apply
+// again. The base files are never touched.
+func (e *Editor) ResetOverrides(svc string, attrs []string) error {
+	if err := e.requireService(svc); err != nil {
+		return err
+	}
+	d := e.p.Docs[e.p.Override]
+	if d == nil {
+		return badf("no environment is active: there is no override to reset")
+	}
+	for _, a := range attrs {
+		parts := strings.Split(a, ".")
+		if a == "" || len(parts) > 2 || len(parts) == 2 && parts[0] != "deploy" {
+			return badf("invalid attribute %q: use a service key (image, ports…) or deploy.<key>", a)
+		}
+		path := append([]string{"services", svc}, parts...)
+		if k, _ := d.Get(path...); k == nil {
+			continue
+		}
+		e.mark(d.Path)
+		if err := d.Delete(path, true); err != nil {
+			return err
 		}
 	}
 	return nil
@@ -602,16 +652,26 @@ func mapKeys(d *Doc, path ...string) []string {
 
 // PatchService applies a partial update: every key present is set (null
 // deletes it); lists replace the whole value, keeping the source text
-// (quoting, ${VAR}) of the items that did not change.
+// (quoting, ${VAR}) of the items that did not change. "resetOverrides"
+// (a list of attributes, see ResetOverrides) goes first.
 func (e *Editor) PatchService(name string, patch map[string]json.RawMessage) error {
 	if err := e.requireService(name); err != nil {
 		return err
+	}
+	if raw, ok := patch["resetOverrides"]; ok {
+		var attrs []string
+		if err := json.Unmarshal(raw, &attrs); err != nil {
+			return badf("resetOverrides must be a list of attributes")
+		}
+		if err := e.ResetOverrides(name, attrs); err != nil {
+			return err
+		}
 	}
 	cur, _ := e.p.Model.Services[name]
 	// The rename goes last so the other fields find the service.
 	keys := make([]string, 0, len(patch))
 	for k := range patch {
-		if k != "name" {
+		if k != "name" && k != "resetOverrides" {
 			keys = append(keys, k)
 		}
 	}
@@ -815,9 +875,10 @@ func (e *Editor) setDeploy(svc string, path []string, v *yaml.Node) error {
 }
 
 func (e *Editor) deleteDeploy(svc string, path ...string) error {
-	for _, d := range e.serviceDocs(svc) {
-		full := append([]string{"services", svc, "deploy"}, path...)
-		if k, _ := d.Get(full...); k != nil {
+	full := append([]string{"services", svc, "deploy"}, path...)
+	sets := func(d *Doc) bool { k, _ := d.Get(full...); return k != nil }
+	for _, d := range e.deleteDocs(svc, sets) {
+		if sets(d) {
 			e.mark(d.Path)
 			if err := d.Delete(full, true); err != nil {
 				return err
@@ -834,21 +895,51 @@ type listItem struct {
 	node  *yaml.Node
 }
 
+// appends reports whether the service's field written in d is appended to
+// what earlier files write (compose appends ports, volumes, expose…
+// lists of an override file to the base's): d must then tag its list
+// !override so the service gets exactly the items wanted, not the base's
+// plus them.
+func (e *Editor) appends(d *Doc, svc, field string) bool {
+	for _, o := range e.serviceDocs(svc) {
+		if o == d {
+			return false
+		}
+		_, sv := o.Get("services", svc)
+		if mergedGet(sv, field) != nil {
+			return true
+		}
+	}
+	return false
+}
+
 // setList makes the service's list field hold items: kept items keep
 // their source; removed ones are deleted, new ones appended; a reordered
-// list is rewritten. canonOf normalizes an existing item.
+// list is rewritten. canonOf normalizes an existing item. In a file whose
+// list compose appends to an earlier file's (an environment override over
+// the base), the list is written whole and tagged !override.
 func (e *Editor) setList(svc, field string, items []listItem, canonOf func(*yaml.Node, *Project) string) error {
+	d := e.fieldDoc(svc, field)
+	path := []string{"services", svc, field}
+	merged := e.appends(d, svc, field)
+	tag := ""
+	if merged {
+		tag = "!override"
+	}
 	if len(items) == 0 {
+		if merged {
+			e.mark(d.Path)
+			return d.Set(path, Raw("!override []"))
+		}
 		return e.deleteField(svc, field)
 	}
-	d := e.fieldDoc(svc, field)
 	if err := e.own(d, svc, field); err != nil {
 		return err
 	}
-	path := []string{"services", svc, field}
 	_, v := d.Get(path...)
 	if v == nil || v.Kind != yaml.SequenceNode {
 		s := Seq()
+		s.Tag = tag
 		for _, it := range items {
 			s.Content = append(s.Content, it.node)
 		}
@@ -871,14 +962,29 @@ func (e *Editor) setList(svc, field string, items []listItem, canonOf func(*yaml
 			}
 		}
 	}
-	if !slices.ContainsFunc(match, func(m int) bool { return m >= 0 }) {
-		// Nothing kept: write the new list (block style).
+	rewrite := func() error {
 		s := Seq()
-		for _, it := range items {
-			s.Content = append(s.Content, it.node)
+		s.Tag = tag
+		for i, it := range items {
+			if match[i] >= 0 {
+				s.Content = append(s.Content, cloneNode(v.Content[match[i]]))
+			} else {
+				s.Content = append(s.Content, it.node)
+			}
 		}
 		e.mark(d.Path)
 		return d.Set(path, s)
+	}
+	if v.Tag == "!override" {
+		tag = v.Tag
+	} else if merged {
+		// Items added or removed in place would merge with the earlier
+		// files' list: write it whole, tagged.
+		return rewrite()
+	}
+	if !slices.ContainsFunc(match, func(m int) bool { return m >= 0 }) {
+		// Nothing kept: write the new list (block style).
+		return rewrite()
 	}
 	last := -1
 	ordered := true
@@ -890,18 +996,6 @@ func (e *Editor) setList(svc, field string, items []listItem, canonOf func(*yaml
 			last = m
 		}
 	}
-	if !ordered {
-		s := Seq()
-		for i, it := range items {
-			if match[i] >= 0 {
-				s.Content = append(s.Content, cloneNode(v.Content[match[i]]))
-			} else {
-				s.Content = append(s.Content, it.node)
-			}
-		}
-		e.mark(d.Path)
-		return d.Set(path, s)
-	}
 	// New items must come after the kept ones to be appended.
 	seenNew := false
 	for _, m := range match {
@@ -912,16 +1006,7 @@ func (e *Editor) setList(svc, field string, items []listItem, canonOf func(*yaml
 		}
 	}
 	if !ordered {
-		s := Seq()
-		for i, it := range items {
-			if match[i] >= 0 {
-				s.Content = append(s.Content, cloneNode(v.Content[match[i]]))
-			} else {
-				s.Content = append(s.Content, it.node)
-			}
-		}
-		e.mark(d.Path)
-		return d.Set(path, s)
+		return rewrite()
 	}
 	for j := len(old) - 1; j >= 0; j-- {
 		if !used[j] {
@@ -1231,8 +1316,16 @@ func (e *Editor) envSet(svc, key string, value *string) error {
 	return d.Set(append(path, key), val)
 }
 
+// envDelete removes key from the service's environment in every file
+// (only from the active environment's override when it sets it, see
+// deleteDocs).
 func (e *Editor) envDelete(svc, key string) error {
-	for _, d := range e.serviceDocs(svc) {
+	sets := func(d *Doc) bool {
+		_, sv := d.Get("services", svc)
+		_, ok := envEntries(Resolve(mergedGet(sv, "environment")))[key]
+		return ok
+	}
+	for _, d := range e.deleteDocs(svc, sets) {
 		path := []string{"services", svc, "environment"}
 		k, v := d.Get(path...)
 		if k == nil {

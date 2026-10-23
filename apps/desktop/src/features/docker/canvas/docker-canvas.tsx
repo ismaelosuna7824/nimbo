@@ -32,6 +32,7 @@ import {
 import { Button } from "@/components/ui/button"
 import { ContextMenu, ContextMenuContent, ContextMenuItem, ContextMenuSeparator, ContextMenuTrigger } from "@/components/ui/context-menu"
 import { Empty, EmptyContent, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from "@/components/ui/empty"
+import { EnvironmentSwitch } from "@/features/environments/environment-switch"
 import { useEndpoints } from "@/features/panels/endpoints/use-endpoints"
 import { revealFiles } from "@/features/panels/terraform/reveal-files"
 import { api } from "@/lib/api/client"
@@ -343,6 +344,10 @@ function CanvasInner() {
               <Background variant={BackgroundVariant.Dots} gap={16} size={1.2} />
               <Controls showInteractive={false} position="bottom-left" />
               <MiniMap pannable zoomable nodeColor={minimapColor} nodeStrokeWidth={0} position="bottom-right" style={{ width: 168, height: 112 }} className="!rounded-lg !border" />
+              {/* Right of the Build/Architecture switch the canvas area draws at the top left. */}
+              <Panel position="top-left" style={{ marginLeft: 232 }}>
+                <EnvironmentSwitch className="bg-background/80 backdrop-blur" />
+              </Panel>
               {canvas.items.length > 0 && (
                 <Panel position="top-right">
                   <Button variant="outline" size="sm" className="bg-background/80 backdrop-blur" onClick={() => void tidy()}>

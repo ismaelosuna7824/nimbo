@@ -120,6 +120,111 @@ export interface Environment {
   file?: string
 }
 
+/** GET /workflows/{id}/environments (docker and Kubernetes): environments are files on top of the base. */
+export interface EnvironmentsView {
+  kind: WorkflowKind
+  /** "" = the base. */
+  active: string
+  environments: EnvironmentInfo[]
+  sources: EnvironmentSource[]
+  /** How environments map to files for this workflow. */
+  note?: string
+  /** Docker: what every environment builds on (the compose files, then .env when it exists). */
+  baseFiles?: string[]
+}
+
+export interface EnvironmentInfo {
+  name: string
+  active: boolean
+  prodLike: boolean
+  /** What it renders on top of the base: "overlays/prod", "chart/values-prod.yaml", "compose.prod.yaml", ".env.prod". */
+  files: string[]
+  /** Docker: the environment's env file variables. */
+  variables?: EnvironmentVariable[]
+  changes?: EnvironmentChange[]
+}
+
+/** A deployable unit and whether it takes environments (Kustomize and Helm do, plain manifests don't). */
+export interface EnvironmentSource {
+  label: string
+  kind: string
+  path: string
+  supported: boolean
+  note?: string
+}
+
+export interface EnvironmentVariable {
+  key: string
+  /** Absent when secret. */
+  value?: string
+  secret: boolean
+  /** The inherited base value (absent: none, or secret). */
+  base?: string
+  /** The base .env sets it too (secrets included). */
+  inBase: boolean
+  /** Set in this environment's own file. */
+  overridden: boolean
+  file: string
+}
+
+export interface EnvironmentChange {
+  target: string
+  field: string
+  base: string
+  value: string
+}
+
+/** GET /workflows/{id}/environments/compare: every environment rendered on its own, per workload/service. */
+export interface EnvCompare {
+  /** The base (name "") first. */
+  columns: { name: string; label: string }[]
+  groups: EnvCompareGroup[]
+  /** Render errors by environment ("" = base). */
+  errors?: Record<string, string>
+}
+
+export interface EnvCompareGroup {
+  id: string
+  label: string
+  kind: string
+  rows: EnvCompareRow[]
+}
+
+export interface EnvCompareRow {
+  key: string
+  label: string
+  /** Aligned with EnvCompare.columns ("" = not set / not rendered). */
+  values: string[]
+  differs: boolean
+}
+
+/** GET /workflows/{id}/environments/{env}/settings: the common knobs of one workload/service. */
+export interface EnvSettings {
+  environment: string
+  target: string
+  targets: { id: string; label: string; kind: string }[]
+  /** Where this environment's edits go. */
+  file?: string
+  settings: EnvSetting[]
+  note?: string
+}
+
+export interface EnvSetting {
+  /** Opaque: sent back to PATCH …/settings. */
+  key: string
+  label: string
+  group: string
+  type: "int" | "string" | "cpu" | "memory"
+  /** Rendered in this environment ("" = not set). */
+  value: string
+  /** Rendered in the base. */
+  base?: string
+  /** This environment's own file sets it. */
+  overridden: boolean
+  editable: boolean
+  reason?: string
+}
+
 export type Severity = "error" | "warning" | "info"
 
 /**
@@ -859,7 +964,7 @@ export interface LoadStage {
 }
 
 export interface LoadProfile {
-  preset: "smoke" | "load" | "stress" | "spike" | "soak" | "custom"
+  preset: "smoke" | "load" | "stress" | "spike" | "soak" | "autoscale" | "custom"
   label?: string
   description?: string
   mode: LoadMode
@@ -932,6 +1037,8 @@ export interface LoadTestRun {
   id: string
   workflowId?: string
   connectionId?: string
+  /** Kubernetes workflows: the active environment when the run started ("" / absent: base). */
+  environment?: string
   /** Traffic left the local sandbox. */
   external?: boolean
   spec: LoadTestSpec
@@ -942,7 +1049,7 @@ export interface LoadTestRun {
   summary?: LoadSummary
   thresholds?: ThresholdResult[]
   error?: string
-  /** Runs against a docker workflow's service: container usage during the run (set once it ends). */
+  /** Runs against a docker or Kubernetes workflow's service: container usage during the run (set once it ends). */
   resources?: LoadResources
 }
 
@@ -986,6 +1093,51 @@ export interface LoadResources {
   services: LoadServiceResources[]
   verdicts: LoadVerdict[]
   /** Headline, e.g. "api reached 98% of its 0.25 CPU limit at 80 req/s — CPU-bound; raise limits or add replicas". */
+  verdict: string
+  note?: string
+  /** Kubernetes runs: replicas and HPA status of the workloads in scope, and the autoscaling verdict. */
+  scaling?: LoadScaling
+}
+
+export type ScalingKind = "scaled" | "late" | "maxed" | "no_hpa" | "no_metrics" | "not_needed" | "too_short"
+
+/** One second of a workload's replicas; t shares LoadSample.t's axis. */
+export interface ScalingPoint {
+  t: number
+  /** spec.replicas: what the HPA asked for. */
+  desired: number
+  ready: number
+  /** HPA's average CPU utilization (% of requests, refreshed ~every 15 s). */
+  cpuUtilization?: number
+}
+
+export interface HPAPolicy {
+  name: string
+  min: number
+  max: number
+  /** Average CPU utilization target (% of requests); absent when the HPA does not scale on CPU. */
+  targetCpu?: number
+}
+
+export interface WorkloadScaling {
+  nodeId: string
+  workload: string
+  target?: boolean
+  hpa?: HPAPolicy
+  timeline: ScalingPoint[]
+  kind: ScalingKind
+  message: string
+  scaleUpAt?: number
+  readyAt?: number
+  degradedAt?: number
+  degradedFor?: number
+  peakReplicas: number
+  peakCpuUtilization?: number
+}
+
+export interface LoadScaling {
+  workloads: WorkloadScaling[]
+  /** Headline sentence. */
   verdict: string
   note?: string
 }
@@ -1188,6 +1340,7 @@ export interface BestPracticeRule {
     | "kubernetes-reliability"
     | "kubernetes-security"
     | "kubernetes-networking"
+    | "kubernetes-hygiene"
   /** Default severity (a few findings of a rule may be lower). */
   severity: Severity
   description: string
@@ -1501,6 +1654,21 @@ export interface ComposeModel {
   /** ${VAR} references with no value in .env and no default. */
   unresolved?: string[]
   graph: ComposeGraph
+  /** Environment the graph was derived for (the active one when its override file exists; absent = base). */
+  environment?: string
+  /** Environments: compose.<env>.yaml override files next to the first compose file, plus .env.<env>. */
+  environments?: ComposeEnvironment[]
+}
+
+/** A docker environment: `docker compose -f compose.yaml [-f <file>] --env-file .env --env-file <envFile>`; either file alone is enough. */
+export interface ComposeEnvironment {
+  name: string
+  /** The override file (compose.prod.yaml); absent when the environment only changes variables. */
+  file?: string
+  /** Its env file as named: .env.<env> or <env>.env. */
+  envFile?: string
+  /** file then envFile: what the environment adds to the base. */
+  files: string[]
 }
 
 export interface ComposeGraph {
@@ -1611,6 +1779,8 @@ export interface ServiceFacts {
   platform?: string
   /** "svc" or "file#svc". */
   extends?: string
+  /** Attributes the active environment's override file sets ("image", "ports", "environment", "deploy.replicas", "deploy.resources"…): edits of them go there. */
+  overrides?: string[]
 }
 
 export interface StageFacts {
@@ -1750,6 +1920,8 @@ export interface ServicePatch {
   containerName?: string | null
   expose?: string[] | null
   envFiles?: string[] | null
+  /** Attributes (as in ServiceFacts.overrides) the active environment's override file stops setting: the base values apply again. */
+  resetOverrides?: string[]
 }
 
 export interface ComposeNetworkRequest {
@@ -2061,6 +2233,28 @@ export interface KubernetesModel {
 export interface KubeGraph {
   nodes: KubeNode[]
   edges: KubeEdge[]
+  /** Third-party charts vendored in Helm sources: the canvas collapses each into one release node. */
+  charts?: KubeChartGroup[]
+}
+
+/** A chart vendored from a repository (palette "Add chart", monitoring), as one canvas node. */
+export interface KubeChartGroup {
+  /** "chart:<vendored subchart path>" ("chart:charts/monitoring/charts/kube-prometheus-stack"). */
+  id: string
+  source: number
+  sourcePath: string
+  /** The vendored chart's name, version and appVersion. */
+  chart: string
+  version?: string
+  appVersion?: string
+  repository?: string
+  release: string
+  namespace: string
+  /** Values files in merge order (the source chart's values.yaml first). */
+  valuesFiles?: string[]
+  objects: number
+  /** Saved position of the collapsed node. */
+  position?: Position
 }
 
 export type KubeCategory = "workload" | "network" | "config" | "storage" | "autoscaling" | "rbac" | "cluster" | "custom"
@@ -2093,6 +2287,8 @@ export interface KubeNode {
   /** ConfigMap/Secret keys (values never sent). */
   data?: string[]
   custom?: boolean
+  /** KubeChartGroup id of the vendored chart that renders it (absent for the workflow's own objects). */
+  chart?: string
 }
 
 export interface KubeWorkload {
@@ -2524,6 +2720,60 @@ export interface ConvertKubernetesRequest {
   namespace?: string
   /** Preview: the report and generated files, nothing created. */
   dryRun?: boolean
+  /** Size requests/limits from the newest usable load test (default true when there is one). */
+  sizeFromLoadTest?: boolean
+  /** Size from this load test run instead of the newest. */
+  loadTestRunId?: string
+  /** Prod HorizontalPodAutoscalers (Kustomize/Helm). Defaults: enabled, 5 max replicas, 70% CPU. */
+  autoscaling?: { enabled?: boolean; maxReplicas?: number; targetCpu?: number }
+}
+
+export type KubeSizingSource = "load_test" | "compose" | "default"
+
+/** The load test run a conversion sizes from. */
+export interface KubeConvertLoadTest {
+  runId: string
+  name?: string
+  /** Compose service the test hit. */
+  target?: string
+  startedAt: string
+  /** Seconds of load. */
+  seconds: number
+  rps: number
+  peakRps: number
+  /** Compose services it measured that still exist. */
+  services: string[]
+  /** False when sizing from it was turned off. */
+  used: boolean
+}
+
+export interface KubeResourceQty {
+  cpu: string
+  memory: string
+}
+
+/** A service's requests/limits and where they come from. */
+export interface KubeConvertSizing {
+  service: string
+  source: KubeSizingSource
+  requests: KubeResourceQty
+  limits: KubeResourceQty
+  /** Per-container usage the load test recorded (cores, bytes). */
+  measured?: { cpuP90: number; cpuPeak: number; memPeak: number }
+  /** The service hit its Docker limit during the test: the measurement is a lower bound. */
+  censored?: "cpu" | "memory" | "single-core"
+  /** Where the numbers come from, one line. */
+  detail: string
+}
+
+/** A HorizontalPodAutoscaler the conversion wrote. */
+export interface KubeConvertHPA {
+  service: string
+  environment: string
+  minReplicas: number
+  maxReplicas: number
+  /** averageUtilization, % of the CPU request. */
+  targetCpu: number
 }
 
 export interface KubeConvertReport {
@@ -2538,6 +2788,10 @@ export interface KubeConvertReport {
   mappings: { service?: string; from: string; to: string }[]
   /** What couldn't be mapped (or only approximately): why and what to do. */
   unmapped: { service?: string; feature: string; detail: string; severity: "warning" | "info"; file?: string; line?: number }[]
+  /** The load test it can size from (absent when the workflow has no usable run). */
+  loadTest?: KubeConvertLoadTest
+  sizing: KubeConvertSizing[]
+  autoscaling: KubeConvertHPA[]
 }
 
 export interface ConvertKubernetesResponse {
@@ -2546,4 +2800,139 @@ export interface ConvertKubernetesResponse {
   report: KubeConvertReport
   /** Dry run: the generated files by path. */
   files?: Record<string, string>
+}
+
+// ---------------------------------------------------------------------------
+// Monitoring (GET/POST /workflows/{id}/monitoring)
+
+export interface MonitoringComponent {
+  name: string
+  /** Pinned image or chart. */
+  image: string
+  purpose: string
+}
+
+export interface MonitoringAlert {
+  name: string
+  severity: "warning" | "critical"
+  /** Workload ("shop/Deployment/api") or compose service. */
+  target: string
+  summary: string
+}
+
+export interface MonitoringScrape {
+  target: string
+  port: string
+  path: string
+  via: string
+}
+
+export interface MonitoringLink {
+  name: "Grafana" | "Prometheus" | "Alertmanager"
+  url?: string
+  /** Deployed and reachable at url. */
+  running: boolean
+}
+
+export interface MonitoringCredentials {
+  user: string
+  password?: string
+  /** Where the password is stored. */
+  source: string
+}
+
+export interface MonitoringSummary {
+  kind: "docker" | "kubernetes"
+  /** The workflow has the generated monitoring (adding again updates it). */
+  enabled: boolean
+  components: MonitoringComponent[]
+  files: string[]
+  alerts: MonitoringAlert[]
+  scrapes: MonitoringScrape[]
+  dashboards: string[]
+  /** Per workload/service: where its HTTP alerts' request metrics come from (empty: no request metrics, no HTTP alert). */
+  http: MonitoringHTTP[]
+  thresholds: MonitoringThresholds
+  links: MonitoringLink[]
+  credentials?: MonitoringCredentials
+  /** Requested (Kubernetes) or reserved (docker) CPU, memory and disk. */
+  cost: { cpuMillis: number; memoryBytes: number; diskBytes: number }
+  notes?: string[]
+}
+
+export type MonitoringHTTPSource = "traefik" | "ingress-nginx" | "otel"
+
+export interface MonitoringHTTP {
+  target: string
+  sources: MonitoringHTTPSource[]
+}
+
+export interface MonitoringThresholds {
+  /** 5xx share of requests that fires the error alert (5m). */
+  errorPercent: number
+  /** p95 latency that fires the latency alert (10m). */
+  latencyP95Ms: number
+  /** Below this traffic neither HTTP alert fires. */
+  minRequestsPerSecond: number
+}
+
+export interface MonitoringRequest {
+  /** Zero/omitted fields keep the current thresholds (else the defaults). */
+  thresholds?: Partial<MonitoringThresholds>
+}
+
+export interface MonitoringResult {
+  workflow: Workflow
+  summary: MonitoringSummary
+}
+
+// ---------------------------------------------------------------------------
+// Production readiness (GET /workflows/{id}/kubernetes/readiness)
+
+export type ReadinessStatus = "ready" | "needs_work" | "blocked"
+
+/** info passes with suggestions; todo is not verified yet (no load test); skip does not apply. */
+export type ReadinessItemStatus = "pass" | "info" | "warn" | "fail" | "todo" | "skip"
+
+export type ReadinessActionKind = "open_problem" | "run_load_test" | "open_load_test" | "add_monitoring"
+
+export interface ReadinessAction {
+  kind: ReadinessActionKind
+  label: string
+  /** The load test run (open_load_test). */
+  runId?: string
+}
+
+export interface ReadinessItem {
+  id: string
+  title: string
+  status: ReadinessItemStatus
+  message: string
+  /** The k8s_* rules the item is made of. */
+  codes?: string[]
+  diagnostics?: Diagnostic[]
+  action?: ReadinessAction
+}
+
+export interface ReadinessGroup {
+  id: "reliability" | "scaling" | "monitoring" | "security" | "hygiene"
+  title: string
+  items: ReadinessItem[]
+}
+
+export interface EnvironmentReadiness {
+  /** "" is the base of a workflow without environments (checked as production). */
+  name: string
+  productionLike: boolean
+  status: ReadinessStatus
+  /** 0-100: passed items count fully, warnings and untested items half, failures nothing. */
+  score: number
+  summary: string
+  groups: ReadinessGroup[]
+}
+
+export interface KubeReadiness {
+  workflowId: string
+  activeEnvironment: string
+  environments: EnvironmentReadiness[]
 }

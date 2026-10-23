@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"helm.sh/helm/v4/pkg/action"
+	chartutil "helm.sh/helm/v4/pkg/chart/v2/util"
 	"helm.sh/helm/v4/pkg/kube"
 	releasev1 "helm.sh/helm/v4/pkg/release/v1"
 	"helm.sh/helm/v4/pkg/storage/driver"
@@ -148,6 +149,9 @@ func (m *Manager) helmUpgrade(ctx context.Context, rs *runState, kc *kubeClient,
 	if _, err := kc.ensureNamespace(ctx, ns); err != nil {
 		return nil, fmt.Errorf("create namespace %s: %w", ns, err)
 	}
+	if err := m.applyChartCRDs(ctx, rs, kc, h); err != nil {
+		return nil, err
+	}
 	cfg, err := m.helmConfig(rs, kc, ns)
 	if err != nil {
 		return nil, err
@@ -166,6 +170,7 @@ func (m *Manager) helmUpgrade(ctx context.Context, rs *runState, kc *kubeClient,
 		in.WaitStrategy = kube.HookOnlyStrategy // the rollout wait follows, with Nimbo's diagnosis
 		in.Timeout = timeout
 		in.ForceConflicts = true
+		in.SkipCRDs = true // applied above, established before the templates need them
 		in.PostRenderer = post
 		rel, err = in.RunWithContext(ctx, h.Chart, h.Values)
 	case herr != nil:
@@ -197,6 +202,41 @@ func (m *Manager) helmUpgrade(ctx context.Context, rs *runState, kc *kubeClient,
 	}
 	m.logLine(rs, "stdout", fmt.Sprintf("Helm release %s: revision %d %s", r.Name, r.Version, status))
 	return manifestRefs(r.Manifest, ns, kc), nil
+}
+
+// applyChartCRDs server-side applies the crds/ files of the chart and its
+// enabled dependencies and waits until each is established. Helm's own CRD
+// install only waits with the release's wait strategy (HookOnly here), so
+// the templates using them (kube-prometheus-stack's ServiceMonitors) could
+// not map yet; Helm also never updates CRDs on upgrade, which apply does.
+func (m *Manager) applyChartCRDs(ctx context.Context, rs *runState, kc *kubeClient, h *KubeHelmRelease) error {
+	if err := chartutil.ProcessDependencies(h.Chart, h.Values); err != nil {
+		return fmt.Errorf("chart dependencies: %w", err)
+	}
+	crds := h.Chart.CRDObjects()
+	if len(crds) == 0 {
+		return nil
+	}
+	m.logLine(rs, "system", fmt.Sprintf("Applying %d CustomResourceDefinition file(s) of chart %s", len(crds), h.Chart.Name()))
+	for _, crd := range crds {
+		for _, doc := range splitYAMLDocs(string(crd.File.Data)) {
+			var obj map[string]any
+			if err := yaml.Unmarshal([]byte(doc), &obj); err != nil {
+				return fmt.Errorf("CRD %s: %w", crd.Filename, err)
+			}
+			if obj == nil {
+				continue
+			}
+			name, _ := objMeta(obj)
+			if err := kc.applyObject(ctx, obj); err != nil {
+				return fmt.Errorf("apply CustomResourceDefinition %s: %s", name, apiMessage(err))
+			}
+			if err := kc.waitCRD(ctx, name); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
 }
 
 // manifestRefs lists the objects of a rendered release manifest.

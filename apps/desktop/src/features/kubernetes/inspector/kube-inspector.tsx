@@ -15,15 +15,17 @@ import { cn } from "@/lib/utils"
 import { useWorkflowStore } from "@/state/workflow-store"
 import { deleteObject, restartWorkload } from "../actions"
 import { podDot } from "../canvas/model"
+import { ChartInspector } from "./chart-inspector"
 import { KubeFieldsContext } from "./kube-fields"
 import { ClaimForm, HpaForm, IngressForm, ServiceForm } from "./object-forms"
 import { WorkloadForm } from "./workload-form"
 
-/** The inspector of a Kubernetes workspace's selected object (null when nothing of the graph is selected). */
+/** The inspector of a Kubernetes workspace's selected object or chart (null when nothing of the graph is selected). */
 export function KubeInspector() {
   const graph = useWorkflowStore((s) => s.workflow!.kubernetes?.graph)
   const selected = useWorkflowStore((s) => s.selectedNodeId)
   const node = graph?.nodes.find((n) => n.id === selected)
+  if (graph && selected && graph.charts?.some((c) => c.id === selected)) return <ChartInspector key={selected} graph={graph} chartId={selected} />
   if (!node) return null
   return <NodeInspector key={node.id} node={node} />
 }
@@ -78,6 +80,8 @@ function NodeInspector({ node }: { node: KubeNode }) {
 
 function Header({ node, status }: { node: KubeNode; status?: KubeWorkloadStatus }) {
   const chart = useWorkflowStore((s) => s.workflow!.kubernetes?.sources[node.source]?.chart)
+  const vendored = useWorkflowStore((s) => (node.chart ? s.workflow!.kubernetes?.graph.charts?.find((c) => c.id === node.chart) : undefined))
+  const select = useWorkflowStore((s) => s.select)
   const restartable = node.workload && node.kind !== "Job" && node.kind !== "CronJob" && node.kind !== "Pod"
   const clusterUp = useWorkflowStore((s) => s.kube?.cluster.state === "running")
   return (
@@ -93,7 +97,14 @@ function Header({ node, status }: { node: KubeNode; status?: KubeWorkloadStatus 
         </div>
         <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
           <Badge variant="secondary">{node.kind}</Badge>
-          {node.sourceKind === "helm" ? (
+          {vendored ? (
+            <Badge variant="outline" className="gap-1" asChild>
+              <button type="button" data-testid="k8s-inspector-chart" title="Show the chart's release" onClick={() => select(vendored.id)}>
+                <TechIcon icon="helm" size={12} />
+                {vendored.chart} {vendored.version}
+              </button>
+            </Badge>
+          ) : node.sourceKind === "helm" ? (
             <Badge variant="outline" className="gap-1">
               <TechIcon icon="helm" size={12} />
               {chart ? `${chart.name} ${chart.version}` : node.sourcePath}

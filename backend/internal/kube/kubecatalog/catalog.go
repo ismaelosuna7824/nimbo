@@ -144,6 +144,12 @@ func defaultName(id string) string {
 
 func labels(name string) *yaml.Node { return m("app", name) }
 
+// appLabels are a workload's recommended labels: app.kubernetes.io/name is
+// what it runs, instance this copy (k8s_recommended_labels).
+func appLabels(app, name string) *yaml.Node {
+	return m("app.kubernetes.io/name", app, "app.kubernetes.io/instance", name)
+}
+
 func requests(cpu, mem, limit string) *yaml.Node {
 	return m("requests", m("cpu", cpu, "memory", mem), "limits", m("memory", limit))
 }
@@ -189,7 +195,7 @@ var starters = []starter{
 	{Item{ID: "deployment-service", Label: "Deployment + Service", Description: "A stateless web workload (NGINX, non-root on 8080) with probes, resources and a Service", Category: model.KubeCatWorkload, Kinds: []string{"Deployment", "Service"}},
 		func(name, ns string) []*yaml.Node {
 			return []*yaml.Node{
-				obj("apps/v1", "Deployment", meta(name, ns, nil), "spec", m(
+				obj("apps/v1", "Deployment", meta(name, ns, appLabels(name, name)), "spec", m(
 					"replicas", 1,
 					"selector", m("matchLabels", labels(name)),
 					"template", m("metadata", m("labels", labels(name)), "spec", m(
@@ -213,7 +219,7 @@ var starters = []starter{
 		func(name, ns string) []*yaml.Node {
 			return []*yaml.Node{
 				service(name, ns, true, svcPort("redis", 6379, "redis")),
-				obj("apps/v1", "StatefulSet", meta(name, ns, nil), "spec", m(
+				obj("apps/v1", "StatefulSet", meta(name, ns, appLabels(name, name)), "spec", m(
 					"serviceName", name,
 					"replicas", 1,
 					"selector", m("matchLabels", labels(name)),
@@ -241,7 +247,7 @@ var starters = []starter{
 		}},
 	{Item{ID: "daemonset", Label: "DaemonSet", Description: "One pod on every node (node agents: log shippers, monitoring exporters)", Category: model.KubeCatWorkload, Kinds: []string{"DaemonSet"}},
 		func(name, ns string) []*yaml.Node {
-			return []*yaml.Node{obj("apps/v1", "DaemonSet", meta(name, ns, nil), "spec", m(
+			return []*yaml.Node{obj("apps/v1", "DaemonSet", meta(name, ns, appLabels(name, name)), "spec", m(
 				"selector", m("matchLabels", labels(name)),
 				"template", m("metadata", m("labels", labels(name)), "spec", m(
 					"securityContext", nonRoot(65534, false),
@@ -259,7 +265,7 @@ var starters = []starter{
 		}},
 	{Item{ID: "job", Label: "Job", Description: "A task that runs to completion once (migrations, imports); retried up to twice and cleaned up after 10 minutes", Category: model.KubeCatWorkload, Kinds: []string{"Job"}},
 		func(name, ns string) []*yaml.Node {
-			return []*yaml.Node{obj("batch/v1", "Job", meta(name, ns, nil), "spec", m(
+			return []*yaml.Node{obj("batch/v1", "Job", meta(name, ns, appLabels(name, name)), "spec", m(
 				"backoffLimit", 2,
 				"ttlSecondsAfterFinished", 600,
 				"template", m("metadata", m("labels", labels(name)), "spec", m(
@@ -278,7 +284,7 @@ var starters = []starter{
 		}},
 	{Item{ID: "cronjob", Label: "CronJob", Description: "A task on a schedule (every 5 minutes); runs never overlap and old runs are cleaned up", Category: model.KubeCatWorkload, Kinds: []string{"CronJob"}},
 		func(name, ns string) []*yaml.Node {
-			return []*yaml.Node{obj("batch/v1", "CronJob", meta(name, ns, nil), "spec", m(
+			return []*yaml.Node{obj("batch/v1", "CronJob", meta(name, ns, appLabels(name, name)), "spec", m(
 				"schedule", "*/5 * * * *",
 				"concurrencyPolicy", "Forbid",
 				"successfulJobsHistoryLimit", 3,
@@ -552,7 +558,7 @@ func imageObjects(im model.DockerImage, name, ns string) []*yaml.Node {
 		out = append(out, service(name, ns, stateful, ports...))
 	}
 	if stateful {
-		out = append(out, obj("apps/v1", "StatefulSet", meta(name, ns, nil), "spec", m(
+		out = append(out, obj("apps/v1", "StatefulSet", meta(name, ns, appLabels(im.ID, name)), "spec", m(
 			"serviceName", name,
 			"replicas", 1,
 			"selector", m("matchLabels", labels(name)),
@@ -561,7 +567,7 @@ func imageObjects(im model.DockerImage, name, ns string) []*yaml.Node {
 		)))
 		return out
 	}
-	out = append(out, obj("apps/v1", "Deployment", meta(name, ns, nil), "spec", m(
+	out = append(out, obj("apps/v1", "Deployment", meta(name, ns, appLabels(im.ID, name)), "spec", m(
 		"replicas", 1,
 		"selector", m("matchLabels", labels(name)),
 		"template", tmpl,

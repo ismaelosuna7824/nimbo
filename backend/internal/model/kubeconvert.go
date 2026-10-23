@@ -1,5 +1,7 @@
 package model
 
+import "time"
+
 // Converting a docker workflow into a Kubernetes one
 // (POST /workflows/{id}/convert/kubernetes).
 
@@ -24,6 +26,72 @@ type KubeConvertReport struct {
 	Objects      []KubeConvertObj   `json:"objects"`
 	Mappings     []KubeConvertMap   `json:"mappings"`
 	Unmapped     []KubeConvertIssue `json:"unmapped"`
+	// LoadTest is the docker workflow's load test run the conversion can
+	// size requests/limits from (nil when there is none usable); Used
+	// tells whether it did.
+	LoadTest *KubeConvertLoadTest `json:"loadTest,omitempty"`
+	// Sizing is where each service's requests/limits come from.
+	Sizing []KubeConvertSizing `json:"sizing"`
+	// Autoscaling lists the HorizontalPodAutoscalers written, per
+	// environment.
+	Autoscaling []KubeConvertHPA `json:"autoscaling"`
+}
+
+// Sizing sources (KubeConvertSizing.Source).
+const (
+	SizingLoadTest = "load_test" // at least one value comes from a load test's measurements
+	SizingCompose  = "compose"   // deploy.resources / cpus / mem_limit, the rest defaulted
+	SizingDefault  = "default"   // nothing set or measured: defaults
+)
+
+// KubeConvertLoadTest is the load test run a conversion sizes from.
+type KubeConvertLoadTest struct {
+	RunID     string    `json:"runId"`
+	Name      string    `json:"name,omitempty"`
+	Target    string    `json:"target,omitempty"` // compose service the test hit
+	StartedAt time.Time `json:"startedAt"`
+	Seconds   float64   `json:"seconds"` // load duration
+	RPS       float64   `json:"rps"`
+	PeakRPS   float64   `json:"peakRps"`
+	Services  []string  `json:"services"` // compose services it measured that still exist
+	Used      bool      `json:"used"`     // false: sizeFromLoadTest was turned off
+}
+
+// KubeResourceQty is a pair of Kubernetes quantities ("250m", "192Mi").
+type KubeResourceQty struct {
+	CPU    string `json:"cpu"`
+	Memory string `json:"memory"`
+}
+
+// KubeConvertSizing is the requests/limits of one service and their
+// provenance.
+type KubeConvertSizing struct {
+	Service  string          `json:"service"`
+	Source   string          `json:"source"` // load_test | compose | default
+	Requests KubeResourceQty `json:"requests"`
+	Limits   KubeResourceQty `json:"limits"`
+	// Measured is the per-container usage the load test recorded.
+	Measured *KubeMeasuredUsage `json:"measured,omitempty"`
+	// Censored: the service hit its Docker limit during the test (cpu,
+	// memory or single-core), so the measurement is a lower bound.
+	Censored string `json:"censored,omitempty"`
+	Detail   string `json:"detail"` // where the numbers come from, one line
+}
+
+// KubeMeasuredUsage is one container's usage during a load test.
+type KubeMeasuredUsage struct {
+	CPUP90  float64 `json:"cpuP90"`  // cores
+	CPUPeak float64 `json:"cpuPeak"` // cores
+	MemPeak int64   `json:"memPeak"` // bytes
+}
+
+// KubeConvertHPA is a HorizontalPodAutoscaler the conversion wrote.
+type KubeConvertHPA struct {
+	Service     string `json:"service"`
+	Environment string `json:"environment"`
+	MinReplicas int    `json:"minReplicas"`
+	MaxReplicas int    `json:"maxReplicas"`
+	TargetCPU   int    `json:"targetCpu"` // averageUtilization, % of the CPU request
 }
 
 // KubeConvertObj is one object written (for Helm: rendered with the

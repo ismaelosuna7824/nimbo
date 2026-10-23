@@ -367,27 +367,9 @@ func (p *Project) serviceFacts(s types.ServiceConfig) *model.ServiceFacts {
 		f.Replicas = &r
 	}
 	// Environment: env_file values first, `environment` wins.
-	fromFile := map[string]string{}
-	values := map[string]*string{}
+	values, fromFile := p.serviceEnv(s)
 	for _, ef := range s.EnvFiles {
-		rel := p.rel(ef.Path)
-		f.EnvFiles = append(f.EnvFiles, rel)
-		data, err := p.read(rel)
-		if err != nil {
-			continue
-		}
-		vars, err := parseDotenv(data, p.Env)
-		if err != nil {
-			continue
-		}
-		for k, v := range vars {
-			v := v
-			values[k], fromFile[k] = &v, rel
-		}
-	}
-	for k, v := range s.Environment {
-		values[k] = v
-		delete(fromFile, k)
+		f.EnvFiles = append(f.EnvFiles, p.rel(ef.Path))
 	}
 	raw := p.RawEnv(s.Name)
 	for _, k := range sortedKeys(values) {
@@ -467,7 +449,60 @@ func (p *Project) serviceFacts(s types.ServiceConfig) *model.ServiceFacts {
 		}
 		f.BaseImages = p.baseImages(s)
 	}
+	f.Overrides = p.overrides(s.Name)
 	return f
+}
+
+// overrides are the attributes of service name the active environment's
+// override file sets (deploy's children as "deploy.<key>").
+func (p *Project) overrides(name string) []string {
+	d := p.Docs[p.Override]
+	if d == nil {
+		return nil
+	}
+	_, sv := d.Get("services", name)
+	if sv == nil || sv.Kind != yaml.MappingNode {
+		return nil
+	}
+	var out []string
+	for i := 0; i+1 < len(sv.Content); i += 2 {
+		k, v := sv.Content[i].Value, Resolve(sv.Content[i+1])
+		if k == "deploy" && v != nil && v.Kind == yaml.MappingNode {
+			for j := 0; j+1 < len(v.Content); j += 2 {
+				out = append(out, "deploy."+v.Content[j].Value)
+			}
+			continue
+		}
+		out = append(out, k)
+	}
+	return out
+}
+
+// serviceEnv is the environment a service's containers get: env_file
+// values first, `environment` wins; fromFile names the env_file of the
+// values that come from one.
+func (p *Project) serviceEnv(s types.ServiceConfig) (values map[string]*string, fromFile map[string]string) {
+	values, fromFile = map[string]*string{}, map[string]string{}
+	for _, ef := range s.EnvFiles {
+		rel := p.rel(ef.Path)
+		data, err := p.read(rel)
+		if err != nil {
+			continue
+		}
+		vars, err := parseDotenv(data, p.Env)
+		if err != nil {
+			continue
+		}
+		for k, v := range vars {
+			v := v
+			values[k], fromFile[k] = &v, rel
+		}
+	}
+	for k, v := range s.Environment {
+		values[k] = v
+		delete(fromFile, k)
+	}
+	return values, fromFile
 }
 
 func healthFacts(h *types.HealthCheckConfig) *model.ServiceHealthcheck {

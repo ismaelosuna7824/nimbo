@@ -1,14 +1,18 @@
 package api
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
+	"os"
+	"path/filepath"
 	"strconv"
 	"time"
 
+	"github.com/ismaelosuna7824/nimbo/backend/internal/compose"
 	"github.com/ismaelosuna7824/nimbo/backend/internal/model"
 	"github.com/ismaelosuna7824/nimbo/backend/internal/sandbox"
 )
@@ -50,12 +54,18 @@ func requireDocker(wf *model.Workflow) error {
 	return nil
 }
 
-// composeFiles returns the -f list and profiles of a docker workflow.
-func composeFiles(wf *model.Workflow) (files, profiles []string) {
+// composeFiles returns the -f list, --env-file list and profiles of a
+// docker workflow in its active environment (see compose.RunFiles).
+func (s *Server) composeFiles(wf *model.Workflow) (files, envFiles, profiles []string) {
 	if wf.Compose == nil {
-		return nil, nil
+		return nil, nil, nil
 	}
-	return wf.Compose.Files, wf.Compose.Profiles
+	dir := s.cfg.Store.AssetsDir(wf.ID)
+	files, envFiles = compose.RunFiles(wf.Compose, func(rel string) bool {
+		_, err := os.Stat(filepath.Join(dir, filepath.FromSlash(rel)))
+		return err == nil
+	})
+	return files, envFiles, wf.Compose.Profiles
 }
 
 // composeServices lists the active services of the workflow's graph.
@@ -100,8 +110,8 @@ func (s *Server) startComposeRun(w http.ResponseWriter, r *http.Request, wf *mod
 	if !model.ComposeAction(req.Action) {
 		return errorf(http.StatusBadRequest, "action must be up, down, build, pull or restart for a docker workflow")
 	}
-	if req.Environment != "" {
-		return errorf(http.StatusBadRequest, "docker workflows take their variables from .env, not from environments")
+	if req.Environment != "" && req.Environment != wf.Compose.Environment {
+		return errorf(http.StatusBadRequest, "docker workflows run their active environment (%q): switch environments first", cmp.Or(wf.Compose.Environment, "base"))
 	}
 	if req.TimeoutSec < 0 || req.TimeoutSec > 3600 {
 		return errorf(http.StatusBadRequest, "timeoutSec must be between 0 and 3600")
@@ -112,7 +122,7 @@ func (s *Server) startComposeRun(w http.ResponseWriter, r *http.Request, wf *mod
 			return err
 		}
 	}
-	files, profiles := composeFiles(wf)
+	files, envFiles, profiles := s.composeFiles(wf)
 	var hints map[string]sandbox.BuildHint
 	if req.Action == model.ActionUp || req.Action == model.ActionBuild {
 		hints = s.buildHints(wf)
@@ -122,6 +132,7 @@ func (s *Server) startComposeRun(w http.ResponseWriter, r *http.Request, wf *mod
 		Action:        req.Action,
 		SourceDir:     s.cfg.Store.AssetsDir(wf.ID),
 		Files:         files,
+		EnvFiles:      envFiles,
 		Profiles:      profiles,
 		Service:       req.Service,
 		RemoveVolumes: req.RemoveVolumes,
@@ -160,8 +171,8 @@ func (s *Server) composePorts(w http.ResponseWriter, r *http.Request) error {
 	if err != nil {
 		return err
 	}
-	files, profiles := composeFiles(wf)
-	ports, err := s.cfg.Sandbox.ComposePorts(r.Context(), wf.ID, s.cfg.Store.AssetsDir(wf.ID), files, profiles)
+	files, envFiles, profiles := s.composeFiles(wf)
+	ports, err := s.cfg.Sandbox.ComposePorts(r.Context(), wf.ID, s.cfg.Store.AssetsDir(wf.ID), files, envFiles, profiles)
 	if err != nil {
 		return composeError(err)
 	}

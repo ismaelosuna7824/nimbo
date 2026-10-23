@@ -1,6 +1,6 @@
 import { useState } from "react"
 import { useQuery } from "@tanstack/react-query"
-import { ArrowRightLeft, Boxes, Download, Eye, Hammer, Play, Power, RotateCcw, Square, TriangleAlert } from "lucide-react"
+import { ArrowRightLeft, Boxes, Download, Eye, Hammer, Layers, Play, Power, RotateCcw, Square, TriangleAlert } from "lucide-react"
 import { useShallow } from "zustand/react/shallow"
 import { toast } from "sonner"
 import { PixelProgress } from "@/components/arcade/pixel-progress"
@@ -31,6 +31,7 @@ import { StatusBadge } from "@/features/panels/components/status-badge"
 import { RunLog } from "@/features/panels/deploy/run-log"
 import { durationBetween, formatDuration, formatRelative } from "@/features/panels/lib/format"
 import { useNow } from "@/features/panels/lib/use-now"
+import { EnvironmentSwitch } from "@/features/environments/environment-switch"
 import { ALL_SERVICES, ComposeLogs } from "./compose-logs"
 import { composeKey, remapNote } from "./compose-model"
 import { ComposeServices, ComposeStateLabel } from "./compose-services"
@@ -126,6 +127,7 @@ export function ComposeDeployTab() {
             </span>
             <ComposeStateLabel state={state} className="ml-auto shrink-0 text-xs" />
           </div>
+          <DeployEnvironment runs={runs} running={state !== "absent"} />
           {status?.message && (
             <p
               className={cn(
@@ -343,6 +345,44 @@ export function ComposeDeployTab() {
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
+    </div>
+  )
+}
+
+/**
+ * The environment the next run uses (the shared switch; hidden without environments) and, when containers exist, the
+ * one the last successful `up` started them with: switching does not touch running containers until the next Up.
+ */
+function DeployEnvironment({ runs, running }: { runs: Run[]; running: boolean }) {
+  const active = useWorkflowStore((s) => s.workflow?.activeEnvironment ?? "")
+  const hasEnvironments = useWorkflowStore((s) => (s.workflow?.compose?.environments?.length ?? 0) > 0)
+  if (!hasEnvironments) return null
+  const lastUp = runs.find((r) => r.action === "up" && r.status === "succeeded")
+  const deployed = running && lastUp ? (lastUp.environment ?? "") : undefined
+  const stale = deployed !== undefined && deployed !== active
+  return (
+    <div className="flex min-w-0 items-center gap-1.5">
+      <EnvironmentSwitch className="h-6 min-w-0 flex-1" />
+      {deployed !== undefined && (
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <span
+              className={cn(
+                "inline-flex h-5 shrink-0 items-center gap-1 rounded-full border px-1.5 text-[11px] text-muted-foreground",
+                stale && "border-amber-500/40 text-amber-700 dark:text-amber-300",
+              )}
+              data-testid="compose-deployed-environment"
+            >
+              <Layers className="size-3" />
+              {deployed || "base"}
+            </span>
+          </TooltipTrigger>
+          <TooltipContent className="max-w-56">
+            The containers run the {deployed ? `“${deployed}”` : "base"} files.
+            {stale && ` Up applies ${active ? `“${active}”` : "the base"}.`}
+          </TooltipContent>
+        </Tooltip>
+      )}
     </div>
   )
 }

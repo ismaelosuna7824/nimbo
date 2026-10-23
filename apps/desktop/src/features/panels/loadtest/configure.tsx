@@ -1,6 +1,6 @@
 import { useState, type ReactNode } from "react"
 import { useQuery } from "@tanstack/react-query"
-import { ArrowLeft, ArrowRight, Play, Plus, ShieldAlert, Trash2 } from "lucide-react"
+import { ArrowLeft, ArrowRight, Info, Play, Plus, ShieldAlert, Trash2 } from "lucide-react"
 import { toast } from "sonner"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
@@ -65,10 +65,15 @@ interface ConfigureProps {
   /** Starts the run on its owner (workflow or connection). */
   start: (spec: LoadTestSpec) => Promise<LoadTestRun>
   onStarted: (run: LoadTestRun) => void
+  /** The target runs in a Kubernetes workflow's cluster: offer the autoscaling preset and warn about short runs. */
+  autoscaling?: boolean
 }
 
+/** Runs shorter than this end before a HorizontalPodAutoscaler can add Ready pods (the daemon's minScalingRunSec). */
+const MIN_SCALING_RUN_SEC = 60
+
 /** The three-step load test wizard: target (pluggable), traffic shape, pass criteria. */
-export function Configure({ draft, setDraft, target, targetStep, external, describeForced, start, onStarted }: ConfigureProps) {
+export function Configure({ draft, setDraft, target, targetStep, external, describeForced, start, onStarted, autoscaling = false }: ConfigureProps) {
   const pro = useWorkflowStore((s) => s.mode === "pro")
   const [step, setStep] = useState(1)
   const [starting, setStarting] = useState(false)
@@ -117,9 +122,10 @@ export function Configure({ draft, setDraft, target, targetStep, external, descr
     <TrafficStep
       draft={draft}
       setDraft={setDraft}
-      presets={presets.data ?? []}
+      presets={(presets.data ?? []).filter((p) => p.preset !== "autoscale" || autoscaling)}
       profile={profile}
       pro={pro}
+      autoscaling={autoscaling}
     />
   )
   const thresholdStep = <ThresholdStep draft={draft} setDraft={setDraft} pro={pro} />
@@ -207,12 +213,14 @@ function TrafficStep({
   presets,
   profile,
   pro,
+  autoscaling,
 }: {
   draft: LoadDraft
   setDraft: SetDraft
   presets: LoadProfile[]
   profile: LoadProfile | null
   pro: boolean
+  autoscaling: boolean
 }) {
   const setProfile = (p: LoadProfile) => setDraft((d) => ({ ...d, profile: p }))
   const editStages = (stages: LoadProfile["stages"]) =>
@@ -246,6 +254,13 @@ function TrafficStep({
           )
         })}
       </div>
+      {autoscaling && profile && totalDuration(profile.stages) < MIN_SCALING_RUN_SEC && (
+        <p className="mt-2 flex items-start gap-1.5 text-[11px] text-muted-foreground" data-testid="loadtest-short-for-scaling">
+          <Info className="mt-px size-3 shrink-0" />
+          Under a minute is too short to see a HorizontalPodAutoscaler add pods (15 s metrics, 15 s sync, pod startup). Pick
+          Autoscaling test to judge autoscaling.
+        </p>
+      )}
 
       {pro && profile && (
         <div className="mt-3 flex flex-col gap-2">

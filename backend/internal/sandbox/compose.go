@@ -71,8 +71,11 @@ type ComposeRunRequest struct {
 	Action    model.RunAction // up | down | build | pull | restart
 	SourceDir string          // the workflow's files (store.AssetsDir), copied into the work dir
 	Files     []string        // compose files in -f order, relative to SourceDir ("" = compose defaults)
-	Profiles  []string        // active compose profiles
-	Service   string          // up/build/pull/restart: only this service ("" = all)
+	// EnvFiles are --env-file files in order (later wins), relative to
+	// SourceDir; nil = compose reads the project directory's .env.
+	EnvFiles []string
+	Profiles []string // active compose profiles
+	Service  string   // up/build/pull/restart: only this service ("" = all)
 	// RemoveVolumes makes down delete the project's named volumes.
 	RemoveVolumes bool
 	// RemapPorts lets up move busy fixed host ports to free ones.
@@ -99,6 +102,7 @@ type composeCmd struct {
 	project  string
 	dir      string   // project directory (absolute)
 	files    []string // relative to dir
+	envFiles []string // --env-file, relative to dir
 	profiles []string
 	override string // relative to dir; "" = none
 }
@@ -117,6 +121,9 @@ func (c composeCmd) args(sub ...string) []string {
 	}
 	if c.override != "" {
 		a = append(a, "-f", filepath.Join(c.dir, filepath.FromSlash(c.override)))
+	}
+	for _, f := range c.envFiles {
+		a = append(a, "--env-file", filepath.Join(c.dir, filepath.FromSlash(f)))
 	}
 	for _, p := range c.profiles {
 		a = append(a, "--profile", p)
@@ -238,9 +245,13 @@ func (m *Manager) ComposeRun(ctx context.Context, req ComposeRunRequest) (*model
 	}
 	m.ensureHistory(wfID)
 	sb := m.sandbox(wfID)
+	env := ""
+	if req.Workflow.Compose != nil {
+		env = req.Workflow.Compose.Environment
+	}
 	rs := &runState{
 		run: model.Run{
-			ID: newRunID(), WorkflowID: wfID, Action: req.Action, Service: req.Service,
+			ID: newRunID(), WorkflowID: wfID, Action: req.Action, Service: req.Service, Environment: env,
 			RemoveVolumes: req.Action == model.ActionDown && req.RemoveVolumes,
 			Status:        model.RunQueued, CreatedAt: time.Now().UTC(), Log: []model.LogLine{},
 		},
@@ -274,6 +285,10 @@ func (m *Manager) ComposeRun(ctx context.Context, req ComposeRunRequest) (*model
 
 	m.publish(model.EventRunStatus, wfID, snap)
 	go m.execute(runCtx, rs, func(ctx context.Context) error {
+		if env != "" {
+			files := append(slices.Clone(req.Files), req.EnvFiles...)
+			m.logLine(rs, "system", fmt.Sprintf("Environment %s: %s.", env, strings.Join(files, ", ")))
+		}
 		for _, r := range prep.newRemaps {
 			m.logLine(rs, "system", fmt.Sprintf("Host port %d (%s) is busy: publishing %s:%d/%s on %d instead. Your compose files are unchanged.", r.HostPort, r.Service, r.Service, r.ContainerPort, r.Protocol, r.Port))
 		}
@@ -320,7 +335,7 @@ func (m *Manager) prepareCompose(ctx context.Context, req ComposeRunRequest) (*c
 	if _, err := syncWorkdir(work, nil, req.SourceDir); err != nil {
 		return nil, fmt.Errorf("copy the workflow's files: %w", err)
 	}
-	cmd, err := m.composeCommand(wfID, work, req.Files, req.Profiles)
+	cmd, err := m.composeCommand(wfID, work, req.Files, req.EnvFiles, req.Profiles)
 	if err != nil {
 		return nil, err
 	}
@@ -375,12 +390,16 @@ func (m *Manager) prepareCompose(ctx context.Context, req ComposeRunRequest) (*c
 	return prep, nil
 }
 
-// composeCommand resolves the -f list against the work dir.
-func (m *Manager) composeCommand(wfID, dir string, files, profiles []string) (composeCmd, error) {
+// composeCommand resolves the -f and --env-file lists against the work dir.
+func (m *Manager) composeCommand(wfID, dir string, files, envFiles, profiles []string) (composeCmd, error) {
 	for _, f := range files {
-		p := filepath.ToSlash(filepath.Clean(filepath.FromSlash(f)))
-		if f == "" || filepath.IsAbs(f) || p == ".." || strings.HasPrefix(p, "../") {
+		if !relPath(f) {
 			return composeCmd{}, invalidCompose("invalid compose file path %q", f)
+		}
+	}
+	for _, f := range envFiles {
+		if !relPath(f) {
+			return composeCmd{}, invalidCompose("invalid env file path %q", f)
 		}
 	}
 	if len(files) == 0 {
@@ -394,7 +413,13 @@ func (m *Manager) composeCommand(wfID, dir string, files, profiles []string) (co
 			return composeCmd{}, invalidCompose("invalid profile %q", p)
 		}
 	}
-	return composeCmd{project: model.ComposeProjectName(wfID), dir: dir, files: files, profiles: profiles}, nil
+	return composeCmd{project: model.ComposeProjectName(wfID), dir: dir, files: files, envFiles: envFiles, profiles: profiles}, nil
+}
+
+// relPath reports a non-empty relative path that stays inside its folder.
+func relPath(f string) bool {
+	p := filepath.ToSlash(filepath.Clean(filepath.FromSlash(f)))
+	return f != "" && !filepath.IsAbs(f) && p != ".." && !strings.HasPrefix(p, "../")
 }
 
 // composeSteps runs the compose subcommand, streaming its output into the

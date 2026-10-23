@@ -1,11 +1,16 @@
 import { describe, expect, test } from "bun:test"
 import { placeNew } from "@/features/docker/canvas/model"
-import type { KubeEdge, KubeNode, KubePod, KubeStatus, KubeWorkloadStatus } from "@/lib/api/types"
+import type { KubeChartGroup, KubeEdge, KubeGraph, KubeNode, KubePod, KubeStatus, KubeWorkloadStatus } from "@/lib/api/types"
 import {
   buildKubeCanvas,
+  CHART_W,
+  chartSummaries,
   FRAME_HEADER,
   FRAME_PAD,
+  kindsText,
+  layoutChart,
   NAMESPACE_FRAME,
+  placeChartFrame,
   podDot,
   replicasText,
   smallFacts,
@@ -226,5 +231,117 @@ describe("placeNew with namespace frames", () => {
     const c = buildKubeCanvas({ nodes: [deployment("web", { position: { x: 0, y: 0 } }), deployment("api")], edges: [] })
     const out = placeNew(c.items, c.edges, (i) => i.kind === "workload")
     expect(out.get("Deployment/default/api")).toEqual({ x: 0, y: WORKLOAD_H + 40 })
+  })
+})
+
+describe("vendored charts", () => {
+  const CHART = "chart:charts/monitoring/charts/kube-prometheus-stack"
+  const group: KubeChartGroup = {
+    id: CHART,
+    source: 1,
+    sourcePath: "charts/monitoring",
+    chart: "kube-prometheus-stack",
+    version: "92.11.0",
+    release: "monitoring",
+    namespace: "monitoring",
+    objects: 6,
+    position: { x: 600, y: 0 },
+  }
+  const helm = { chart: CHART, source: 1, sourceKind: "helm" as const, sourcePath: "charts/monitoring", namespace: "monitoring" }
+  const graph = (): KubeGraph => ({
+    nodes: [
+      deployment("web", { position: { x: 0, y: 0 } }),
+      node("ServiceMonitor", "web", { category: "custom", custom: true, position: { x: 0, y: 200 } }),
+      deployment("grafana", helm),
+      deployment("operator", helm),
+      service("grafana", helm),
+      node("ConfigMap", "dash-a", helm),
+      node("ConfigMap", "dash-b", helm),
+      node("ClusterRole", "operator", { ...helm, namespace: undefined, category: "rbac" }),
+    ],
+    edges: [
+      edge("inferred", "Deployment/default/web", "Service/monitoring/grafana", { envKey: "GRAFANA_URL" }),
+      edge("env", "Deployment/default/web", "ConfigMap/monitoring/dash-a", { envKey: "A" }),
+      edge("env", "Deployment/default/web", "ConfigMap/monitoring/dash-b", { envKey: "B" }),
+      edge("selects", "Service/monitoring/grafana", "Deployment/monitoring/grafana"),
+    ],
+    charts: [group],
+  })
+
+  test("collapsed: one release card instead of the chart's objects, its edges attached once", () => {
+    const c = buildKubeCanvas(graph())
+    const items = byId(c.items)
+    expect([...items.keys()].filter((id) => !id.startsWith(NAMESPACE_FRAME)).sort()).toEqual(["Deployment/default/web", "ServiceMonitor/default/web", CHART])
+    const card = items.get(CHART)!
+    expect(card).toMatchObject({ kind: "chart", x: 600, y: 0, w: CHART_W, placed: true })
+    expect(card.parent).toBeUndefined()
+    expect(card.chart!.members).toHaveLength(6)
+    expect(kindsText(card.chart!.kinds)).toBe("2 ConfigMaps · 2 Deployments · 1 ClusterRole · 1 Service")
+    // Three references from web to the chart: one edge; the internal selects edge is gone.
+    expect(c.edges).toEqual([{ id: `Deployment/default/web->${CHART}`, source: "Deployment/default/web", target: CHART, kind: "inferred", label: undefined, live: false }])
+  })
+
+  test("expanded: a frame holds the chart's objects, namespaced or not", () => {
+    const c = buildKubeCanvas(graph(), null, [CHART])
+    const items = byId(c.items)
+    expect(items.get(CHART)).toMatchObject({ kind: "frame" })
+    expect(items.get(CHART)!.chart!.expanded).toBe(true)
+    for (const id of ["Deployment/monitoring/grafana", "Service/monitoring/grafana", "ClusterRole/operator"]) expect(items.get(id)?.parent).toBe(CHART)
+    expect(items.has(`${NAMESPACE_FRAME}monitoring`)).toBe(false)
+    expect(c.edges.map((e) => e.id).sort()).toEqual([
+      "env:Deployment/default/web->ConfigMap/monitoring/dash-a",
+      "env:Deployment/default/web->ConfigMap/monitoring/dash-b",
+      "inferred:Deployment/default/web->Service/monitoring/grafana",
+      "selects:Service/monitoring/grafana->Deployment/monitoring/grafana",
+    ])
+  })
+
+  test("live summary: ready of total workloads and failing ones", () => {
+    const st = status([
+      workloadStatus("Deployment/monitoring/grafana"),
+      workloadStatus("Deployment/monitoring/operator", { state: "starting", ready: 0, pods: [pod("op-1", { phase: "Pending", ready: false, reason: "CrashLoopBackOff" })] }),
+    ])
+    const [summary] = chartSummaries(graph(), st)
+    expect(summary.live).toEqual({ ready: 1, total: 2, problems: 1, state: "error" })
+    expect(chartSummaries(graph(), null)[0].live).toBeUndefined()
+    // Traffic into the chart animates the collapsed edge when both ends run.
+    const both = status([workloadStatus("Deployment/default/web"), workloadStatus("Deployment/monitoring/grafana")])
+    expect(buildKubeCanvas(graph(), both).edges[0].live).toBe(true)
+  })
+
+  test("an expanded frame takes the collapsed card's spot when free, else a row below the drawing", () => {
+    const c = buildKubeCanvas(graph(), null, [CHART])
+    const members = new Map([["Deployment/monitoring/grafana", { x: 0, y: 0, w: WORKLOAD_W, h: WORKLOAD_H }]])
+    const free = placeChartFrame(c.items, CHART, members, { x: 600, y: 0 }, true)
+    expect(free.get("Deployment/monitoring/grafana")).toEqual({ x: 600 + FRAME_PAD, y: FRAME_HEADER })
+    // Over the user's objects: below everything instead.
+    const busy = placeChartFrame(c.items, CHART, members, { x: 0, y: 0 }, true)
+    const bottom = Math.max(...c.items.filter((i) => !i.parent && i.id !== CHART).map((i) => i.y + i.h))
+    expect(busy.get("Deployment/monitoring/grafana")!.y).toBeGreaterThan(bottom)
+  })
+
+  test("saved objects stay at the card's spot, move there when they would cover other objects", async () => {
+    const at = (x: number, y: number) => {
+      const g = graph()
+      let i = 0
+      g.nodes = g.nodes.map((n) => (n.chart ? { ...n, position: { x: x + 300 * i++, y } } : n))
+      return buildKubeCanvas(g, null, [CHART])
+    }
+    expect((await layoutChart(at(600 + FRAME_PAD, FRAME_HEADER), CHART, group.position)).size).toBe(0)
+    // Busy anchor (the user's objects sit there now): the saved spot is kept when free.
+    expect((await layoutChart(at(2000, 0), CHART, { x: 0, y: 0 })).size).toBe(0)
+    const moved = await layoutChart(at(0, 0), CHART, group.position)
+    expect(moved.size).toBe(6)
+    const placed = graph()
+    placed.nodes = placed.nodes.map((n) => (moved.has(n.id) ? { ...n, position: moved.get(n.id) } : n))
+    const after = buildKubeCanvas(placed, null, [CHART])
+    const frame = byId(after.items).get(CHART)!
+    for (const o of after.items.filter((i) => !i.parent && i.id !== CHART)) {
+      expect(o.x >= frame.x + frame.w || o.x + o.w <= frame.x || o.y >= frame.y + frame.h || o.y + o.h <= frame.y).toBe(true)
+    }
+    // Some objects new (a values change rendered more): placeNew puts them by their siblings instead.
+    const partial = graph()
+    partial.nodes = partial.nodes.map((n) => (n.id === "Deployment/monitoring/grafana" ? { ...n, position: { x: 2000, y: 0 } } : n))
+    expect((await layoutChart(buildKubeCanvas(partial, null, [CHART]), CHART, group.position)).size).toBe(0)
   })
 })

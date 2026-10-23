@@ -48,16 +48,31 @@ type ConnectionResolver interface {
 	Connection(id string) (model.Connection, bool)
 }
 
+// WorkflowInspector tells the engine about docker and Kubernetes
+// workflows: the environment a run is recorded under and, for the
+// autoscaling verdict, which other environments autoscale a workload.
+type WorkflowInspector interface {
+	// ActiveEnvironment is the environment a docker or Kubernetes workflow
+	// renders and runs ("" = the base); ok is false for other workflows.
+	ActiveEnvironment(wfID string) (env string, ok bool)
+	// AutoscaledIn lists the workflow's environments other than env whose
+	// rendered objects have a HorizontalPodAutoscaler scaling the workload
+	// kind/name.
+	AutoscaledIn(ctx context.Context, wfID, env, kind, name string) []string
+}
+
 // EngineConfig configures an Engine. Resolver may be nil when only plain
 // host URLs are tested; Connections may be nil when no connection is used.
-// Monitor (optional) samples the containers of docker workflows during
-// their runs (LoadTestRun.Resources).
+// Monitor (optional) samples the containers of docker and Kubernetes
+// workflows during their runs (LoadTestRun.Resources); Workflows
+// (optional) records Kubernetes runs' environment.
 type EngineConfig struct {
 	Home        string
 	Events      model.Publisher
 	Resolver    Resolver
 	Connections ConnectionResolver
 	Monitor     ResourceMonitor
+	Workflows   WorkflowInspector
 }
 
 const (
@@ -92,13 +107,14 @@ type Engine struct {
 	resolver    Resolver
 	connections ConnectionResolver
 	monitor     ResourceMonitor
+	workflows   WorkflowInspector
 
 	mu   sync.Mutex
 	runs map[string]*runner // running, plus finished runs that could not be saved
 }
 
 func NewEngine(cfg EngineConfig) *Engine {
-	return &Engine{home: cfg.Home, events: cfg.Events, resolver: cfg.Resolver, connections: cfg.Connections, monitor: cfg.Monitor, runs: map[string]*runner{}}
+	return &Engine{home: cfg.Home, events: cfg.Events, resolver: cfg.Resolver, connections: cfg.Connections, monitor: cfg.Monitor, workflows: cfg.Workflows, runs: map[string]*runner{}}
 }
 
 // Start validates spec, then runs it in the background on behalf of the
@@ -166,6 +182,9 @@ func (e *Engine) start(ctx context.Context, wfID, connID string, spec model.Load
 			StartedAt:    time.Now().UTC(),
 			Timeline:     []model.LoadSample{},
 		},
+	}
+	if e.workflows != nil && wfID != "" {
+		r.run.Environment, _ = e.workflows.ActiveEnvironment(wfID)
 	}
 	r.ctx, r.cancel = context.WithCancel(context.WithoutCancel(ctx))
 

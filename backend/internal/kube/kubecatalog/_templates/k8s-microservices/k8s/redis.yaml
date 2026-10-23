@@ -4,6 +4,10 @@ kind: Deployment
 metadata:
   name: redis
   namespace: shop
+  labels:
+    app.kubernetes.io/name: redis
+    app.kubernetes.io/instance: redis
+    app.kubernetes.io/part-of: shop
 spec:
   replicas: 1
   strategy:

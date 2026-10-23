@@ -24,6 +24,7 @@ const (
 	catReliability = "kubernetes-reliability" // probes, resources, replicas, images, storage
 	catSecurity    = "kubernetes-security"    // privileges, host access, credentials
 	catNetworking  = "kubernetes-networking"  // selectors, Services, Ingress, references, namespaces
+	catHygiene     = "kubernetes-hygiene"     // labels, quotas, image digests
 )
 
 const (
@@ -110,6 +111,24 @@ var rules = []Rule{
 	rule("k8s_pvc_storage_class", "Explicit storage classes", catReliability, model.SeverityInfo,
 		"PersistentVolumeClaims should name their storageClassName.", docsConcepts+"storage/persistent-volumes/#class-1",
 		"Without one the claim uses the cluster's default class: fine locally (k3s local-path), but a cluster without a default class leaves it Pending forever and production clusters often default to a slow or non-replicated disk."),
+	rule("k8s_topology_spread", "Replicas spread over nodes", catReliability, model.SeverityWarning,
+		"In production-like environments, Deployments and StatefulSets with 2+ replicas should spread them over nodes or zones (topologySpreadConstraints or podAntiAffinity on kubernetes.io/hostname or topology.kubernetes.io/zone).", docsConcepts+"scheduling-eviction/topology-spread-constraints/",
+		"The scheduler may put every replica on the same node: one node failure, drain or upgrade then takes the whole service down even though it runs several replicas."),
+	rule("k8s_pdb", "Disruption budgets allow evictions", catReliability, model.SeverityWarning,
+		"A PodDisruptionBudget should leave room for one eviction (not maxUnavailable: 0, minAvailable: 100% or minAvailable ≥ replicas) and each pod should be covered by one budget only.", "https://kubernetes.io/docs/tasks/run-application/configure-pdb/",
+		"A budget that allows no eviction makes kubectl drain and cluster upgrades hang until someone deletes it; a pod selected by two budgets can't be evicted at all (the eviction API refuses it)."),
+	rule("k8s_rollout_strategy", "Rollouts keep serving", catReliability, model.SeverityWarning,
+		"In production-like environments, Deployments with 2+ replicas should roll out with RollingUpdate keeping pods available (not Recreate or maxUnavailable: 100%); maxSurge and maxUnavailable can't both be 0.", docsConcepts+"workloads/controllers/deployment/#strategy",
+		"Recreate (or a rolling update allowed to remove every pod) stops all replicas before the new ones are ready: every deploy is an outage. maxUnavailable: 0 with maxSurge: 1 starts each new pod before removing an old one."),
+	rule("k8s_recommended_labels", "Recommended labels", catHygiene, model.SeverityInfo,
+		"Workloads should carry the recommended labels app.kubernetes.io/name and app.kubernetes.io/instance (plus part-of and version).", docsConcepts+"overview/working-with-objects/common-labels/",
+		"Dashboards, kubectl selectors, Helm, Argo CD and cost tools group objects by these labels; without them you can't tell which app or release a pod belongs to during an incident."),
+	optIn(rule("k8s_resource_quota", "Namespace quotas", catHygiene, model.SeverityInfo,
+		"In production-like environments, every namespace with workloads should have a ResourceQuota and a LimitRange.", docsConcepts+"policy/resource-quotas/",
+		"Without a quota one runaway deploy or HPA can take the whole cluster's capacity; without a LimitRange a container that forgets requests gets none and is packed blindly.")),
+	optIn(rule("k8s_image_digest", "Images pinned by digest", catHygiene, model.SeverityInfo,
+		"In production-like environments, images should be pinned by digest (image@sha256:…), not only by tag.", docsConcepts+"containers/images/#image-names",
+		"A tag can be moved to other content: two nodes pulling the same tag at different times may run different code. A digest always names the same image.")),
 
 	// Networking and wiring
 	rule("k8s_selector_mismatch", "Selectors match pods", catNetworking, model.SeverityWarning,

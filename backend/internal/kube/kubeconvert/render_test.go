@@ -47,7 +47,7 @@ func TestConvertedTemplatesRender(t *testing.T) {
 				}
 				got := map[string]bool{}
 				for _, o := range p.Objects {
-					if o.Kind == "PodDisruptionBudget" || o.Kind == "Namespace" {
+					if o.Kind == "PodDisruptionBudget" || o.Kind == "HorizontalPodAutoscaler" || o.Kind == "Namespace" {
 						continue // prod only / not in Helm (release namespace)
 					}
 					got[o.Kind+"/"+o.Namespace+"/"+o.Name] = true
@@ -58,26 +58,63 @@ func TestConvertedTemplatesRender(t *testing.T) {
 				if len(got) == 0 {
 					t.Errorf("%s %s %q: nothing rendered", tmpl.ID, f, env)
 				}
+				hpas := map[string]map[string]any{}
+				for _, o := range p.Objects {
+					if o.Kind == "HorizontalPodAutoscaler" {
+						spec := o.Obj["spec"].(map[string]any)
+						hpas[spec["scaleTargetRef"].(map[string]any)["name"].(string)] = spec
+					}
+				}
+				if env != "prod" && len(hpas) > 0 {
+					t.Errorf("%s %s %q: HPAs outside prod", tmpl.ID, f, env)
+				}
 				if env == "prod" {
-					// Stateless Deployments scale out (at least 2 replicas, more if compose asks) behind a PDB.
+					// Stateless Deployments (RollingUpdate) scale out behind a
+					// PDB: an HPA from 2+ replicas without spec.replicas (it
+					// owns the count), or 2+ fixed replicas.
 					pdbs, stateless := 0, 0
 					for _, o := range p.Objects {
 						if o.Kind == "PodDisruptionBudget" {
 							pdbs++
 						}
-						if o.Kind == "Deployment" {
-							strategy, _ := o.Obj["spec"].(map[string]any)["strategy"].(map[string]any)
-							r := o.Obj["spec"].(map[string]any)["replicas"]
-							if strategy == nil {
-								stateless++
+						if o.Kind != "Deployment" {
+							continue
+						}
+						spec := o.Obj["spec"].(map[string]any)
+						if fmt.Sprint(spec["strategy"].(map[string]any)["type"]) != "RollingUpdate" {
+							continue
+						}
+						stateless++
+						r, hasReplicas := spec["replicas"]
+						if h := hpas[o.Name]; h != nil {
+							if hasReplicas {
+								t.Errorf("%s %s prod: %s sets replicas %v under an HPA", tmpl.ID, f, o.Name, r)
 							}
-							if n, _ := strconv.Atoi(fmt.Sprint(r)); strategy == nil && n < 2 {
-								t.Errorf("%s %s prod: %s replicas %v", tmpl.ID, f, o.Name, r)
+							if n, _ := strconv.Atoi(fmt.Sprint(h["minReplicas"])); n < 2 {
+								t.Errorf("%s %s prod: %s HPA minReplicas %v", tmpl.ID, f, o.Name, h["minReplicas"])
 							}
+							continue
+						}
+						if n, _ := strconv.Atoi(fmt.Sprint(r)); n < 2 {
+							t.Errorf("%s %s prod: %s replicas %v", tmpl.ID, f, o.Name, r)
 						}
 					}
 					if pdbs != stateless {
 						t.Errorf("%s %s prod: %d PDBs for %d stateless Deployments", tmpl.ID, f, pdbs, stateless)
+					}
+					if stateless > 0 && len(hpas) == 0 {
+						t.Errorf("%s %s prod: no HPA", tmpl.ID, f)
+					}
+				}
+				if env == "dev" {
+					// Dev runs what compose runs: every Deployment sets replicas.
+					for _, o := range p.Objects {
+						if o.Kind != "Deployment" {
+							continue
+						}
+						if _, ok := o.Obj["spec"].(map[string]any)["replicas"]; !ok {
+							t.Errorf("%s %s dev: %s without replicas", tmpl.ID, f, o.Name)
+						}
 					}
 				}
 				for k := range want {

@@ -75,7 +75,7 @@ func Derive(ctx context.Context, dir string, wf *model.Workflow) (*Project, []mo
 		}
 	}
 	if rendered || len(k.Sources) == 0 {
-		k.Graph = p.Graph(k.Graph.Nodes)
+		k.Graph = p.Graph(&k.Graph)
 	}
 	if k.Graph.Nodes == nil {
 		k.Graph.Nodes = []model.KubeNode{}

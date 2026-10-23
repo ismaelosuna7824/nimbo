@@ -140,6 +140,7 @@ func (c *converter) writeKustomize() map[string][]byte {
 		"apiVersion", "kustomize.config.k8s.io/v1beta1",
 		"kind", "Kustomization",
 		"namespace", c.opts.Namespace,
+		"labels", seq(mapping("pairs", mapping("app.kubernetes.io/managed-by", "kustomize"))),
 		"resources", strList(resources),
 	)
 	if len(cmGen) > 0 {
@@ -148,10 +149,23 @@ func (c *converter) writeKustomize() map[string][]byte {
 	if len(secGen) > 0 {
 		set(k, "secretGenerator", seq(secGen...))
 	}
+	overlays := "overlays/dev and overlays/prod"
+	if len(c.envs) > 0 {
+		names := make([]string, len(c.envs))
+		for i, e := range c.envs {
+			names[i] = "overlays/" + e.name
+		}
+		overlays = strings.Join(names, ", ") + " (the docker workflow's environments)"
+	}
 	files[base+"/kustomization.yaml"] = encode(comment(k,
 		"Base of "+c.opts.Name+", converted from its compose project. Generated ConfigMaps/Secrets get a",
 		"content hash suffix, so pods roll when their environment or files change.",
-		"Environments: overlays/dev and overlays/prod."))
+		"Environments: "+overlays+"."))
+	c.report.Sources = append(c.report.Sources, model.KubeSource{Kind: model.KubeKustomize, Path: base, Namespace: c.opts.Namespace})
+	if len(c.envs) > 0 {
+		c.writeKustomizeEnvironments(files)
+		return files
+	}
 
 	// dev: the base as converted.
 	dev := mapping(
@@ -163,17 +177,28 @@ func (c *converter) writeKustomize() map[string][]byte {
 	)
 	files[kustomizeDir+"/overlays/dev/kustomization.yaml"] = encode(comment(dev, "Development: one replica of everything, like docker compose."))
 
-	// prod: stateless services scale out behind a PDB; the Ingress uses
-	// the "nginx" class.
+	// prod: stateless services scale out behind a PDB, autoscaled by an
+	// HPA (which then owns spec.replicas) unless they are data services;
+	// the Ingress uses the "nginx" class.
 	pb := &builder{c: c, v: literal{}, format: "kustomize"}
 	prodRes := []string{"../../base"}
-	var pdbs []*yaml.Node
+	var pdbs, hpas []*yaml.Node
 	replicas := seq()
+	patches := seq()
 	for _, u := range c.units {
 		if !u.stateless() {
 			continue
 		}
-		replicas.Content = append(replicas.Content, mapping("name", u.k8s, "count", max(u.replicas, 2)))
+		if u.autoscale {
+			hpas = append(hpas, pb.hpa(u))
+			c.obj("HorizontalPodAutoscaler", u.k8s, kustomizeDir+"/overlays/prod/hpa.yaml", u.name)
+			patches.Content = append(patches.Content, mapping(
+				"target", mapping("kind", "Deployment", "name", u.k8s),
+				"patch", textNode("- op: remove\n  path: /spec/replicas\n"),
+			))
+		} else {
+			replicas.Content = append(replicas.Content, mapping("name", u.k8s, "count", u.prodReplicas()))
+		}
 		pdbs = append(pdbs, pb.pdb(u))
 		c.obj("PodDisruptionBudget", u.k8s, kustomizeDir+"/overlays/prod/pdb.yaml", u.name)
 	}
@@ -181,28 +206,36 @@ func (c *converter) writeKustomize() map[string][]byte {
 		files[kustomizeDir+"/overlays/prod/pdb.yaml"] = encode(pdbs...)
 		prodRes = append(prodRes, "pdb.yaml")
 	}
+	if len(hpas) > 0 {
+		files[kustomizeDir+"/overlays/prod/hpa.yaml"] = encode(hpas...)
+		prodRes = append(prodRes, "hpa.yaml")
+	}
 	prod := mapping(
 		"apiVersion", "kustomize.config.k8s.io/v1beta1",
 		"kind", "Kustomization",
 		"namespace", c.opts.Namespace,
 		"resources", strList(prodRes),
-		"labels", seq(mapping("pairs", mapping("app.kubernetes.io/environment", "prod"))),
+		"labels", seq(mapping("pairs", mapping("app.kubernetes.io/environment", "prod", "app.kubernetes.io/managed-by", "kustomize"))),
 	)
 	if len(replicas.Content) > 0 {
 		set(prod, "replicas", replicas)
 	}
 	if len(c.ingressUnits()) > 0 {
-		set(prod, "patches", seq(mapping(
+		patches.Content = append(patches.Content, mapping(
 			"target", mapping("kind", "Ingress", "name", c.opts.Name),
 			"patch", textNode("- op: replace\n  path: /spec/ingressClassName\n  value: "+prodClass+"\n"),
-		)))
+		))
+	}
+	if len(patches.Content) > 0 {
+		set(prod, "patches", patches)
 	}
 	files[kustomizeDir+"/overlays/prod/kustomization.yaml"] = encode(comment(prod,
-		"Production: stateless services run 2 replicas with a PodDisruptionBudget; data services",
-		"keep one replica (a second one would be a separate, empty database). Replace the dev",
-		"credentials in base/env/*.secret.env (or use an external secret store) and the .localhost hosts."))
+		"Production: stateless services run 2+ replicas with a PodDisruptionBudget; those that aren't data",
+		"services are autoscaled by a HorizontalPodAutoscaler (hpa.yaml), so their Deployments drop",
+		"spec.replicas (the HPA owns it). Data services keep one replica (a second one would be a separate,",
+		"empty database). Replace the dev credentials in base/env/*.secret.env (or use an external secret",
+		"store) and the .localhost hosts."))
 
-	c.report.Sources = append(c.report.Sources, model.KubeSource{Kind: model.KubeKustomize, Path: base, Namespace: c.opts.Namespace})
 	c.report.Environments = []string{"dev", "prod"}
 	return files
 }
@@ -289,6 +322,10 @@ func (c *converter) writeHelm() map[string][]byte {
 			h.put(u.key+".pdb.enabled", boolean(false))
 			tpl(helmFile("PodDisruptionBudget", u.k8s), b.pdb(u), ".Values."+u.key+".pdb.enabled")
 		}
+		if u.autoscale {
+			h.put(u.key+".autoscaling.enabled", boolean(false))
+			tpl(helmFile("HorizontalPodAutoscaler", u.k8s), b.hpa(u), ".Values."+u.key+".autoscaling.enabled")
+		}
 		for i := start; i < len(c.report.Objects); i++ {
 			c.report.Objects[i].Service = u.name
 		}
@@ -300,7 +337,7 @@ func (c *converter) writeHelm() map[string][]byte {
 	// Comments on the values of each service, keys in reading order.
 	for i := 0; i+1 < len(h.values.Content); i += 2 {
 		k := h.values.Content[i]
-		order(h.values.Content[i+1], "enabled", "className", "hosts", "replicaCount", "image", "resources", "env", "secretEnv", "persistence", "pdb")
+		order(h.values.Content[i+1], "enabled", "className", "hosts", "replicaCount", "image", "resources", "env", "secretEnv", "persistence", "pdb", "autoscaling")
 		for _, u := range c.units {
 			if u.key == k.Value {
 				what := "image " + u.image
@@ -314,29 +351,23 @@ func (c *converter) writeHelm() map[string][]byte {
 			k.HeadComment = "Services users reach (*.localhost resolves to this machine)."
 		}
 	}
-	vals := encodeOne(comment(h.values, "Default values of "+c.opts.Name+", converted from its compose project.",
-		"values-dev.yaml and values-prod.yaml are layered on top per environment."))
+	layered := "values-dev.yaml and values-prod.yaml are layered on top per environment."
+	if len(c.envs) > 0 {
+		names := make([]string, len(c.envs))
+		for i, e := range c.envs {
+			names[i] = "values-" + e.name + ".yaml"
+		}
+		layered = strings.Join(names, ", ") + " (the docker workflow's environments) are layered on top."
+	}
+	vals := encodeOne(comment(h.values, "Default values of "+c.opts.Name+", converted from its compose project.", layered))
 	files[chartDir+"/values.yaml"] = vals
 
-	dev, prod := mapping(), mapping()
-	for _, u := range c.units {
-		if u.kind == kindJob {
-			continue
-		}
-		set(dev, u.key, mapping("replicaCount", u.replicas))
-		if u.stateless() {
-			set(prod, u.key, mapping("replicaCount", max(u.replicas, 2), "pdb", mapping("enabled", true)))
-		}
+	if len(c.envs) > 0 {
+		c.writeHelmEnvironments(files)
+	} else {
+		c.writeHelmDevProd(files)
+		c.report.Environments = []string{"dev", "prod"}
 	}
-	if len(c.ingressUnits()) > 0 {
-		set(dev, "ingress", mapping("className", ingressClass))
-		set(prod, "ingress", mapping("className", prodClass))
-	}
-	files[chartDir+"/values-dev.yaml"] = encodeOne(comment(dev, "Development: one replica of everything, like docker compose."))
-	files[chartDir+"/values-prod.yaml"] = encodeOne(comment(prod,
-		"Production: stateless services run 2 replicas with a PodDisruptionBudget; data services keep",
-		"one replica (a second one would be a separate, empty database). Override the dev credentials",
-		"(secretEnv) with --set or an external secret store, and the .localhost hosts."))
 
 	chart := mapping(
 		"apiVersion", "v2",
@@ -350,9 +381,42 @@ func (c *converter) writeHelm() map[string][]byte {
 	files[chartDir+"/.helmignore"] = []byte("# Patterns ignored when packaging the chart.\n.DS_Store\n.git/\n*.swp\n*.bak\n*.tmp\n")
 	files[chartDir+"/templates/NOTES.txt"] = []byte(c.notes())
 	c.report.Sources = append(c.report.Sources, model.KubeSource{Kind: model.KubeHelm, Path: chartDir, Release: c.opts.Name, Namespace: c.opts.Namespace})
-	c.report.Environments = []string{"dev", "prod"}
 	slices.SortStableFunc(c.report.Objects, func(a, b model.KubeConvertObj) int { return strings.Compare(a.Service, b.Service) })
 	return files
+}
+
+// writeHelmDevProd writes values-dev.yaml and values-prod.yaml (no docker
+// environments).
+func (c *converter) writeHelmDevProd(files map[string][]byte) {
+	dev, prod := mapping(), mapping()
+	for _, u := range c.units {
+		if u.kind == kindJob {
+			continue
+		}
+		dv := mapping("replicaCount", u.replicas)
+		if u.autoscale {
+			set(dv, "autoscaling", mapping("enabled", false))
+		}
+		set(dev, u.key, dv)
+		if u.stateless() {
+			pv := mapping("replicaCount", u.prodReplicas(), "pdb", mapping("enabled", true))
+			if u.autoscale {
+				set(pv, "autoscaling", mapping("enabled", true))
+			}
+			set(prod, u.key, pv)
+		}
+	}
+	if len(c.ingressUnits()) > 0 {
+		set(dev, "ingress", mapping("className", ingressClass))
+		set(prod, "ingress", mapping("className", prodClass))
+	}
+	files[chartDir+"/values-dev.yaml"] = encodeOne(comment(dev, "Development: one replica of everything, like docker compose."))
+	files[chartDir+"/values-prod.yaml"] = encodeOne(comment(prod,
+		"Production: stateless services run 2+ replicas with a PodDisruptionBudget; those that aren't data",
+		"services are autoscaled (autoscaling.enabled: a HorizontalPodAutoscaler owns the replica count,",
+		"so the Deployment drops spec.replicas). Data services keep one replica (a second one would be a",
+		"separate, empty database). Override the dev credentials (secretEnv) with --set or an external",
+		"secret store, and the .localhost hosts."))
 }
 
 func (c *converter) notes() string {

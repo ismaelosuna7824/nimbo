@@ -232,18 +232,29 @@ const (
 	minDegradationMs = 10
 )
 
-// breakingPoint returns the target of the first second whose error rate
-// exceeds 5% or whose p95 exceeds 4x the median p95 of the first three
-// seconds with successful requests.
-func breakingPoint(secs []secStat) *float64 {
+// degradation says why one second of a run degraded: p95 above
+// breakP95Factor times the baseline, or an error rate above breakErrorRate.
+type degradation struct {
+	latency bool
+	errors  bool
+}
+
+func (d degradation) any() bool { return d.latency || d.errors }
+
+// degradations flags every second whose error rate exceeds 5% or whose p95
+// exceeds 4x the median p95 of the first three seconds with successful
+// requests (index i is second i+1 of the timeline).
+func degradations(secs []secStat) []degradation {
+	out := make([]degradation, len(secs))
 	var base []float64
 	baseline := -1.0
-	for _, st := range secs {
+	for i, st := range secs {
 		if st.resolved == 0 {
 			continue
 		}
 		if float64(st.errors)/float64(st.resolved) > breakErrorRate {
-			return &st.target
+			out[i].errors = true
+			continue
 		}
 		if st.ok == 0 {
 			continue
@@ -257,7 +268,17 @@ func breakingPoint(secs []secStat) *float64 {
 			continue
 		}
 		if st.p95 > breakP95Factor*baseline && st.p95-baseline >= minDegradationMs {
-			return &st.target
+			out[i].latency = true
+		}
+	}
+	return out
+}
+
+// breakingPoint returns the target of the first degraded second.
+func breakingPoint(secs []secStat) *float64 {
+	for i, d := range degradations(secs) {
+		if d.any() {
+			return &secs[i].target
 		}
 	}
 	return nil

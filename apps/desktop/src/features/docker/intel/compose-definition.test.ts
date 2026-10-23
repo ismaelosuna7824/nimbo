@@ -87,6 +87,15 @@ describe("composeDefinitionAt", () => {
     expect(composeDefinitionAt(COMPOSE, COMPOSE.indexOf("POSTGRES_USER") + 2, env())).toEqual({ file: ".env", line: 2 })
   })
 
+  test("an environment's override reads its .env.<env> first, then .env", () => {
+    const files = [...FILES, ".env.prod"]
+    const texts: Record<string, string> = { ".env": "# creds\nPOSTGRES_USER=app\n", ".env.prod": "LOG=warn\nPOSTGRES_USER=prod\n" }
+    const prod = env({ path: "compose.prod.yaml", envFile: ".env.prod", exists: (p) => files.includes(p), read: (p) => texts[p] })
+    expect(composeDefinitionAt(COMPOSE, COMPOSE.indexOf("POSTGRES_USER") + 2, prod)).toEqual({ file: ".env.prod", line: 2 })
+    texts[".env.prod"] = "LOG=warn\n"
+    expect(composeDefinitionAt(COMPOSE, COMPOSE.indexOf("POSTGRES_USER") + 2, prod)).toEqual({ file: ".env", line: 2 })
+  })
+
   test("names declared in another compose file come from the graph", () => {
     const graph: ComposeGraph = { nodes: [{ id: "service:proxy", kind: "service", name: "proxy", file: "compose.override.yaml", line: 3 }], edges: [] } as unknown as ComposeGraph
     const text = "services:\n  web:\n    depends_on: [proxy]\n"

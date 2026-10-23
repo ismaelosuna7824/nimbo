@@ -58,7 +58,8 @@ import { addFromPalette, dockerCanvasHandle } from "../docker/actions"
 import { contentCount } from "../docker/badge"
 import { loadDockerImages } from "../docker/intel"
 import { matchesImage } from "../docker/palette"
-import { addFromPalette as addKubeItem, kubeCanvasHandle } from "../kubernetes/actions"
+import { addFromPalette as addKubeItem, kubeCanvasHandle, showObject } from "../kubernetes/actions"
+import { hasMonitoring, openMonitoringDialog } from "../monitoring/monitoring-store"
 import { K8sIcon } from "@/components/k8s-icons/k8s-icon"
 import { TechIcon } from "@/components/tech-icons/tech-icon"
 import { switchView, useArchUi, useCanvasView, VIEW_SHORTCUT } from "../architecture/store"
@@ -151,6 +152,17 @@ function PaletteBody() {
           .filter((i) => `${i.label} ${i.image ?? ""} ${i.kinds.join(" ")} ${i.chart?.name ?? ""}`.toLowerCase().includes(needle))
           .slice(0, 15)
       : []
+  // Objects and vendored charts on the canvas (an object of a collapsed chart expands it).
+  const kubeGraph = workflow?.kubernetes?.graph
+  const objectHits =
+    kubernetes && q.length >= 2
+      ? [
+          ...(kubeGraph?.charts ?? []).map((c) => ({ id: c.id, kind: "Helm chart", name: c.chart, where: `release ${c.release} · ns ${c.namespace}` })),
+          ...(kubeGraph?.nodes ?? []).map((n) => ({ id: n.id, kind: n.kind, name: n.name, where: n.namespace ?? "" })),
+        ]
+          .filter((h) => `${h.kind} ${h.name} ${h.where}`.toLowerCase().includes(needle))
+          .slice(0, 15)
+      : []
   const workflows = useQuery({ queryKey: ["workflows"], queryFn: api.listWorkflows })
   const connections = useConnections()
 
@@ -165,6 +177,29 @@ function PaletteBody() {
       <CommandInput value={search} onValueChange={setSearch} placeholder="Type a command or search resources…" />
       <CommandList className="max-h-[420px]">
         <CommandEmpty>{q.length < 2 && workflow ? "Type at least 2 letters to search resources." : "No results."}</CommandEmpty>
+        {objectHits.length > 0 && (
+          <CommandGroup heading="Go to">
+            {objectHits.map((h) => (
+              <CommandItem
+                key={h.id}
+                value={`go ${h.kind} ${h.name} ${h.id} ${q}`}
+                onSelect={() =>
+                  run(() => {
+                    switchView("build")
+                    void showObject(h.id)
+                  })
+                }
+              >
+                {h.kind === "Helm chart" ? <TechIcon icon="helm" size={16} /> : <K8sIcon icon={h.kind} size={16} />}
+                <span className="shrink-0">{h.name}</span>
+                <span className="truncate font-mono text-xs text-muted-foreground">
+                  {h.kind}
+                  {h.where ? ` · ${h.where}` : ""}
+                </span>
+              </CommandItem>
+            ))}
+          </CommandGroup>
+        )}
         {kubernetes && kubeHits.length > 0 && (
           <CommandGroup heading="Add to the cluster">
             {kubeHits.map((item) => (
@@ -244,6 +279,12 @@ function PaletteBody() {
                 <ThemedIcon icon={ActivityIcon} glyph="bolt" />
                 Load test
               </CommandItem>
+              {(docker || kubernetes) && (
+                <CommandItem value="add monitoring prometheus grafana alerts dashboards observability" onSelect={() => run(openMonitoringDialog)}>
+                  <TechIcon icon="prometheus" size={16} />
+                  {hasMonitoring(workflow) ? "Update monitoring…" : "Add monitoring…"}
+                </CommandItem>
+              )}
               {kubernetes ? (
                 <>
                   <CommandItem value="restart workloads rollout kubernetes" onSelect={() => run(() => void runAction("restart"))}>

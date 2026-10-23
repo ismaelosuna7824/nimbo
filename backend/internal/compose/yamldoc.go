@@ -635,7 +635,7 @@ func (d *Doc) AppendItem(path []string, item *yaml.Node) error {
 		return d.Set(path, Seq(item))
 	}
 	if v.Kind != yaml.SequenceNode || v.Style&yaml.FlowStyle != 0 || len(v.Content) == 0 {
-		next := &yaml.Node{Kind: yaml.SequenceNode, Style: v.Style & yaml.FlowStyle}
+		next := &yaml.Node{Kind: yaml.SequenceNode, Style: v.Style & yaml.FlowStyle, Tag: localTag(v)}
 		if v.Kind == yaml.SequenceNode {
 			next.Content = append(slices.Clone(v.Content), item)
 		} else if v.Kind == yaml.ScalarNode && v.Tag == "!!null" {
@@ -666,10 +666,10 @@ func (d *Doc) DeleteItem(path []string, i int, pruneEmpty bool) error {
 		if pruneEmpty {
 			return d.Delete(path, true)
 		}
-		return d.replaceValue(k, v, &yaml.Node{Kind: yaml.SequenceNode, Style: yaml.FlowStyle})
+		return d.replaceValue(k, v, &yaml.Node{Kind: yaml.SequenceNode, Style: yaml.FlowStyle, Tag: localTag(v)})
 	}
 	if v.Style&yaml.FlowStyle != 0 {
-		next := &yaml.Node{Kind: yaml.SequenceNode, Style: yaml.FlowStyle}
+		next := &yaml.Node{Kind: yaml.SequenceNode, Style: yaml.FlowStyle, Tag: localTag(v)}
 		next.Content = slices.Delete(slices.Clone(v.Content), i, i+1)
 		return d.replaceValue(k, v, next)
 	}
@@ -702,7 +702,7 @@ func (d *Doc) SetItem(path []string, i int, item *yaml.Node) error {
 		}
 	}
 	if v.Style&yaml.FlowStyle != 0 {
-		next := &yaml.Node{Kind: yaml.SequenceNode, Style: yaml.FlowStyle, Content: slices.Clone(v.Content)}
+		next := &yaml.Node{Kind: yaml.SequenceNode, Style: yaml.FlowStyle, Tag: localTag(v), Content: slices.Clone(v.Content)}
 		next.Content[i] = item
 		return d.replaceValue(k, v, next)
 	}
@@ -772,6 +772,9 @@ func (r renderer) entry(key string, v *yaml.Node, indent int, head string) []str
 		comment = head[i:]
 	}
 	prefix := pad(indent) + key + ":"
+	if localTag(v) != "" {
+		prefix += " " + v.Tag // !override, !reset
+	}
 	switch {
 	case inline(v):
 		return []string{prefix + " " + r.inlineText(v) + comment}
@@ -794,6 +797,15 @@ func (r renderer) entry(key string, v *yaml.Node, indent int, head string) []str
 		}
 		return out
 	}
+}
+
+// localTag is a collection's application tag (!override, !reset; "" for
+// scalars and the YAML core tags), kept when the collection is rewritten.
+func localTag(v *yaml.Node) string {
+	if v.Kind != yaml.ScalarNode && strings.HasPrefix(v.Tag, "!") && !strings.HasPrefix(v.Tag, "!!") {
+		return v.Tag
+	}
+	return ""
 }
 
 // item renders "- value" with the dash at column dash (0-based).

@@ -147,7 +147,7 @@ export function readOnlyReason(file: WorkflowFile): string | undefined {
 export function languageOf(path: string): FileLanguage {
   const base = baseName(path).toLowerCase()
   if (base.endsWith(".tf.json") || base.endsWith(".tfvars.json")) return "json"
-  if (base.endsWith(".env.example") || base === ".env" || base.startsWith(".env.")) return "shell"
+  if (base === ".env" || base.startsWith(".env.") || base.endsWith(".env")) return "shell"
   if (/^(dockerfile|containerfile)(\.[\w.-]+)?$|\.dockerfile$/.test(base)) return "dockerfile"
   const named = NAME_LANGUAGE[base]
   if (named) return named

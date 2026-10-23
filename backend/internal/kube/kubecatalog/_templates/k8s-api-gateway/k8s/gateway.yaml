@@ -53,6 +53,10 @@ kind: Deployment
 metadata:
   name: gateway
   namespace: edge-gateway
+  labels:
+    app.kubernetes.io/name: gateway
+    app.kubernetes.io/instance: gateway
+    app.kubernetes.io/part-of: edge-gateway
 spec:
   selector:
     matchLabels:

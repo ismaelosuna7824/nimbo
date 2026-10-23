@@ -17,6 +17,7 @@
 package kubeconvert
 
 import (
+	"cmp"
 	"errors"
 	"fmt"
 	"maps"
@@ -41,7 +42,40 @@ type Options struct {
 	Format    string // model.ConvertManifests (default) | ConvertKustomize | ConvertHelm
 	Name      string // application name: labels, chart and release name, Ingress hosts (DNS-1123 label)
 	Namespace string // default Name
+	// LoadTest is a finished load test run of the docker workflow, with
+	// its timelines (see UsableRun): the services it measured are sized
+	// from their usage instead of defaults, unless IgnoreLoadTest.
+	LoadTest       *model.LoadTestRun
+	IgnoreLoadTest bool
+	Autoscaling    Autoscaling
+	// Environments are the docker workflow's environments, each opened
+	// with its override (compose.Options.Environment). Kustomize and Helm
+	// map each one to an overlay / values-<env>.yaml carrying what it
+	// changes from the base, with the prod treatment (HPA, PDB) on the
+	// prod-like ones (model.ProdLike). None: the dev and prod environments.
+	Environments []Environment
 }
+
+// Environment is one environment of the docker workflow.
+type Environment struct {
+	Name    string
+	Project *compose.Project
+}
+
+// Autoscaling tunes the HorizontalPodAutoscalers of the prod environment
+// (Kustomize and Helm). The zero value autoscales with the defaults.
+type Autoscaling struct {
+	Disabled    bool
+	MaxReplicas int // default 5; at least 2
+	TargetCPU   int // average CPU utilization, % of the request; default 70
+}
+
+// Autoscaling defaults and bounds.
+const (
+	DefaultMaxReplicas = 5
+	DefaultTargetCPU   = 70
+	maxMaxReplicas     = 100
+)
 
 // Result is a conversion: the new workflow's files and the report.
 type Result struct {
@@ -160,6 +194,9 @@ type unit struct {
 	readiness, liveness, startup *probe
 
 	limits, requests quantities
+	// autoscale: prod runs a HorizontalPodAutoscaler for it (stateless,
+	// not a data service, autoscaling enabled).
+	autoscale bool
 
 	sec      security
 	waits    []wait
@@ -256,6 +293,12 @@ type converter struct {
 	volumeUsers map[string][]string
 	pvcOwner    map[string]string // standalone PVC → service creating it
 	shared      []*config         // top-level configs/secrets (one per compose config/secret)
+	measured    map[string]usage  // per-container usage from the load test, by service
+	// manifestsNoted: the "no HPA in plain manifests" issue was reported.
+	manifestsNoted bool
+	// envs are the docker workflow's environments, analyzed (nil: the
+	// default dev and prod).
+	envs []*envUnits
 }
 
 // Convert converts the compose project p (opened from the docker
@@ -293,16 +336,35 @@ func Convert(p *compose.Project, opts Options) (*Result, error) {
 	if !ValidName(opts.Namespace) {
 		return nil, fmt.Errorf("invalid namespace %q: lower-case letters, digits and '-', starting with a letter (at most 63)", opts.Namespace)
 	}
-	c := &converter{
-		p: p, opts: opts, byName: map[string]*unit{}, files: map[string][]byte{},
-		volumeUsers: map[string][]string{}, pvcOwner: map[string]string{},
-		report: model.KubeConvertReport{
-			Format: opts.Format, Name: opts.Name, Namespace: opts.Namespace,
-			Sources: []model.KubeSource{}, Builds: []model.KubeBuild{}, Environments: []string{},
-			Objects: []model.KubeConvertObj{}, Mappings: []model.KubeConvertMap{}, Unmapped: []model.KubeConvertIssue{},
-		},
+	as := &opts.Autoscaling
+	if as.MaxReplicas == 0 {
+		as.MaxReplicas = DefaultMaxReplicas
+	}
+	if as.TargetCPU == 0 {
+		as.TargetCPU = DefaultTargetCPU
+	}
+	if as.MaxReplicas < 2 || as.MaxReplicas > maxMaxReplicas {
+		return nil, fmt.Errorf("invalid max replicas %d: between 2 and %d (prod runs at least 2)", as.MaxReplicas, maxMaxReplicas)
+	}
+	if as.TargetCPU < 10 || as.TargetCPU > 95 {
+		return nil, fmt.Errorf("invalid target CPU %d%%: between 10 and 95", as.TargetCPU)
+	}
+	if opts.LoadTest != nil {
+		if err := UsableRun(p, opts.LoadTest); err != nil {
+			return nil, fmt.Errorf("can't size from the load test: %w", err)
+		}
+	}
+	c := newConverter(p, opts)
+	if opts.LoadTest != nil {
+		c.report.LoadTest = loadTestInfo(p, opts.LoadTest, !opts.IgnoreLoadTest)
+		if !opts.IgnoreLoadTest {
+			c.measured = measure(opts.LoadTest)
+		}
 	}
 	if err := c.analyze(); err != nil {
+		return nil, err
+	}
+	if err := c.analyzeEnvironments(); err != nil {
 		return nil, err
 	}
 	files, err := c.write()
@@ -313,6 +375,19 @@ func Convert(p *compose.Project, opts Options) (*Result, error) {
 	maps.Copy(files, c.files)
 	k := &model.KubernetesModel{Sources: c.report.Sources, Builds: c.report.Builds}
 	return &Result{Files: files, Generated: generated, Model: k, Report: c.report}, nil
+}
+
+func newConverter(p *compose.Project, opts Options) *converter {
+	return &converter{
+		p: p, opts: opts, byName: map[string]*unit{}, files: map[string][]byte{},
+		volumeUsers: map[string][]string{}, pvcOwner: map[string]string{}, measured: map[string]usage{},
+		report: model.KubeConvertReport{
+			Format: opts.Format, Name: opts.Name, Namespace: opts.Namespace,
+			Sources: []model.KubeSource{}, Builds: []model.KubeBuild{}, Environments: []string{},
+			Objects: []model.KubeConvertObj{}, Mappings: []model.KubeConvertMap{}, Unmapped: []model.KubeConvertIssue{},
+			Sizing: []model.KubeConvertSizing{}, Autoscaling: []model.KubeConvertHPA{},
+		},
+	}
 }
 
 func (c *converter) mapped(svc, from, to string) {
@@ -411,6 +486,7 @@ func (c *converter) analyze() error {
 	}
 	for _, u := range c.units {
 		c.dependencies(u)
+		c.autoscaling(u)
 	}
 	return nil
 }
@@ -1259,56 +1335,221 @@ func memQuantity(b int64) string {
 	return strconv.FormatInt(b, 10)
 }
 
-func (c *converter) resources(u *unit) {
-	var limCPU, reqCPU float64
-	var limMem, reqMem int64
-	if d := u.svc.Deploy; d != nil {
+// resourceSpec is a container's requests/limits (0: not set).
+type resourceSpec struct {
+	reqCPU, limCPU float64
+	reqMem, limMem int64
+}
+
+// sized is a container's resolved requests/limits and where each came
+// from.
+type sized struct {
+	resourceSpec
+	compose, measured, defaulted []string // "cpu limit", "memory request"…
+	// kept: measured requests of a data service below the default, kept
+	// at the default.
+	kept []string
+	rec  *recommendation
+}
+
+func (s sized) source() string {
+	switch {
+	case len(s.measured) > 0:
+		return model.SizingLoadTest
+	case len(s.compose) > 0:
+		return model.SizingCompose
+	}
+	return model.SizingDefault
+}
+
+// resolve decides a container's requests/limits: explicit compose values
+// are the source of truth, the load test's recommendation (m) replaces
+// the defaults, and defaults fill the rest. Requests never exceed
+// limits: a measured/defaulted limit grows to an explicit request, an
+// explicit limit caps the request. Data services are never sized down:
+// a short load test underestimates what their caches and buffers grow
+// to, and a request too low gets them evicted first under node memory
+// pressure, so a measured request only raises the default one.
+func resolve(ex resourceSpec, m *usage, data bool) sized {
+	s := sized{}
+	if m != nil {
+		r := recommend(*m)
+		s.rec = &r
+	}
+	pickF := func(what string, explicit float64, rec func(recommendation) float64, def float64) float64 {
+		switch {
+		case explicit > 0:
+			s.compose = append(s.compose, what)
+			return explicit
+		case s.rec != nil:
+			s.measured = append(s.measured, what)
+			return rec(*s.rec)
+		}
+		s.defaulted = append(s.defaulted, what)
+		return def
+	}
+	pickI := func(what string, explicit int64, rec func(recommendation) int64, def int64) int64 {
+		return int64(pickF(what, float64(explicit), func(r recommendation) float64 { return float64(rec(r)) }, float64(def)))
+	}
+	defCPU, defMem := 0.5, int64(256<<20)
+	if data {
+		defCPU, defMem = 1, 512<<20
+	}
+	s.limCPU = pickF("cpu limit", ex.limCPU, func(r recommendation) float64 { return r.limCPU }, defCPU)
+	s.limMem = pickI("memory limit", ex.limMem, func(r recommendation) int64 { return r.limMem }, defMem)
+	// Default CPU request: a quarter of the limit (at least 50m), bursts
+	// stay possible without reserving the whole limit on the node.
+	// Default memory request: the limit (memory isn't compressible, so the
+	// scheduler never overcommits it).
+	defReqCPU := func(lim float64) float64 { return max(math.Round(lim*250/5)*5/1000, minCPU) }
+	s.reqCPU = pickF("cpu request", ex.reqCPU, func(r recommendation) float64 { return r.reqCPU }, defReqCPU(s.limCPU))
+	s.reqMem = pickI("memory request", ex.reqMem, func(r recommendation) int64 { return r.reqMem }, s.limMem)
+	if data && s.rec != nil {
+		baseCPU, baseMem := cmp.Or(ex.limCPU, defCPU), cmp.Or(ex.limMem, defMem)
+		if ex.reqCPU == 0 && s.reqCPU < defReqCPU(baseCPU) {
+			s.reqCPU = defReqCPU(baseCPU)
+			s.kept = append(s.kept, "cpu request")
+		}
+		if ex.reqMem == 0 && s.reqMem < baseMem {
+			s.reqMem = baseMem
+			s.kept = append(s.kept, "memory request")
+		}
+	}
+	if ex.limCPU > 0 {
+		s.reqCPU = min(s.reqCPU, s.limCPU)
+	} else {
+		s.limCPU = max(s.limCPU, s.reqCPU)
+	}
+	if ex.limMem > 0 {
+		s.reqMem = min(s.reqMem, s.limMem)
+	} else {
+		s.limMem = max(s.limMem, s.reqMem)
+	}
+	return s
+}
+
+// explicitResources reads deploy.resources, cpus, mem_limit and
+// mem_reservation.
+func explicitResources(svc types.ServiceConfig) resourceSpec {
+	var ex resourceSpec
+	if d := svc.Deploy; d != nil {
 		if l := d.Resources.Limits; l != nil {
-			limCPU, limMem = float64(l.NanoCPUs), int64(l.MemoryBytes)
+			ex.limCPU, ex.limMem = float64(l.NanoCPUs), int64(l.MemoryBytes)
 		}
 		if r := d.Resources.Reservations; r != nil {
-			reqCPU, reqMem = float64(r.NanoCPUs), int64(r.MemoryBytes)
+			ex.reqCPU, ex.reqMem = float64(r.NanoCPUs), int64(r.MemoryBytes)
 		}
 	}
-	if limCPU == 0 && u.svc.CPUS > 0 {
-		limCPU = float64(u.svc.CPUS)
+	if ex.limCPU == 0 && svc.CPUS > 0 {
+		ex.limCPU = float64(svc.CPUS)
 	}
-	if limMem == 0 && u.svc.MemLimit > 0 {
-		limMem = int64(u.svc.MemLimit)
+	if ex.limMem == 0 && svc.MemLimit > 0 {
+		ex.limMem = int64(svc.MemLimit)
 	}
-	if reqMem == 0 && u.svc.MemReservation > 0 {
-		reqMem = int64(u.svc.MemReservation)
+	if ex.reqMem == 0 && svc.MemReservation > 0 {
+		ex.reqMem = int64(svc.MemReservation)
 	}
-	defaulted := []string{}
-	if limCPU == 0 {
-		limCPU = 0.5
-		if u.data {
-			limCPU = 1
+	return ex
+}
+
+func (c *converter) resources(u *unit) {
+	ex := explicitResources(u.svc)
+	var m *usage
+	if mu, ok := c.measured[u.name]; ok {
+		m = &mu
+	}
+	s := resolve(ex, m, u.data)
+	u.limits = quantities{cpu: cpuQuantity(s.limCPU), memory: memQuantity(s.limMem)}
+	u.requests = quantities{cpu: cpuQuantity(s.reqCPU), memory: memQuantity(s.reqMem)}
+	to := fmt.Sprintf("requests cpu %s / memory %s, limits cpu %s / memory %s", u.requests.cpu, u.requests.memory, u.limits.cpu, u.limits.memory)
+	row := model.KubeConvertSizing{
+		Service: u.name, Source: s.source(),
+		Requests: model.KubeResourceQty{CPU: u.requests.cpu, Memory: u.requests.memory},
+		Limits:   model.KubeResourceQty{CPU: u.limits.cpu, Memory: u.limits.memory},
+	}
+	var detail []string
+	from := "deploy.resources"
+	if m != nil {
+		from = c.provenance(*m)
+		detail = append(detail, "from "+from)
+		row.Measured = &model.KubeMeasuredUsage{CPUP90: round3f(m.cpuP90), CPUPeak: round3f(m.cpuPeak), MemPeak: m.memPeak}
+		row.Censored = s.rec.censored
+	}
+	if len(s.compose) > 0 {
+		detail = append(detail, strings.Join(s.compose, ", ")+" from compose")
+	}
+	if len(s.defaulted) > 0 {
+		detail = append(detail, strings.Join(s.defaulted, ", ")+" defaulted")
+	}
+	if len(s.kept) > 0 {
+		detail = append(detail, strings.Join(s.kept, ", ")+" kept at the default: data services are not sized down from a short load test")
+	}
+	if m != nil && s.rec.censored != "" {
+		detail = append(detail, censoredNote(*m, s.rec.censored))
+	}
+	row.Detail = strings.Join(detail, "; ")
+	c.report.Sizing = append(c.report.Sizing, row)
+	c.mapped(u.name, from, to)
+	switch {
+	case m != nil:
+		c.sizingIssues(u, ex, *m, s)
+	case ex.limCPU == 0 || ex.limMem == 0:
+		var lims []string
+		if ex.limCPU == 0 {
+			lims = append(lims, "cpu limit "+u.limits.cpu)
 		}
-		defaulted = append(defaulted, "cpu limit "+cpuQuantity(limCPU))
-	}
-	if limMem == 0 {
-		limMem = 256 << 20
-		if u.data {
-			limMem = 512 << 20
+		if ex.limMem == 0 {
+			lims = append(lims, "memory limit "+u.limits.memory)
 		}
-		defaulted = append(defaulted, "memory limit "+memQuantity(limMem))
+		c.issue(u, "info", "resources", "No deploy.resources limits: defaulted "+strings.Join(lims, ", ")+". Run a load test against the docker workflow and convert again to size them from what it measures.")
 	}
-	if reqCPU == 0 {
-		// A quarter of the limit (at least 50m): bursts stay possible
-		// without reserving the whole limit on the node.
-		reqCPU = max(math.Round(limCPU*250/5)*5/1000, 0.05)
+}
+
+func round3f(v float64) float64 { return math.Round(v*1000) / 1000 }
+
+// censoredNote says why a measurement is a lower bound.
+func censoredNote(m usage, censored string) string {
+	switch censored {
+	case "cpu":
+		return fmt.Sprintf("CPU-bound at its Docker limit of %s CPU during the test, so it needs more: sized one step above (request ≥ that limit, limit twice it)", trimFloat(m.cpuLimit, 2))
+	case "memory":
+		return fmt.Sprintf("hit its Docker memory limit of %s during the test, so it needs more: sized one step above (request ≥ that limit, limit twice it)", memQuantity(ceilMiB(float64(m.memLimit))))
+	case "single-core":
+		return "pinned one CPU core during the test (single-threaded runtime): request 1 core; more replicas, not a bigger limit, add throughput"
 	}
-	if reqMem == 0 {
-		// Memory isn't compressible: request what the limit allows so the
-		// scheduler never overcommits it.
-		reqMem = limMem
+	return ""
+}
+
+// sizingIssues reports censored measurements and explicit compose values
+// far from what the load test measured (they stay: compose is the source
+// of truth).
+func (c *converter) sizingIssues(u *unit, ex resourceSpec, m usage, s sized) {
+	r := s.rec
+	if r.censored != "" {
+		c.issue(u, "info", "resources", fmt.Sprintf("%s %s.", u.name, censoredNote(m, r.censored)))
 	}
-	u.limits = quantities{cpu: cpuQuantity(limCPU), memory: memQuantity(limMem)}
-	u.requests = quantities{cpu: cpuQuantity(min(reqCPU, limCPU)), memory: memQuantity(min(reqMem, limMem))}
-	c.mapped(u.name, "deploy.resources", fmt.Sprintf("requests cpu %s / memory %s, limits cpu %s / memory %s", u.requests.cpu, u.requests.memory, u.limits.cpu, u.limits.memory))
-	if len(defaulted) > 0 {
-		c.issue(u, "info", "resources", "No deploy.resources limits: defaulted "+strings.Join(defaulted, ", ")+". Tune them with the Perf verdict after a load test.")
+	// Data services are never sized down from a load test: only suggest
+	// raising their explicit values.
+	far := []string{}
+	suggest := func(what, explicit, measured string, e, m float64) {
+		if farApart(e, m) && (!u.data || m > e) {
+			far = append(far, fmt.Sprintf("%s %s (measured suggests %s)", what, explicit, measured))
+		}
+	}
+	if ex.limCPU > 0 {
+		suggest("cpu limit", cpuQuantity(ex.limCPU), cpuQuantity(r.limCPU), ex.limCPU, r.limCPU)
+	}
+	if ex.reqCPU > 0 {
+		suggest("cpu request", cpuQuantity(ex.reqCPU), cpuQuantity(r.reqCPU), ex.reqCPU, r.reqCPU)
+	}
+	if ex.limMem > 0 {
+		suggest("memory limit", memQuantity(ex.limMem), memQuantity(r.limMem), float64(ex.limMem), float64(r.limMem))
+	}
+	if ex.reqMem > 0 {
+		suggest("memory request", memQuantity(ex.reqMem), memQuantity(r.reqMem), float64(ex.reqMem), float64(r.reqMem))
+	}
+	if len(far) > 0 {
+		c.issue(u, "info", "resources", fmt.Sprintf("Kept the compose %s — %s. Update deploy.resources if that load is representative.", strings.Join(far, ", "), c.provenance(m)), "deploy")
 	}
 }
 

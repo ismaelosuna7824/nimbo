@@ -176,7 +176,7 @@ func buildKubeView(s kubeSnapshot) kubeView {
 		return ""
 	}
 
-	podNode := map[string]string{} // pod namespace/name -> workload node ID
+	podNode := map[string]string{}       // pod namespace/name -> workload node ID
 	readySince := map[string]time.Time{} // pod namespace/name -> when it last became Ready (ready pods only)
 	for _, p := range sortedPods(s.pods) {
 		id := podWorkload(p)
@@ -318,7 +318,7 @@ func buildKubeView(s kubeSnapshot) kubeView {
 			v.forwards = append(v.forwards, forwardSpec{
 				key: svc.Namespace + "/" + svc.Name + "/" + strconv.Itoa(int(sp.Port)), nodeID: sid,
 				namespace: svc.Namespace, service: svc.Name, port: int(sp.Port), portName: sp.Name,
-				http: httpPort(int(sp.Port), target, sp.AppProtocol), ready: ready,
+				http: httpPort(sp.Name, int(sp.Port), target, sp.AppProtocol), ready: ready,
 			})
 		}
 	}
@@ -775,11 +775,21 @@ func readyEndpoint(eps []*discoveryv1.EndpointSlice, portName string, n uint64) 
 	return t.pod, t.port, true
 }
 
-// httpPort reports whether a Service port is offered as an HTTP URL.
-func httpPort(port, target int, appProtocol *string) bool {
+// httpPort reports whether a Service port is offered as an HTTP URL: its
+// appProtocol, else its name (the http/https/web, http-*, *-http and tcp-*
+// conventions Istio and most charts follow: Alertmanager's http-web on
+// 9093 is HTTP although Kafka's TLS listener uses the same number), else
+// the well-known numbers of other protocols.
+func httpPort(name string, port, target int, appProtocol *string) bool {
 	if appProtocol != nil {
 		ap := strings.ToLower(*appProtocol)
 		return ap == "http" || ap == "https" || strings.HasPrefix(ap, "kubernetes.io/h") || ap == "http2"
+	}
+	switch n := strings.ToLower(name); {
+	case n == "http" || n == "https" || n == "web" || strings.HasPrefix(n, "http-") || strings.HasPrefix(n, "https-") || strings.HasSuffix(n, "-http"):
+		return true
+	case strings.HasPrefix(n, "tcp") || strings.HasPrefix(n, "udp") || strings.HasPrefix(n, "grpc") || strings.HasPrefix(n, "tls"):
+		return false
 	}
 	return !nonHTTPPorts[port] && !nonHTTPPorts[target]
 }

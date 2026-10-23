@@ -4,6 +4,10 @@ kind: Deployment
 metadata:
   name: web
   namespace: edge-proxy
+  labels:
+    app.kubernetes.io/name: web
+    app.kubernetes.io/instance: web
+    app.kubernetes.io/part-of: edge-proxy
 spec:
   selector:
     matchLabels:

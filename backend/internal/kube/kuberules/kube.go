@@ -1,6 +1,8 @@
 package kuberules
 
 import (
+	"strings"
+
 	"github.com/ismaelosuna7824/nimbo/backend/internal/compose"
 	"github.com/ismaelosuna7824/nimbo/backend/internal/kube"
 	"github.com/ismaelosuna7824/nimbo/backend/internal/model"
@@ -10,6 +12,11 @@ import (
 // workflow's project (its active environment) and drops the advice turned
 // off in Settings (cfg).
 func Check(p *kube.Project, wf *model.Workflow, cfg model.BestPracticeSettings) []model.Diagnostic {
+	return FilterSettings(run(newInput(p, wf)), cfg)
+}
+
+// newInput collects what the rules read from a rendered project.
+func newInput(p *kube.Project, wf *model.Workflow) input {
 	in := input{env: p.Environment, localImages: map[string]bool{}, namespaces: map[string]bool{}}
 	var k model.KubernetesModel
 	if wf.Kubernetes != nil {
@@ -29,7 +36,8 @@ func Check(p *kube.Project, wf *model.Workflow, cfg model.BestPracticeSettings) 
 		if o.Node == nil {
 			continue
 		}
-		obj := &object{id: o.ID, apiVersion: o.APIVersion, kind: o.Kind, name: o.Name, namespace: o.Namespace, node: o.Node}
+		obj := &object{id: o.ID, apiVersion: o.APIVersion, kind: o.Kind, name: o.Name, namespace: o.Namespace, node: o.Node,
+			vendored: strings.HasPrefix(o.Template, "charts/")}
 		obj.explicitNS = str(o.Node, "metadata", "namespace") != ""
 		if o.Source >= 0 && o.Source < len(p.Sources) && p.Sources[o.Source].Source.Namespace != "" {
 			obj.explicitNS = true
@@ -47,5 +55,5 @@ func Check(p *kube.Project, wf *model.Workflow, cfg model.BestPracticeSettings) 
 			}
 		}
 	}
-	return FilterSettings(run(in), cfg)
+	return in
 }

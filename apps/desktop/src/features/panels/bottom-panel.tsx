@@ -1,5 +1,5 @@
 import { lazy, memo, Suspense, useEffect } from "react"
-import { ChevronDown, ChevronUp, Code2, Gauge, Plug, Rocket, SlidersHorizontal, TriangleAlert } from "lucide-react"
+import { ChevronDown, ChevronUp, ClipboardCheck, Code2, Gauge, Layers, Plug, Rocket, SlidersHorizontal, TriangleAlert } from "lucide-react"
 import { ThemedIcon } from "@/components/arcade/themed-icon"
 import type { PixelIconName } from "@/components/arcade/pixel-icons"
 import { Badge } from "@/components/ui/badge"
@@ -25,6 +25,12 @@ const ComposeDeployTab = lazy(() =>
 const KubeDeployTab = lazy(() =>
   import("@/features/kubernetes/deploy/kube-deploy-tab").then((m) => ({ default: m.KubeDeployTab })),
 )
+const ReadinessTab = lazy(() =>
+  import("@/features/kubernetes/readiness/readiness-tab").then((m) => ({ default: m.ReadinessTab })),
+)
+const KubeEnvironmentsTab = lazy(() =>
+  import("@/features/kubernetes/environments/environments-tab").then((m) => ({ default: m.KubeEnvironmentsTab })),
+)
 const TAB_FALLBACK = (
   <div className="flex h-full items-center justify-center">
     <Spinner />
@@ -34,17 +40,25 @@ const TAB_FALLBACK = (
 const TABS: { id: BottomTab; label: string; icon: typeof Code2; pixel: PixelIconName }[] = [
   { id: "terraform", label: "Code", icon: Code2, pixel: "code" },
   { id: "variables", label: "Variables & Environments", icon: SlidersHorizontal, pixel: "sliders" },
+  { id: "environments", label: "Environments", icon: Layers, pixel: "sliders" },
   { id: "deploy", label: "Deploy", icon: Rocket, pixel: "rocket" },
   { id: "endpoints", label: "Endpoints", icon: Plug, pixel: "plug" },
   { id: "loadtest", label: "Load test", icon: Gauge, pixel: "gauge" },
   { id: "problems", label: "Problems", icon: TriangleAlert, pixel: "warning" },
+  { id: "readiness", label: "Readiness", icon: ClipboardCheck, pixel: "check" },
 ]
 
 /**
- * Docker and Kubernetes workspaces have no Terraform variables or environments (compose reads .env, edited in Code;
- * Kubernetes environments are overlays / values files, switched on the canvas and in Deploy).
+ * Docker and Kubernetes workspaces have no Terraform variables: their environments are files (compose override
+ * files and .env.<env>; Kustomize overlays and Helm values files), managed in the Environments tab.
  */
 const CONTAINER_HIDDEN: Partial<Record<BottomTab, true>> = { variables: true }
+
+/** Tabs only container workspaces (docker, Kubernetes) have. */
+const CONTAINER_ONLY: Partial<Record<BottomTab, true>> = { environments: true }
+
+/** Tabs only Kubernetes workspaces have: production readiness per environment. */
+const KUBE_ONLY: Partial<Record<BottomTab, true>> = { readiness: true }
 
 /**
  * Bottom dock with the code (file viewer), variables, deploy, endpoints, load test and
@@ -64,7 +78,9 @@ export function BottomPanel() {
   // Info (mostly best-practice suggestions) is listed in the tab but not counted, like the node badges.
   const alertCount = problems.filter((d) => d.severity !== "info").length
 
-  const tabs = containers ? TABS.filter((t) => !CONTAINER_HIDDEN[t.id]) : TABS
+  const tabs = (containers ? TABS.filter((t) => !CONTAINER_HIDDEN[t.id]) : TABS.filter((t) => !CONTAINER_ONLY[t.id])).filter(
+    (t) => kind === "kubernetes" || !KUBE_ONLY[t.id],
+  )
 
   useDeployToast()
   useEffect(() => {
@@ -79,10 +95,11 @@ export function BottomPanel() {
     return () => window.removeEventListener("keydown", onKey)
   }, [])
 
-  // A Docker or Kubernetes workspace opened while a Terraform-only tab was active: show its code instead.
+  // A workspace opened while a tab it doesn't have was active (Terraform-only, Kubernetes-only): show its code instead.
   useEffect(() => {
-    if (containers && CONTAINER_HIDDEN[tab]) useWorkflowStore.setState({ bottomTab: "terraform" })
-  }, [containers, tab])
+    if ((containers && CONTAINER_HIDDEN[tab]) || (!containers && CONTAINER_ONLY[tab]) || (kind !== "kubernetes" && KUBE_ONLY[tab]))
+      useWorkflowStore.setState({ bottomTab: "terraform" })
+  }, [containers, kind, tab])
 
   if (!workflowId) return null
 
@@ -182,5 +199,18 @@ const TabBody = memo(function TabBody({ tab, kind }: { tab: BottomTab; kind: str
       )
     case "problems":
       return <ProblemsTab />
+    case "readiness":
+      return (
+        <Suspense fallback={TAB_FALLBACK}>
+          <ReadinessTab />
+        </Suspense>
+      )
+    case "environments":
+      // One tab for both container kinds: the same API, kind-aware copy inside.
+      return kind === "kubernetes" || kind === "docker" ? (
+        <Suspense fallback={TAB_FALLBACK}>
+          <KubeEnvironmentsTab />
+        </Suspense>
+      ) : null
   }
 })

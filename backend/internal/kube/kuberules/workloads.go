@@ -695,38 +695,12 @@ func (c *checker) checkPDB(o *object) {
 }
 
 // prodLike matches environment names of production-like environments.
-func prodLike(env string) bool {
-	e := strings.ToLower(env)
-	for _, p := range []string{"prod", "production", "prd", "live", "staging", "stage", "stg"} {
-		if e == p || strings.HasPrefix(e, p+"-") || strings.HasSuffix(e, "-"+p) || strings.HasPrefix(e, p+"_") {
-			return true
-		}
-	}
-	return false
-}
+func prodLike(env string) bool { return model.ProdLike(env) }
 
 // stateful reports why a workload can't simply run more replicas: its own
 // volume claim templates, a ReadWriteOnce claim or a Recreate strategy.
 func (c *checker) stateful(w *workload) bool {
-	if len(items(w.o.node, "spec", "volumeClaimTemplates")) > 0 || str(w.o.node, "spec", "strategy", "type") == "Recreate" {
-		return true
-	}
-	for _, v := range items(w.pod, "volumes") {
-		claim := str(v, "persistentVolumeClaim", "claimName")
-		if claim == "" {
-			continue
-		}
-		pvc := c.get("PersistentVolumeClaim", w.o.namespace, claim)
-		if pvc == nil {
-			return true
-		}
-		for _, m := range items(pvc.node, "spec", "accessModes") {
-			if m.Value == "ReadWriteOnce" || m.Value == "ReadWriteOncePod" {
-				return true
-			}
-		}
-	}
-	return false
+	return len(items(w.o.node, "spec", "volumeClaimTemplates")) > 0 || str(w.o.node, "spec", "strategy", "type") == "Recreate" || c.rwoClaim(w)
 }
 
 func (c *checker) checkReplicas() {

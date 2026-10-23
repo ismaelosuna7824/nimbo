@@ -1,0 +1,21 @@
+# Spread the replicas over nodes so one node failure or drain never takes
+# them all down; ScheduleAnyway still schedules on a single-node cluster.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: web
+spec:
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 0
+      maxSurge: 1
+  template:
+    spec:
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: kubernetes.io/hostname
+          whenUnsatisfiable: ScheduleAnyway
+          labelSelector:
+            matchLabels:
+              app: web

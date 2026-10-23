@@ -193,8 +193,8 @@ test("a Helm values edit is rendered on the canvas and mapped in the inspector",
   expect(await fileText(api, wf.id, "chart/values.yaml")).toContain("# Defaults for every environment;")
   // Environments are the chart's values files: prod renders its own replica count.
   // The switch sits on the canvas (the Deploy tab has its own copy).
-  await page.getByTestId("k8s-canvas").getByTestId("kube-environment").click()
-  await page.getByTestId("kube-environment-prod").click()
+  await page.getByTestId("k8s-canvas").getByTestId("environment").click()
+  await page.getByTestId("environment-prod").click()
   await expect.poll(async () => (await api.request<Workflow>("GET", `/workflows/${wf.id}`)).kubernetes?.environment).toBe("prod")
 })
 
@@ -217,6 +217,10 @@ test("converts a Docker workflow to Kubernetes", async ({ app, api, page }) => {
   const dialog = page.getByTestId("convert-kubernetes-dialog")
   await expect(dialog).toBeVisible()
   await dialog.getByTestId("convert-format-kustomize").click()
+  // No load test yet: the sizing table shows compose limits, and prod autoscales the API.
+  await expect(dialog.getByTestId("convert-sizing-table")).toContainText("Compose")
+  await expect(dialog.getByTestId("convert-sizing-table")).toContainText("HPA 2–5 at 70% CPU")
+  await expect(dialog.getByTestId("convert-sizing")).toContainText("No load test yet")
   await dialog.getByTestId("convert-kubernetes-create").click()
   await expect(dialog).toBeHidden()
 

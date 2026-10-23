@@ -110,14 +110,15 @@ func planPorts(cfg *composeConfig, own map[string]bool, saved []model.PortRemap,
 
 // ComposePorts is the host port pre-check of an up, on the workflow's files
 // (SourceDir) as they are: conflicts and the remaps that would be kept.
-func (m *Manager) ComposePorts(ctx context.Context, wfID, sourceDir string, files, profiles []string) (model.ComposePorts, error) {
+// envFiles are the --env-file list (nil = .env).
+func (m *Manager) ComposePorts(ctx context.Context, wfID, sourceDir string, files, envFiles, profiles []string) (model.ComposePorts, error) {
 	if err := checkID(wfID); err != nil {
 		return model.ComposePorts{}, err
 	}
 	if err := m.composeAvailable(ctx); err != nil {
 		return model.ComposePorts{}, err
 	}
-	cmd, err := m.composeCommand(wfID, sourceDir, files, profiles)
+	cmd, err := m.composeCommand(wfID, sourceDir, files, envFiles, profiles)
 	if err != nil {
 		return model.ComposePorts{}, err
 	}

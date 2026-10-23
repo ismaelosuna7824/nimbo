@@ -51,21 +51,44 @@ type resourceSample struct {
 // resourceRecorder collects the samples of one run.
 type resourceRecorder struct {
 	probe  model.ResourceProbe
+	scaler scalingProbe // Kubernetes probes; nil otherwise
 	before map[string]model.ContainerFacts
 
 	mu      sync.Mutex
 	samples []resourceSample
+	scales  []scaleSample
 }
 
 func newResourceRecorder(p model.ResourceProbe) *resourceRecorder {
-	return &resourceRecorder{probe: p, before: p.Containers()}
+	rr := &resourceRecorder{probe: p, before: p.Containers()}
+	rr.scaler, _ = p.(scalingProbe)
+	return rr
 }
 
 func (rr *resourceRecorder) record(t float64) {
 	u := rr.probe.Sample()
+	var ws []model.WorkloadScale
+	if rr.scaler != nil {
+		ws = rr.scaler.Scaling()
+	}
 	rr.mu.Lock()
 	rr.samples = append(rr.samples, resourceSample{T: t, Usage: u})
+	if ws != nil {
+		rr.scales = append(rr.scales, scaleSample{T: t, Workloads: ws})
+	}
 	rr.mu.Unlock()
+}
+
+// scaling judges the run's autoscaling (nil unless the probe samples
+// replicas); see analyzeScaling.
+func (rr *resourceRecorder) scaling(secs []secStat, env string, elsewhere func(kind, name string) []string) *model.LoadScaling {
+	if rr.scaler == nil {
+		return nil
+	}
+	rr.mu.Lock()
+	scales := slices.Clone(rr.scales)
+	rr.mu.Unlock()
+	return analyzeScaling(scalingRun{target: rr.probe.Target(), samples: scales, degraded: degradations(secs), env: env, elsewhere: elsewhere})
 }
 
 // resourcesSummary copies res without the per-second timelines (lists and
@@ -80,6 +103,14 @@ func resourcesSummary(res *model.LoadResources) *model.LoadResources {
 		out.Services[i].Timeline = []model.ResourcePoint{}
 	}
 	out.Verdicts = slices.Clone(res.Verdicts)
+	if res.Scaling != nil {
+		sc := *res.Scaling
+		sc.Workloads = slices.Clone(sc.Workloads)
+		for i := range sc.Workloads {
+			sc.Workloads[i].Timeline = []model.ScalingPoint{}
+		}
+		out.Scaling = &sc
+	}
 	return &out
 }
 

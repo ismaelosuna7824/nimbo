@@ -308,7 +308,7 @@ func TestConvertKustomize(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, f := range []string{"k8s/base/kustomization.yaml", "k8s/overlays/dev/kustomization.yaml", "k8s/overlays/prod/kustomization.yaml", "k8s/overlays/prod/pdb.yaml", "k8s/base/env/api.secret.env", "k8s/base/env/db.env"} {
+	for _, f := range []string{"k8s/base/kustomization.yaml", "k8s/overlays/dev/kustomization.yaml", "k8s/overlays/prod/kustomization.yaml", "k8s/overlays/prod/pdb.yaml", "k8s/overlays/prod/hpa.yaml", "k8s/base/env/api.secret.env", "k8s/base/env/db.env"} {
 		if _, ok := res.Files[f]; !ok {
 			t.Errorf("missing %s", f)
 		}
@@ -325,8 +325,19 @@ func TestConvertKustomize(t *testing.T) {
 	}
 	var prod yaml.Node
 	_ = yaml.Unmarshal(res.Files["k8s/overlays/prod/kustomization.yaml"], &prod)
-	if val(prod.Content[0], "replicas", "name=api", "count") != "2" || at(prod.Content[0], "replicas", "name=db") != nil {
+	// The HPA owns the api's replicas in prod: no count, the base's removed.
+	if at(prod.Content[0], "replicas") != nil || val(prod.Content[0], "patches", "0", "target", "name") != "api" ||
+		!strings.Contains(val(prod.Content[0], "patches", "0", "patch"), "op: remove\n  path: /spec/replicas") {
 		t.Errorf("prod %s", res.Files["k8s/overlays/prod/kustomization.yaml"])
+	}
+	hpa := docs(t, res.Files, "k8s/overlays/prod/")["HorizontalPodAutoscaler/api"]
+	if val(hpa, "apiVersion") != "autoscaling/v2" || val(hpa, "spec", "scaleTargetRef", "name") != "api" || val(hpa, "spec", "minReplicas") != "2" ||
+		val(hpa, "spec", "maxReplicas") != "5" || val(hpa, "spec", "metrics", "0", "resource", "target", "averageUtilization") != "70" ||
+		val(hpa, "spec", "behavior", "scaleDown", "stabilizationWindowSeconds") != "300" || val(hpa, "spec", "behavior", "scaleUp", "stabilizationWindowSeconds") != "0" {
+		t.Errorf("hpa %s", res.Files["k8s/overlays/prod/hpa.yaml"])
+	}
+	if len(res.Report.Autoscaling) != 1 || res.Report.Autoscaling[0] != (model.KubeConvertHPA{Service: "api", Environment: "prod", MinReplicas: 2, MaxReplicas: 5, TargetCPU: 70}) {
+		t.Errorf("report autoscaling %+v", res.Report.Autoscaling)
 	}
 	if !strings.Contains(string(res.Files["k8s/overlays/prod/kustomization.yaml"]), "value: nginx") {
 		t.Error("prod ingress class")
@@ -339,6 +350,56 @@ func TestConvertKustomize(t *testing.T) {
 	d := docs(t, res.Files, "k8s/base/")
 	if d["ConfigMap/api-env"] != nil || val(d["Deployment/api"], "metadata", "namespace") != "" {
 		t.Error("base objects")
+	}
+	// Stateless Deployments roll one pod at a time at full capacity and
+	// spread over nodes; data stores keep their StatefulSet.
+	api := d["Deployment/api"]
+	if val(api, "spec", "strategy", "rollingUpdate", "maxUnavailable") != "0" || val(api, "spec", "strategy", "rollingUpdate", "maxSurge") != "1" ||
+		val(api, "spec", "template", "spec", "topologySpreadConstraints", "0", "topologyKey") != "kubernetes.io/hostname" ||
+		val(api, "spec", "template", "spec", "topologySpreadConstraints", "0", "labelSelector", "matchLabels", "app.kubernetes.io/name") != "api" ||
+		val(api, "spec", "template", "metadata", "labels", "app.kubernetes.io/version") != "dev" {
+		t.Errorf("api deployment strategy/spread/labels")
+	}
+	if at(d["StatefulSet/db"], "spec", "template", "spec", "topologySpreadConstraints") != nil {
+		t.Error("db spread")
+	}
+	// No HPA when autoscaling is off: fixed prod replicas.
+	off, err := Convert(openTemplate(t, "docker-fastapi-postgres"), Options{Format: model.ConvertKustomize, Name: "fastapi", Autoscaling: Autoscaling{Disabled: true}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = yaml.Unmarshal(off.Files["k8s/overlays/prod/kustomization.yaml"], &prod)
+	if _, ok := off.Files["k8s/overlays/prod/hpa.yaml"]; ok || val(prod.Content[0], "replicas", "name=api", "count") != "2" || len(off.Report.Autoscaling) != 0 {
+		t.Errorf("autoscaling off: %s", off.Files["k8s/overlays/prod/kustomization.yaml"])
+	}
+}
+
+func TestConvertAutoscalingOptions(t *testing.T) {
+	p := openTemplate(t, "docker-load-balancer")
+	res, err := Convert(p, Options{Format: model.ConvertKustomize, Name: "lb", Autoscaling: Autoscaling{MaxReplicas: 2, TargetCPU: 60}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Compose runs app with 3 replicas: the HPA's max is raised to them.
+	byService := map[string]model.KubeConvertHPA{}
+	for _, h := range res.Report.Autoscaling {
+		byService[h.Service] = h
+	}
+	if h := byService["app"]; h.MinReplicas != 3 || h.MaxReplicas != 3 || h.TargetCPU != 60 {
+		t.Errorf("app hpa %+v", res.Report.Autoscaling)
+	}
+	for _, bad := range []Autoscaling{{MaxReplicas: 1}, {MaxReplicas: 101}, {TargetCPU: 5}, {TargetCPU: 99}} {
+		if _, err := Convert(p, Options{Format: model.ConvertKustomize, Name: "lb", Autoscaling: bad}); err == nil {
+			t.Errorf("%+v accepted", bad)
+		}
+	}
+	// Plain manifests mirror compose: no HPA, and the report says why.
+	m, err := Convert(p, Options{Name: "lb"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(m.Report.Autoscaling) != 0 || !hasIssue(m.Report, "autoscaling") {
+		t.Errorf("manifests autoscaling %+v %+v", m.Report.Autoscaling, m.Report.Unmapped)
 	}
 }
 
@@ -365,14 +426,30 @@ func TestConvertHelm(t *testing.T) {
 	dep := string(res.Files["chart/templates/api-deployment.yaml"])
 	for _, want := range []string{
 		`image: "{{ .Values.api.image.repository }}:{{ .Values.api.image.tag }}"`,
-		`replicas: {{ .Values.api.replicaCount }}`,
+		"  {{- if not .Values.api.autoscaling.enabled }}\n  replicas: {{ .Values.api.replicaCount }}\n  {{- end }}\n",
 		"resources:\n            {{- toYaml .Values.api.resources | nindent 12 }}",
 		`app.kubernetes.io/instance: {{ .Release.Name }}`,
+		`app.kubernetes.io/version: {{ .Values.api.image.tag | toString | trunc 63 | trimSuffix "-" | quote }}`,
 		`checksum/api-secret: {{ include (print $.Template.BasePath "/api-secret.yaml") . | sha256sum }}`,
 	} {
 		if !strings.Contains(dep, want) {
 			t.Errorf("deployment template lacks %q:\n%s", want, dep)
 		}
+	}
+	hpa := string(res.Files["chart/templates/api-hpa.yaml"])
+	for _, want := range []string{
+		"{{- if .Values.api.autoscaling.enabled }}\n",
+		"minReplicas: {{ .Values.api.autoscaling.minReplicas }}",
+		"maxReplicas: {{ .Values.api.autoscaling.maxReplicas }}",
+		"averageUtilization: {{ .Values.api.autoscaling.targetCPUUtilizationPercentage }}",
+	} {
+		if !strings.Contains(hpa, want) {
+			t.Errorf("hpa template lacks %q:\n%s", want, hpa)
+		}
+	}
+	if val(root, "api", "autoscaling", "enabled") != "false" || val(root, "api", "autoscaling", "minReplicas") != "2" || val(root, "api", "autoscaling", "maxReplicas") != "5" ||
+		val(root, "api", "autoscaling", "targetCPUUtilizationPercentage") != "70" || at(root, "db", "autoscaling") != nil {
+		t.Errorf("autoscaling values:\n%s", res.Files["chart/values.yaml"])
 	}
 	sec := string(res.Files["chart/templates/api-secret.yaml"])
 	if !strings.Contains(sec, "stringData:\n  {{- range $k, $v := .Values.api.secretEnv }}\n  {{ $k }}: {{ $v | toString | quote }}\n  {{- end }}") {
@@ -383,7 +460,7 @@ func TestConvertHelm(t *testing.T) {
 	}
 	var prod yaml.Node
 	_ = yaml.Unmarshal(res.Files["chart/values-prod.yaml"], &prod)
-	if val(prod.Content[0], "api", "replicaCount") != "2" || val(prod.Content[0], "api", "pdb", "enabled") != "true" || at(prod.Content[0], "db") != nil {
+	if val(prod.Content[0], "api", "replicaCount") != "2" || val(prod.Content[0], "api", "pdb", "enabled") != "true" || val(prod.Content[0], "api", "autoscaling", "enabled") != "true" || at(prod.Content[0], "db") != nil {
 		t.Errorf("values-prod:\n%s", res.Files["chart/values-prod.yaml"])
 	}
 	if s := res.Report.Sources[0]; s.Kind != model.KubeHelm || s.Path != "chart" || s.Release != "shop" || s.Namespace != "shop" {

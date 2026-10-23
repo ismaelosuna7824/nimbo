@@ -75,7 +75,10 @@ export function Inspector() {
   const docker = useWorkflowStore((s) => s.workflow?.kind === "docker")
   const dockerSelected = useWorkflowStore((s) => !!s.workflow?.compose?.graph.nodes.some((n) => n.id === s.selectedNodeId))
   const kubernetes = useWorkflowStore((s) => s.workflow?.kind === "kubernetes")
-  const kubeSelected = useWorkflowStore((s) => !!s.workflow?.kubernetes?.graph.nodes.some((n) => n.id === s.selectedNodeId))
+  const kubeSelected = useWorkflowStore((s) => {
+    const graph = s.workflow?.kubernetes?.graph
+    return !!graph && (graph.nodes.some((n) => n.id === s.selectedNodeId) || !!graph.charts?.some((c) => c.id === s.selectedNodeId))
+  })
   const nodes = useWorkflowStore((s) => s.workflow?.nodes)
   const allDiagnostics = useWorkflowStore((s) => s.workflow?.diagnostics)
   const selectedNodeId = useWorkflowStore((s) => s.selectedNodeId)

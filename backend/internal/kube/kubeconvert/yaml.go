@@ -177,6 +177,9 @@ type marker struct {
 	// lines: text is a multi-line template whose lines start with %[1]s
 	// (the indent string).
 	lines bool
+	// cond (inline markers): the whole "key: value" line is only rendered
+	// when this Helm condition holds.
+	cond string
 }
 
 const markerPrefix = "__NIMBO_HELM_"
@@ -212,6 +215,13 @@ func (h *helmValuer) scalar(path string, v *yaml.Node) *yaml.Node {
 	return h.mark(marker{text: "{{ .Values." + path + pipe + " }}"})
 }
 
+// scalarIf is scalar on a line rendered only when cond holds.
+func (h *helmValuer) scalarIf(path string, v *yaml.Node, cond string) *yaml.Node {
+	n := h.scalar(path, v)
+	h.markers[len(h.markers)-1].cond = cond
+	return n
+}
+
 func (h *helmValuer) block(path string, v *yaml.Node) *yaml.Node {
 	h.put(path, v)
 	return h.mark(marker{block: true, text: "{{- toYaml .Values." + path + " | nindent %d }}"})
@@ -234,7 +244,11 @@ func (h *helmValuer) expand(src []byte) []byte {
 		i, _ := strconv.Atoi(string(sm[4]))
 		m := h.markers[i]
 		if !m.block {
-			return []byte(indent + dash + before + m.text + "\n")
+			out := indent + dash + before + m.text + "\n"
+			if m.cond != "" {
+				out = indent + "{{- if " + m.cond + " }}\n" + out + indent + "{{- end }}\n"
+			}
+			return []byte(out)
 		}
 		// "key: MARKER": the block goes on the following lines, two spaces
 		// deeper than the key.

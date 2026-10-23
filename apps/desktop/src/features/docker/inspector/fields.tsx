@@ -139,13 +139,16 @@ export function ListEditor<T>({
   )
 }
 
-/** A label above a field. */
-export function Field({ label, htmlFor, hint, children }: { label: string; htmlFor?: string; hint?: string; children: React.ReactNode }) {
+/** A label above a field; `badge` sits right of the label (where the value comes from). */
+export function Field({ label, htmlFor, hint, badge, children }: { label: string; htmlFor?: string; hint?: string; badge?: React.ReactNode; children: React.ReactNode }) {
   return (
     <div className="flex min-w-0 flex-col gap-1">
-      <label htmlFor={htmlFor} className="text-[11px] font-medium text-muted-foreground">
-        {label}
-      </label>
+      <div className="flex min-h-4 items-center gap-1.5">
+        <label htmlFor={htmlFor} className="text-[11px] font-medium text-muted-foreground">
+          {label}
+        </label>
+        {badge}
+      </div>
       {children}
       {hint && <p className="text-[11px] text-muted-foreground">{hint}</p>}
     </div>

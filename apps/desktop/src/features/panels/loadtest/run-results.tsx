@@ -2,6 +2,7 @@ import { lazy, Suspense, useState } from "react"
 import { Check, Info, Square, X } from "lucide-react"
 import { toast } from "sonner"
 import { PixelProgress } from "@/components/arcade/pixel-progress"
+import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Spinner } from "@/components/ui/spinner"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
@@ -18,11 +19,13 @@ import { StatusBadge } from "../components/status-badge"
 import { formatDuration, formatMs, formatNumber, formatPercent } from "../lib/format"
 import { DENSE_TABLE } from "../variables/blocks-editors"
 import { computeKpis, EXPLAIN, formatThreshold, METRIC_META, modeUnit, runDurationSec, stabilityLabel, totalDuration } from "./metrics"
+import { ScalingVerdicts } from "./scaling"
 import { useLoadRun } from "./use-load-run"
 
 // recharts loads with the first run shown, not with the tab.
 const LoadCharts = lazy(() => import("./charts").then((m) => ({ default: m.LoadCharts })))
 const ResourceCharts = lazy(() => import("./charts").then((m) => ({ default: m.ResourceCharts })))
+const ScalingCharts = lazy(() => import("./charts").then((m) => ({ default: m.ScalingCharts })))
 
 const TONE_TEXT = {
   ok: "text-emerald-600 dark:text-emerald-400",
@@ -146,6 +149,7 @@ export function RunResults({ runId }: { runId: string }) {
       <div className="flex flex-wrap items-center gap-2">
         <Verdict run={run} />
         <span className="text-sm font-semibold">{run.spec.name}</span>
+        {run.environment && <EnvironmentBadge env={run.environment} />}
         <span className="truncate text-xs text-muted-foreground">
           {run.spec.target.label} · {run.spec.profile.label ?? run.spec.profile.preset} ·{" "}
           {running ? `${formatDuration(elapsed * 1000)} of ${formatDuration(planned * 1000)}` : formatDuration(elapsed * 1000)}
@@ -192,9 +196,10 @@ export function RunResults({ runId }: { runId: string }) {
         />
       </div>
 
-      <div className="h-56 shrink-0">
+      {/* Side by side from md up at a fixed height; stacked charts on narrow panels take their own height. */}
+      <div className="shrink-0 md:h-56">
         {samples.length === 0 ? (
-          <div className="flex h-full items-center justify-center rounded-lg border text-xs text-muted-foreground">
+          <div className="flex h-56 items-center justify-center rounded-lg border text-xs text-muted-foreground md:h-full">
             {running ? (
               <span className="flex items-center gap-2">
                 <Spinner /> Warming up…
@@ -210,8 +215,23 @@ export function RunResults({ runId }: { runId: string }) {
         )}
       </div>
 
+      {resources?.scaling && (
+        <>
+          <ScalingVerdicts scaling={resources.scaling} />
+          {resources.scaling.workloads
+            .filter((w) => w.timeline.length > 0)
+            .map((w) => (
+              <div key={w.nodeId} className="shrink-0 md:h-52">
+                <Suspense fallback={chartFallback}>
+                  <ScalingCharts workload={w} samples={samples} domain={domain} />
+                </Suspense>
+              </div>
+            ))}
+        </>
+      )}
+
       {resources && resources.services.some((s) => s.timeline.length > 0) && (
-        <div className="h-56 shrink-0">
+        <div className="shrink-0 md:h-56">
           <Suspense fallback={chartFallback}>
             <ResourceCharts resources={resources} domain={domain} />
           </Suspense>
@@ -266,4 +286,13 @@ export function RunResults({ runId }: { runId: string }) {
 export function Verdict({ run }: { run: LoadTestRun }) {
   if (run.status === "running") return <StatusBadge status="running" label="Live" />
   return <StatusBadge status={run.status} label={run.status === "failed" ? "Failed criteria" : undefined} />
+}
+
+/** The Kubernetes environment a run was recorded under. */
+export function EnvironmentBadge({ env, className }: { env: string; className?: string }) {
+  return (
+    <Badge variant="outline" className={cn("h-4 px-1 font-mono text-[10px]", className)} title={`Environment ${env}`} data-testid="loadtest-environment">
+      {env}
+    </Badge>
+  )
 }

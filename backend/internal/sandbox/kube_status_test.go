@@ -311,8 +311,13 @@ func TestBuildKubeViewNetwork(t *testing.T) {
 		us[1].URL != "http://127.0.0.1:61080/" || us[1].Host != "" || us[1].ServiceNodeID != "Service/default/web" {
 		t.Errorf("ingresses = %+v", us)
 	}
-	if !httpPort(8080, 8080, nil) || httpPort(6379, 6379, nil) || httpPort(80, 5432, nil) || !httpPort(5432, 5432, new("http")) {
+	if !httpPort("", 8080, 8080, nil) || httpPort("", 6379, 6379, nil) || httpPort("", 80, 5432, nil) || !httpPort("", 5432, 5432, new("http")) {
 		t.Error("httpPort")
+	}
+	// Names win over port numbers: Alertmanager's http-web on 9093 (a Kafka
+	// TLS number) is HTTP; its tcp-mesh cluster port and Kafka's own are not.
+	if !httpPort("http-web", 9093, 9093, nil) || httpPort("tcp-mesh", 9094, 9094, nil) || httpPort("kafka-tls", 9093, 9093, nil) || httpPort("grpc", 8080, 8080, nil) || !httpPort("web", 9090, 9090, nil) {
+		t.Error("httpPort by port name")
 	}
 	if !userNamespace("shop") || userNamespace("kube-system") {
 		t.Error("userNamespace")

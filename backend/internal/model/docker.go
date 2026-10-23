@@ -40,6 +40,29 @@ type ComposeModel struct {
 	// a value in .env and without a default.
 	Unresolved []string     `json:"unresolved,omitempty"`
 	Graph      ComposeGraph `json:"graph"`
+	// Environment is the environment the graph was derived for: the
+	// workflow's active environment when its override file exists, else ""
+	// (the base files alone).
+	Environment string `json:"environment,omitempty"`
+	// Environments are the override files found next to the first compose
+	// file (compose.<env>.yaml, docker-compose.<env>.yml), the environments
+	// Workflow.Environments lists.
+	Environments []ComposeEnvironment `json:"environments,omitempty"`
+}
+
+// ComposeEnvironment is one environment of a docker workflow, the official
+// compose pattern: `docker compose -f compose.yaml [-f compose.<env>.yaml]
+// --env-file .env --env-file <env file>`. Either file alone is enough.
+type ComposeEnvironment struct {
+	Name string `json:"name"`
+	// File is the override file, relative to the workflow's files ("" =
+	// none: the environment only changes variables).
+	File string `json:"file,omitempty"`
+	// EnvFile is its env file, .env.<env> or <env>.env as the user named it
+	// ("" = none): read after .env, so its values win.
+	EnvFile string `json:"envFile,omitempty"`
+	// Files are File then EnvFile: what the environment adds to the base.
+	Files []string `json:"files"`
 }
 
 // ComposeGraph is the canvas of a docker workflow.
@@ -126,6 +149,10 @@ type ServiceFacts struct {
 	Platform      string              `json:"platform,omitempty"`
 	// Extends is the service this one extends ("svc" or "file#svc").
 	Extends string `json:"extends,omitempty"`
+	// Overrides are the attributes the active environment's override file
+	// sets ("image", "ports", "environment", "deploy.replicas",
+	// "deploy.resources", ...): edits of them go to that file.
+	Overrides []string `json:"overrides,omitempty"`
 }
 
 // ImageRef is a parsed image reference ("postgres:16-alpine").

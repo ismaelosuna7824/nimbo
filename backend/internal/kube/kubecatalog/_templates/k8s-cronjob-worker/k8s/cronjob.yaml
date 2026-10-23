@@ -5,6 +5,10 @@ kind: CronJob
 metadata:
   name: enqueue
   namespace: jobs
+  labels:
+    app.kubernetes.io/name: enqueue
+    app.kubernetes.io/instance: enqueue
+    app.kubernetes.io/part-of: jobs
 spec:
   schedule: "* * * * *"
   concurrencyPolicy: Forbid

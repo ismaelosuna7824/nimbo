@@ -11,8 +11,9 @@ import {
   type ChartConfig,
 } from "@/components/ui/chart"
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip"
-import type { LoadMode, LoadResources, LoadSample } from "@/lib/api/types"
-import { formatPct, resourceRows } from "@/features/docker/perf/model"
+import type { LoadMode, LoadResources, LoadSample, WorkloadScaling } from "@/lib/api/types"
+import { cn } from "@/lib/utils"
+import { formatPct, resourceRows, scalingRows } from "@/features/docker/perf/model"
 import { compactTick, EXPLAIN, modeUnit, SERIES_COLORS } from "./metrics"
 
 /** Seconds axis; a fixed `domain` keeps several charts of one run aligned. */
@@ -199,6 +200,102 @@ export function ResourceCharts({ resources, domain }: { resources: LoadResources
           </LineChart>
         </ChartContainer>
       </ChartCard>
+    </div>
+  )
+}
+
+const replicasConfig: ChartConfig = {
+  ready: { label: "Ready pods", theme: SERIES_COLORS.rps },
+  desired: { label: "Desired", theme: SERIES_COLORS.target },
+  p95: { label: "p95 (ms)", theme: SERIES_COLORS.p95 },
+}
+const hpaCpuConfig: ChartConfig = { cpu: { label: "CPU (% of requests)", theme: SERIES_COLORS.b } }
+
+/**
+ * A labelled vertical marker on the seconds axis; `side` puts the label left or right of the line so the scale-up and
+ * Ready markers of a fast scale-up do not overlap.
+ */
+function moment(t: number | undefined, label: string, side: "left" | "right") {
+  if (t === undefined) return null
+  return (
+    <ReferenceLine
+      x={t}
+      yAxisId="pods"
+      stroke="var(--muted-foreground)"
+      strokeDasharray="2 3"
+      strokeOpacity={0.7}
+      label={{ value: label, position: side === "left" ? "insideTopRight" : "insideTopLeft", fontSize: 10, fill: "var(--muted-foreground)" }}
+    />
+  )
+}
+
+/**
+ * One workload's autoscaling on the run's seconds axis: desired and Ready replicas (steps) against p95 latency, and
+ * the HPA's CPU reading against its target.
+ */
+export function ScalingCharts({ workload, samples, domain }: { workload: WorkloadScaling; samples: LoadSample[]; domain?: [number, number] }) {
+  const rows = scalingRows(workload, samples)
+  const xAxis = timeAxis(domain)
+  const hpa = workload.hpa
+  const top = Math.max(hpa?.max ?? 0, ...workload.timeline.map((p) => Math.max(p.desired, p.ready))) + 1
+  const cpuTop = Math.max(100, (hpa?.targetCpu ?? 0) * 1.5, workload.peakCpuUtilization ?? 0)
+  const showCpu = !!hpa?.targetCpu
+  return (
+    <div className={cn("grid h-full min-h-44 grid-cols-1 gap-2", showCpu && "md:grid-cols-2")} data-testid="loadtest-scaling-chart" data-workload={workload.workload}>
+      <ChartCard
+        title={`${workload.workload}: replicas vs p95`}
+        hint="Desired = the replicas the HPA asked for (spec.replicas); Ready = pods passing their readiness probe. New pods should be Ready before p95 climbs."
+      >
+        <ChartContainer config={replicasConfig} className="aspect-auto h-full min-h-32 w-full">
+          <LineChart data={rows} margin={{ left: 0, right: 0, top: 4, bottom: 0 }}>
+            <CartesianGrid vertical={false} />
+            {xAxis}
+            <YAxis yAxisId="pods" tickLine={false} axisLine={false} width={28} allowDecimals={false} domain={[0, top]} />
+            <YAxis yAxisId="ms" orientation="right" tickLine={false} axisLine={false} width={40} tickFormatter={compactTick} />
+            <ChartTooltip content={<ChartTooltipContent labelFormatter={secondsLabel} />} />
+            <ChartLegend content={<ChartLegendContent />} />
+            {hpa && (
+              <ReferenceLine
+                y={hpa.max}
+                yAxisId="pods"
+                stroke="var(--destructive)"
+                strokeDasharray="4 3"
+                strokeOpacity={0.5}
+                label={{ value: `max ${hpa.max}`, position: "insideBottomRight", fontSize: 10, fill: "var(--muted-foreground)" }}
+              />
+            )}
+            {moment(workload.scaleUpAt, "scale-up", "left")}
+            {moment(workload.readyAt, "ready", "right")}
+            <Line yAxisId="ms" dataKey="p95" type="monotone" stroke="var(--color-p95)" strokeWidth={1.25} strokeOpacity={0.8} dot={false} connectNulls isAnimationActive={false} />
+            <Line yAxisId="pods" dataKey="desired" type="stepAfter" stroke="var(--color-desired)" strokeDasharray="4 3" dot={false} connectNulls isAnimationActive={false} />
+            <Line yAxisId="pods" dataKey="ready" type="stepAfter" stroke="var(--color-ready)" strokeWidth={2.5} dot={false} connectNulls isAnimationActive={false} />
+          </LineChart>
+        </ChartContainer>
+      </ChartCard>
+      {showCpu && hpa && (
+        <ChartCard
+          title={`${workload.workload}: CPU vs HPA target`}
+          hint="The HPA's own CPU reading: average usage as a % of the pods' CPU requests, from metrics-server (refreshed about every 15 s). The HPA adds pods when it stays above the target (+10% tolerance)."
+        >
+          <ChartContainer config={hpaCpuConfig} className="aspect-auto h-full min-h-32 w-full">
+            <LineChart data={rows} margin={{ left: 0, right: 8, top: 4, bottom: 0 }}>
+              <CartesianGrid vertical={false} />
+              {xAxis}
+              <YAxis tickLine={false} axisLine={false} width={40} domain={[0, Math.ceil(cpuTop / 10) * 10]} tickFormatter={(v: number) => formatPct(v)} />
+              <ReferenceLine
+                y={hpa.targetCpu}
+                stroke="var(--destructive)"
+                strokeDasharray="4 3"
+                strokeOpacity={0.6}
+                label={{ value: `target ${hpa.targetCpu}%`, position: "insideTopLeft", fontSize: 10, fill: "var(--muted-foreground)" }}
+              />
+              <ChartTooltip content={<ChartTooltipContent labelFormatter={secondsLabel} />} />
+              <ChartLegend content={<ChartLegendContent />} />
+              <Line dataKey="cpu" type="stepAfter" stroke="var(--color-cpu)" strokeWidth={2} dot={false} connectNulls isAnimationActive={false} />
+            </LineChart>
+          </ChartContainer>
+        </ChartCard>
+      )}
     </div>
   )
 }

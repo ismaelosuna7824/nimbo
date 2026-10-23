@@ -227,6 +227,29 @@ describe("deriveKubernetesArchitecture", () => {
     expect(m).toEqual({ groups: [], cards: [], actors: [], edges: [], providers: [], regions: [] })
     expect(deriveKubernetesArchitecture({ id: "abc", name: "Empty" }).cards).toEqual([])
   })
+
+  test("a vendored chart is one card in its release namespace; requests to its objects go to it", () => {
+    const w = micro()
+    const CHART = "chart:charts/monitoring/charts/kube-prometheus-stack"
+    const helm = { chart: CHART, source: 1, sourceKind: "helm" as const, sourcePath: "charts/monitoring" }
+    w.kubernetes.graph.nodes.push(
+      { ...workload("Deployment", "grafana", "grafana/grafana:12", {}, "monitoring"), ...helm },
+      { ...service("grafana", "ClusterIP", 80, "3000", "monitoring"), ...helm },
+      { ...workload("StatefulSet", "prometheus", "quay.io/prometheus/prometheus:v3", {}, "monitoring"), ...helm },
+      { ...base("ClusterRole", "operator", undefined, { category: "rbac" }), ...helm },
+    )
+    w.kubernetes.graph.edges.push(edge("Service/monitoring/grafana", "Deployment/monitoring/grafana", "selects"), edge(API, "Service/monitoring/grafana", "inferred", { envKey: "GRAFANA_URL" }))
+    const graph = {
+      ...w.kubernetes.graph,
+      charts: [{ id: CHART, source: 1, sourcePath: "charts/monitoring", chart: "kube-prometheus-stack", version: "92.11.0", release: "monitoring", namespace: "monitoring", objects: 4 }],
+    }
+    const m = deriveKubernetesArchitecture({ ...w, kubernetes: { ...w.kubernetes, graph } })
+    expect(m.cards.filter((c) => c.parent === namespaceGroupId("monitoring")).map((c) => c.id)).toEqual([CHART])
+    expect(card(m, CHART)).toMatchObject({ type: "Helm chart", name: "kube-prometheus-stack", nodeId: CHART })
+    expect(card(m, CHART).details).toEqual(["92.11.0 · release monitoring", "1 ClusterRole · 1 Deployment · 1 Service · +1 more kind"])
+    expect(m.edges.filter((e) => e.target === CHART).map((e) => e.source)).toEqual([API])
+    expect(kubeCardScene(card(m, CHART), undefined).icon).toBe(techIcon("helm").src)
+  })
 })
 
 describe("kubernetes scene", () => {

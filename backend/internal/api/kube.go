@@ -305,7 +305,8 @@ func kubeTemplate(id string) (model.Template, bool) {
 // ---------------------------------------------------------------------------
 // Handlers
 
-// kubeLayout saves canvas positions (PATCH /kubernetes/layout).
+// kubeLayout saves canvas positions (PATCH /kubernetes/layout) of objects
+// and of collapsed charts (KubeChartGroup IDs).
 func (s *Server) kubeLayout(w http.ResponseWriter, r *http.Request) error {
 	var req struct {
 		Positions map[string]*model.Position `json:"positions"`
@@ -318,11 +319,15 @@ func (s *Server) kubeLayout(w http.ResponseWriter, r *http.Request) error {
 			return nil, err
 		}
 		for id, pos := range req.Positions {
-			i := slices.IndexFunc(wf.Kubernetes.Graph.Nodes, func(n model.KubeNode) bool { return n.ID == id })
+			if i := slices.IndexFunc(wf.Kubernetes.Graph.Nodes, func(n model.KubeNode) bool { return n.ID == id }); i >= 0 {
+				wf.Kubernetes.Graph.Nodes[i].Position = pos
+				continue
+			}
+			i := slices.IndexFunc(wf.Kubernetes.Graph.Charts, func(c model.KubeChartGroup) bool { return c.ID == id })
 			if i < 0 {
 				return nil, errorf(http.StatusBadRequest, "node %q not found", id)
 			}
-			wf.Kubernetes.Graph.Nodes[i].Position = pos
+			wf.Kubernetes.Graph.Charts[i].Position = pos
 		}
 		return nil, nil
 	})

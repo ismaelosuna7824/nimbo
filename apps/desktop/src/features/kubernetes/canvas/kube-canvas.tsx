@@ -12,7 +12,7 @@ import {
   type Connection,
   type NodeChange,
 } from "@xyflow/react"
-import { Code2Icon, ExpandIcon, LayoutTemplateIcon, MousePointerClickIcon, RotateCwIcon, SplitIcon, Trash2Icon, WandSparklesIcon } from "lucide-react"
+import { ChevronsDownUpIcon, ChevronsUpDownIcon, Code2Icon, ExpandIcon, FileSlidersIcon, LayoutTemplateIcon, MousePointerClickIcon, RotateCwIcon, SplitIcon, Trash2Icon, WandSparklesIcon } from "lucide-react"
 import { useTheme } from "next-themes"
 import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { toast } from "sonner"
@@ -31,20 +31,30 @@ import {
 import { Button } from "@/components/ui/button"
 import { ContextMenu, ContextMenuContent, ContextMenuItem, ContextMenuSeparator, ContextMenuTrigger } from "@/components/ui/context-menu"
 import { Empty, EmptyContent, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from "@/components/ui/empty"
-import { layoutCanvas } from "@/features/docker/canvas/layout"
 import { looseItems, placeNew, relativePosition } from "@/features/docker/canvas/model"
 import { useEndpoints } from "@/features/panels/endpoints/use-endpoints"
 import { revealFiles } from "@/features/panels/terraform/reveal-files"
 import { api } from "@/lib/api/client"
 import type { KubeGraph, KubeNode, Position } from "@/lib/api/types"
 import { useWorkflowStore } from "@/state/workflow-store"
-import { addFromPalette, applyRecipe, deleteObject, KUBE_DRAG_TYPE, registerKubeCanvas, restartWorkload, savePositions, type KubePaletteDrag } from "../actions"
-import { KubeEnvironmentSwitch } from "../environment-switch"
+import {
+  addFromPalette,
+  applyRecipe,
+  collapseChart,
+  deleteObject,
+  KUBE_DRAG_TYPE,
+  registerKubeCanvas,
+  restartWorkload,
+  savePositions,
+  type KubePaletteDrag,
+} from "../actions"
+import { EnvironmentSwitch } from "@/features/environments/environment-switch"
+import { expandedCharts, setChartExpanded, useExpandedCharts } from "./charts"
 import { KubeConnectDialog, type PendingKubeConnection, type PendingKubeEnd } from "./connect-dialog"
-import { buildKubeCanvas, WORKLOAD_H, WORKLOAD_W, type KubeCanvasItem } from "./model"
-import { FrameNode, KubeEdge, SmallNode, WorkloadNode, type KubeFlowEdge, type KubeFlowNode } from "./nodes"
+import { buildKubeCanvas, layoutChart, layoutKubeCanvas, withChartSpots, WORKLOAD_H, WORKLOAD_W, type ChartSummary, type KubeCanvasItem } from "./model"
+import { ChartNode, FrameNode, KubeEdge, SmallNode, WorkloadNode, type KubeFlowEdge, type KubeFlowNode } from "./nodes"
 
-const nodeTypes = { workload: WorkloadNode, small: SmallNode, frame: FrameNode }
+const nodeTypes = { workload: WorkloadNode, small: SmallNode, frame: FrameNode, chart: ChartNode }
 const edgeTypes = { kube: KubeEdge }
 const EMPTY_GRAPH: KubeGraph = { nodes: [], edges: [] }
 const EDGE_MARKER = { type: MarkerType.ArrowClosed, width: 16, height: 16 }
@@ -59,7 +69,8 @@ function isEditableTarget(el: Element | null) {
 }
 
 function minimapColor(n: KubeFlowNode) {
-  if (n.type === "frame") return "rgba(59,130,246,0.15)"
+  if (n.type === "frame") return n.data.chart ? "rgba(139,92,246,0.15)" : "rgba(59,130,246,0.15)"
+  if (n.type === "chart") return "#8b5cf6"
   if (n.data.status?.state === "running") return "#10b981"
   return n.type === "workload" ? "#64748b" : "#94a3b8"
 }
@@ -82,6 +93,7 @@ export function KubeCanvas() {
 }
 
 function CanvasInner() {
+  const workflowId = useWorkflowStore((s) => s.workflow!.id)
   const graph = useWorkflowStore((s) => s.workflow!.kubernetes?.graph) ?? EMPTY_GRAPH
   const status = useWorkflowStore((s) => s.kube)
   const diagnostics = useWorkflowStore((s) => s.workflow!.diagnostics)
@@ -92,15 +104,18 @@ function CanvasInner() {
   const { resolvedTheme } = useTheme()
   const flow = useReactFlow<KubeFlowNode, KubeFlowEdge>()
   const endpoints = useEndpoints().data
+  const expanded = useExpandedCharts(workflowId)
   const [hovered, setHovered] = useState<string | null>(null)
   const [pending, setPending] = useState<PendingKubeConnection | null>(null)
   const [pendingDelete, setPendingDelete] = useState<{ node: KubeNode; users: number } | null>(null)
   const [menu, setMenu] = useState<KubeNode | null>(null)
+  const [chartMenu, setChartMenu] = useState<ChartSummary | null>(null)
 
-  const canvas = useMemo(() => buildKubeCanvas(graph, status), [graph, status])
+  const canvas = useMemo(() => buildKubeCanvas(graph, status, expanded), [graph, status, expanded])
   const byId = useMemo(() => new Map(canvas.items.map((i) => [i.id, i])), [canvas])
 
-  // Place what was never placed: everything at once with the layered layout, newcomers next to their siblings.
+  // Place what was never placed: everything at once with the layered layout; the objects of an expanded chart none
+  // of which has a position as a chart; other newcomers next to their siblings.
   const unplacedKey = looseItems(canvas.items)
     .filter((i) => !i.placed)
     .map((i) => i.id)
@@ -110,34 +125,96 @@ function CanvasInner() {
     if (!unplacedKey || placing.current === unplacedKey) return
     placing.current = unplacedKey
     const all = looseItems(canvas.items).every((i) => !i.placed)
+    const fresh = canvas.items.find((f) => f.chart?.expanded && f.kind === "frame" && canvas.items.every((i) => i.parent !== f.id || !i.placed))
     const run = all
-      ? layoutCanvas(canvas)
-      : Promise.resolve(placeNew(canvas.items.map((i) => ({ ...i })), canvas.edges, (i) => i.kind === "workload"))
+      ? layoutKubeCanvas(graph, status, expanded)
+      : fresh
+        ? layoutChart(canvas, fresh.id, fresh.chart!.group.position)
+        : Promise.resolve(placeNew(canvas.items.map((i) => ({ ...i })), canvas.edges, (i) => i.kind === "workload"))
     void run
       .then((positions) => savePositions(positions))
       .then(() => all && window.requestAnimationFrame(() => void flow.fitView({ padding: 0.15, duration: 300 })))
       .catch((err) => toast.error("Automatic layout failed", { description: errorMessage(err) }))
-  }, [unplacedKey, canvas, flow])
+  }, [unplacedKey, canvas, flow, graph, status, expanded])
 
   const tidy = useCallback(async () => {
     try {
-      await savePositions(await layoutCanvas(canvas))
+      await savePositions(await layoutKubeCanvas(graph, status, expanded))
       window.requestAnimationFrame(() => void flow.fitView({ padding: 0.15, duration: 400 }))
     } catch (err) {
       toast.error("Tidy up failed", { description: errorMessage(err) })
     }
-  }, [canvas, flow])
+  }, [graph, status, expanded, flow])
+
+  // Focus after an expansion: the chart's frame, or the object asked for once its card is drawn.
+  const focusing = useRef<string | null>(null)
+  const focus = useCallback(
+    (id: string) => {
+      window.requestAnimationFrame(() => void flow.fitView({ nodes: [{ id }], padding: 0.3, maxZoom: 1, duration: 400 }))
+    },
+    [flow],
+  )
+  /** Expands a chart: its objects laid out (tidy, at the card's spot when free) before they are drawn. */
+  const expanding = useRef(new Set<string>())
+  const expand = useCallback(
+    async (chartId: string, target?: string) => {
+      const wf = useWorkflowStore.getState().workflow
+      const g = wf?.kubernetes?.graph
+      const group = g?.charts?.find((c) => c.id === chartId)
+      if (!wf || !g || !group || expanding.current.has(chartId)) return
+      const open = expandedCharts(wf.id)
+      if (open.includes(chartId)) {
+        focus(target ?? chartId)
+        return
+      }
+      expanding.current.add(chartId)
+      try {
+        await savePositions(await layoutChart(buildKubeCanvas(g, useWorkflowStore.getState().kube, [...open, chartId]), chartId, group.position))
+      } catch (err) {
+        toast.error("Couldn't lay out the chart", { description: errorMessage(err) })
+      } finally {
+        expanding.current.delete(chartId)
+      }
+      focusing.current = target ?? chartId
+      setChartExpanded(wf.id, chartId, true)
+    },
+    [focus],
+  )
+  const reveal = useCallback(
+    async (id: string) => {
+      const chart = useWorkflowStore.getState().workflow?.kubernetes?.graph.nodes.find((n) => n.id === id)?.chart
+      if (chart) await expand(chart, id)
+      else focus(id)
+    },
+    [expand, focus],
+  )
+
+  // Selecting an object of a collapsed chart (Problems, search, the chart's inspector) expands the chart.
+  const revealed = useRef<string | null>(null)
+  useEffect(() => {
+    if (!selectedNodeId || revealed.current === selectedNodeId) return
+    revealed.current = selectedNodeId
+    const chart = graph.nodes.find((n) => n.id === selectedNodeId)?.chart
+    if (chart && !expanded.includes(chart) && graph.charts?.some((c) => c.id === chart)) void expand(chart, selectedNodeId)
+  }, [selectedNodeId, graph, expanded, expand])
 
   const derivedNodes = useMemo(() => {
     const endpointOf = new Map<string, string>()
     for (const r of endpoints?.resources ?? []) if (r.nodeId && !endpointOf.has(r.nodeId)) endpointOf.set(r.nodeId, r.address)
     const diag = new Map<string, { errors: number; warnings: number }>()
+    const count = (id: string, severity: string) => {
+      const c = diag.get(id) ?? { errors: 0, warnings: 0 }
+      if (severity === "error") c.errors++
+      else if (severity === "warning") c.warnings++
+      diag.set(id, c)
+    }
+    const chartOf = new Map(graph.nodes.flatMap((n) => (n.chart ? [[n.id, n.chart] as const] : [])))
     for (const d of diagnostics ?? []) {
       if (!d.nodeId) continue
-      const c = diag.get(d.nodeId) ?? { errors: 0, warnings: 0 }
-      if (d.severity === "error") c.errors++
-      else if (d.severity === "warning") c.warnings++
-      diag.set(d.nodeId, c)
+      count(d.nodeId, d.severity)
+      // A chart's card and frame count its objects' problems.
+      const chart = chartOf.get(d.nodeId)
+      if (chart) count(chart, d.severity)
     }
     const hasKids = new Set(canvas.items.flatMap((i) => (i.parent ? [i.parent] : [])))
     // Frames first: React Flow needs parents before their children.
@@ -152,11 +229,12 @@ function CanvasInner() {
         height: i.h,
         zIndex: i.kind === "frame" ? -1 : undefined,
         selected: i.id === selectedNodeId,
-        selectable: !!i.node,
+        selectable: !!i.node || !!i.chart,
         data: {
           kind: i.kind,
           node: i.node,
           namespace: i.namespace,
+          chart: i.chart,
           status: i.status,
           pods: i.pods,
           hpa: i.hpa,
@@ -169,7 +247,7 @@ function CanvasInner() {
         },
       }),
     )
-  }, [canvas, byId, selectedNodeId, endpoints, diagnostics])
+  }, [canvas, byId, selectedNodeId, endpoints, diagnostics, graph])
 
   const derivedEdges = useMemo(
     () =>
@@ -191,6 +269,12 @@ function CanvasInner() {
     (changes: NodeChange<KubeFlowNode>[]) => setNodes((ns) => applyNodeChanges(changes.filter((c) => c.type !== "remove"), ns)),
     [setNodes],
   )
+  useEffect(() => {
+    const id = focusing.current
+    if (!id || !nodes.some((n) => n.id === id)) return
+    focusing.current = null
+    focus(id)
+  }, [nodes, focus])
 
   const onNodeDragStop = useCallback(
     (_: unknown, __: KubeFlowNode, dragged: KubeFlowNode[]) => {
@@ -204,12 +288,12 @@ function CanvasInner() {
         const dx = Math.round(abs.x - item.x)
         const dy = Math.round(abs.y - item.y)
         if (dx === 0 && dy === 0) continue
-        // A namespace frame moves its objects (frames are drawn around them, not stored).
+        // A frame (namespace, expanded chart) moves its objects (frames are drawn around them, not stored).
         const moved: KubeCanvasItem[] = item.kind === "frame" ? canvas.items.filter((c) => c.parent === item.id) : [item]
         if (item.kind === "frame" && moved.length === 0 && item.node) moved.push(item)
         for (const m of moved) positions.set(m.id, { x: m.x + dx, y: m.y + dy })
       }
-      void savePositions(positions)
+      void savePositions(withChartSpots(canvas, positions))
     },
     [byId, canvas, flow],
   )
@@ -281,9 +365,9 @@ function CanvasInner() {
   }, [requestDelete, byId])
 
   useEffect(() => {
-    registerKubeCanvas({ tidy })
+    registerKubeCanvas({ tidy, expandChart: expand, reveal })
     return () => registerKubeCanvas(null)
-  }, [tidy])
+  }, [tidy, expand, reveal])
 
   const onDragOver = useCallback((e: React.DragEvent) => {
     if (!e.dataTransfer.types.includes(KUBE_DRAG_TYPE)) return
@@ -316,14 +400,24 @@ function CanvasInner() {
               nodeTypes={nodeTypes}
               edgeTypes={edgeTypes}
               onNodesChange={onNodesChange}
-              onNodeClick={(_, n) => select(n.data.node ? n.id : null)}
-              onNodeDoubleClick={(_, n) => n.data.node && openInCode(n.data.node)}
-              onNodeContextMenu={(_, n) => setMenu(n.data.node ?? null)}
-              onPaneContextMenu={() => setMenu(null)}
+              onNodeClick={(_, n) => select(n.data.node || n.data.chart ? n.id : null)}
+              onNodeDoubleClick={(_, n) => {
+                if (n.data.node) openInCode(n.data.node)
+                else if (n.type === "chart") void expand(n.id)
+              }}
+              onNodeContextMenu={(_, n) => {
+                setMenu(n.data.node ?? null)
+                setChartMenu(n.data.chart ?? null)
+              }}
+              onPaneContextMenu={() => {
+                setMenu(null)
+                setChartMenu(null)
+              }}
               onPaneClick={() => select(null)}
               onNodeDragStop={onNodeDragStop}
               onConnect={onConnect}
-              isValidConnection={(c) => c.source !== c.target}
+              // A chart's card or frame stands for many objects: connect its objects instead.
+              isValidConnection={(c) => c.source !== c.target && !byId.get(c.source)?.chart && !byId.get(c.target)?.chart}
               onEdgeMouseEnter={(_, e) => setHovered(e.id)}
               onEdgeMouseLeave={() => setHovered(null)}
               deleteKeyCode={null}
@@ -342,7 +436,7 @@ function CanvasInner() {
               <MiniMap pannable zoomable nodeColor={minimapColor} nodeStrokeWidth={0} position="bottom-right" style={{ width: 168, height: 112 }} className="!rounded-lg !border" />
               {/* Right of the Build/Architecture switch the canvas area draws at the top left. */}
               <Panel position="top-left" style={{ marginLeft: 232 }}>
-                <KubeEnvironmentSwitch className="bg-background/80 backdrop-blur" />
+                <EnvironmentSwitch className="bg-background/80 backdrop-blur" />
               </Panel>
               {canvas.items.length > 0 && (
                 <Panel position="top-right">
@@ -356,7 +450,27 @@ function CanvasInner() {
           </div>
         </ContextMenuTrigger>
         <ContextMenuContent className="min-w-52" data-testid="k8s-node-menu">
-          {menu ? (
+          {chartMenu ? (
+            <>
+              {chartMenu.expanded ? (
+                <ContextMenuItem onSelect={() => collapseChart(chartMenu.group.id)}>
+                  <ChevronsDownUpIcon />
+                  Collapse chart
+                </ContextMenuItem>
+              ) : (
+                <ContextMenuItem onSelect={() => void expand(chartMenu.group.id)}>
+                  <ChevronsUpDownIcon />
+                  Expand {chartMenu.members.length} objects
+                </ContextMenuItem>
+              )}
+              {chartMenu.group.valuesFiles?.[0] && (
+                <ContextMenuItem onSelect={() => revealFiles("", chartMenu.group.valuesFiles![0])}>
+                  <FileSlidersIcon />
+                  Open values
+                </ContextMenuItem>
+              )}
+            </>
+          ) : menu ? (
             <>
               {menu.file && (
                 <ContextMenuItem onSelect={() => openInCode(menu)}>

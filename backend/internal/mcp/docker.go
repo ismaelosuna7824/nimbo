@@ -21,7 +21,7 @@ func registerDockerTools(r *registry, t *tools) {
 	addTool(r, "list_docker_images", "List Docker images", "List the curated image palette for docker workflows (id, image:tag, category, icon, default ports, env, volumes, healthcheck, connection variables). Pass catalog_id to add_service.", t.listDockerImages)
 	addTool(r, "get_compose", "Get compose files", "Show a docker workflow's compose files (in -f order), Dockerfiles and .env (secret values redacted) with their content. Edit them with apply_terraform_code (it is kind-aware) or the service tools.", t.getCompose)
 	addTool(r, "add_service", "Add service", "Add a service to a docker workflow: from catalog_id (list_docker_images: image, ports, env with secrets moved to .env, named volume, healthcheck), an image, or build_context (a folder; when it has no Dockerfile a buildable starter is created: node, python, go, static or alpine). Returns the compact docker workflow.", t.addService)
-	addTool(r, "update_service", "Update service", "Change a service: set is a partial patch (null deletes a key; lists replace the whole value): image, build {context, dockerfile?, target?}, ports [{host?, container, protocol?, hostIp?}], environment [{key, value?}], volumes [{type?, source?, target, readOnly?}], dependsOn [{service, condition?}], healthcheck {test, interval?, timeout?, retries?, startPeriod?}, restart, replicas, resources {cpus?, memory?}, networks [names], command, entrypoint, profiles, user, containerName, expose, envFiles, name (rename; references follow). Comments and formatting of the files are kept.", t.updateService)
+	addTool(r, "update_service", "Update service", "Change a service: set is a partial patch (null deletes a key; lists replace the whole value): image, build {context, dockerfile?, target?}, ports [{host?, container, protocol?, hostIp?}], environment [{key, value?}], volumes [{type?, source?, target, readOnly?}], dependsOn [{service, condition?}], healthcheck {test, interval?, timeout?, retries?, startPeriod?}, restart, replicas, resources {cpus?, memory?}, networks [names], command, entrypoint, profiles, user, containerName, expose, envFiles, name (rename; references follow). With an active environment, a key its override file (compose.<env>.yaml) sets is written there (lists tagged !override) and null removes it from the override only; other keys edit the base files; resetOverrides [\"image\", \"ports\", \"deploy.replicas\"…] drops keys from the override so the base values apply. Comments and formatting of the files are kept.", t.updateService)
 	addTool(r, "remove_service", "Remove service", "Remove a service from a docker workflow (other services' depends_on/links/volumes_from to it are removed too).", t.removeService)
 	addTool(r, "connect_services", "Connect services", "Connect service from to to (a service, \"network:<name>\" or \"volume:<name>\"). Without kind and recipe_id it lists the options (depends_on started/healthy, env connection variables from the catalog, shared network, volume mount). kind: depends_on (condition), network (network name; created if missing), volume (target path), env; or recipe_id from the options.", t.connectServices)
 	addTool(r, "review_docker", "Review Docker", "Check a docker workflow against Docker best practices and return the findings grouped by severity (warnings: databases published on every interface, secrets in builds, single-stage builds of compiled code, cache-busting layer order, missing .dockerignore for heavy contexts, shell-form CMD, depends_on without service_healthy, anonymous data volumes, docker.sock/privileged; info: pinned tags, slim runtime bases, apt/pip/apk caches, ADD, WORKDIR, healthchecks and their timing, restart policies, log rotation, init for node/python, published ports vs EXPOSE), each with file:line, why it matters, how to fix it and a docs link; plus the opt-in rules the user can turn on in Settings. Call it before finishing any docker change; mutating docker tools already return the findings their change introduced as best_practices. Findings never block runs.", t.reviewDocker)
@@ -42,17 +42,25 @@ type dockerServiceView struct {
 	Environment []string `json:"environment,omitempty"`
 	Healthcheck string   `json:"healthcheck,omitempty"`
 	Inactive    bool     `json:"inactive,omitempty"`
-	At          string   `json:"at,omitempty"`
+	// Overrides are the attributes the active environment's override file
+	// sets (update_service writes those there; resetOverrides drops them).
+	Overrides []string `json:"overrides,omitempty"`
+	At        string   `json:"at,omitempty"`
 }
 
 type dockerView struct {
-	ID           string              `json:"id"`
-	Name         string              `json:"name"`
-	Description  string              `json:"description,omitempty"`
-	Kind         string              `json:"kind"`
-	Project      string              `json:"project"`
-	ComposeFiles []string            `json:"compose_files"`
-	Profiles     []string            `json:"profiles,omitempty"`
+	ID           string   `json:"id"`
+	Name         string   `json:"name"`
+	Description  string   `json:"description,omitempty"`
+	Kind         string   `json:"kind"`
+	Project      string   `json:"project"`
+	ComposeFiles []string `json:"compose_files"`
+	Profiles     []string `json:"profiles,omitempty"`
+	// Environment is the active environment the services below are
+	// rendered for (its override file is applied after compose_files);
+	// Environments are all of them (list_environments for details).
+	Environment  string              `json:"environment,omitempty"`
+	Environments []string            `json:"environments,omitempty"`
 	Services     []dockerServiceView `json:"services"`
 	Networks     []string            `json:"networks,omitempty"`
 	Volumes      []string            `json:"volumes,omitempty"`
@@ -70,6 +78,10 @@ func viewDocker(wf *model.Workflow) dockerView {
 	if wf.Compose != nil {
 		c := wf.Compose
 		v.Project, v.ComposeFiles, v.Profiles, v.Unresolved = c.Project, c.Files, c.Profiles, c.Unresolved
+		v.Environment = c.Environment
+		for _, e := range c.Environments {
+			v.Environments = append(v.Environments, e.Name)
+		}
 		for _, n := range c.Graph.Nodes {
 			switch n.Kind {
 			case model.ComposeNetwork:
@@ -80,7 +92,7 @@ func viewDocker(wf *model.Workflow) dockerView {
 				v.Networks = append(v.Networks, n.Name+" (external "+n.ExternalKind+")")
 			case model.ComposeService:
 				s := n.Service
-				sv := dockerServiceView{Name: n.Name, Inactive: n.Inactive, Stack: s.Stack, BaseImages: s.BaseImages, Networks: s.Networks}
+				sv := dockerServiceView{Name: n.Name, Inactive: n.Inactive, Stack: s.Stack, BaseImages: s.BaseImages, Networks: s.Networks, Overrides: s.Overrides}
 				if n.File != "" {
 					sv.At = fmt.Sprintf("%s:%d", n.File, n.Line)
 				}

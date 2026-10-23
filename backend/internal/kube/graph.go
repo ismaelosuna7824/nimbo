@@ -12,16 +12,24 @@ import (
 	"github.com/ismaelosuna7824/nimbo/backend/internal/model"
 )
 
-// Graph derives the canvas from the rendered objects; positions are kept
-// from prev by node ID.
-func (p *Project) Graph(prev []model.KubeNode) model.KubeGraph {
+// Graph derives the canvas from the rendered objects; node and chart
+// positions are kept from prev by ID.
+func (p *Project) Graph(prev *model.KubeGraph) model.KubeGraph {
 	pos := map[string]*model.Position{}
-	for _, n := range prev {
-		if n.Position != nil {
-			pos[n.ID] = n.Position
+	if prev != nil {
+		for _, n := range prev.Nodes {
+			if n.Position != nil {
+				pos[n.ID] = n.Position
+			}
+		}
+		for _, c := range prev.Charts {
+			if c.Position != nil {
+				pos[c.ID] = c.Position
+			}
 		}
 	}
 	g := model.KubeGraph{Nodes: []model.KubeNode{}, Edges: []model.KubeEdge{}}
+	charts := map[string]int{}
 	for _, o := range p.Objects {
 		r := p.Source(o)
 		n := model.KubeNode{
@@ -32,6 +40,23 @@ func (p *Project) Graph(prev []model.KubeNode) model.KubeGraph {
 		if r != nil {
 			n.SourceKind, n.SourcePath = r.Source.Kind, r.Source.Path
 			n.Editable = r.Source.Kind != model.KubeHelm && o.Doc >= 0 && !o.generated
+			if r.helm != nil {
+				if sub, ok := r.helm.thirdPartyOf(o.Template); ok {
+					n.Chart = "chart:" + joinRel(r.helm.chartDir, sub)
+					i, seen := charts[n.Chart]
+					if !seen {
+						i = len(g.Charts)
+						charts[n.Chart] = i
+						tp := r.helm.thirdParty[sub]
+						g.Charts = append(g.Charts, model.KubeChartGroup{
+							ID: n.Chart, Source: o.Source, SourcePath: r.Source.Path, Chart: tp.name, Version: tp.version, AppVersion: tp.appVersion,
+							Repository: tp.repository, Release: r.helm.release, Namespace: r.helm.namespace,
+							ValuesFiles: slices.Clone(r.helm.valuesFiles), Position: pos[n.Chart],
+						})
+					}
+					g.Charts[i].Objects++
+				}
+			}
 		}
 		facts(o, &n)
 		g.Nodes = append(g.Nodes, n)
