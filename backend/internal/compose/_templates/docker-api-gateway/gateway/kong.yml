@@ -1,0 +1,45 @@
+# Kong's whole configuration (DB-less): read at start, no database.
+# Edit it and restart the gateway service to apply.
+_format_version: "3.0"
+_transform: true
+
+services:
+  # /users/42 → http://users:8080/42 (strip_path removes the route's prefix).
+  - name: users
+    url: http://users:8080
+    routes:
+      - name: users
+        paths: [/users]
+  - name: orders
+    url: http://orders:8080
+    routes:
+      - name: orders
+        paths: [/orders]
+  # One request, two answers: the summary service calls users and orders.
+  - name: summary
+    url: http://summary:8080
+    routes:
+      - name: summary
+        paths: [/summary]
+
+# Global plugins: every route needs an API key and is rate limited.
+plugins:
+  - name: key-auth
+    config:
+      # Send it as the "apikey" header (or ?apikey=); no key → 401.
+      key_names: [apikey]
+      # Don't pass the key on to the services.
+      hide_credentials: true
+  - name: rate-limiting
+    config:
+      # Per consumer; the 21st request in a minute → 429.
+      minute: 20
+      policy: local
+      limit_by: consumer
+
+consumers:
+  - username: demo-app
+    keyauth_credentials:
+      # A test value, not a secret (also in .env as GATEWAY_DEMO_KEY).
+      # key-auth keys can't come from a vault in Kong OSS: change it here.
+      - key: demo-key-not-a-secret

@@ -713,6 +713,7 @@ const AWS_RULES: readonly IconRule[] = [
   ["aws_vpc", "aws-vpc"],
   ["aws_default_vpc", "aws-vpc"],
   ["aws_subnet", "aws-vpc"],
+  ["aws_subnets", "aws-vpc"],
   ["aws_default_subnet", "aws-vpc"],
   ["aws_availability_zones", "aws-vpc"],
   ["aws_region", "aws-vpc"],

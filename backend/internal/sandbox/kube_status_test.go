@@ -288,8 +288,23 @@ func TestBuildKubeViewNetwork(t *testing.T) {
 	if !slices.Equal(v.links["Service/default/web"], []string{"Deployment/default/web"}) || !slices.Equal(v.links["Service/default/db"], []string{"StatefulSet/default/db"}) {
 		t.Errorf("links = %v", v.links)
 	}
-	if pod, port, ok := readyEndpoint([]*discoveryv1.EndpointSlice{slice}, "http"); !ok || pod != "web-1-a" || port != 8080 {
+	if pod, port, ok := readyEndpoint([]*discoveryv1.EndpointSlice{slice}, "http", 0); !ok || pod != "web-1-a" || port != 8080 {
 		t.Errorf("ready endpoint = %s %d %v", pod, port, ok)
+	}
+	// Successive connections rotate over the ready pods (sorted), skipping unready ones.
+	three := &discoveryv1.EndpointSlice{Ports: slice.Ports, Endpoints: []discoveryv1.Endpoint{
+		{Conditions: discoveryv1.EndpointConditions{Ready: new(true)}, TargetRef: &corev1.ObjectReference{Kind: "Pod", Name: "web-1-c"}},
+		{Conditions: discoveryv1.EndpointConditions{Ready: new(false)}, TargetRef: &corev1.ObjectReference{Kind: "Pod", Name: "web-1-x"}},
+		{Conditions: discoveryv1.EndpointConditions{Ready: new(true)}, TargetRef: &corev1.ObjectReference{Kind: "Pod", Name: "web-1-a"}},
+		{Conditions: discoveryv1.EndpointConditions{Ready: new(true)}, TargetRef: &corev1.ObjectReference{Kind: "Pod", Name: "web-1-b"}},
+	}}
+	var picked []string
+	for n := range uint64(4) {
+		pod, _, _ := readyEndpoint([]*discoveryv1.EndpointSlice{three}, "http", n)
+		picked = append(picked, pod)
+	}
+	if !slices.Equal(picked, []string{"web-1-a", "web-1-b", "web-1-c", "web-1-a"}) {
+		t.Errorf("rotation = %v", picked)
 	}
 	us := v.status.Ingresses
 	if len(us) != 2 || us[0].URL != "http://web.shop.localhost:61080/api" || us[0].Address != "http://127.0.0.1:61080/api" || us[0].Port != "http" || us[0].Class != "nginx" ||

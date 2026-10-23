@@ -1,0 +1,76 @@
+# Three replicas of the app; each answer names the pod (hostname) that served it.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: app
+  namespace: edge-lb
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: app
+  template:
+    metadata:
+      labels:
+        app: app
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        seccompProfile:
+          type: RuntimeDefault
+      automountServiceAccountToken: false
+      containers:
+        - name: app
+          image: ghcr.io/stefanprodan/podinfo:6.15.0
+          command: ["./podinfo", "--port=9898", "--level=info"]
+          env:
+            # Every answer carries this message and the pod's name (hostname).
+            - name: PODINFO_UI_MESSAGE
+              value: "app"
+          ports:
+            - name: http
+              containerPort: 9898
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: http
+            periodSeconds: 5
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            periodSeconds: 20
+          resources:
+            requests:
+              cpu: 50m
+              memory: 32Mi
+            limits:
+              memory: 128Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+---
+# The load balancer: one address for the three pods. Only ready pods (the
+# readiness probe above passes) receive traffic; a pod that fails it or
+# dies is taken out until it is ready again. On the local cluster k3s's
+# ServiceLB gives it an external address inside the node, and Nimbo
+# forwards the port to 127.0.0.1, spreading connections over the ready pods.
+#
+# Try it:  for i in $(seq 9); do curl -s http://127.0.0.1:<forwarded port>/ | grep hostname; done
+apiVersion: v1
+kind: Service
+metadata:
+  name: app
+  namespace: edge-lb
+spec:
+  type: LoadBalancer
+  selector:
+    app: app
+  ports:
+    # Not 80: Traefik's own LoadBalancer already holds port 80 on the node.
+    - name: http
+      port: 8080
+      targetPort: http

@@ -5,6 +5,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/ismaelosuna7824/nimbo/backend/internal/hclcodec"
 	"github.com/ismaelosuna7824/nimbo/backend/internal/model"
 )
 
@@ -661,7 +662,7 @@ func TestValidate(t *testing.T) {
 func TestTemplatesHaveFiles(t *testing.T) {
 	c := mustLoad(t)
 	ts := c.Templates()
-	if len(ts) != 10 {
+	if len(ts) != 22 {
 		t.Fatalf("%d templates", len(ts))
 	}
 	for _, tpl := range ts {
@@ -672,5 +673,51 @@ func TestTemplatesHaveFiles(t *testing.T) {
 	}
 	if _, ok := c.TemplateFiles("../curated"); ok {
 		t.Error("path traversal accepted")
+	}
+}
+
+// One edge-pattern template per cloud and pattern, whose description is
+// honest about the sandbox: "Runs locally" only when Floci supports every
+// resource, "Design and export only" when it doesn't.
+func TestEdgePatternTemplates(t *testing.T) {
+	c := mustLoad(t)
+	seen := map[string]bool{}
+	for _, tpl := range c.Templates() {
+		if tpl.Category != model.TemplateCategoryEdgePatterns {
+			if tpl.Pattern != "" {
+				t.Errorf("%s: pattern %q outside the edge-patterns category", tpl.ID, tpl.Pattern)
+			}
+			continue
+		}
+		if want := string(tpl.Cloud) + "-" + tpl.Pattern; tpl.ID != want || seen[want] {
+			t.Errorf("%s: want one template %s", tpl.ID, want)
+		}
+		seen[tpl.ID] = true
+		files, _ := c.TemplateFiles(tpl.ID)
+		wf, _, err := hclcodec.Import(tpl.ID, files)
+		if err != nil {
+			t.Fatalf("%s: %v", tpl.ID, err)
+		}
+		hclcodec.Normalize(wf)
+		unsupported := 0
+		for _, d := range c.Validate(wf) {
+			if d.Code != "floci_unsupported" {
+				t.Errorf("%s: %s %s %s", tpl.ID, d.NodeID, d.Code, d.Message)
+				continue
+			}
+			unsupported++
+		}
+		local := strings.Contains(tpl.Description, "Runs locally")
+		designOnly := strings.Contains(tpl.Description, "Design and export only")
+		if local == designOnly || local != (unsupported == 0) {
+			t.Errorf("%s: description %q, %d resources Floci doesn't support", tpl.ID, tpl.Description, unsupported)
+		}
+	}
+	for _, cloud := range []model.Cloud{model.CloudAWS, model.CloudAzure, model.CloudGCP, model.CloudOCI} {
+		for _, p := range []string{model.PatternReverseProxy, model.PatternAPIGateway, model.PatternLoadBalancer} {
+			if id := string(cloud) + "-" + p; !seen[id] {
+				t.Errorf("no %s template", id)
+			}
+		}
 	}
 }

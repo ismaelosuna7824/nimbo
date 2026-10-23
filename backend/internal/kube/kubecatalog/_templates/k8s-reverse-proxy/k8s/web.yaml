@@ -1,0 +1,66 @@
+# The web backend: the proxy sends every other path here.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: web
+  namespace: edge-proxy
+spec:
+  selector:
+    matchLabels:
+      app: web
+  template:
+    metadata:
+      labels:
+        app: web
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        seccompProfile:
+          type: RuntimeDefault
+      automountServiceAccountToken: false
+      containers:
+        - name: web
+          image: ghcr.io/stefanprodan/podinfo:6.15.0
+          command: ["./podinfo", "--port=9898", "--level=info"]
+          env:
+            # Every answer carries this message and the pod's name (hostname).
+            - name: PODINFO_UI_MESSAGE
+              value: "web"
+          ports:
+            - name: http
+              containerPort: 9898
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: http
+            periodSeconds: 5
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            periodSeconds: 20
+          resources:
+            requests:
+              cpu: 50m
+              memory: 32Mi
+            limits:
+              memory: 128Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: web
+  namespace: edge-proxy
+spec:
+  selector:
+    app: web
+  ports:
+    - name: http
+      port: 80
+      targetPort: http

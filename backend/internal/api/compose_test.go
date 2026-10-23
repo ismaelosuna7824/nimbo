@@ -41,7 +41,7 @@ func TestDockerWorkflowFromTemplate(t *testing.T) {
 	var templates []model.Template
 	e.mustCall(http.StatusOK, "GET", "/catalog/templates", nil, &templates)
 	docker := slices.DeleteFunc(slices.Clone(templates), func(t model.Template) bool { return t.Kind != model.WorkflowDocker })
-	if len(docker) != 8 {
+	if len(docker) != 11 {
 		t.Fatalf("docker templates: %d", len(docker))
 	}
 	for _, tmpl := range docker {
@@ -57,6 +57,40 @@ func TestDockerWorkflowFromTemplate(t *testing.T) {
 	e.mustCall(http.StatusOK, "GET", "/workflows", nil, &list)
 	if list[0].Kind != model.WorkflowDocker || list[0].NodeCount == 0 {
 		t.Errorf("summary: %+v", list[0])
+	}
+}
+
+// Edge-pattern templates carry their category and pattern through the API
+// (the New workflow dialog groups them; MCP list_templates relays them):
+// Docker and Kubernetes have one reverse proxy, API gateway and load
+// balancer each.
+func TestEdgePatternTemplates(t *testing.T) {
+	e := newEnv(t)
+	var raw []map[string]any
+	e.mustCall(http.StatusOK, "GET", "/catalog/templates", nil, &raw)
+	patterns := map[string][]string{} // kind → patterns
+	for _, tmpl := range raw {
+		if tmpl["category"] == nil {
+			if tmpl["pattern"] != nil {
+				t.Errorf("%s: pattern without category", tmpl["id"])
+			}
+			continue
+		}
+		if tmpl["category"] != model.TemplateCategoryEdgePatterns {
+			t.Errorf("%s: category %v", tmpl["id"], tmpl["category"])
+		}
+		p, _ := tmpl["pattern"].(string)
+		if p != model.PatternReverseProxy && p != model.PatternAPIGateway && p != model.PatternLoadBalancer {
+			t.Errorf("%s: pattern %q", tmpl["id"], p)
+		}
+		kind, _ := tmpl["kind"].(string)
+		patterns[kind] = append(patterns[kind], p)
+	}
+	want := []string{model.PatternReverseProxy, model.PatternAPIGateway, model.PatternLoadBalancer}
+	for _, kind := range []string{model.WorkflowDocker, model.WorkflowKubernetes} {
+		if !slices.Equal(patterns[kind], want) {
+			t.Errorf("%s edge patterns %v, want %v", kind, patterns[kind], want)
+		}
 	}
 }
 

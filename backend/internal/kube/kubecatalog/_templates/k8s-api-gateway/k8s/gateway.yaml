@@ -1,0 +1,151 @@
+# The API gateway: Kong in DB-less mode is the single entry point. Its whole
+# configuration is kong.yml below: every route needs an API key (key-auth,
+# 401 without it), each consumer gets 20 requests a minute (rate-limiting,
+# 429 after that), /users and /orders go to their Services.
+#
+# Try it on the gateway Service's forwarded port:
+#   curl -i http://127.0.0.1:<port>/users                                        → 401
+#   curl -H "apikey: demo-key-not-a-secret" http://127.0.0.1:<port>/users/api/info → 200 {"message":"users",...}
+#
+# kong.yml holds the consumers' API keys, so it is a Secret, not a ConfigMap
+# (key-auth keys can't come from a vault in Kong OSS).
+apiVersion: v1
+kind: Secret
+metadata:
+  name: gateway-config
+  namespace: edge-gateway
+type: Opaque
+stringData:
+  kong.yml: |
+    _format_version: "3.0"
+    _transform: true
+    services:
+      # /users/api/info → http://users/api/info (strip_path removes /users).
+      - name: users
+        url: http://users.edge-gateway.svc.cluster.local:80
+        routes:
+          - name: users
+            paths: [/users]
+      - name: orders
+        url: http://orders.edge-gateway.svc.cluster.local:80
+        routes:
+          - name: orders
+            paths: [/orders]
+    plugins:
+      - name: key-auth
+        config:
+          # Send it as the "apikey" header (or ?apikey=).
+          key_names: [apikey]
+          hide_credentials: true
+      - name: rate-limiting
+        config:
+          minute: 20
+          policy: local
+          limit_by: consumer
+    consumers:
+      - username: demo-app
+        keyauth_credentials:
+          # A test value, not a secret: replace it before exposing the gateway.
+          - key: demo-key-not-a-secret
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: gateway
+  namespace: edge-gateway
+spec:
+  selector:
+    matchLabels:
+      app: gateway
+  template:
+    metadata:
+      labels:
+        app: gateway
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1001
+        seccompProfile:
+          type: RuntimeDefault
+      automountServiceAccountToken: false
+      containers:
+        - name: kong
+          image: kong:3.9.4
+          env:
+            - name: KONG_DATABASE
+              value: "off"
+            - name: KONG_DECLARATIVE_CONFIG
+              value: /kong/kong.yml
+            - name: KONG_PROXY_LISTEN
+              value: 0.0.0.0:8000
+            # No Admin API: the configuration is the ConfigMap.
+            - name: KONG_ADMIN_LISTEN
+              value: "off"
+            # /status and /status/ready for the probes.
+            - name: KONG_STATUS_LISTEN
+              value: 0.0.0.0:8100
+            # Kong writes its nginx files here (the root filesystem is read-only).
+            - name: KONG_PREFIX
+              value: /kong_prefix
+            - name: KONG_NGINX_WORKER_PROCESSES
+              value: "1"
+            - name: KONG_PROXY_ACCESS_LOG
+              value: /dev/stdout
+            - name: KONG_PROXY_ERROR_LOG
+              value: /dev/stderr
+          ports:
+            - name: proxy
+              containerPort: 8000
+            - name: status
+              containerPort: 8100
+          readinessProbe:
+            httpGet:
+              path: /status/ready
+              port: status
+            periodSeconds: 5
+          livenessProbe:
+            httpGet:
+              path: /status
+              port: status
+            periodSeconds: 20
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              memory: 512Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          volumeMounts:
+            - name: config
+              mountPath: /kong
+              readOnly: true
+            - name: prefix
+              mountPath: /kong_prefix
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: config
+          secret:
+            secretName: gateway-config
+        - name: prefix
+          emptyDir: {}
+        - name: tmp
+          emptyDir: {}
+---
+# Only the proxy port is a Service port: the status port stays on the pod.
+apiVersion: v1
+kind: Service
+metadata:
+  name: gateway
+  namespace: edge-gateway
+spec:
+  selector:
+    app: gateway
+  ports:
+    - name: http
+      port: 80
+      targetPort: proxy

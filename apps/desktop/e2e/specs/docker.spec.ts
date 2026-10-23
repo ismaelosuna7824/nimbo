@@ -77,6 +77,37 @@ test("creates a Docker workflow from the Node + PostgreSQL + Redis template", as
   expect(wf?.kind).toBe("docker")
 })
 
+test("creates the Docker reverse proxy from the Edge patterns group", async ({ app, api, page }) => {
+  await app.gotoHome()
+  await page.getByRole("button", { name: "New workflow" }).first().click()
+  const dialog = page.getByRole("dialog", { name: "New workflow" })
+  await dialog.getByRole("radiogroup", { name: "Workflow kind" }).getByRole("radio", { name: /Containers \(Docker\)/ }).click()
+  await dialog.getByRole("radiogroup", { name: "Template group" }).getByRole("radio", { name: "Edge patterns" }).click()
+  // Only the three Docker edge patterns are listed, in pattern order.
+  const group = dialog.getByRole("region", { name: "Edge patterns" })
+  await expect(group.locator("[data-template]")).toHaveCount(3)
+  expect(await group.locator("[data-template]").evaluateAll((els) => els.map((e) => e.getAttribute("data-template")))).toEqual([
+    "docker-reverse-proxy",
+    "docker-api-gateway",
+    "docker-load-balancer",
+  ])
+  await expect(dialog.getByText("Node.js API + PostgreSQL + Redis")).toHaveCount(0)
+  await group.locator('[data-template="docker-reverse-proxy"]').click()
+  await dialog.getByRole("button", { name: "Create from template" }).click()
+  await expect(dialog).toBeHidden()
+
+  // NGINX in front of the two backends it routes to, each on the canvas.
+  const canvas = page.getByTestId("docker-canvas")
+  await expect(canvas.getByTestId("docker-service")).toHaveCount(3)
+  await expect(service(app, "proxy").locator("img").first()).toHaveAttribute("alt", "NGINX")
+  await expect(service(app, "api")).toBeVisible()
+  await expect(service(app, "web")).toBeVisible()
+  await expect(canvas.locator('[data-testid="docker-network"][data-name="backend"]')).toBeVisible()
+
+  const wf = (await api.listWorkflows()).find((w) => w.name === "Reverse proxy (NGINX)")
+  expect(wf?.kind).toBe("docker")
+})
+
 test("adds PostgreSQL from the Docker palette and makes the API wait until it is healthy", async ({ app, api, page }) => {
   const wf = await app.openNew(api, "Proxy stack", "docker-go-nginx")
   await expect(service(app, "api")).toBeVisible()

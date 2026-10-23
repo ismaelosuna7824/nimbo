@@ -156,6 +156,7 @@ const AWS_CATEGORY: readonly CategoryRule[] = [
   ["aws_amplify_", "devops"],
   ["aws_vpc", "networking"],
   ["aws_subnet", "networking"],
+  ["aws_subnets", "networking"],
   ["aws_internet_gateway", "networking"],
   ["aws_egress_only_internet_gateway", "networking"],
   ["aws_nat_gateway", "networking"],

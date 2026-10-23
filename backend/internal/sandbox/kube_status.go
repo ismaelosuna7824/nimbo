@@ -746,8 +746,14 @@ func endpointPort(eps []*discoveryv1.EndpointSlice, portName string) (int, bool)
 }
 
 // readyEndpoint picks a ready pod behind a Service port: its name and the
-// container port.
-func readyEndpoint(eps []*discoveryv1.EndpointSlice, portName string) (pod string, port int, ok bool) {
+// container port. n rotates over the ready pods (the n-th modulo their
+// count), so successive connections spread like the Service's own ones.
+func readyEndpoint(eps []*discoveryv1.EndpointSlice, portName string, n uint64) (pod string, port int, ok bool) {
+	type target struct {
+		pod  string
+		port int
+	}
+	var ready []target
 	for _, es := range eps {
 		for _, pp := range es.Ports {
 			if ptrOr(pp.Name, "") != portName || pp.Port == nil {
@@ -755,12 +761,18 @@ func readyEndpoint(eps []*discoveryv1.EndpointSlice, portName string) (pod strin
 			}
 			for _, ep := range es.Endpoints {
 				if ptrOr(ep.Conditions.Ready, true) && ep.TargetRef != nil && ep.TargetRef.Kind == "Pod" {
-					return ep.TargetRef.Name, int(*pp.Port), true
+					ready = append(ready, target{ep.TargetRef.Name, int(*pp.Port)})
 				}
 			}
 		}
 	}
-	return "", 0, false
+	if len(ready) == 0 {
+		return "", 0, false
+	}
+	// Informer order is not stable: rotate over a sorted list.
+	slices.SortFunc(ready, func(a, b target) int { return strings.Compare(a.pod, b.pod) })
+	t := ready[n%uint64(len(ready))]
+	return t.pod, t.port, true
 }
 
 // httpPort reports whether a Service port is offered as an HTTP URL.

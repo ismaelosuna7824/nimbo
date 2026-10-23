@@ -1,0 +1,31 @@
+# The reverse proxy: the cluster's Traefik accepts every request for
+# proxy.localhost and forwards it by path. Clients only see this address;
+# the api and web Services stay ClusterIP (inside the cluster).
+#
+# Try it:  http://proxy.localhost:<ingress port>/api/info → {"message":"api","hostname":"api-…"}
+#          http://proxy.localhost:<ingress port>/         → {"message":"web","hostname":"web-…"}
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: proxy
+  namespace: edge-proxy
+spec:
+  ingressClassName: traefik
+  rules:
+    - host: proxy.localhost
+      http:
+        paths:
+          - path: /api
+            pathType: Prefix
+            backend:
+              service:
+                name: api
+                port:
+                  name: http
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: web
+                port:
+                  name: http

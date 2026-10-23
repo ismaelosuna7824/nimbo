@@ -1,0 +1,99 @@
+# API gateway: Kong is the single entry point. It checks the API key
+# (key-auth), rate limits each consumer, routes /users and /orders to their
+# services and /summary to a service that aggregates both. Only Kong is
+# published; the services sit on an internal network.
+#
+# Try it:  curl -i http://localhost:8187/users                             → 401 (no key)
+#          curl -H "apikey: demo-key-not-a-secret" http://localhost:8187/users   → 200 {"service":"users",...}
+#          curl -H "apikey: demo-key-not-a-secret" http://localhost:8187/summary → users + orders in one answer
+#          21 requests within a minute → 429
+
+# Settings every service shares: restart after crashes, rotated logs.
+x-defaults: &defaults
+  restart: unless-stopped
+  logging:
+    driver: json-file
+    options:
+      max-size: "10m"
+      max-file: "3"
+
+# Every service runs the same tiny Go service; SERVICE_NAME is what it answers.
+x-backend: &backend
+  <<: *defaults
+  build:
+    context: ./backend
+  expose:
+    - "8080"
+  networks:
+    - backend
+  healthcheck:
+    test: ["CMD", "/backend", "-healthcheck"]
+    interval: 10s
+    timeout: 5s
+    retries: 3
+  deploy:
+    resources:
+      limits:
+        cpus: "0.25"
+        memory: 32M
+
+services:
+  gateway:
+    <<: *defaults
+    image: kong:3.9.4
+    ports:
+      - "127.0.0.1:8187:8000"
+    environment:
+      KONG_DATABASE: "off"
+      KONG_DECLARATIVE_CONFIG: /kong/kong.yml
+      KONG_PROXY_LISTEN: 0.0.0.0:8000
+      # No Admin API: the configuration is the file.
+      KONG_ADMIN_LISTEN: "off"
+      KONG_NGINX_WORKER_PROCESSES: "1"
+      KONG_PROXY_ACCESS_LOG: /dev/stdout
+      KONG_PROXY_ERROR_LOG: /dev/stderr
+    volumes:
+      - ./gateway/kong.yml:/kong/kong.yml:ro
+    networks:
+      - edge
+      - backend
+    depends_on:
+      users:
+        condition: service_healthy
+      orders:
+        condition: service_healthy
+      summary:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "kong", "health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    deploy:
+      resources:
+        limits:
+          cpus: "1"
+          memory: 512M
+
+  users:
+    <<: *backend
+    environment:
+      SERVICE_NAME: users
+
+  orders:
+    <<: *backend
+    environment:
+      SERVICE_NAME: orders
+
+  summary:
+    <<: *backend
+    environment:
+      SERVICE_NAME: summary
+      AGGREGATE: users=http://users:8080/,orders=http://orders:8080/
+
+networks:
+  # The gateway's public side.
+  edge: {}
+  # Services only: reachable through the gateway, never directly.
+  backend:
+    internal: true

@@ -571,7 +571,22 @@ type Template struct {
 	Difficulty string        `json:"difficulty"` // beginner | intermediate | advanced
 	Tags       []string      `json:"tags"`
 	Icon       *WorkflowIcon `json:"icon,omitempty"`
+	// Category groups templates in the New workflow dialog
+	// (TemplateCategoryEdgePatterns); "" for the general starters.
+	Category string `json:"category,omitempty"`
+	// Pattern is the edge pattern an edge-patterns template shows
+	// (PatternReverseProxy, PatternAPIGateway, PatternLoadBalancer).
+	Pattern string `json:"pattern,omitempty"`
 }
+
+// Template categories and the patterns of TemplateCategoryEdgePatterns.
+const (
+	TemplateCategoryEdgePatterns = "edge-patterns"
+
+	PatternReverseProxy = "reverse-proxy"
+	PatternAPIGateway   = "api-gateway"
+	PatternLoadBalancer = "load-balancer"
+)
 
 // ---------------------------------------------------------------------------
 // Sandbox (per-workflow Floci emulators) and Terraform runs

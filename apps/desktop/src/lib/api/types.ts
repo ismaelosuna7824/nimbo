@@ -381,7 +381,14 @@ export interface Template {
   difficulty: "beginner" | "intermediate" | "advanced"
   tags: string[]
   icon?: WorkflowIcon
+  /** "edge-patterns" groups the template in the New workflow dialog; absent for the general starters. */
+  category?: TemplateCategory
+  /** The edge pattern an "edge-patterns" template shows. */
+  pattern?: EdgePattern
 }
+
+export type TemplateCategory = "edge-patterns"
+export type EdgePattern = "reverse-proxy" | "api-gateway" | "load-balancer"
 
 // ---------------------------------------------------------------- sandbox & runs
 

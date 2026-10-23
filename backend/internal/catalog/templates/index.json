@@ -88,5 +88,137 @@
     "difficulty": "beginner",
     "tags": ["object-storage", "bucket"],
     "icon": { "glyph": "bucket", "color": "red" }
+  },
+  {
+    "id": "aws-reverse-proxy",
+    "name": "Reverse proxy (NGINX on EC2)",
+    "description": "An NGINX server in a public subnet accepts every client request and forwards / to a web server and /api/ to an API server, both in a private subnet the internet never sees. Runs locally: Floci starts the three instances and the proxy answers on a published port.",
+    "cloud": "aws",
+    "difficulty": "intermediate",
+    "tags": ["edge", "reverse-proxy", "nginx", "ec2", "vpc"],
+    "category": "edge-patterns",
+    "pattern": "reverse-proxy",
+    "icon": { "glyph": "shield", "color": "amber" }
+  },
+  {
+    "id": "aws-api-gateway",
+    "name": "API gateway (HTTP API + Lambda authorizer)",
+    "description": "One HTTP API is the single entry for two services: a Lambda authorizer checks the bearer token on every call, then /orders goes to the orders function and /users to the users function. Runs locally: Floci enforces the authorizer and invokes both functions.",
+    "cloud": "aws",
+    "difficulty": "intermediate",
+    "tags": ["edge", "api-gateway", "lambda", "authorizer", "openapi"],
+    "category": "edge-patterns",
+    "pattern": "api-gateway",
+    "icon": { "glyph": "key", "color": "amber" }
+  },
+  {
+    "id": "aws-load-balancer",
+    "name": "Load balancer (ALB)",
+    "description": "An Application Load Balancer gives an Auto Scaling group of two app servers one public address, sends requests only to servers that pass its health check and answers /admin/* itself with a 403 rule. Runs locally, but the listener port is only reachable inside the sandbox network.",
+    "cloud": "aws",
+    "difficulty": "intermediate",
+    "tags": ["edge", "load-balancer", "alb", "ec2", "health-checks"],
+    "category": "edge-patterns",
+    "pattern": "load-balancer",
+    "icon": { "glyph": "flow", "color": "amber" }
+  },
+  {
+    "id": "azure-reverse-proxy",
+    "name": "Reverse proxy (Front Door)",
+    "description": "Azure Front Door is the one public endpoint and forwards / to a web App Service and /api/* to an API App Service, which accept traffic only from this Front Door profile. Design and export only: Floci does not emulate Front Door or App Service.",
+    "cloud": "azure",
+    "difficulty": "intermediate",
+    "tags": ["edge", "reverse-proxy", "front-door", "app-service"],
+    "category": "edge-patterns",
+    "pattern": "reverse-proxy",
+    "icon": { "glyph": "shield", "color": "blue" }
+  },
+  {
+    "id": "azure-api-gateway",
+    "name": "API gateway (API Management)",
+    "description": "API Management is the single entry for two App Service backends: callers need a subscription key, and /orders and /users are routed to their own backend. Design and export only: Floci does not run the API Management gateway.",
+    "cloud": "azure",
+    "difficulty": "intermediate",
+    "tags": ["edge", "api-gateway", "api-management", "app-service"],
+    "category": "edge-patterns",
+    "pattern": "api-gateway",
+    "icon": { "glyph": "key", "color": "blue" }
+  },
+  {
+    "id": "azure-load-balancer",
+    "name": "Load balancer (Standard LB + scale set)",
+    "description": "A Standard Load Balancer gives a two-instance VM scale set one public IP and sends traffic only to instances that pass its HTTP health probe. Design and export only: Floci does not emulate Azure Load Balancer or scale sets.",
+    "cloud": "azure",
+    "difficulty": "intermediate",
+    "tags": ["edge", "load-balancer", "vmss", "health-probe"],
+    "category": "edge-patterns",
+    "pattern": "load-balancer",
+    "icon": { "glyph": "flow", "color": "blue" }
+  },
+  {
+    "id": "gcp-reverse-proxy",
+    "name": "Reverse proxy (HTTPS load balancer + Cloud Run)",
+    "description": "A global external HTTPS load balancer is the one public address and its URL map sends / to a web Cloud Run service and /api/* to an API Cloud Run service, which accept traffic only from the load balancer. Design and export only: Floci runs Cloud Run but not the load balancer.",
+    "cloud": "gcp",
+    "difficulty": "intermediate",
+    "tags": ["edge", "reverse-proxy", "load-balancer", "cloud-run", "serverless-neg"],
+    "category": "edge-patterns",
+    "pattern": "reverse-proxy",
+    "icon": { "glyph": "shield", "color": "lime" }
+  },
+  {
+    "id": "gcp-api-gateway",
+    "name": "API gateway (Apigee)",
+    "description": "Apigee is the single entry for two Cloud Run services: its proxy verifies the caller's API key, then routes /orders and /users to their own service with a Google-signed identity token. Design and export only: Floci does not emulate Apigee.",
+    "cloud": "gcp",
+    "difficulty": "advanced",
+    "tags": ["edge", "api-gateway", "apigee", "cloud-run", "api-key"],
+    "category": "edge-patterns",
+    "pattern": "api-gateway",
+    "icon": { "glyph": "key", "color": "lime" }
+  },
+  {
+    "id": "gcp-load-balancer",
+    "name": "Load balancer (managed instance group)",
+    "description": "A global external Application Load Balancer gives a two-VM managed instance group one public IP, sends requests only to VMs that pass its health check and recreates VMs that keep failing it. Design and export only: Floci does not emulate load balancers or instance groups.",
+    "cloud": "gcp",
+    "difficulty": "intermediate",
+    "tags": ["edge", "load-balancer", "mig", "health-checks"],
+    "category": "edge-patterns",
+    "pattern": "load-balancer",
+    "icon": { "glyph": "flow", "color": "lime" }
+  },
+  {
+    "id": "oci-reverse-proxy",
+    "name": "Reverse proxy (Load Balancer path routes)",
+    "description": "A public OCI Load Balancer is the one entry and its path route set sends / to a web server and /api/ to an API server, both in a private subnet. Design and export only: Floci does not emulate OCI load balancers or compute.",
+    "cloud": "oci",
+    "difficulty": "intermediate",
+    "tags": ["edge", "reverse-proxy", "load-balancer", "path-routing"],
+    "category": "edge-patterns",
+    "pattern": "reverse-proxy",
+    "icon": { "glyph": "shield", "color": "red" }
+  },
+  {
+    "id": "oci-api-gateway",
+    "name": "API gateway (API Gateway + Functions)",
+    "description": "An OCI API Gateway deployment is the single entry for two Functions: an authorizer function checks every request's token, then /orders and /users go to their own function. Design and export only: Floci runs Functions but not API Gateway.",
+    "cloud": "oci",
+    "difficulty": "advanced",
+    "tags": ["edge", "api-gateway", "functions", "authorizer"],
+    "category": "edge-patterns",
+    "pattern": "api-gateway",
+    "icon": { "glyph": "key", "color": "red" }
+  },
+  {
+    "id": "oci-load-balancer",
+    "name": "Load balancer (flexible LB)",
+    "description": "A flexible OCI Load Balancer gives two instances one public IP, spreads requests round robin and sends traffic only to instances its health checker reports OK. Design and export only: Floci does not emulate OCI load balancers or compute.",
+    "cloud": "oci",
+    "difficulty": "intermediate",
+    "tags": ["edge", "load-balancer", "health-checks"],
+    "category": "edge-patterns",
+    "pattern": "load-balancer",
+    "icon": { "glyph": "flow", "color": "red" }
   }
 ]

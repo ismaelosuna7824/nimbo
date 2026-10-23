@@ -1,0 +1,79 @@
+# Reverse proxy: NGINX accepts every client request on one address and
+# forwards it by path (/api/ → api, everything else → web). Only the proxy
+# is published; api and web sit on an internal network the host can't reach.
+#
+# Try it:  curl http://localhost:8186/          → {"service":"web",...}
+#          curl http://localhost:8186/api/hello → {"service":"api","path":"/hello",...}
+
+# Settings every service shares: restart after crashes, rotated logs.
+x-defaults: &defaults
+  restart: unless-stopped
+  logging:
+    driver: json-file
+    options:
+      max-size: "10m"
+      max-file: "3"
+
+# Both backends run the same tiny Go service; SERVICE_NAME is what it answers.
+x-backend: &backend
+  <<: *defaults
+  build:
+    context: ./backend
+  expose:
+    - "8080"
+  networks:
+    - backend
+  healthcheck:
+    test: ["CMD", "/backend", "-healthcheck"]
+    interval: 10s
+    timeout: 5s
+    retries: 3
+  deploy:
+    resources:
+      limits:
+        cpus: "0.25"
+        memory: 32M
+
+services:
+  proxy:
+    <<: *defaults
+    image: nginx:1.27-alpine
+    ports:
+      - "127.0.0.1:8186:80"
+    volumes:
+      - ./proxy/nginx.conf:/etc/nginx/conf.d/default.conf:ro
+    networks:
+      - edge
+      - backend
+    depends_on:
+      api:
+        condition: service_healthy
+      web:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1/healthz >/dev/null || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+    deploy:
+      resources:
+        limits:
+          cpus: "0.5"
+          memory: 64M
+
+  api:
+    <<: *backend
+    environment:
+      SERVICE_NAME: api
+
+  web:
+    <<: *backend
+    environment:
+      SERVICE_NAME: web
+
+networks:
+  # The proxy's public side.
+  edge: {}
+  # Backends only: no published ports and no route out of the host.
+  backend:
+    internal: true

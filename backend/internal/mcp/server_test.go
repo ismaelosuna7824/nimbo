@@ -172,6 +172,28 @@ func TestAgentBuildsWorkflowThroughTools(t *testing.T) {
 	}
 }
 
+// list_templates relays each template's category and pattern, so an agent
+// can pick the edge pattern the user asks for.
+func TestListTemplatesEdgePatterns(t *testing.T) {
+	cs, _ := session(t)
+	var list []model.Template
+	mustTool(t, cs, "list_templates", nil, &list)
+	got := map[string]string{}
+	for _, tmpl := range list {
+		if tmpl.Category == model.TemplateCategoryEdgePatterns {
+			got[tmpl.ID] = tmpl.Pattern
+		}
+	}
+	for id, want := range map[string]string{
+		"docker-reverse-proxy": model.PatternReverseProxy, "docker-api-gateway": model.PatternAPIGateway, "docker-load-balancer": model.PatternLoadBalancer,
+		"k8s-reverse-proxy": model.PatternReverseProxy, "k8s-api-gateway": model.PatternAPIGateway, "k8s-load-balancer": model.PatternLoadBalancer,
+	} {
+		if got[id] != want {
+			t.Errorf("%s: pattern %q, want %q", id, got[id], want)
+		}
+	}
+}
+
 func TestApplyTerraformCodeMergesFiles(t *testing.T) {
 	cs, _ := session(t)
 	var wf workflowView

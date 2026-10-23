@@ -110,7 +110,7 @@ func TestEnvironmentsLayoutApplyOnFloci(t *testing.T) {
 	for k, v := range outputs {
 		vals[k] = fmt.Sprint(v.Value)
 	}
-	applyChecks["aws-serverless-api"](t, base, vals)
+	applyChecks["aws-serverless-api"](t, pod, base, vals)
 	planNoChanges(t, pod, dir, env, chdir)
 	runTerraform(t, pod, dir, env, chdir, "destroy", "-auto-approve", "-input=false", "-no-color")
 }

@@ -506,9 +506,11 @@ Templates (`list_templates`, kind `kubernetes`): `k8s-webapp-postgres`
 `k8s-kustomize-app` (base + dev/prod overlays), `k8s-helm-app` (podinfo
 chart with values-dev/prod), `k8s-microservices` (frontend + backend behind
 one Ingress, HPAs, Redis), `k8s-cronjob-worker` (CronJob producer + queue
-worker). Each renders without warnings in every environment and deploys
-healthy on the local cluster. Prompt `create_kubernetes_app` walks the
-whole loop.
+worker) and the edge patterns `k8s-reverse-proxy` (Traefik Ingress by path),
+`k8s-api-gateway` (Kong DB-less: key-auth, rate limit) and
+`k8s-load-balancer` (3 replicas behind a LoadBalancer Service). Each renders
+without warnings in every environment and deploys healthy on the local
+cluster. Prompt `create_kubernetes_app` walks the whole loop.
 
 ### Kubernetes best practices
 
@@ -547,7 +549,7 @@ Conventions).
 |---|---|---|
 | `list_workflows` | `include_archived?` | Workflows, most recent first; the open one is flagged |
 | `get_open_workflow` | — | The workflow open in the desktop app, like `get_workflow` (or a message when none is) |
-| `list_templates` | — | Starter templates |
+| `list_templates` | — | Starter templates (`id`, `name`, `description`, `kind`, `cloud`, `difficulty`, `tags`); edge patterns add `category: "edge-patterns"` and `pattern` (`reverse-proxy`, `api-gateway`, `load-balancer`), one of each per kind and cloud |
 | `create_workflow` | `name`, `description?`, `template?`, `kind?` | New workflow, optionally from a template; `kind: "docker"` (or a `docker-*` template) makes a docker-compose workflow |
 | `get_workflow` | `workflow` | Compact workflow: nodes, edges, variables, outputs, environments, diagnostics, and `structure` (layout, states, resources per state, modules, nesting, backend) |
 | `update_workflow` | `workflow`, `name?`, `description?`, `layout?` (`auto`/`single`/`environments`) | Rename a workflow, change its description or its export layout (only the given fields change; `description: ""` clears it); the Terraform is unchanged; returns the workflow with its `structure` |

@@ -31,8 +31,8 @@ func writeFiles(t *testing.T, files map[string][]byte) string {
 // Every template renders in every environment without errors or warnings
 // (k8s_* advice included): they are what new users copy.
 func TestTemplatesRenderClean(t *testing.T) {
-	if len(Templates()) != 5 {
-		t.Fatalf("want 5 templates, got %d", len(Templates()))
+	if len(Templates()) != 8 {
+		t.Fatalf("want 8 templates, got %d", len(Templates()))
 	}
 	for _, tmpl := range Templates() {
 		t.Run(tmpl.ID, func(t *testing.T) {

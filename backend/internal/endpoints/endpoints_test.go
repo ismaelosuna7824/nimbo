@@ -2,6 +2,7 @@ package endpoints
 
 import (
 	"encoding/json"
+	"slices"
 	"strings"
 	"testing"
 
@@ -156,6 +157,30 @@ func TestBuildHTTPAPIv2(t *testing.T) {
 	fn := byAddr(t, info, "aws_lambda_function.api")
 	if !strings.Contains(fn.Summary, "HTTP API") {
 		t.Errorf("function summary does not mention its API: %q", fn.Summary)
+	}
+}
+
+// An HTTP API defined by an OpenAPI body (the aws-api-gateway template) has
+// no route resources: its routes come from the document's paths.
+func TestBuildHTTPAPIFromOpenAPIBody(t *testing.T) {
+	body := `{"openapi":"3.0.1","paths":{"/users":{"get":{}},"/orders":{"get":{},"parameters":[]},"/{proxy+}":{"x-amazon-apigateway-any-method":{}}}}`
+	st := &model.DeployedState{WorkflowID: "wf1", Resources: []model.DeployedResource{
+		res("aws_apigatewayv2_api.http", map[string]any{"id": "gw1", "protocol_type": "HTTP", "body": body}),
+		res("aws_apigatewayv2_stage.default", map[string]any{"api_id": "gw1", "name": "$default"}),
+	}}
+	_, _, sb := fixture()
+	api := byAddr(t, Build(&model.Workflow{ID: "wf1"}, st, sb), "aws_apigatewayv2_api.http")
+	stage := base + "/execute-api/gw1/$default"
+	var got []string
+	for _, e := range api.Endpoints {
+		got = append(got, e.Method+" "+e.URL)
+	}
+	want := []string{"ANY " + stage + "/hello", "GET " + stage + "/orders", "GET " + stage + "/users"}
+	if !slices.Equal(got, want) {
+		t.Fatalf("endpoints %v, want %v", got, want)
+	}
+	if hasAction(api, ActRequest) == nil {
+		t.Error("no request action")
 	}
 }
 

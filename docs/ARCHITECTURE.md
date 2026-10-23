@@ -498,7 +498,7 @@ submodule, each wrapping one resource), `bp_sensitive_not_marked` 3 (2),
 `aws_vpc_block_public_access_options`), `bp_unencrypted_storage` 2 (2),
 `bp_hardcoded_region` 1, `bp_open_ingress` 1, `bp_state_too_large` 1
 (terraform-aws-lambda's complete example calls the module ~15 times: about
-59 instances), every other rule 0. The 10 templates and a fresh workflow with every popular
+59 instances), every other rule 0. The 22 Terraform templates and a fresh workflow with every popular
 starter of each cloud have 0 findings (`lint` tests).
 
 ### netcheck (network checks)
@@ -964,7 +964,8 @@ URL). Postman: a folder per HTTP service with a GET per host URL.
 Every managed resource of the state becomes one `ResourceAccess` (data
 sources and non-cloud providers such as `random`/`archive` are skipped).
 AWS kinds: `http-api` (`aws_apigatewayv2_api` HTTP with its stages/routes/
-integrations folded in, one `HTTPEndpoint` per stage × route at
+integrations folded in, one `HTTPEndpoint` per stage × route — route
+resources and the paths of an OpenAPI `body` — at
 `<aws>/execute-api/<id>/<stage><path>`; `aws_api_gateway_rest_api` with
 stages/resources/methods at `<aws>/restapis/<id>/<stage>/_user_request_<path>`),
 `function-url` (`<aws>/lambda-url/<urlId>/`), `function`, `queue` (host
@@ -1631,7 +1632,9 @@ namespace?, valuesFiles?, environments?}`.
 - **Endpoints**: every TCP Service port is forwarded by the daemon from a
   stable `127.0.0.1` port (Service port, or +8000 below 1024, else free;
   saved in `kube/forwards.json`, never one saved by another workflow); each
-  connection picks a ready pod from the EndpointSlices and tunnels through
+  connection goes to the next ready pod from the EndpointSlices (round robin
+  over the sorted ready pods, so connections spread like the Service's own)
+  and tunnels through
   the pod's port-forward (WebSocket, SPDY fallback). Ingress rules get
   `http://<host>:<ingress port><path>` (`*.localhost` resolves in browsers)
   and an `Address` on 127.0.0.1 for the Host header. Cards: cluster, each
@@ -1751,6 +1754,70 @@ Tests: every docker template × format × environment renders through the
 engine and passes the `k8s_*` rules with no warning; `go test -tags docker
 -run TestDeployConvertedTemplates ./internal/kube/kubeconvert` deploys them
 all on a throwaway `nimbo-k8s-convert-it` k3s cluster (removed afterwards).
+
+## Edge pattern templates
+
+`model.Template` has `category` and `pattern`: `category: "edge-patterns"`
+marks the templates of the three ways client traffic reaches services —
+`pattern` `reverse-proxy` (one address that forwards by path and hides the
+servers), `api-gateway` (single entry with authentication, rate limits and
+routing to services) and `load-balancer` (one address spread over healthy
+replicas). Every kind and cloud has one of each. The New workflow dialog
+(`features/home/template-groups.ts`) lists them in an *Edge patterns*
+section after the general starters of the selected kind (an *Edge patterns*
+chip shows only that section; for Terraform a cloud chip row narrows it to
+one provider), ordered reverse proxy, API gateway, load balancer.
+`GET /catalog/templates` and MCP `list_templates` carry both fields.
+
+| Template | What runs | Verified (2026-10-22, local) |
+|---|---|---|
+| `docker-reverse-proxy` | NGINX 1.27 on `127.0.0.1:8186`; `/api/` → `api`, the rest → `web` (two builds of a tiny Go service answering its name and hostname) on an `internal` network | `/` → web, `/api/hello` → api with path `/hello` |
+| `docker-api-gateway` | Kong 3.9.4 DB-less (`gateway/kong.yml`) on `127.0.0.1:8187`, no Admin API: global key-auth (`apikey` header, demo key in kong.yml and `.env`), rate-limiting 20/minute per consumer, `/users`, `/orders`, `/summary` (a service aggregating both) | no key 401, wrong key 401, key 200 on all three routes; 20 × 200 then 429 |
+| `docker-load-balancer` | HAProxy 3.0 on `127.0.0.1:8188` (stats on `127.0.0.1:8404`), `roundrobin` over `server-template` filled by Docker DNS for 3 replicas (`deploy.replicas: 3`), `httpchk /health` every 2 s, redispatch + retries | 300 requests → 100/100/100; one replica killed under load: 0 failed requests, back to 3 after `up` |
+| `k8s-reverse-proxy` | Ingress (class `traefik`) `proxy.localhost`: `/api` → `api`, `/` → `web` (podinfo 6.15.0, ClusterIP) | `/api/info` → api pod, `/` → web pod |
+| `k8s-api-gateway` | Kong 3.9.4 DB-less Deployment, `kong.yml` in a Secret (it holds the consumer key; key-auth keys can't be vault references in Kong OSS), read-only root with emptyDir prefix, probes on the status listener; `/users`, `/orders` | 401 without key, 200 with it, 429 after 20/minute |
+| `k8s-load-balancer` | Deployment ×3 (podinfo, readiness probes) behind a `LoadBalancer` Service on port 8080 (80 is Traefik's ServiceLB port) | Try it ×30 → 10/10/10 pods; 300 requests → 100/100/100; pod deleted under load: 0 failed requests |
+| `aws-reverse-proxy` | **Floci-local.** VPC with a public and a private subnet; NGINX on an AL2023 EC2 instance (public) proxies `/api/` → `api`, the rest → `web` (two private instances, Python service on 8080) | Endpoints Try it on the proxy's published port: `/` → web, `/api/orders` → api, `/healthz` ok; apply + empty plan + destroy (`TestAWSTemplatesApplyOnFloci`) |
+| `aws-api-gateway` | **Floci-local.** HTTP API defined by an OpenAPI body (routes, Lambda integrations, REQUEST authorizer), `$default` stage with throttling; authorizer Lambda reads a bearer token from an SSM SecureString (random_password); `orders`/`users` Lambdas share one log group (`logging_config`) | Try it: no token 401, wrong token 403, token 200 on `/orders` and `/users` (caller context passed through); the Endpoints card lists the routes from the OpenAPI body |
+| `aws-load-balancer` | **Floci-local, listener inside the sandbox only.** ALB in the default VPC (or given subnets), target group with `/health` checks, Auto Scaling group (launch template, `health_check_type = "ELB"`) of 2 servers, `/admin/*` fixed-response 403 rule, optional HTTPS listener | From the pod namespace: requests alternate between the two instances, a killed server stops getting traffic, `/admin/x` 403; empty plan after apply |
+| `azure-reverse-proxy` | Design/export only. Front Door Standard → two Linux App Services (`/*`, `/api/*`) that accept only `AzureFrontDoor.Backend` with this profile's `X-Azure-FDID` | `terraform validate`; floci-az: App Service plan and Front Door profile → 404 |
+| `azure-api-gateway` | Design/export only. API Management (Consumption), one API with GET `/orders`, `/users` routed by `set-backend-service` to two App Service backends, product + subscription key | `terraform validate`; floci-az creates the service, API, operations and product, but product-API link and subscription keys → 405, App Service plan → 404 |
+| `azure-load-balancer` | Design/export only. Standard LB + public IP, HTTP probe `/health`, rule 80, VM scale set ×2 (Ubuntu 24.04, automatic instance repair), NSG on the subnet | `terraform validate`; floci-az creates the VNet, NSG, public IP, LB, probe, pool and rule; the scale set → 404 |
+| `gcp-reverse-proxy` | Design/export only. Global external HTTPS LB (managed certificate, HTTP→HTTPS redirect), URL map `/api`,`/api/*` → API, rest → web, serverless NEGs to two Cloud Run services with internal-LB ingress | `terraform validate`; floci-gcp creates Cloud Run and the global address; managed certificate 501, serverless NEG 400 |
+| `gcp-api-gateway` | Design/export only. Apigee X (PAYG, no VPC peering): org, instance, environment, env group, proxy bundle (VerifyAPIKey, route rules, GoogleIDToken targets) deployed with a service account, API product, developer app (key) → two Cloud Run services only that account may invoke. Apigee rather than API Gateway: `google_api_gateway_*` exist only in google-beta, which the catalog doesn't carry | `terraform validate`; floci-gcp runs Cloud Run and the service account; Apigee calls reach the real API (no Floci endpoint) and get 401 |
+| `gcp-load-balancer` | Design/export only. Custom VPC, firewall for Google front ends on 8080, instance template (Debian 12, Shielded VM), regional MIG ×2 with auto-healing, global external Application LB on 80 | `terraform validate`; floci-gcp creates network, subnet, firewall, health check and address; the `debian-cloud/debian-12` image isn't found |
+| `oci-reverse-proxy` | Design/export only. VCN with public/private subnets, flexible LB with a routing policy (`/api` → api backend set; routing policies replace the deprecated path route sets), two private Oracle Linux 9 instances | `terraform validate`; floci-oci doesn't serve Core images/VCN/compute or load balancers (the image lookup reaches real OCI → 401) |
+| `oci-api-gateway` | Design/export only. Public API Gateway deployment `/v1` with a custom authorizer function, per-IP rate limit, GET `/orders`, `/users` → two Functions in a private subnet (service gateway), IAM policy for the gateway; function images are inputs (OCIR) | `terraform validate`; Core Services lookup → real OCI → 401 before Functions are reached |
+| `oci-load-balancer` | Design/export only. Flexible LB, backend set with an HTTP health checker, round robin over two private instances | `terraform validate`; same Core limit as above |
+
+Cloud templates keep every `bp_*` and `net_*` check at 0 (the `lint`,
+`netcheck` and `TestEdgePatternTemplates` tests, which also require
+"Runs locally" only when Floci supports every resource). To stay under
+`bp_module_candidate` (≥ 5 resources of one group in a workflow of ≥ 12)
+without modules, the AWS API is one OpenAPI-defined
+`aws_apigatewayv2_api` + stage, identical backends use `for_each`/`count`,
+and the ALB stack reads its network (default VPC or given subnets) with
+data sources, as an app layer should.
+
+Floci limits found (floci 2.3.0, floci-az/gcp/oci latest of 2026-10-15):
+CloudFront serves S3 origins but custom origins on Floci's own hosts
+(Lambda URL, `execute-api`) fail with `UnknownHostException` → 502, so a
+CloudFront reverse proxy can't carry API traffic locally (hence NGINX on
+EC2); ALB listeners bind their port inside the pod's network namespace,
+which the pod doesn't publish (no Endpoints card or Try it; `docker exec
+nimbo-<wf>-pod wget -qO- http://localhost/`); concurrent `RegisterTargets`
+on one target group can drop a target (two `aws_lb_target_group_attachment`
+applied in parallel → one missing, plan not empty; the ASG registers them
+reliably); an `aws_instance` with `associate_public_ip_address` set (even
+`false`) gets the VPC default security group; `root_block_device.encrypted`
+isn't stored (replacement on every plan); a security group with an
+explicit narrow `egress` keeps the default allow-all rule (in-place update
+on every plan); importing an OpenAPI body sets the API `version` from
+`info.version` (set `version` to match).
+
+Kubernetes Services spread connections, not requests, so the daemon's
+Service forwards rotate over the ready pods per connection and Try it opens
+one connection per request (`endpoints/try.go`), like curl.
 
 ## Architecture diagram view
 

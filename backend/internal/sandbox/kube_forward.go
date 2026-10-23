@@ -319,6 +319,8 @@ type connectorState struct {
 	mu    sync.Mutex
 	conns map[string]httpstream.Connection // namespace/pod
 	reqID atomic.Int64
+	// next rotates connections over the ready pods of a Service.
+	next atomic.Uint64
 }
 
 func newKubeConnector(kc *kubeClient, l kubeListers) kubeConnector {
@@ -326,7 +328,7 @@ func newKubeConnector(kc *kubeClient, l kubeListers) kubeConnector {
 }
 
 func (c kubeConnector) connect(ctx context.Context, ns, svc, portName string) (upstream, error) {
-	pod, port, ok := readyEndpoint(c.listers.endpointSlices(ns, svc), portName)
+	pod, port, ok := readyEndpoint(c.listers.endpointSlices(ns, svc), portName, c.state.next.Add(1)-1)
 	if !ok {
 		return nil, fmt.Errorf("no ready pod behind Service %s/%s", ns, svc)
 	}

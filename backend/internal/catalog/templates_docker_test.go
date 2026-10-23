@@ -12,6 +12,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"strings"
 	"testing"
@@ -168,7 +169,7 @@ func TestAWSTemplatesApplyOnFloci(t *testing.T) {
 				for k, v := range outputs {
 					vals[k] = fmt.Sprint(v.Value)
 				}
-				check(t, base, vals)
+				check(t, pod, base, vals)
 			}
 			planNoChanges(t, pod, dir, env)
 			runTerraform(t, pod, dir, env, "destroy", "-auto-approve", "-input=false", "-no-color")
@@ -226,9 +227,10 @@ func planNoChanges(t *testing.T, pod, dir string, env []string, global ...string
 	}
 }
 
-// applyChecks exercise a deployed template through the Floci host port.
-var applyChecks = map[string]func(t *testing.T, base string, out map[string]string){
-	"aws-serverless-api": func(t *testing.T, base string, out map[string]string) {
+// applyChecks exercise a deployed template through the Floci host port
+// (or, for load balancer listeners, from inside the pod).
+var applyChecks = map[string]func(t *testing.T, pod, base string, out map[string]string){
+	"aws-serverless-api": func(t *testing.T, pod, base string, out map[string]string) {
 		url := base + "/execute-api/" + out["api_id"] + "/$default/items"
 		created := httpJSON(t, http.MethodPost, url, `{"name":"first"}`, http.StatusCreated)
 		id, _ := created["id"].(string)
@@ -240,6 +242,93 @@ var applyChecks = map[string]func(t *testing.T, base string, out map[string]stri
 			t.Fatalf("GET /items/%s returned %v", id, got)
 		}
 	},
+	// The authorizer refuses calls without the token and lets the token
+	// through to each service.
+	"aws-api-gateway": func(t *testing.T, pod, base string, out map[string]string) {
+		url := base + "/execute-api/" + out["api_id"] + "/$default"
+		getJSON(t, url+"/orders", nil, http.StatusUnauthorized, 90*time.Second)
+		getJSON(t, url+"/orders", map[string]string{"Authorization": "Bearer wrong"}, http.StatusForbidden, 90*time.Second)
+		auth := map[string]string{"Authorization": "Bearer " + out["api_token"]}
+		for _, svc := range []string{"orders", "users"} {
+			got := getJSON(t, url+"/"+svc, auth, http.StatusOK, 90*time.Second)
+			if got["service"] != svc || got["caller"] != "api-client" {
+				t.Errorf("GET /%s returned %v", svc, got)
+			}
+		}
+	},
+	// NGINX answers on the port Floci publishes for the proxy's security
+	// group rule and forwards / and /api/ to different private servers.
+	"aws-reverse-proxy": func(t *testing.T, pod, base string, out map[string]string) {
+		// Floci starts the port forwarder for the security group rule
+		// shortly after the instance.
+		var hostPort []string
+		for deadline := time.Now().Add(2 * time.Minute); hostPort == nil; time.Sleep(2 * time.Second) {
+			published := docker(t, "ps", "--filter", "name=ec2-fwd-"+out["proxy_instance_id"]+"-80", "--format", "{{.Ports}}")
+			hostPort = regexp.MustCompile(`0\.0\.0\.0:(\d+)->80`).FindStringSubmatch(published)
+			if hostPort == nil && time.Now().After(deadline) {
+				t.Fatalf("proxy port 80 not published: %q", published)
+			}
+		}
+		proxy := "http://127.0.0.1:" + hostPort[1]
+		// User data installs NGINX after the apply returns.
+		for path, server := range map[string]string{"/": "web", "/api/orders": "api"} {
+			got := getJSON(t, proxy+path, nil, http.StatusOK, 4*time.Minute)
+			if got["server"] != server || got["path"] != path {
+				t.Errorf("GET %s through the proxy returned %v, want server %s", path, got, server)
+			}
+		}
+	},
+	// The listener binds port 80 inside the pod: requests reach both
+	// servers, and the listener rule answers /admin/* itself.
+	"aws-load-balancer": func(t *testing.T, pod, base string, out map[string]string) {
+		servers := map[string]bool{}
+		deadline := time.Now().Add(3 * time.Minute)
+		for len(servers) < 2 && time.Now().Before(deadline) {
+			raw, err := exec.Command("docker", "exec", pod, "wget", "-qO-", "-T", "5", "http://localhost/hello").Output()
+			var v map[string]any
+			if err == nil && json.Unmarshal(raw, &v) == nil {
+				servers[fmt.Sprint(v["server"])] = true
+			}
+			time.Sleep(time.Second)
+		}
+		if len(servers) < 2 {
+			t.Errorf("load balancer reached %v, want the two servers of the Auto Scaling group", servers)
+		}
+		raw, _ := exec.Command("docker", "exec", pod, "wget", "-S", "-qO-", "-T", "5", "http://localhost/admin/x").CombinedOutput()
+		if !strings.Contains(string(raw), "403") {
+			t.Errorf("/admin/x through the load balancer: %s", raw)
+		}
+	},
+}
+
+// getJSON GETs url until it answers want or the wait is over (Lambda cold
+// starts, EC2 user data) and returns the JSON body.
+func getJSON(t *testing.T, url string, headers map[string]string, want int, wait time.Duration) map[string]any {
+	t.Helper()
+	deadline := time.Now().Add(wait)
+	for {
+		req, _ := http.NewRequestWithContext(context.Background(), http.MethodGet, url, nil)
+		for k, v := range headers {
+			req.Header.Set(k, v)
+		}
+		resp, err := http.DefaultClient.Do(req)
+		if err == nil {
+			raw, _ := io.ReadAll(resp.Body)
+			resp.Body.Close()
+			if resp.StatusCode == want {
+				var v map[string]any
+				if err := json.Unmarshal(bytes.TrimSpace(raw), &v); err != nil {
+					t.Fatalf("GET %s: %v: %s", url, err, raw)
+				}
+				return v
+			}
+			err = fmt.Errorf("status %d: %s", resp.StatusCode, raw)
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("GET %s: %v, want status %d", url, err, want)
+		}
+		time.Sleep(2 * time.Second)
+	}
 }
 
 func httpJSON(t *testing.T, method, url, body string, want int) map[string]any {

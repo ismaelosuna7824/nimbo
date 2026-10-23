@@ -91,7 +91,9 @@ function AlertDialogFooter({
     <div
       data-slot="alert-dialog-footer"
       className={cn(
-        "-mx-4 -mb-4 flex flex-col-reverse gap-2 rounded-b-xl border-t bg-muted/50 p-4 group-data-[size=sm]/alert-dialog-content:grid group-data-[size=sm]/alert-dialog-content:grid-cols-2 sm:flex-row sm:justify-end",
+        // Small dialogs: buttons share the row but grow from their own label width (flex-auto), so a long action
+        // label ("Down and delete data") gets the room it needs instead of overflowing a fixed half.
+        "-mx-4 -mb-4 flex flex-col-reverse gap-2 rounded-b-xl border-t bg-muted/50 p-4 group-data-[size=sm]/alert-dialog-content:flex-row group-data-[size=sm]/alert-dialog-content:*:flex-auto sm:flex-row sm:justify-end",
         className
       )}
       {...props}

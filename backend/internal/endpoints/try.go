@@ -221,15 +221,25 @@ func loopback(host string) bool {
 	return ip != nil && ip.IsLoopback()
 }
 
-// tryClient never follows redirects away from this machine.
+// tryClient never follows redirects away from this machine. Each request
+// opens its own connection, like curl: a reused keep-alive connection would
+// pin every Try to the pod or replica a connection-level load balancer (a
+// Kubernetes Service, Nimbo's port forward) picked first.
 var tryClient = &http.Client{
-	Timeout: tryTimeout,
+	Timeout:   tryTimeout,
+	Transport: freshTransport(),
 	CheckRedirect: func(req *http.Request, via []*http.Request) error {
 		if len(via) >= maxRedirect || !loopback(req.URL.Hostname()) {
 			return http.ErrUseLastResponse
 		}
 		return nil
 	},
+}
+
+func freshTransport() *http.Transport {
+	tr := http.DefaultTransport.(*http.Transport).Clone()
+	tr.DisableKeepAlives = true
+	return tr
 }
 
 func doHTTP(ctx context.Context, method, u string, headers map[string]string, body string) model.TryResult {

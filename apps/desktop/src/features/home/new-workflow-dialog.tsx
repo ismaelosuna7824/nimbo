@@ -1,8 +1,9 @@
 import { useMutation, useQuery } from "@tanstack/react-query"
-import { CloudIcon, FilePlus2Icon } from "lucide-react"
+import { CloudIcon, FilePlus2Icon, WaypointsIcon } from "lucide-react"
 import { useState } from "react"
 import { toast } from "sonner"
 import { CloudBadge } from "@/components/cloud"
+import { CLOUD_META } from "@/components/cloud-meta"
 import { errorMessage } from "@/components/errors"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
@@ -15,9 +16,10 @@ import { WorkflowIconTile } from "@/components/workflow-icon/workflow-icon-tile"
 import { techIcon } from "@/components/tech-icons"
 import { TechIcon } from "@/components/tech-icons/tech-icon"
 import { api } from "@/lib/api/client"
-import type { Template } from "@/lib/api/types"
+import { ALL_CLOUDS, type Cloud, type Template } from "@/lib/api/types"
 import { cn } from "@/lib/utils"
 import { useWorkflowStore } from "@/state/workflow-store"
+import { dialogKind, type Kind, patternLabel, templateSections, type TemplateFilter } from "./template-groups"
 
 const DIFFICULTY: Record<Template["difficulty"], { label: string; className: string }> = {
   beginner: { label: "Beginner", className: "bg-emerald-500/15 text-emerald-700 dark:text-emerald-300" },
@@ -39,14 +41,7 @@ export function NewWorkflowDialog() {
   )
 }
 
-type Kind = "terraform" | "docker" | "kubernetes"
-
 const BLANK_NAME: Record<Kind, string> = { terraform: "Untitled workflow", docker: "Untitled stack", kubernetes: "Untitled cluster app" }
-
-/** Workflow kind → the dialog's kind ("" Terraform). */
-function dialogKind(kind: string | undefined): Kind {
-  return kind === "docker" || kind === "kubernetes" ? kind : "terraform"
-}
 
 /** Lives inside DialogContent, so its state resets every time the dialog opens. */
 function NewWorkflowForm() {
@@ -58,6 +53,8 @@ function NewWorkflowForm() {
   const [name, setName] = useState("")
   const [nameTouched, setNameTouched] = useState(false)
   const [level, setLevel] = useState<string>("all")
+  const [filter, setFilter] = useState<TemplateFilter>("all")
+  const [cloud, setCloud] = useState<Cloud | "all">("all")
   const docker = kind === "docker"
   const kubernetes = kind === "kubernetes"
 
@@ -86,7 +83,41 @@ function NewWorkflowForm() {
     if (!nameTouched) setName("")
   }
 
-  const visible = (templates.data ?? []).filter((t) => dialogKind(t.kind) === kind && (level === "all" || t.difficulty === level))
+  const { general, edge } = templateSections(templates.data ?? [], { kind, level, filter, cloud })
+  const card = (t: Template) => (
+    <TemplateCard key={t.id} selected={choice === t.id} onSelect={() => pick(t.id)} onConfirm={() => create.mutate()} id={t.id}>
+      <div className="flex items-start justify-between gap-2">
+        <span className="flex items-center gap-2 font-medium">
+          <WorkflowIconTile icon={t.icon} size={24} />
+          {t.name}
+        </span>
+        <span className={cn("shrink-0 rounded-full px-2 py-0.5 text-[10px] font-medium", DIFFICULTY[t.difficulty]?.className)}>
+          {DIFFICULTY[t.difficulty]?.label ?? t.difficulty}
+        </span>
+      </div>
+      <p className="line-clamp-3 text-xs text-muted-foreground">{t.description}</p>
+      <div className="mt-auto flex flex-wrap items-center gap-1 pt-1">
+        {t.kind === "docker" || t.kind === "kubernetes" ? (
+          <StackIcons tags={t.tags} platform={t.kind} />
+        ) : (
+          t.cloud && <CloudBadge cloud={t.cloud} />
+        )}
+        {t.pattern && (
+          <Badge variant="outline" className="text-[10px]">
+            {patternLabel(t.pattern)}
+          </Badge>
+        )}
+        {t.tags
+          .filter((tag) => tag !== t.pattern)
+          .slice(0, t.pattern ? 2 : 3)
+          .map((tag) => (
+            <Badge key={tag} variant="secondary" className="text-[10px]">
+              {tag}
+            </Badge>
+          ))}
+      </div>
+    </TemplateCard>
+  )
 
   return (
     <>
@@ -135,8 +166,24 @@ function NewWorkflowForm() {
             onKeyDown={(e) => e.key === "Enter" && !create.isPending && create.mutate()}
           />
         </div>
-        <div className="flex items-center justify-between gap-2">
-          <span className="text-sm font-medium">Templates</span>
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <div className="flex items-center gap-2">
+            <span className="text-sm font-medium">Templates</span>
+            <ToggleGroup
+              type="single"
+              size="sm"
+              variant="outline"
+              value={filter}
+              onValueChange={(v) => v && setFilter(v as TemplateFilter)}
+              aria-label="Template group"
+            >
+              <ToggleGroupItem value="all">All</ToggleGroupItem>
+              <ToggleGroupItem value="edge-patterns" className="gap-1">
+                <WaypointsIcon />
+                Edge patterns
+              </ToggleGroupItem>
+            </ToggleGroup>
+          </div>
           <ToggleGroup type="single" size="sm" variant="outline" value={level} onValueChange={(v) => v && setLevel(v)}>
             <ToggleGroupItem value="all">All</ToggleGroupItem>
             <ToggleGroupItem value="beginner">Beginner</ToggleGroupItem>
@@ -145,49 +192,60 @@ function NewWorkflowForm() {
           </ToggleGroup>
         </div>
         <div className="-mx-1 min-h-0 flex-1 overflow-y-auto px-1 py-1">
-          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
-            <TemplateCard selected={choice === BLANK} onSelect={() => pick(BLANK)}>
-              <div className="flex items-center gap-2 font-medium">
-                <FilePlus2Icon className="size-4" />
-                {docker ? "Empty compose file" : kubernetes ? "Empty manifests" : "Blank canvas"}
-              </div>
-              <p className="text-xs text-muted-foreground">
-                {docker
-                  ? "Start with no services and add images or your own Dockerfiles from the palette."
-                  : kubernetes
-                    ? "Start with an empty k8s/ folder and add workloads, images or Helm charts from the palette."
-                    : "Start empty and drag resources in from the palette."}
-              </p>
-            </TemplateCard>
-            {templates.isPending &&
-              Array.from({ length: 5 }, (_, i) => <Skeleton key={i} className="h-32 rounded-xl" />)}
-            {visible.map((t) => (
-              <TemplateCard key={t.id} selected={choice === t.id} onSelect={() => pick(t.id)} onConfirm={() => create.mutate()} id={t.id}>
-                <div className="flex items-start justify-between gap-2">
-                  <span className="flex items-center gap-2 font-medium">
-                    <WorkflowIconTile icon={t.icon} size={24} />
-                    {t.name}
-                  </span>
-                  <span className={cn("shrink-0 rounded-full px-2 py-0.5 text-[10px] font-medium", DIFFICULTY[t.difficulty]?.className)}>
-                    {DIFFICULTY[t.difficulty]?.label ?? t.difficulty}
-                  </span>
+          {filter === "all" && (
+            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
+              <TemplateCard selected={choice === BLANK} onSelect={() => pick(BLANK)}>
+                <div className="flex items-center gap-2 font-medium">
+                  <FilePlus2Icon className="size-4" />
+                  {docker ? "Empty compose file" : kubernetes ? "Empty manifests" : "Blank canvas"}
                 </div>
-                <p className="line-clamp-3 text-xs text-muted-foreground">{t.description}</p>
-                <div className="mt-auto flex flex-wrap items-center gap-1 pt-1">
-                  {t.kind === "docker" || t.kind === "kubernetes" ? (
-                    <StackIcons tags={t.tags} platform={t.kind} />
-                  ) : (
-                    t.cloud && <CloudBadge cloud={t.cloud} />
-                  )}
-                  {t.tags.slice(0, 3).map((tag) => (
-                    <Badge key={tag} variant="secondary" className="text-[10px]">
-                      {tag}
-                    </Badge>
-                  ))}
-                </div>
+                <p className="text-xs text-muted-foreground">
+                  {docker
+                    ? "Start with no services and add images or your own Dockerfiles from the palette."
+                    : kubernetes
+                      ? "Start with an empty k8s/ folder and add workloads, images or Helm charts from the palette."
+                      : "Start empty and drag resources in from the palette."}
+                </p>
               </TemplateCard>
-            ))}
-          </div>
+              {templates.isPending &&
+                Array.from({ length: 5 }, (_, i) => <Skeleton key={i} className="h-32 rounded-xl" />)}
+              {general.map(card)}
+            </div>
+          )}
+          {(edge.length > 0 || filter === "edge-patterns" || cloud !== "all") && !templates.isPending && (
+            <section aria-label="Edge patterns" data-testid="edge-patterns" className={cn("flex flex-col gap-2", filter === "all" && "mt-5")}>
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <div>
+                  <h3 className="flex items-center gap-1.5 text-sm font-medium">
+                    <WaypointsIcon className="size-4" />
+                    Edge patterns
+                  </h3>
+                  <p className="text-xs text-muted-foreground">
+                    Reverse proxy, API gateway and load balancer: how client traffic reaches your services.
+                  </p>
+                </div>
+                {kind === "terraform" && (
+                  <ToggleGroup
+                    type="single"
+                    size="sm"
+                    variant="outline"
+                    value={cloud}
+                    onValueChange={(v) => v && setCloud(v as Cloud | "all")}
+                    aria-label="Edge patterns cloud"
+                  >
+                    <ToggleGroupItem value="all">All clouds</ToggleGroupItem>
+                    {ALL_CLOUDS.map((c) => (
+                      <ToggleGroupItem key={c} value={c}>
+                        {CLOUD_META[c].label}
+                      </ToggleGroupItem>
+                    ))}
+                  </ToggleGroup>
+                )}
+              </div>
+              <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">{edge.map(card)}</div>
+              {edge.length === 0 && <p className="text-xs text-muted-foreground">No edge pattern templates match these filters.</p>}
+            </section>
+          )}
           {templates.isError && (
             <p className="mt-3 text-sm text-destructive">Couldn't load templates: {errorMessage(templates.error)}</p>
           )}

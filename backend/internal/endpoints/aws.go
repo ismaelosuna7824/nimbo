@@ -41,6 +41,9 @@ func (b *builder) httpAPIs() {
 				}
 			}
 		}
+		// APIs defined by an OpenAPI document (body) declare their routes
+		// there.
+		routes = append(routes, openAPIRoutes(str(api, "body"))...)
 		// Quick-create APIs (target on the API) get an implicit $default
 		// stage and route.
 		if str(api, "target") != "" {
@@ -95,6 +98,30 @@ func (b *builder) httpAPIs() {
 			e.action(requestAction)
 		}
 	}
+}
+
+// openAPIRoutes lists the route keys ("GET /orders", "ANY /{proxy+}") of
+// an HTTP API's OpenAPI body, sorted; YAML or invalid bodies give none.
+func openAPIRoutes(body string) []string {
+	var doc struct {
+		Paths map[string]map[string]json.RawMessage `json:"paths"`
+	}
+	if body == "" || json.Unmarshal([]byte(body), &doc) != nil {
+		return nil
+	}
+	var out []string
+	for path, ops := range doc.Paths {
+		for op := range ops {
+			switch op = strings.ToLower(op); op {
+			case "get", "put", "post", "delete", "options", "head", "patch":
+				out = append(out, strings.ToUpper(op)+" "+path)
+			case "x-amazon-apigateway-any-method":
+				out = append(out, "ANY "+path)
+			}
+		}
+	}
+	slices.Sort(out)
+	return out
 }
 
 // routeEndpoint turns a v2 route key ("GET /items/{id}", "ANY /{proxy+}",

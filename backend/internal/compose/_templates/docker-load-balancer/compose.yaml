@@ -1,0 +1,73 @@
+# Load balancer: HAProxy is the one public address and spreads requests
+# round-robin over three replicas of the app, checking each one's /health
+# every 2 seconds; a replica that fails is taken out until it recovers.
+# Every answer names the replica (its container hostname) that served it.
+#
+# Try it:  for i in $(seq 9); do curl -s http://localhost:8188/; done   → 3 hostnames, 3 times each
+#          Stats page (this machine only): http://127.0.0.1:8404/
+
+# Settings every service shares: restart after crashes, rotated logs.
+x-defaults: &defaults
+  restart: unless-stopped
+  logging:
+    driver: json-file
+    options:
+      max-size: "10m"
+      max-file: "3"
+
+services:
+  lb:
+    <<: *defaults
+    image: haproxy:3.0-alpine
+    ports:
+      - "127.0.0.1:8188:8080"
+      # The stats page stays on this machine.
+      - "127.0.0.1:8404:8404"
+    volumes:
+      - ./lb/haproxy.cfg:/usr/local/etc/haproxy/haproxy.cfg:ro
+    networks:
+      - edge
+      - backend
+    depends_on:
+      app:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:8080/healthz >/dev/null || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+    deploy:
+      resources:
+        limits:
+          cpus: "0.5"
+          memory: 64M
+
+  app:
+    <<: *defaults
+    build:
+      context: ./backend
+    expose:
+      - "8080"
+    environment:
+      SERVICE_NAME: app
+    networks:
+      - backend
+    healthcheck:
+      test: ["CMD", "/backend", "-healthcheck"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+    deploy:
+      # HAProxy finds every replica through Docker's DNS (app → 3 addresses).
+      replicas: 3
+      resources:
+        limits:
+          cpus: "0.25"
+          memory: 32M
+
+networks:
+  # The load balancer's public side.
+  edge: {}
+  # Replicas only: reachable through the load balancer, never directly.
+  backend:
+    internal: true

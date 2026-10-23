@@ -2,9 +2,11 @@ package kubeconvert
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"testing"
 
 	"github.com/ismaelosuna7824/nimbo/backend/internal/compose"
@@ -57,7 +59,7 @@ func TestConvertedTemplatesRender(t *testing.T) {
 					t.Errorf("%s %s %q: nothing rendered", tmpl.ID, f, env)
 				}
 				if env == "prod" {
-					// Stateless Deployments scale out behind a PDB.
+					// Stateless Deployments scale out (at least 2 replicas, more if compose asks) behind a PDB.
 					pdbs, stateless := 0, 0
 					for _, o := range p.Objects {
 						if o.Kind == "PodDisruptionBudget" {
@@ -69,7 +71,7 @@ func TestConvertedTemplatesRender(t *testing.T) {
 							if strategy == nil {
 								stateless++
 							}
-							if strategy == nil && r != 2 && r != int64(2) && r != float64(2) {
+							if n, _ := strconv.Atoi(fmt.Sprint(r)); strategy == nil && n < 2 {
 								t.Errorf("%s %s prod: %s replicas %v", tmpl.ID, f, o.Name, r)
 							}
 						}

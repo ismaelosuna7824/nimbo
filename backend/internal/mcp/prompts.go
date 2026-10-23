@@ -25,7 +25,7 @@ func registerPrompts(r *registry) {
 		return fmt.Sprintf(`Build this Docker stack with the Nimbo tools: %s
 
 Steps:
-1. list_templates: if a docker-* template is close, create_workflow from it (templates are worked examples of every practice below); otherwise create_workflow kind "docker" with a short descriptive name.
+1. list_templates: if a docker-* template is close, create_workflow from it (templates are worked examples of every practice below; category "edge-patterns" has a reverse proxy, an API gateway and a load balancer); otherwise create_workflow kind "docker" with a short descriptive name.
 2. Data services first: add_service with catalog_id from list_docker_images (pinned tag, credentials moved to .env, named volume, healthcheck, published on 127.0.0.1). Then the app services: add_service build_context with a starter (node, python, go, static) or your own Dockerfile, written with get_compose + apply_terraform_code.
 3. Wire them with connect_services: depends_on with condition service_healthy on every database, cache and broker; env recipes for connection URLs (DATABASE_URL=postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@db:5432/app).
 4. Follow these practices in every file you write:
@@ -91,7 +91,7 @@ Nothing touches a real cloud: everything runs in the local Floci emulator. Tell 
 		return fmt.Sprintf(`Build this Kubernetes app with the Nimbo tools: %s
 
 Steps:
-1. list_templates: if a k8s-* template is close (web app + PostgreSQL, Kustomize dev/prod, Helm chart, microservices with Ingress + HPA, CronJob worker), create_workflow from it; with an existing docker workflow, convert_to_kubernetes; otherwise create_workflow kind "kubernetes". Several environments: Kustomize overlays/<env> or Helm values-<env>.yaml.
+1. list_templates: if a k8s-* template is close (web app + PostgreSQL, Kustomize dev/prod, Helm chart, microservices with Ingress + HPA, CronJob worker, and the "edge-patterns" reverse proxy, API gateway and load balancer), create_workflow from it; with an existing docker workflow, convert_to_kubernetes; otherwise create_workflow kind "kubernetes". Several environments: Kustomize overlays/<env> or Helm values-<env>.yaml.
 2. Add objects with add_kubernetes_object: catalog_id from list_kubernetes_catalog (image:<id> for databases and services: probes, resources, claims and a Secret already set; chart:<id> for pinned Helm charts; starters for Ingress, HPA, PDB, NetworkPolicy, ConfigMap, Secret) or your own yaml. Code you build goes in a folder with a Dockerfile, its image named <folder>:dev.
 3. Wire them with connect_kubernetes (expose, route, envFrom/volume, env, scale) and change fields with update_kubernetes_object.
 4. Follow these practices: pinned tags (local images <name>:dev + imagePullPolicy IfNotPresent); requests (cpu, memory) and a memory limit on every container; readiness and liveness probes on named ports for every container that serves a port; credentials in Secrets (secretKeyRef/envFrom), never literal env values; selectors equal to the pod template labels; Ingress backends on existing Service ports; securityContext runAsNonRoot + numeric runAsUser, automountServiceAccountToken: false when the pod never calls the API, no privileged/hostPath/hostNetwork; a Namespace object for the app; StatefulSets with volumeClaimTemplates for data and an init container that waits for dependencies (pg_isready) instead of crash-looping; prod-like environments with replicas >= 2 (or an HPA) and a PodDisruptionBudget.

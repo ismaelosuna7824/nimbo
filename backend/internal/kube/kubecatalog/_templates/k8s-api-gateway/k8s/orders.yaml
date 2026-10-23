@@ -1,0 +1,66 @@
+# The orders service: the gateway routes /orders/... here (path prefix stripped).
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: orders
+  namespace: edge-gateway
+spec:
+  selector:
+    matchLabels:
+      app: orders
+  template:
+    metadata:
+      labels:
+        app: orders
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        seccompProfile:
+          type: RuntimeDefault
+      automountServiceAccountToken: false
+      containers:
+        - name: orders
+          image: ghcr.io/stefanprodan/podinfo:6.15.0
+          command: ["./podinfo", "--port=9898", "--level=info"]
+          env:
+            # Every answer carries this message and the pod's name (hostname).
+            - name: PODINFO_UI_MESSAGE
+              value: "orders"
+          ports:
+            - name: http
+              containerPort: 9898
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: http
+            periodSeconds: 5
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            periodSeconds: 20
+          resources:
+            requests:
+              cpu: 50m
+              memory: 32Mi
+            limits:
+              memory: 128Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: orders
+  namespace: edge-gateway
+spec:
+  selector:
+    app: orders
+  ports:
+    - name: http
+      port: 80
+      targetPort: http

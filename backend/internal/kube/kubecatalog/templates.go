@@ -46,6 +46,21 @@ var templates = []template{
 		model.KubernetesModel{
 			Sources: []model.KubeSource{{Kind: model.KubeManifests, Path: "k8s"}},
 		}},
+	{model.Template{ID: "k8s-reverse-proxy", Name: "Reverse proxy (Ingress + Traefik)", Description: "The cluster's Traefik accepts every request for proxy.localhost and forwards /api to an api Service and everything else to a web Service, which stay inside the cluster; runs locally on a k3s cluster.", Difficulty: "beginner", Tags: []string{"ingress", "traefik", "reverse-proxy"},
+		Category: model.TemplateCategoryEdgePatterns, Pattern: model.PatternReverseProxy},
+		model.KubernetesModel{
+			Sources: []model.KubeSource{{Kind: model.KubeManifests, Path: "k8s"}},
+		}},
+	{model.Template{ID: "k8s-api-gateway", Name: "API gateway (Kong)", Description: "Kong in DB-less mode is the single entry point that rejects requests without an API key (401), rate limits each consumer (429) and routes /users and /orders to their Services; runs locally on a k3s cluster.", Difficulty: "intermediate", Tags: []string{"kong", "api-gateway", "manifests"},
+		Category: model.TemplateCategoryEdgePatterns, Pattern: model.PatternAPIGateway},
+		model.KubernetesModel{
+			Sources: []model.KubeSource{{Kind: model.KubeManifests, Path: "k8s"}},
+		}},
+	{model.Template{ID: "k8s-load-balancer", Name: "Load balancer (Service type LoadBalancer)", Description: "A LoadBalancer Service gives three replicas one address and spreads connections over the pods whose readiness probe passes, so a failed pod stops getting traffic; runs locally on a k3s cluster.", Difficulty: "beginner", Tags: []string{"load-balancer", "replicas", "probes"},
+		Category: model.TemplateCategoryEdgePatterns, Pattern: model.PatternLoadBalancer},
+		model.KubernetesModel{
+			Sources: []model.KubeSource{{Kind: model.KubeManifests, Path: "k8s"}},
+		}},
 }
 
 func init() {
