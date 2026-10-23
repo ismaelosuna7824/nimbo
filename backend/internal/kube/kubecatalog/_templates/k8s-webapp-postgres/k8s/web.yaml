@@ -37,6 +37,11 @@ spec:
     metadata:
       labels:
         app: web
+      # Add monitoring scrapes GET /metrics (request rate, 5xx, p95 alerts).
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "3000"
+        prometheus.io/path: /metrics
     spec:
       securityContext:
         runAsNonRoot: true

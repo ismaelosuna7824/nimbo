@@ -1852,6 +1852,20 @@ Desktop: `features/monitoring` (top bar action, command palette, dialog via
   exists. `TestHTTPAlertsPromtool` runs `promtool test rules` (pinned
   `prom/prometheus` image; skipped without Docker) on synthetic series:
   fires above, quiet below, quiet under the traffic guard.
+- **Apps measured out of the box**: the node, python and go build starters
+  (`compose/_starters`) and the APIs of `docker-node-postgres-redis`,
+  `docker-fastapi-postgres`, `docker-go-nginx` and `k8s-webapp-postgres`
+  serve `http_server_request_duration_seconds` (histogram, seconds, the
+  OpenTelemetry semconv buckets 5 ms…10 s; labels `http_request_method`,
+  `http_route` = the matched route template or "" for unmatched paths,
+  `http_response_status_code`) at `GET /metrics` on the app port, not
+  measuring `/metrics` itself (prom-client 15.1.3, prometheus-client
+  0.21.1, client_golang 1.20.5). Their compose services carry
+  `prometheus.io/scrape|port|path` labels (`compose.StarterScrapeLabels`
+  for starters added from the palette; `ServiceSpec.Labels`); the k8s web
+  pod template carries the same annotations (a PodMonitor on the port
+  number). `docker-go-nginx`'s proxy answers 404 on `/metrics` so only
+  Prometheus inside the network reads it. Existing workflows are unchanged.
 
 ### Production readiness (`internal/kube/kubeready`)
 

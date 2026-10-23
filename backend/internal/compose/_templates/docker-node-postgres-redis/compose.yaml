@@ -19,6 +19,11 @@ services:
     init: true
     ports:
       - "3100:3000"
+    # Add monitoring scrapes GET /metrics (request rate, 5xx, p95 alerts).
+    labels:
+      prometheus.io/scrape: "true"
+      prometheus.io/port: "3000"
+      prometheus.io/path: /metrics
     environment:
       DATABASE_URL: postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB}
       REDIS_URL: redis://cache:6379

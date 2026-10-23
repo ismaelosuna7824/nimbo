@@ -4,6 +4,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -123,4 +124,51 @@ func TestMonitoringThresholdsPersist(t *testing.T) {
 		t.Fatalf("thresholds %+v, want %+v", res.Summary.Thresholds, want)
 	}
 	e.mustCall(http.StatusBadRequest, "POST", "/workflows/"+wf.ID+"/monitoring", map[string]any{"thresholds": map[string]any{"errorPercent": 150}}, nil)
+}
+
+// Services built from the node, python and go starters, and the API of
+// the app templates, serve the HTTP histogram Add monitoring alerts on and
+// carry the scrape labels: monitoring marks them HTTP-covered (otel).
+func TestStartersAndTemplatesAreHTTPCovered(t *testing.T) {
+	e := newEnv(t)
+	wf := e.createDocker(map[string]string{"kind": "docker", "name": "starters"})
+	for _, starter := range []string{"node", "python", "go", "static"} {
+		e.mustCall(http.StatusCreated, "POST", "/workflows/"+wf.ID+"/compose/services", map[string]any{"name": starter, "build": map[string]string{"context": starter, "starter": starter}}, nil)
+	}
+	compose := e.file(wf.ID, "compose.yaml")
+	if n := strings.Count(compose, `prometheus.io/scrape: "true"`); n != 3 || !strings.Contains(compose, `prometheus.io/port: "8080"`) {
+		t.Fatalf("%d services labelled for scraping:\n%s", n, compose)
+	}
+	for _, f := range []string{"node/server.js", "python/app.py", "go/main.go"} {
+		src := e.file(wf.ID, f)
+		for _, s := range []string{"http_server_request_duration_seconds", "http_response_status_code", "http_route", "/metrics"} {
+			if !strings.Contains(src, s) {
+				t.Errorf("%s lacks %s", f, s)
+			}
+		}
+	}
+	covered := func(id string) map[string][]string {
+		var sum model.MonitoringSummary
+		e.mustCall(http.StatusOK, "GET", "/workflows/"+id+"/monitoring", nil, &sum)
+		out := map[string][]string{}
+		for _, h := range sum.HTTP {
+			out[h.Target] = h.Sources
+		}
+		return out
+	}
+	got := covered(wf.ID)
+	for _, s := range []string{"node", "python", "go"} {
+		if !slices.Equal(got[s], []string{monitoring.SourceOTel}) {
+			t.Errorf("%s sources %v", s, got[s])
+		}
+	}
+	if len(got["static"]) != 0 {
+		t.Errorf("static (no metrics) sources %v", got["static"])
+	}
+	for _, tmpl := range []string{"docker-node-postgres-redis", "docker-fastapi-postgres", "docker-go-nginx"} {
+		w := e.createDocker(map[string]string{"templateId": tmpl})
+		if got := covered(w.ID); !slices.Equal(got["api"], []string{monitoring.SourceOTel}) {
+			t.Errorf("%s api sources %v", tmpl, got["api"])
+		}
+	}
 }

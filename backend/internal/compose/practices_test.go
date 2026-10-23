@@ -217,6 +217,35 @@ ENTRYPOINT ["/app"]
 	}
 }
 
+func TestDependsCompletedOnAServer(t *testing.T) {
+	p := open(t, map[string]string{
+		"compose.yaml": `services:
+  collector:
+    image: otel/opentelemetry-collector-contrib:0.109.0
+    restart: unless-stopped
+    depends_on:
+      cache: {condition: service_completed_successfully}
+      seed: {condition: service_completed_successfully}
+  cache:
+    image: redis:7-alpine
+    restart: unless-stopped
+  seed:
+    image: alpine:3.20
+    restart: "no"
+`,
+	})
+	var got []string
+	for _, d := range p.Diagnostics {
+		if d.Code == "dk_depends_completed" {
+			got = append(got, string(d.Severity)+"@"+d.File+":"+itoa(d.Line))
+		}
+	}
+	// The cache never exits; the seed job does.
+	if want := []string{"error@compose.yaml:6"}; !slices.Equal(got, want) {
+		t.Errorf("dk_depends_completed = %v, want %v", got, want)
+	}
+}
+
 func TestPracticesBuildTargetOfAToolchainStage(t *testing.T) {
 	p := open(t, map[string]string{
 		"compose.yaml":   "services:\n  api:\n    build: {context: ./api, target: builder}\n    restart: unless-stopped\n",

@@ -15,6 +15,11 @@ services:
     build: ./api
     ports:
       - "8100:8000"
+    # Add monitoring scrapes GET /metrics (request rate, 5xx, p95 alerts).
+    labels:
+      prometheus.io/scrape: "true"
+      prometheus.io/port: "8000"
+      prometheus.io/path: /metrics
     environment:
       DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB}
     depends_on:

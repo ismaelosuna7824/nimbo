@@ -160,10 +160,20 @@ func (p *Project) servicePractices(name string, s types.ServiceConfig, dependent
 			"Rotate it: logging: {driver: json-file, options: {max-size: \"10m\", max-file: \"3\"}} (or driver: local).")
 	}
 
-	// Waiting for data services.
+	// Waiting for data services; waiting for a server to "complete".
 	for _, dep := range sortedKeys(s.DependsOn) {
 		target, ok := p.Model.Services[dep]
-		if !ok || s.DependsOn[dep].Condition != types.ServiceConditionStarted {
+		if !ok {
+			continue
+		}
+		if s.DependsOn[dep].Condition == types.ServiceConditionCompletedSuccessfully && LongRunning(target, p.hasHealthcheck(target)) {
+			file, line := p.refLine(name, "depends_on", dep)
+			p.diag(model.SeverityError, "dk_depends_completed", file, line, id,
+				fmt.Sprintf("%s waits for %s to complete, but %s is a server that keeps running: %s never starts and docker compose up hangs", name, dep, dep, name),
+				fmt.Sprintf("Use depends_on: {%s: {condition: service_healthy}} (or service_started), or drop the dependency if %s doesn't call %s.", dep, name, dep))
+			continue
+		}
+		if s.DependsOn[dep].Condition != types.ServiceConditionStarted {
 			continue
 		}
 		if dd := dataServiceOf(target.Image); dd != nil && p.hasHealthcheck(target) {
@@ -530,6 +540,20 @@ func PublishIP(image string) string {
 		return "127.0.0.1"
 	}
 	return ""
+}
+
+// LongRunning tells a server from a one-off job: a restart policy that brings it back after it
+// exits, a healthcheck, published ports or a data image all mean it is not meant to exit, so
+// service_completed_successfully on it never holds.
+func LongRunning(s types.ServiceConfig, healthcheck bool) bool {
+	switch s.Restart {
+	case types.RestartPolicyAlways, types.RestartPolicyUnlessStopped:
+		return true
+	}
+	if s.Deploy != nil && s.Deploy.RestartPolicy != nil && s.Deploy.RestartPolicy.Condition == "any" {
+		return true
+	}
+	return healthcheck || len(s.Ports) > 0 || dataServiceOf(s.Image) != nil
 }
 
 // dataServiceOf recognizes an image that holds data (nil otherwise): the

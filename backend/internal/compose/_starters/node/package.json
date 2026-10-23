@@ -3,5 +3,7 @@
   "version": "1.0.0",
   "private": true,
   "main": "server.js",
-  "dependencies": {}
+  "dependencies": {
+    "prom-client": "15.1.3"
+  }
 }

@@ -19,11 +19,15 @@ export const HTTP_SOURCES: Record<MonitoringHTTPSource, { label: string; hint: s
 }
 
 /** How many targets have request metrics, and the requirements of the sources in use. */
-export function httpCoverage(http: MonitoringHTTP[]): { measured: number; notes: string[] } {
+export function httpCoverage(http: MonitoringHTTP[], kind: MonitoringSummary["kind"]): { measured: number; notes: string[] } {
   const used = new Set(http.flatMap((h) => h.sources))
   const notes = [...used].map((s) => HTTP_SOURCES[s].note).filter((n): n is string => !!n)
   if (http.some((h) => h.sources.length === 0))
-    notes.push("Targets without request metrics get no HTTP alert: route them through an Ingress or expose OpenTelemetry HTTP metrics on a scraped port.")
+    notes.push(
+      kind === "kubernetes"
+        ? "Targets without request metrics get no HTTP alert: route them through an Ingress or expose OpenTelemetry HTTP metrics on a scraped port."
+        : 'Services without request metrics get no HTTP alert (cAdvisor still covers their CPU, memory, network and restarts): serve http_server_request_duration_seconds on a port, label the service prometheus.io/scrape: "true" and prometheus.io/port, then Update monitoring.',
+    )
   return { measured: http.filter((h) => h.sources.length > 0).length, notes }
 }
 

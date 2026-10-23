@@ -1,8 +1,10 @@
 import os
+import time
 from contextlib import asynccontextmanager
 
 import psycopg
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request, Response
+from prometheus_client import CONTENT_TYPE_LATEST, Histogram, generate_latest
 from pydantic import BaseModel
 
 DATABASE_URL = os.environ["DATABASE_URL"]
@@ -22,6 +24,37 @@ async def lifespan(_app: FastAPI):
 
 
 app = FastAPI(title="items", lifespan=lifespan)
+
+# HTTP server metrics named after the OpenTelemetry semantic conventions
+# (http.server.request.duration in seconds), served at GET /metrics for
+# Prometheus (compose labels prometheus.io/*).
+REQUEST_DURATION = Histogram(
+    "http_server_request_duration_seconds",
+    "Duration of HTTP server requests.",
+    ["http_request_method", "http_route", "http_response_status_code"],
+    buckets=(0.005, 0.01, 0.025, 0.05, 0.075, 0.1, 0.25, 0.5, 0.75, 1, 2.5, 5, 7.5, 10),
+)
+
+
+@app.middleware("http")
+async def measure(request: Request, call_next):
+    if request.url.path == "/metrics":
+        return await call_next(request)  # not measured itself
+    start = time.perf_counter()
+    status = 500  # an unhandled exception is a 500 for the client
+    try:
+        response = await call_next(request)
+        status = response.status_code
+        return response
+    finally:
+        # The route template ("/items"), not the URL: no per-path cardinality.
+        route = getattr(request.scope.get("route"), "path", "")
+        REQUEST_DURATION.labels(request.method, route, str(status)).observe(time.perf_counter() - start)
+
+
+@app.get("/metrics", include_in_schema=False)
+def metrics():
+    return Response(generate_latest(), media_type=CONTENT_TYPE_LATEST)
 
 
 class ItemIn(BaseModel):

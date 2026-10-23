@@ -23,14 +23,23 @@ describe("alertsByTarget", () => {
 
 describe("httpCoverage", () => {
   test("counts measured targets and explains the sources' requirements", () => {
-    const cov = httpCoverage([
-      { target: "shop/Deployment/web", sources: ["traefik", "ingress-nginx"] },
-      { target: "shop/Deployment/worker", sources: [] },
-    ])
+    const cov = httpCoverage(
+      [
+        { target: "shop/Deployment/web", sources: ["traefik", "ingress-nginx"] },
+        { target: "shop/Deployment/worker", sources: [] },
+      ],
+      "kubernetes",
+    )
     expect(cov.measured).toBe(1)
     expect(cov.notes).toHaveLength(2)
     expect(cov.notes[0]).toContain("controller.metrics.enabled")
-    expect(httpCoverage([{ target: "api", sources: ["traefik"] }]).notes).toEqual([])
+    expect(httpCoverage([{ target: "api", sources: ["traefik"] }], "kubernetes").notes).toEqual([])
+  })
+  test("docker never mentions Ingresses: labels and cAdvisor instead", () => {
+    const [note] = httpCoverage([{ target: "db", sources: [] }], "docker").notes
+    expect(note).not.toContain("Ingress")
+    expect(note).toContain("prometheus.io/scrape")
+    expect(note).toContain("cAdvisor")
   })
 })
 

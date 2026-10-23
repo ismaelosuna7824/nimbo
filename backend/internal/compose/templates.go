@@ -4,6 +4,7 @@ import (
 	"embed"
 	"io/fs"
 	"path"
+	"strconv"
 	"strings"
 
 	"github.com/ismaelosuna7824/nimbo/backend/internal/model"
@@ -60,6 +61,21 @@ func StarterFiles(name string) (map[string][]byte, int, bool) {
 		return nil, 0, false
 	}
 	return readTree("_starters/" + name), port, true
+}
+
+// metricsStarters serve HTTP server metrics at GET /metrics on their port
+// (http_server_request_duration_seconds, the OpenTelemetry HTTP semantic
+// conventions in Prometheus form), which Add monitoring scrapes and alerts on.
+var metricsStarters = map[string]bool{"node": true, "python": true, "go": true}
+
+// StarterScrapeLabels are the prometheus.io/* labels of a service built
+// from starter (nil when the starter serves no metrics).
+func StarterScrapeLabels(starter string) map[string]string {
+	port := Starters[starter]
+	if !metricsStarters[starter] || port == 0 {
+		return nil
+	}
+	return map[string]string{"prometheus.io/scrape": "true", "prometheus.io/port": strconv.Itoa(port), "prometheus.io/path": "/metrics"}
 }
 
 func readTree(root string) map[string][]byte {

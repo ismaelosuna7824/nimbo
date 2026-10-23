@@ -3,6 +3,7 @@ package compose
 import (
 	"encoding/json"
 	"fmt"
+	"maps"
 	"os"
 	"path"
 	"regexp"
@@ -251,6 +252,8 @@ type ServiceSpec struct {
 	// Init runs the command under Docker's init (tini): signals reach
 	// node/python and zombies are reaped.
 	Init bool
+	// Labels are the service's labels (written sorted).
+	Labels map[string]string
 }
 
 // BuildSpec is a service's build section.
@@ -327,6 +330,15 @@ func (e *Editor) AddService(spec ServiceSpec) error {
 	}
 	if spec.Init {
 		addKV("init", &yaml.Node{Kind: yaml.ScalarNode, Tag: "!!bool", Value: "true"})
+	}
+	if len(spec.Labels) > 0 {
+		m := &yaml.Node{Kind: yaml.MappingNode}
+		for _, k := range slices.Sorted(maps.Keys(spec.Labels)) {
+			v := Str(spec.Labels[k])
+			v.Style = yaml.DoubleQuotedStyle
+			m.Content = append(m.Content, Str(k), v)
+		}
+		addKV("labels", m)
 	}
 	if spec.Restart != "" {
 		addKV("restart", Str(spec.Restart))

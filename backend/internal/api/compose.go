@@ -332,6 +332,8 @@ func (s *Server) addComposeService(w http.ResponseWriter, r *http.Request) error
 				}
 				// node and python ignore SIGTERM as PID 1: run them under Docker's init.
 				spec.Init = starter == "node" || starter == "python"
+				// The starter serves HTTP metrics at /metrics: Add monitoring scrapes it.
+				spec.Labels = compose.StarterScrapeLabels(starter)
 			}
 			b.Starter = ""
 			if b.Context != "." && !strings.HasPrefix(b.Context, "../") {
@@ -550,6 +552,12 @@ func connectRecipes(p *compose.Project, from, to string) ([]connectRecipe, error
 			desc += " " + to + " has no healthcheck yet: add one, or it never becomes healthy."
 		}
 		out = append(out, connectRecipe{ID: "depends_on_healthy", Kind: "depends_on", Condition: "service_healthy", Label: "Wait until " + to + " is healthy", Description: desc})
+		// Jobs (migrations, seeds) that run once and exit: the other two conditions start the dependent
+		// while they still run. Not offered for servers: they never complete, so the dependent would never start.
+		if !compose.LongRunning(dst, healthy) {
+			out = append(out, connectRecipe{ID: "depends_on_completed", Kind: "depends_on", Condition: "service_completed_successfully", Label: "Wait until " + to + " completes",
+				Description: fmt.Sprintf("%s starts once %s has run and exited with code 0 (depends_on condition: service_completed_successfully): for one-off jobs like migrations or seeds.", from, to)})
+		}
 		if im, found := compose.ImageFor(dst.Image); found && len(im.Connect) > 0 {
 			// Values as written: a password read from .env stays ${VAR}.
 			env := map[string]string{}

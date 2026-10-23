@@ -121,6 +121,16 @@ func TestDockerGraphEditing(t *testing.T) {
 	if got := e.file(id, "compose.yaml"); !strings.Contains(got, "DATABASE_URL: postgres://app:${DB_POSTGRES_PASSWORD}@db:5432/app") || !strings.Contains(got, "condition: service_healthy") {
 		t.Fatalf("compose:\n%s", got)
 	}
+	// db is a server: it never completes, so "wait until it completes" isn't offered.
+	e.mustCall(http.StatusBadRequest, "POST", "/workflows/"+id+"/compose/connect", map[string]string{"from": "api", "to": "service:db", "recipeId": "depends_on_completed"}, nil)
+	// A one-off job (no restart policy, healthcheck, ports or data image) is.
+	e.mustCall(http.StatusCreated, "POST", "/workflows/"+id+"/compose/services", map[string]any{"image": "alpine:3.20", "name": "migrate"}, &res)
+	e.mustCall(http.StatusOK, "PATCH", "/workflows/"+id+"/compose/services/migrate", map[string]any{"restart": "no"}, &wf)
+	e.mustCall(http.StatusOK, "POST", "/workflows/"+id+"/compose/connect", map[string]string{"from": "api", "to": "service:migrate", "recipeId": "depends_on_completed"}, &wf)
+	if got := e.file(id, "compose.yaml"); !strings.Contains(got, "condition: service_completed_successfully") {
+		t.Fatalf("compose:\n%s", got)
+	}
+	e.mustCall(http.StatusOK, "DELETE", "/workflows/"+id+"/compose/services/migrate", nil, &wf)
 	e.mustCall(http.StatusOK, "PATCH", "/workflows/"+id+"/compose/services/api", map[string]any{"name": "backend", "restart": "unless-stopped"}, &wf)
 	var pos *model.Position
 	for _, n := range wf.Compose.Graph.Nodes {

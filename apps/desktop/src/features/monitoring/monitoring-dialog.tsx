@@ -75,7 +75,7 @@ function MonitoringBody({ workflow, onDone }: { workflow: Workflow; onDone: () =
         <DialogDescription>
           {kube
             ? "Metrics, alerts and dashboards for this workflow's workloads: the kube-prometheus-stack chart in the monitoring namespace, plus alerts, scrape targets and a dashboard generated from your workloads."
-            : "Metrics, alerts and dashboards for every service: Prometheus, Grafana and cAdvisor in their own compose file (monitoring/compose.yaml); your services stay as they are."}
+            : "Metrics, alerts and dashboards for every service: Prometheus, Grafana and cAdvisor in their own compose file (monitoring/compose.yaml); your services stay as they are. cAdvisor already measures every container (CPU, memory, network, restarts) for the container alerts and the Containers dashboard."}
           {added &&
             !done &&
             (kube
@@ -175,14 +175,19 @@ function Preview({
           <span className="text-muted-foreground">{summary.kind === "kubernetes" ? "requested on the cluster" : "reserved on Docker"}</span>
         </p>
       </Section>
-      <Section title={`Alerts (${summary.alerts.length})`}>
+      <Section title={`Alert rules (${summary.alerts.length})`}>
+        <p className="text-[11px] text-muted-foreground">
+          Rules Prometheus evaluates, not alerts firing now: each one fires only when its condition holds (e.g. ContainerDown when a
+          container stops). Live alerts are in Prometheus and Grafana.
+        </p>
         <ul className="flex flex-col gap-1">
           {groups.map((g) => (
             <li key={g.target} className="flex flex-wrap items-center gap-1">
               <span className="mr-1 font-mono text-xs">{g.target}</span>
               {g.alerts.map((a) => (
-                <Badge key={a.name} variant={a.severity === "critical" ? "destructive" : "secondary"} className="text-[10px]" title={a.summary}>
+                <Badge key={a.name} variant="outline" className="gap-1 text-[10px]" title={`${a.severity}: ${a.summary}`}>
                   {a.name}
+                  {a.severity === "critical" && <span className="text-[9px] font-normal text-muted-foreground uppercase">critical</span>}
                 </Badge>
               ))}
             </li>
@@ -201,10 +206,9 @@ function Preview({
           </ul>
         ) : (
           <p className="text-xs text-muted-foreground">
-            None declared: container metrics only.{" "}
             {summary.kind === "kubernetes"
-              ? "Name a Service port metrics (or annotate it prometheus.io/scrape) to scrape your app."
-              : 'Label a service prometheus.io/scrape: "true" (and prometheus.io/port) to scrape your app.'}
+              ? "None declared: container metrics only. Name a Service port metrics (or annotate it prometheus.io/scrape) to scrape your app."
+              : 'None declared: cAdvisor still covers every container (CPU, memory, network, restarts). For HTTP 5xx and p95 alerts, serve HTTP metrics on a port, label the service prometheus.io/scrape: "true" and prometheus.io/port (prometheus.io/path, default /metrics), then Update monitoring.'}
           </p>
         )}
       </Section>
@@ -231,7 +235,7 @@ function HttpSection({
   thresholds: Partial<MonitoringThresholds>
   onThresholds: (t: Partial<MonitoringThresholds>) => void
 }) {
-  const cov = httpCoverage(summary.http)
+  const cov = httpCoverage(summary.http, summary.kind)
   return (
     <Section title={`HTTP alerts (${cov.measured} of ${summary.http.length} ${summary.kind === "kubernetes" ? "workloads" : "services"})`}>
       <ul className="flex flex-col gap-1" data-testid="monitoring-http">

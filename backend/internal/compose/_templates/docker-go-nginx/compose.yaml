@@ -38,6 +38,11 @@ services:
       context: ./api
     expose:
       - "8080"
+    # Add monitoring scrapes GET /metrics (request rate, 5xx, p95 alerts).
+    labels:
+      prometheus.io/scrape: "true"
+      prometheus.io/port: "8080"
+      prometheus.io/path: /metrics
     environment:
       GREETING: Hello from Go
     healthcheck:
