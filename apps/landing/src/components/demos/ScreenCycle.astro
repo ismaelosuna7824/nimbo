@@ -1,0 +1,107 @@
+---
+/**
+ * Two real app captures that cross-fade on a loop, with a segmented label in the title bar saying which one shows.
+ * Every image is shown at the first one's aspect ratio (cover, anchored top-left) so the frame never jumps.
+ */
+import type { ImageMetadata } from "astro"
+import { Image } from "astro:assets"
+import type { Lang } from "../../i18n"
+import DemoFrame from "./ui/DemoFrame.astro"
+
+interface Props {
+  /** Demo id (data-demo); must be listed in this component's script. */
+  id: "docker" | "kubernetes"
+  lang: Lang
+  /** Accessible description of both captures. */
+  label: string
+  title: string
+  shots: readonly [{ src: ImageMetadata; label: string }, { src: ImageMetadata; label: string }]
+  class?: string
+}
+
+const { id, lang, label, title, shots, class: className } = Astro.props
+const sizes = "(min-width: 1280px) 600px, (min-width: 1024px) 46vw, 92vw"
+const widths = [640, 960, 1280, 1800]
+const aspect = `${shots[0].src.width} / ${shots[0].src.height}`
+---
+
+<DemoFrame id={id} lang={lang} label={label} title={title} class={className}>
+  <span slot="chrome-end" class="seg" data-state="1" data-state0="0">
+    <span class="seg-0">{shots[0].label}</span>
+    <span class="seg-1">{shots[1].label}</span>
+  </span>
+  <div class="shots" data-state="1" data-state0="0" style={{ aspectRatio: aspect }}>
+    {
+      shots.map((s, i) => (
+        <Image src={s.src} alt="" widths={widths} sizes={sizes} format="webp" quality={82} loading="lazy" class={`shot shot-${i}`} />
+      ))
+    }
+  </div>
+</DemoFrame>
+
+<style>
+  .seg {
+    display: inline-flex;
+    margin-left: auto;
+    padding: 2px;
+    border: 1px solid var(--color-border-strong);
+    border-radius: 7px;
+    font-size: 10.5px;
+  }
+  .seg span {
+    padding: 1px 8px;
+    border-radius: 5px;
+    color: var(--color-muted);
+    white-space: nowrap;
+    transition:
+      background 0.35s,
+      color 0.35s;
+  }
+  .seg[data-state="0"] .seg-0,
+  .seg[data-state="1"] .seg-1 {
+    background: var(--color-primary-strong);
+    color: #fff;
+  }
+  .shots {
+    display: grid;
+    overflow: hidden;
+    background: #0a0a0b;
+  }
+  .shots :global(.shot) {
+    grid-area: 1 / 1;
+    display: block;
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    object-position: left top;
+    transition: opacity 0.6s ease;
+  }
+  .shots[data-state="0"] :global(.shot-1),
+  .shots[data-state="1"] :global(.shot-0) {
+    opacity: 0;
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .seg span,
+    .shots :global(.shot) {
+      transition: none;
+    }
+  }
+  /* Narrow frames (phones): the view switch needs the title's room. */
+  @container (max-width: 560px) {
+    :global([data-demo="docker"] .demo-title),
+    :global([data-demo="kubernetes"] .demo-title) {
+      display: none;
+    }
+  }
+</style>
+
+<script>
+  import { mountDemo } from "./lib/timeline"
+
+  for (const id of ["docker", "kubernetes"]) {
+    mountDemo(id, (tl) => {
+      tl.state(3200, ".seg, .shots", "1")
+      return { length: 8400 }
+    })
+  }
+</script>

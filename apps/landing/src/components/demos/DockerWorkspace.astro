@@ -1,0 +1,28 @@
+---
+/** A compose stack running in Nimbo, then its load test with the bottleneck verdict. */
+import type { Lang } from "../../i18n"
+import loadTest from "../../assets/screens/docker-loadtest.png"
+import running from "../../assets/screens/docker-running.png"
+import { demoStrings } from "./lib/strings"
+import ScreenCycle from "./ScreenCycle.astro"
+
+interface Props {
+  lang: Lang
+  class?: string
+}
+
+const { lang, class: className } = Astro.props
+const s = demoStrings(lang).docker
+---
+
+<ScreenCycle
+  id="docker"
+  lang={lang}
+  label={s.label}
+  title={s.windowTitle}
+  class={className}
+  shots={[
+    { src: running, label: s.running },
+    { src: loadTest, label: s.loadTest },
+  ]}
+/>

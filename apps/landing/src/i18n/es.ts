@@ -4,7 +4,7 @@ export const es: Strings = {
   meta: {
     title: "Nimbo — Diseña, despliega y prueba bajo carga infraestructura cloud en tu laptop",
     description:
-      "Nimbo es una app de escritorio gratuita para diseñar infraestructura cloud conectando nodos, exportar o importar Terraform, desplegar en una nube local privada (AWS, Azure, GCP, OCI) y hacerle pruebas de carga, sin tocar una cuenta real.",
+      "Nimbo es una app de escritorio gratuita para diseñar infraestructura cloud conectando nodos, exportar o importar Terraform, desplegar en una nube local privada (AWS, Azure, GCP, OCI), levantar proyectos de Docker Compose y Kubernetes en tu máquina y hacerles pruebas de carga, sin tocar una cuenta real.",
     ogImageAlt: "La mascota de Nimbo junto al titular: Diseña, despliega y prueba bajo carga infraestructura cloud en tu laptop.",
   },
   a11y: {
@@ -35,7 +35,7 @@ export const es: Strings = {
     eyebrow: "Un ADE local para infraestructura cloud",
     titleStart: "Diseña, despliega y prueba bajo carga tu infraestructura cloud",
     titleAccent: "en tu laptop.",
-    sub: "Arrastra y conecta recursos de AWS, Azure, Google Cloud y OCI, obtén Terraform limpio, ejecútalo en una nube local privada y mira cómo aguanta el tráfico. Nada toca tu cuenta real ni tu factura.",
+    sub: "Arrastra y conecta recursos de AWS, Azure, Google Cloud y OCI, o abre tu docker-compose y tus manifiestos de Kubernetes; obtén código limpio, ejecútalo en tu máquina y mira cómo aguanta el tráfico. Nada toca tu cuenta real ni tu factura.",
     downloadFor: "Descargar para {os}",
     download: "Descargar Nimbo",
     downloadDesktop: "Consíguelo para tu computadora",
@@ -82,6 +82,26 @@ export const es: Strings = {
           "Security groups, tablas de rutas y gateways integrados en las tarjetas que los usan",
           "Los módulos se expanden en sus servicios, también en proyectos importados",
           "Exporta a PNG (hasta 4×) o SVG para tus docs, revisiones y presentaciones",
+        ],
+      },
+      docker: {
+        eyebrow: "Workspaces de Docker",
+        title: "Tu archivo compose, como un diagrama que corre.",
+        body: "Abre o crea un proyecto de docker-compose: los archivos compose y los Dockerfiles siguen siendo la fuente de verdad. Los servicios aparecen con el icono de su tecnología, lo que editas en el lienzo vuelve al YAML sin perder tus comentarios, y Deploy ejecuta docker compose up con estado y logs en vivo.",
+        bullets: [
+          "168 imágenes con versión fija, health checks y datos de conexión",
+          "Buenas prácticas con correcciones de un clic: multi-stage, imágenes ligeras, sin root, health checks",
+          "Pruebas de carga con CPU y memoria en vivo por contenedor y el cuello de botella señalado",
+        ],
+      },
+      kubernetes: {
+        eyebrow: "Workspaces de Kubernetes",
+        title: "Manifiestos, Kustomize y Helm, en un clúster propio.",
+        body: "Cada workflow tiene un clúster k3s local en un solo contenedor de Docker; tu ~/.kube/config nunca se toca. Nimbo construye tus imágenes, aplica los manifiestos o instala el chart, y muestra rollouts, pods, logs, port-forwards y URLs del Ingress.",
+        bullets: [
+          "Los overlays y archivos de values se vuelven entornos",
+          "Autocompletado y revisiones desde el esquema de Kubernetes, con correcciones de un clic",
+          "Convert to Kubernetes: un proyecto compose se vuelve manifiestos, Kustomize o un chart de Helm",
         ],
       },
       sandbox: {

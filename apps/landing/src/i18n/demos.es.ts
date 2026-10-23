@@ -14,6 +14,8 @@ export const demosEs: DemoStrings = {
     connections: "Conexiones a servicios desplegados",
     modes: "Modos Guiado y Pro",
     architecture: "Vistas Build y Architecture",
+    docker: "Workspaces de Docker",
+    kubernetes: "Workspaces de Kubernetes",
   },
   common: {
     local: "Local",
@@ -157,6 +159,20 @@ export const demosEs: DemoStrings = {
     windowTitle: "Orders pipeline",
     build: "Build",
     architecture: "Architecture",
+  },
+  docker: {
+    label:
+      "Una API en Node.js con PostgreSQL y Redis desde un archivo compose, corriendo en Nimbo: tarjetas de servicio con el icono de su tecnología, estado sano, CPU y memoria en vivo, flechas de depends_on y volúmenes. Después su prueba de carga: las peticiones suben a 1,000 por segundo y el veredicto dice que la api llegó al 99% de su límite de 0.25 CPU a 717 peticiones por segundo, limitada por CPU, mientras la base de datos y la caché siguen bajas.",
+    windowTitle: "Notes API · compose.yaml",
+    running: "Corriendo",
+    loadTest: "Prueba de carga",
+  },
+  kubernetes: {
+    label:
+      "Una app de Kubernetes corriendo en su clúster k3s local en Nimbo: un Ingress enruta a los Services y Deployments de frontend y backend, escalados por HorizontalPodAutoscalers, con un Deployment de Redis, pods y CPU en vivo. Después el diálogo Convert to Kubernetes que convierte un proyecto compose en un chart de Helm, con el mapeo de cada ajuste de compose a objetos de Kubernetes.",
+    windowTitle: "Shop on Kubernetes",
+    cluster: "Clúster local",
+    convert: "Compose → K8s",
   },
   modes: {
     label:

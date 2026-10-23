@@ -2,7 +2,7 @@ export const en = {
   meta: {
     title: "Nimbo — Design, deploy and load-test cloud infrastructure on your laptop",
     description:
-      "Nimbo is a free desktop app to design cloud infrastructure by connecting nodes, export or import Terraform, deploy to a private local cloud (AWS, Azure, GCP, OCI) and load-test it — without touching a real account.",
+      "Nimbo is a free desktop app to design cloud infrastructure by connecting nodes, export or import Terraform, deploy to a private local cloud (AWS, Azure, GCP, OCI), run Docker Compose and Kubernetes projects on your machine and load-test it all — without touching a real account.",
     ogImageAlt: "Nimbo mascot next to the headline: Design, deploy and load-test cloud infrastructure on your laptop.",
   },
   a11y: {
@@ -33,7 +33,7 @@ export const en = {
     eyebrow: "A local ADE for cloud infrastructure",
     titleStart: "Design, deploy and load-test cloud infrastructure",
     titleAccent: "on your laptop.",
-    sub: "Drag and connect resources from AWS, Azure, Google Cloud and OCI, get clean Terraform out of it, run it in a private local cloud and see how it holds up under traffic. Nothing touches your real account — or your bill.",
+    sub: "Drag and connect resources from AWS, Azure, Google Cloud and OCI, or open your docker-compose and Kubernetes manifests; get clean code out of it, run it on your machine and see how it holds up under traffic. Nothing touches your real account — or your bill.",
     downloadFor: "Download for {os}",
     download: "Download Nimbo",
     downloadDesktop: "Get it for your computer",
@@ -80,6 +80,26 @@ export const en = {
           "Security groups, route tables and gateways folded into the cards that use them",
           "Modules expanded into their services, imported projects included",
           "Export to PNG (up to 4×) or SVG for docs, reviews and slides",
+        ],
+      },
+      docker: {
+        eyebrow: "Docker workspaces",
+        title: "Your compose file, as a diagram that runs.",
+        body: "Open or create a docker-compose project: the compose files and Dockerfiles stay the source of truth. Services show up with their technology's icon, edits on the canvas go back into the YAML with your comments kept, and Deploy runs docker compose up with live state and logs.",
+        bullets: [
+          "168 images with pinned tags, health checks and connection settings",
+          "Best-practice checks with quick fixes: multi-stage builds, slim bases, non-root, health checks",
+          "Load tests with live CPU and memory per container and a bottleneck verdict",
+        ],
+      },
+      kubernetes: {
+        eyebrow: "Kubernetes workspaces",
+        title: "Manifests, Kustomize and Helm, on a cluster of its own.",
+        body: "Each workflow gets a local k3s cluster in a single Docker container — your ~/.kube/config is never touched. Nimbo builds your images, applies the manifests or installs the chart, and shows rollouts, pods, logs, port-forwards and Ingress URLs.",
+        bullets: [
+          "Overlays and values files become environments",
+          "Completion and checks from the Kubernetes schema, with quick fixes",
+          "Convert to Kubernetes: a compose project becomes manifests, Kustomize or a Helm chart",
         ],
       },
       sandbox: {

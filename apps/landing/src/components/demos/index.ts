@@ -7,10 +7,12 @@ import AgentMCP from "./AgentMCP.astro";
 import ArchitectureViews from "./ArchitectureViews.astro";
 import ConnectRecipe from "./ConnectRecipe.astro";
 import Connections from "./Connections.astro";
+import DockerWorkspace from "./DockerWorkspace.astro";
 import EndpointsTry from "./EndpointsTry.astro";
 import FlowSteps from "./FlowSteps.astro";
 import GuidedPro from "./GuidedPro.astro";
 import HeroCanvas from "./HeroCanvas.astro";
+import KubernetesWorkspace from "./KubernetesWorkspace.astro";
 import LoadTestLive from "./LoadTestLive.astro";
 import LocalCloud from "./LocalCloud.astro";
 import TerraformBothWays from "./TerraformBothWays.astro";
@@ -21,6 +23,8 @@ export const demos = [
   { id: "design", component: ConnectRecipe, titleKey: "design" },
   { id: "terraform", component: TerraformBothWays, titleKey: "terraform" },
   { id: "architecture", component: ArchitectureViews, titleKey: "architecture" },
+  { id: "docker", component: DockerWorkspace, titleKey: "docker" },
+  { id: "kubernetes", component: KubernetesWorkspace, titleKey: "kubernetes" },
   { id: "sandbox", component: LocalCloud, titleKey: "sandbox" },
   { id: "endpoints", component: EndpointsTry, titleKey: "endpoints" },
   { id: "loadtest", component: LoadTestLive, titleKey: "loadtest" },
