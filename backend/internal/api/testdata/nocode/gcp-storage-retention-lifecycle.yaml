@@ -1,0 +1,15 @@
+# retention_policy and two lifecycle_rule blocks (Add + fields) on the
+# bucket; uniform access and public access prevention stay as they are.
+steps:
+  - set:
+      node: google_storage_bucket.audit_logs
+      attrs:
+        storage_class: STANDARD
+        retention_policy[0].retention_period: "31557600"
+        retention_policy[0].is_locked: false
+        lifecycle_rule[0].action[0].type: SetStorageClass
+        lifecycle_rule[0].action[0].storage_class: NEARLINE
+        lifecycle_rule[0].condition[0].age: 30
+        lifecycle_rule[1].action[0].type: SetStorageClass
+        lifecycle_rule[1].action[0].storage_class: COLDLINE
+        lifecycle_rule[1].condition[0].age: 90

@@ -1,0 +1,15 @@
+# Named volume from the palette mounted in the Volumes list, a pg_isready
+# healthcheck (compose interpolates ${POSTGRES_USER} from .env), the
+# dependency's "until healthy" select, and the db's port row removed.
+steps:
+  - composeAddTop: {kind: volume, name: pgdata}
+  - composePatch:
+      service: db
+      patch:
+        volumes: [{type: volume, source: pgdata, target: /var/lib/postgresql/data}]
+  - composePatch:
+      service: db
+      patch:
+        healthcheck: {test: "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}", interval: 5s, timeout: 5s, retries: 10}
+  - composePatch: {service: db, patch: {ports: []}}
+  - composePatch: {service: api, patch: {dependsOn: [{service: db, condition: service_healthy}]}}

@@ -8,10 +8,24 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip
 import type { SchemaAttribute, Value } from "@/lib/api/types"
 import { cn } from "@/lib/utils"
 import { nodeLabel, schemaKey } from "../canvas/catalog"
-import { ctyKind, ctyLabel, exprOf, referencedNodes, resolveReference } from "./body"
+import {
+  appendToList,
+  ctyKind,
+  ctyLabel,
+  exprOf,
+  listItems,
+  listValue,
+  mapEntries,
+  referencedNodes,
+  removeListItem,
+  resolveReference,
+  stringLiteral,
+} from "./body"
 import { useInspector } from "./context"
+import { MapField } from "./map-field"
 import { ReferencePicker } from "./reference-picker"
-import { ExpressionInput, KeyValueEditor, TagInput } from "./widgets"
+import { refFit } from "./references"
+import { ExpressionInput, TagInput } from "./widgets"
 
 const UNSET = "__unset__"
 
@@ -46,6 +60,10 @@ export function AttrField({
   const constant = value === undefined || value.literal !== undefined
   const exprMode = kind === "complex" || forceExpr || !constant
   const ref = exprMode && !rawRef ? resolveReference(value?.expr, nodes) : null
+  // A list built with Link to… (references among strings) shows as chips.
+  const items = kind === "string-list" && !constant && !forceExpr && !rawRef ? listItems(value) : null
+  // Maps edit entry by entry; values holding expressions are kept as they are.
+  const entries = kind === "string-map" && !forceExpr && !rawRef && !ref ? mapEntries(value) : null
   const pro = mode === "pro"
   const help = shortHelp(attr.description)
   const invalid = problems.some((p) => p.severity === "error")
@@ -95,9 +113,12 @@ export function AttrField({
           {kind !== "bool" && (
             <ReferencePicker
               className="opacity-0 group-hover/field:opacity-100 focus-visible:opacity-100 data-[state=open]:opacity-100"
-              onPick={(expr) => {
+              target={attr.type}
+              base64={attr.name === "user_data" && kind === "string"}
+              onPick={(expr, type) => {
                 setRawRef(false)
-                setExpr(expr)
+                if (refFit(attr.type, type) === "append") onChange(appendToList(value, expr))
+                else setExpr(expr)
               }}
             />
           )}
@@ -146,6 +167,16 @@ export function AttrField({
             <XIcon className="size-3.5" />
           </button>
         </div>
+      ) : items ? (
+        <ListChips
+          items={items}
+          invalid={invalid}
+          onRemove={(i) => onChange(removeListItem(value, i))}
+          onAdd={(text) => onChange(listValue([...items, JSON.stringify(text)]))}
+          onEdit={pro ? () => setRawRef(true) : undefined}
+        />
+      ) : entries ? (
+        <MapField entries={entries} onChange={onChange} />
       ) : exprMode ? (
         <>
           <ExpressionInput value={exprOf(value)} onCommit={setExpr} invalid={invalid} rows={kind === "complex" ? 3 : 1} />
@@ -183,6 +214,86 @@ function ReferencedChips({ expr }: { expr?: string }) {
           {nodeLabel(n, schemas.get(schemaKey(n.kind, n.type)))}
         </button>
       ))}
+    </div>
+  )
+}
+
+/** A list holding references (Link to…) and texts: one chip per element, removable, plus a text input. */
+function ListChips({
+  items,
+  invalid,
+  onRemove,
+  onAdd,
+  onEdit,
+}: {
+  items: string[]
+  invalid: boolean
+  onRemove: (index: number) => void
+  onAdd: (text: string) => void
+  onEdit?: () => void
+}) {
+  const { nodes, schemas, select } = useInspector()
+  const [draft, setDraft] = useState("")
+  const commit = () => {
+    const text = draft.trim()
+    if (text) onAdd(text)
+    setDraft("")
+  }
+  return (
+    <div
+      className={cn("flex min-h-8 flex-wrap items-center gap-1 rounded-md border px-1.5 py-1", invalid && "border-destructive")}
+      data-testid="list-chips"
+    >
+      {items.map((src, i) => {
+        const text = stringLiteral(src)
+        const ref = text === undefined ? resolveReference(src, nodes) : null
+        const schema = ref ? schemas.get(schemaKey(ref.node.kind, ref.node.type)) : undefined
+        return (
+          <span
+            key={`${i}-${src}`}
+            className={cn(
+              "inline-flex h-6 max-w-full min-w-0 items-center gap-1 rounded border px-1.5 text-xs",
+              ref ? "border-primary/30 bg-primary/8" : "bg-muted/50",
+            )}
+          >
+            {ref ? (
+              <button type="button" onClick={() => select(ref.node.id)} className="inline-flex min-w-0 items-center gap-1 hover:underline">
+                <ResourceIcon name={schema?.icon} className="size-3 shrink-0" />
+                <span className="truncate font-medium">{nodeLabel(ref.node, schema)}</span>
+                {ref.attr && <span className="shrink-0 font-mono text-muted-foreground">.{ref.attr}</span>}
+              </button>
+            ) : (
+              <span className={cn("truncate", text === undefined && "font-mono")}>{text ?? src}</span>
+            )}
+            <button
+              type="button"
+              onClick={() => onRemove(i)}
+              className="flex size-4 shrink-0 items-center justify-center rounded text-muted-foreground hover:bg-muted hover:text-foreground"
+              aria-label={`Remove ${text ?? src}`}
+            >
+              <XIcon className="size-3" />
+            </button>
+          </span>
+        )
+      })}
+      <input
+        value={draft}
+        onChange={(e) => setDraft(e.target.value)}
+        onBlur={commit}
+        onKeyDown={(e) => {
+          if (e.key === "Enter") {
+            e.preventDefault()
+            commit()
+          }
+        }}
+        placeholder="Add…"
+        className="h-6 min-w-16 flex-1 bg-transparent px-1 text-xs outline-none placeholder:text-muted-foreground"
+      />
+      {onEdit && (
+        <button type="button" onClick={onEdit} className="h-6 px-1 text-[11px] text-muted-foreground hover:text-foreground">
+          edit
+        </button>
+      )}
     </div>
   )
 }
@@ -228,13 +339,6 @@ function LiteralWidget({
           value={Array.isArray(literal) ? literal.map(String) : []}
           onChange={(list) => onChange(list.length ? list : undefined)}
           invalid={invalid}
-        />
-      )
-    case "string-map":
-      return (
-        <KeyValueEditor
-          value={literal && typeof literal === "object" ? (literal as Record<string, string>) : {}}
-          onChange={(m) => onChange(Object.keys(m).length ? m : undefined)}
         />
       )
     default:

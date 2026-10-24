@@ -7,17 +7,24 @@ import type { Block, Body, SchemaAttribute, SchemaBlock, SchemaNestedBlock } fro
 import { cn } from "@/lib/utils"
 import { AttrField } from "./attr-field"
 import { blocksOf, emptyBody, getAttr, setAttr, setBlocks } from "./body"
+import { objectListFields } from "./object-list"
+import { ObjectListField } from "./object-list-field"
 import { useInspector } from "./context"
 
+/** Provider bookkeeping of a resource block (not of its nested blocks, e.g. network_details.id). */
 const NOISE = new Set(["id", "tags_all"])
 
+/** A value, or blocks written for an attribute-as-blocks (`ingress { … }` of a list(object) attribute). */
+function isSet(a: SchemaAttribute, body: Body) {
+  return getAttr(body, a.name) !== undefined || (objectListFields(a.type) !== null && blocksOf(body, a.name).length > 0)
+}
+
 /** Attributes a user can set: hides computed-only and provider bookkeeping attributes unless they already have a value. */
-function editable(attrs: SchemaAttribute[], body: Body) {
+function editable(attrs: SchemaAttribute[], body: Body, depth: number) {
   return attrs.filter((a) => {
-    const isSet = getAttr(body, a.name) !== undefined
-    if (isSet) return true
+    if (isSet(a, body)) return true
     if (a.computed && !a.optional && !a.required) return false
-    if (NOISE.has(a.name) && !a.required) return false
+    if (depth === 0 && NOISE.has(a.name) && !a.required) return false
     return !a.deprecated
   })
 }
@@ -47,21 +54,24 @@ export function BlockForm({
 }) {
   const { mode } = useInspector()
   const [showAll, setShowAll] = useState(false)
-  const attrs = editable(schema.attributes ?? [], body)
+  const attrs = editable(schema.attributes ?? [], body, depth)
     .filter((a) => matches(a.name, filter))
     .sort((a, b) => rank(a) - rank(b) || a.name.localeCompare(b.name))
   const nested = (schema.blocks ?? []).filter((b) => matches(b.name, filter))
   const path = (name: string) => (pathPrefix ? `${pathPrefix}.${name}` : name)
 
-  const field = (a: SchemaAttribute) => (
-    <AttrField
-      key={a.name}
-      attr={a}
-      path={path(a.name)}
-      value={getAttr(body, a.name)}
-      onChange={(v) => onChange(setAttr(body, a.name, v))}
-    />
-  )
+  const field = (a: SchemaAttribute) =>
+    objectListFields(a.type) ? (
+      <ObjectListField key={a.name} attr={a} path={path(a.name)} body={body} onChange={onChange} />
+    ) : (
+      <AttrField
+        key={a.name}
+        attr={a}
+        path={path(a.name)}
+        value={getAttr(body, a.name)}
+        onChange={(v) => onChange(setAttr(body, a.name, v))}
+      />
+    )
   const blockEditor = (nb: SchemaNestedBlock) => (
     <NestedBlocks
       key={nb.name}
@@ -103,7 +113,7 @@ export function BlockForm({
     )
   }
 
-  const isPrimary = (a: SchemaAttribute) => a.required || a.basic || getAttr(body, a.name) !== undefined
+  const isPrimary = (a: SchemaAttribute) => a.required || a.basic || isSet(a, body)
   const primary = attrs.filter(isPrimary)
   const secondary = attrs.filter((a) => !isPrimary(a))
   const primaryBlocks = nested.filter((b) => (b.minItems ?? 0) > 0 || blocksOf(body, b.name).length > 0)

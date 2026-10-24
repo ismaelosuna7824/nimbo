@@ -1,0 +1,14 @@
+# The container's probe editors (HTTP GET, path, port, timings).
+steps:
+  - kubePatch:
+      node: Deployment/catalog/catalog
+      set:
+        spec.template.spec.containers[name=catalog].readinessProbe:
+          httpGet: {path: /readyz, port: http}
+          periodSeconds: 5
+        spec.template.spec.containers[name=catalog].livenessProbe:
+          httpGet: {path: /healthz, port: http}
+        spec.template.spec.containers[name=catalog].startupProbe:
+          httpGet: {path: /healthz, port: http}
+          periodSeconds: 5
+          failureThreshold: 12

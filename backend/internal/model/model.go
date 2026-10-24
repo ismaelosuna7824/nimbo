@@ -561,6 +561,10 @@ type ConnectionRecipe struct {
 	SourceType  string `json:"sourceType"`
 	TargetType  string `json:"targetType"`
 	Curated     bool   `json:"curated"`
+	// Group "access" marks grant recipes (IDs "access:<level>"): the
+	// connect dialog shows them as "What can it do?" with Level.
+	Group string      `json:"group,omitempty"`
+	Level AccessLevel `json:"level,omitempty"`
 }
 
 // Template is a starter workflow.

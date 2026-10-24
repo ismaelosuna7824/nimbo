@@ -1,0 +1,17 @@
+# Requests in the container's Resources section (base), then in the prod
+# environment the HPA form: min 2 replicas, CPU 70% instead of memory.
+steps:
+  - kubePatch:
+      node: Deployment/default/checkout
+      set:
+        spec.template.spec.containers[name=api].resources.requests.cpu: 100m
+        spec.template.spec.containers[name=api].resources.requests.memory: 64Mi
+        spec.template.spec.containers[name=api].resources.limits.memory: 128Mi
+  - envActivate: {env: prod}
+  - kubePatch:
+      node: HorizontalPodAutoscaler/pay-prod/checkout
+      set:
+        spec.minReplicas: 2
+        spec.metrics:
+          - type: Resource
+            resource: {name: cpu, target: {type: Utilization, averageUtilization: 70}}

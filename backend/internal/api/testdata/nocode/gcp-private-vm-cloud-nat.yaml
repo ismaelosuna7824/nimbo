@@ -1,0 +1,35 @@
+# Remove the access_config block (its Trash button), give the VM a
+# service account from the palette, and add a router + Cloud NAT with
+# logging (selects, switches, nested subnetwork block, Link to…).
+steps:
+  - add: {type: google_service_account, name: worker}
+  - set:
+      node: google_service_account.worker
+      attrs:
+        account_id: worker-vm
+        display_name: Worker VM
+  - set:
+      node: google_compute_instance.worker
+      attrs:
+        network_interface[0].access_config[0]: {unset: true}
+        service_account[0].email: {link: google_service_account.worker.email}
+        service_account[0].scopes: [cloud-platform]
+        shielded_instance_config[0].enable_secure_boot: true
+  - add: {type: google_compute_router, name: nat}
+  - set:
+      node: google_compute_router.nat
+      attrs:
+        name: app-router
+        network: {link: google_compute_network.main.id}
+  - add: {type: google_compute_router_nat, name: egress}
+  - set:
+      node: google_compute_router_nat.egress
+      attrs:
+        name: app-nat
+        router: {link: google_compute_router.nat.name}
+        nat_ip_allocate_option: AUTO_ONLY
+        source_subnetwork_ip_ranges_to_nat: LIST_OF_SUBNETWORKS
+        subnetwork[0].name: {link: google_compute_subnetwork.app.id}
+        subnetwork[0].source_ip_ranges_to_nat: [ALL_IP_RANGES]
+        log_config[0].enable: true
+        log_config[0].filter: ERRORS_ONLY

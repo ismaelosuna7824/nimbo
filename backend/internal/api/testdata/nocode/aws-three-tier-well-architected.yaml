@@ -1,0 +1,347 @@
+# Every tier gets one subnet per zone, added separately (public/public_b,
+# app/app_b, db/db_b) in the zone lookup's names[0] / names[1] (Link to…
+# → More…); lists of subnets and security groups are built with Link to…
+# appending (and a chip's X); the security groups chain through their
+# object-list ingress cards. The launch template's user_data is Link to…
+# local.user_data with Base64-encode; the alarm's LoadBalancer dimension
+# is a map row linked to aws_lb.app.arn_suffix.
+steps:
+  - add: {type: aws_availability_zones, kind: data, name: available}
+  - set:
+      node: data.aws_availability_zones.available
+      attrs:
+        state: available
+  # Public tier
+  - set:
+      node: aws_subnet.public
+      attrs:
+        availability_zone: {link: "data.aws_availability_zones.available.names[0]"}
+  - add: {type: aws_subnet, name: public_b}
+  - set:
+      node: aws_subnet.public_b
+      attrs:
+        vpc_id: {link: aws_vpc.main.id}
+        cidr_block: 10.20.1.0/24
+        availability_zone: {link: "data.aws_availability_zones.available.names[1]"}
+        map_public_ip_on_launch: true
+        tags: {Name: shop-prod-public-b}
+  - add: {type: aws_route_table_association, name: public_b}
+  - set:
+      node: aws_route_table_association.public_b
+      attrs:
+        subnet_id: {link: aws_subnet.public_b.id}
+        route_table_id: {link: aws_route_table.public.id}
+  # NAT gateways, one per zone
+  - add: {type: aws_eip, name: nat}
+  - set:
+      node: aws_eip.nat
+      attrs:
+        domain: vpc
+  - add: {type: aws_eip, name: nat_b}
+  - set:
+      node: aws_eip.nat_b
+      attrs:
+        domain: vpc
+  - add: {type: aws_nat_gateway, name: main}
+  - set:
+      node: aws_nat_gateway.main
+      attrs:
+        allocation_id: {link: aws_eip.nat.allocation_id}
+        subnet_id: {link: aws_subnet.public.id}
+  - add: {type: aws_nat_gateway, name: main_b}
+  - set:
+      node: aws_nat_gateway.main_b
+      attrs:
+        allocation_id: {link: aws_eip.nat_b.allocation_id}
+        subnet_id: {link: aws_subnet.public_b.id}
+  # App tier
+  - add: {type: aws_subnet, name: app}
+  - set:
+      node: aws_subnet.app
+      attrs:
+        vpc_id: {link: aws_vpc.main.id}
+        cidr_block: 10.20.10.0/24
+        availability_zone: {link: "data.aws_availability_zones.available.names[0]"}
+        tags: {Name: shop-prod-app-a}
+  - add: {type: aws_subnet, name: app_b}
+  - set:
+      node: aws_subnet.app_b
+      attrs:
+        vpc_id: {link: aws_vpc.main.id}
+        cidr_block: 10.20.11.0/24
+        availability_zone: {link: "data.aws_availability_zones.available.names[1]"}
+        tags: {Name: shop-prod-app-b}
+  - add: {type: aws_route_table, name: app}
+  - set:
+      node: aws_route_table.app
+      attrs:
+        vpc_id: {link: aws_vpc.main.id}
+        tags: {Name: shop-prod-app-a}
+  - add: {type: aws_route, name: app_nat}
+  - set:
+      node: aws_route.app_nat
+      attrs:
+        route_table_id: {link: aws_route_table.app.id}
+        destination_cidr_block: 0.0.0.0/0
+        nat_gateway_id: {link: aws_nat_gateway.main.id}
+  - add: {type: aws_route_table, name: app_b}
+  - set:
+      node: aws_route_table.app_b
+      attrs:
+        vpc_id: {link: aws_vpc.main.id}
+        tags: {Name: shop-prod-app-b}
+  - add: {type: aws_route, name: app_b_nat}
+  - set:
+      node: aws_route.app_b_nat
+      attrs:
+        route_table_id: {link: aws_route_table.app_b.id}
+        destination_cidr_block: 0.0.0.0/0
+        nat_gateway_id: {link: aws_nat_gateway.main_b.id}
+  - add: {type: aws_route_table_association, name: app}
+  - set:
+      node: aws_route_table_association.app
+      attrs:
+        subnet_id: {link: aws_subnet.app.id}
+        route_table_id: {link: aws_route_table.app.id}
+  - add: {type: aws_route_table_association, name: app_b}
+  - set:
+      node: aws_route_table_association.app_b
+      attrs:
+        subnet_id: {link: aws_subnet.app_b.id}
+        route_table_id: {link: aws_route_table.app_b.id}
+  # Data tier (no route to the internet)
+  - add: {type: aws_subnet, name: db}
+  - set:
+      node: aws_subnet.db
+      attrs:
+        vpc_id: {link: aws_vpc.main.id}
+        cidr_block: 10.20.20.0/24
+        availability_zone: {link: "data.aws_availability_zones.available.names[0]"}
+        tags: {Name: shop-prod-db-a}
+  - add: {type: aws_subnet, name: db_b}
+  - set:
+      node: aws_subnet.db_b
+      attrs:
+        vpc_id: {link: aws_vpc.main.id}
+        cidr_block: 10.20.21.0/24
+        availability_zone: {link: "data.aws_availability_zones.available.names[1]"}
+        tags: {Name: shop-prod-db-b}
+  - add: {type: aws_route_table, name: db}
+  - set:
+      node: aws_route_table.db
+      attrs:
+        vpc_id: {link: aws_vpc.main.id}
+        tags: {Name: shop-prod-db}
+  - add: {type: aws_route_table_association, name: db}
+  - set:
+      node: aws_route_table_association.db
+      attrs:
+        subnet_id: {link: aws_subnet.db.id}
+        route_table_id: {link: aws_route_table.db.id}
+  - add: {type: aws_route_table_association, name: db_b}
+  - set:
+      node: aws_route_table_association.db_b
+      attrs:
+        subnet_id: {link: aws_subnet.db_b.id}
+        route_table_id: {link: aws_route_table.db.id}
+  # Security groups: internet → ALB → app → db
+  - add: {type: aws_security_group, name: alb}
+  - set:
+      node: aws_security_group.alb
+      attrs:
+        name: shop-prod-alb
+        description: Load balancer
+        vpc_id: {link: aws_vpc.main.id}
+        ingress:
+          - description: HTTP
+            from_port: 80
+            to_port: 80
+            protocol: tcp
+            cidr_blocks: [0.0.0.0/0]
+          - description: HTTPS
+            from_port: 443
+            to_port: 443
+            protocol: tcp
+            cidr_blocks: [0.0.0.0/0]
+        egress:
+          - description: All outbound traffic
+            from_port: 0
+            to_port: 0
+            protocol: "-1"
+            cidr_blocks: [0.0.0.0/0]
+  - add: {type: aws_security_group, name: app}
+  - set:
+      node: aws_security_group.app
+      attrs:
+        name: shop-prod-app
+        description: App servers
+        vpc_id: {link: aws_vpc.main.id}
+        ingress:
+          - description: App from the load balancer
+            from_port: 8080
+            to_port: 8080
+            protocol: tcp
+            security_groups: [{link: aws_security_group.alb.id}]
+        egress:
+          - description: All outbound traffic
+            from_port: 0
+            to_port: 0
+            protocol: "-1"
+            cidr_blocks: [0.0.0.0/0]
+  - add: {type: aws_security_group, name: db}
+  - set:
+      node: aws_security_group.db
+      attrs:
+        name: shop-prod-db
+        description: PostgreSQL
+        vpc_id: {link: aws_vpc.main.id}
+        ingress:
+          - description: PostgreSQL from the app tier
+            from_port: 5432
+            to_port: 5432
+            protocol: tcp
+            security_groups: [{link: aws_security_group.app.id}]
+  # The pet server and its admin policy go; SSM replaces SSH
+  - delete: {node: aws_instance.server}
+  - delete: {node: aws_iam_role_policy.server_admin}
+  - add: {type: aws_iam_role_policy_attachment, name: ssm}
+  - set:
+      node: aws_iam_role_policy_attachment.ssm
+      attrs:
+        role: {link: aws_iam_role.server.name}
+        policy_arn: arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore
+  # Load balancer
+  - add: {type: aws_lb_target_group, name: app}
+  - set:
+      node: aws_lb_target_group.app
+      attrs:
+        name: shop-prod-app
+        port: 8080
+        protocol: HTTP
+        vpc_id: {link: aws_vpc.main.id}
+        health_check[0].path: /health
+  - add: {type: aws_lb, name: app}
+  - set:
+      node: aws_lb.app
+      attrs:
+        name: shop-prod-alb
+        load_balancer_type: application
+        internal: false
+        security_groups: {link: aws_security_group.alb.id, append: true}
+        subnets: {link: aws_subnet.public.id, append: true}
+  - set:
+      node: aws_lb.app
+      attrs:
+        subnets: {link: aws_subnet.public_b.id, append: true}
+  - add: {type: aws_acm_certificate, name: app}
+  - set:
+      node: aws_acm_certificate.app
+      attrs:
+        domain_name: shop.example.com
+        validation_method: DNS
+  - add: {type: aws_lb_listener, name: https}
+  - set:
+      node: aws_lb_listener.https
+      attrs:
+        load_balancer_arn: {link: aws_lb.app.arn}
+        port: 443
+        protocol: HTTPS
+        ssl_policy: ELBSecurityPolicy-TLS13-1-2-2021-06
+        certificate_arn: {link: aws_acm_certificate.app.arn}
+        default_action[0].type: forward
+        default_action[0].target_group_arn: {link: aws_lb_target_group.app.arn}
+  - add: {type: aws_lb_listener, name: http}
+  - set:
+      node: aws_lb_listener.http
+      attrs:
+        load_balancer_arn: {link: aws_lb.app.arn}
+        port: 80
+        protocol: HTTP
+        default_action[0].type: redirect
+        default_action[0].redirect[0].protocol: HTTPS
+        default_action[0].redirect[0].port: "443"
+        default_action[0].redirect[0].status_code: HTTP_301
+  # App servers
+  - add: {type: aws_launch_template, name: app}
+  - set:
+      node: aws_launch_template.app
+      attrs:
+        name: shop-prod-app
+        image_id: {link: data.aws_ssm_parameter.al2023.value}
+        instance_type: {link: var.instance_type}
+        vpc_security_group_ids: {link: aws_security_group.app.id, append: true}
+        iam_instance_profile[0].name: {link: aws_iam_instance_profile.server.name}
+        metadata_options[0].http_endpoint: enabled
+        metadata_options[0].http_tokens: required
+        user_data: {link: local.user_data, base64: true}
+  - add: {type: aws_autoscaling_group, name: app}
+  - set:
+      node: aws_autoscaling_group.app
+      attrs:
+        name: shop-prod-app
+        min_size: 2
+        max_size: 4
+        desired_capacity: 2
+        health_check_type: ELB
+        vpc_zone_identifier: {link: aws_subnet.app.id, append: true}
+        target_group_arns: {link: aws_lb_target_group.app.arn, append: true}
+        launch_template[0].id: {link: aws_launch_template.app.id}
+        launch_template[0].version: {link: aws_launch_template.app.latest_version}
+  - set:
+      node: aws_autoscaling_group.app
+      attrs:
+        vpc_zone_identifier: {link: aws_subnet.app_b.id, append: true}
+  - add: {type: aws_autoscaling_policy, name: cpu}
+  - set:
+      node: aws_autoscaling_policy.cpu
+      attrs:
+        name: shop-prod-cpu
+        autoscaling_group_name: {link: aws_autoscaling_group.app.name}
+        policy_type: TargetTrackingScaling
+        target_tracking_configuration[0].target_value: 50
+        target_tracking_configuration[0].predefined_metric_specification[0].predefined_metric_type: ASGAverageCPUUtilization
+  # Database
+  - set:
+      node: aws_db_subnet_group.db
+      attrs:
+        subnet_ids: {link: aws_subnet.db.id, append: true}
+  - set:
+      node: aws_db_subnet_group.db
+      attrs:
+        subnet_ids: {link: aws_subnet.db_b.id, append: true}
+  - set:
+      node: aws_db_subnet_group.db
+      attrs:
+        subnet_ids: {remove: aws_subnet.public.id}
+  - set:
+      node: aws_db_instance.main
+      attrs:
+        vpc_security_group_ids: {link: aws_security_group.db.id, append: true}
+  - set:
+      node: aws_db_instance.main
+      attrs:
+        vpc_security_group_ids: {remove: aws_security_group.server.id}
+        password: {unset: true}
+        manage_master_user_password: true
+        publicly_accessible: false
+        multi_az: true
+        storage_encrypted: true
+        backup_retention_period: 7
+        skip_final_snapshot: false
+        final_snapshot_identifier: shop-prod-db-final
+  - variable: {name: db_password, sensitive: true}
+  - delete: {node: aws_security_group.server}
+  # Alarm on the load balancer
+  - add: {type: aws_cloudwatch_metric_alarm, name: alb_5xx}
+  - set:
+      node: aws_cloudwatch_metric_alarm.alb_5xx
+      attrs:
+        alarm_name: shop-prod-alb-5xx
+        namespace: AWS/ApplicationELB
+        metric_name: HTTPCode_ELB_5XX_Count
+        statistic: Sum
+        period: 60
+        evaluation_periods: 1
+        threshold: 10
+        comparison_operator: GreaterThanThreshold
+        dimensions: {LoadBalancer: {link: aws_lb.app.arn_suffix}}

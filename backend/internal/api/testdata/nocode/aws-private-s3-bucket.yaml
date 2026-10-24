@@ -1,0 +1,34 @@
+# Four bucket features from the palette, each linked to the bucket and set
+# with switches/selects; the TLS-only policy is a palette bucket policy
+# dragged onto the bucket with the "Require HTTPS" recipe (Deny + the
+# aws:SecureTransport condition, depends_on the public access block).
+steps:
+  - add: {type: aws_s3_bucket_public_access_block, name: data}
+  - set:
+      node: aws_s3_bucket_public_access_block.data
+      attrs:
+        bucket: {link: aws_s3_bucket.data.id}
+        block_public_acls: true
+        block_public_policy: true
+        ignore_public_acls: true
+        restrict_public_buckets: true
+  - add: {type: aws_s3_bucket_ownership_controls, name: data}
+  - set:
+      node: aws_s3_bucket_ownership_controls.data
+      attrs:
+        bucket: {link: aws_s3_bucket.data.id}
+        rule[0].object_ownership: BucketOwnerEnforced
+  - add: {type: aws_s3_bucket_versioning, name: data}
+  - set:
+      node: aws_s3_bucket_versioning.data
+      attrs:
+        bucket: {link: aws_s3_bucket.data.id}
+        versioning_configuration[0].status: Enabled
+  - add: {type: aws_s3_bucket_server_side_encryption_configuration, name: data}
+  - set:
+      node: aws_s3_bucket_server_side_encryption_configuration.data
+      attrs:
+        bucket: {link: aws_s3_bucket.data.id}
+        rule[0].apply_server_side_encryption_by_default[0].sse_algorithm: AES256
+  - add: {type: aws_s3_bucket_policy, name: tls_only}
+  - connect: {source: aws_s3_bucket_policy.tls_only, target: aws_s3_bucket.data, recipe: s3-require-tls}

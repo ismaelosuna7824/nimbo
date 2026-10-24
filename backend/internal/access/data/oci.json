@@ -1,0 +1,1000 @@
+{
+ "source": {
+  "title": "OCI IAM Detailed Service Policy Reference",
+  "url": "https://docs.oracle.com/en-us/iaas/Content/Identity/policyreference/policyreference.htm",
+  "retrieved": "2026-10-24"
+ },
+ "verbs": [
+  {
+   "name": "inspect",
+   "target": "Third-party auditors",
+   "description": "Ability to list resources, without access to any confidential information or user-specified metadata that might be part of that resource. Important: The operation to list policies includes the contents of the policies themselves. The list operations for the Networking resource-types return all the information (for example, the contents of security lists and route tables)."
+  },
+  {
+   "name": "read",
+   "target": "Internal auditors",
+   "description": "Includes inspect plus the ability to get user-specified metadata and the actual resource itself."
+  },
+  {
+   "name": "use",
+   "target": "Day-to-day end users of resources",
+   "description": "Includes read plus the ability to work with existing resources (the actions vary by resource type). Includes the ability to update the resource, except for resource-types where the \"update\" operation has the same effective impact as the \"create\" operation (for example, UpdatePolicy , UpdateSecurityList , and more), in which case the \"update\" ability is available only with the manage verb. In general, this verb doesn't include the ability to create or delete that type of resource."
+  },
+  {
+   "name": "manage",
+   "target": "Administrators",
+   "description": "Includes all permissions for the resource."
+  }
+ ],
+ "resourceTypes": [
+  {
+   "name": "all-resources",
+   "service": "All services",
+   "family": true,
+   "url": "https://docs.oracle.com/en-us/iaas/Content/Identity/policiesgs/policies_topic-ResourceTypes.htm"
+  },
+  {
+   "name": "virtual-network-family",
+   "service": "Core Services (Networking, Compute, Block Volume)",
+   "family": true,
+   "url": "https://docs.oracle.com/en-us/iaas/Content/Identity/policyreference/corepolicyreference_topic-ResourceTypes.htm"
+  },
+  {
+   "name": "drgs",
+   "service": "Core Services (Networking, Compute, Block Volume)",
+   "family": true,
+   "url": "https://docs.oracle.com/en-us/iaas/Content/Identity/policyreference/corepolicyreference_topic-ResourceTypes.htm"
+  },
+  {
+   "name": "drg-object",
+   "service": "Core Services (Networking, Compute, Block Volume)",
+   "url": "https://docs.oracle.com/en-us/iaas/Content/Identity/policyreference/corepolicyreference_topic-ResourceTypes.htm"
+  },
+  {
+   "name": "drg-route-table",
+   "service": "Core Services (Networking, Compute, Block Volume)",
+   "url": "https://docs.oracle.com/en-us/iaas/Content/Identity/policyreference/corepolicyreference_topic-ResourceTypes.htm"
+  },
+  {
+   "name": "drg-route-distribution",
+   "service": "Core Services (Networking, Compute, Block Volume)",
+   "url": "https://docs.oracle.com/en-us/iaas/Content/Identity/policyreference/corepolicyreference_topic-ResourceTypes.htm"
+  },
+  {
+   "name": "drg-attachment",
+   "service": "Core Services (Networking, Compute, Block Volume)",
+   "url": "https://docs.oracle.com/en-us/iaas/Content/Identity/policyreference/corepolicyreference_topic-ResourceTypes.htm"
+  },
+  {
+   "name": "vcns",
+   "service": "Core Services (Networking, Compute, Block Volume)",
+   "url": "https://docs.oracle.com/en-us/iaas/Content/Identity/policyreference/corepolicyreference_topic-ResourceTypes.htm"
+  },
+  {
+   "name": "subnets",
+   "service": "Core Services (Networking, Compute, Block Volume)",
+   "url": "https://docs.oracle.com/en-us/iaas/Content/Identity/policyreference/corepolicyreference_topic-ResourceTypes.htm"
+  },
+  {
+   "name": "route-tables",
+   "service": "Core Services (Networking, Compute, Block Volume)",
+   "url": "https://docs.oracle.com/en-us/iaas/Content/Identity/policyreference/corepolicyreference_topic-ResourceTypes.htm"
+  },
+  {
+   "name": "network-security-groups",
+   "service": "Core Services (Networking, Compute, Block Volume)",
+   "url": "https://docs.oracle.com/en-us/iaas/Content/Identity/policyreference/corepolicyreference_topic-ResourceTypes.htm"
+  },
+  {
+   "name": "security-lists",
+   "service": "Core Services (Networking, Compute, Block Volume)",
+   "url": "https://docs.oracle.com/en-us/iaas/Content/Identity/policyreference/corepolicyreference_topic-ResourceTypes.htm"
+  },
+  {
+   "name": "dhcp-options",
+   "service": "Core Services (Networking, Compute, Block Volume)",
+   "url": "https://docs.oracle.com/en-us/iaas/Content/Identity/policyreference/corepolicyreference_topic-ResourceTypes.htm"
+  },
+  {
+   "name": "private-ips",
+   "service": "Core Services (Networking, Compute, Block Volume)",
+   "url": "https://docs.oracle.com/en-us/iaas/Content/Identity/policyreference/corepolicyreference_topic-ResourceTypes.htm"
+  },
+  {
+   "name": "public-ips",
+   "service": "Core Services (Networking, Compute, Block Volume)",
+   "url": "https://docs.oracle.com/en-us/iaas/Content/Identity/policyreference/corepolicyreference_topic-ResourceTypes.htm"
+  },
+  {
+   "name": "ipv6s",
+   "service": "Core Services (Networking, Compute, Block Volume)",
+   "url": "https://docs.oracle.com/en-us/iaas/Content/Identity/policyreference/corepolicyreference_topic-ResourceTypes.htm"
+  },
+  {
+   "name": "internet-gateways",
+   "service": "Core Services (Networking, Compute, Block Volume)",
+   "url": "https://docs.oracle.com/en-us/iaas/Content/Identity/policyreference/corepolicyreference_topic-ResourceTypes.htm"
+  },
+  {
+   "name": "nat-gateways",
+   "service": "Core Services (Networking, Compute, Block Volume)",
+   "url": "https://docs.oracle.com/en-us/iaas/Content/Identity/policyreference/corepolicyreference_topic-ResourceTypes.htm"
+  },
+  {
+   "name": "service-gateways",
+   "service": "Core Services (Networking, Compute, Block Volume)",
+   "url": "https://docs.oracle.com/en-us/iaas/Content/Identity/policyreference/corepolicyreference_topic-ResourceTypes.htm"
+  },
+  {
+   "name": "local-peering-gateways",
+   "service": "Core Services (Networking, Compute, Block Volume)",
+   "url": "https://docs.oracle.com/en-us/iaas/Content/Identity/policyreference/corepolicyreference_topic-ResourceTypes.htm"
+  },
+  {
+   "name": "local-peering-from",
+   "service": "Core Services (Networking, Compute, Block Volume)",
+   "url": "https://docs.oracle.com/en-us/iaas/Content/Identity/policyreference/corepolicyreference_topic-ResourceTypes.htm"
+  },
+  {
+   "name": "local-peering-to",
+   "service": "Core Services (Networking, Compute, Block Volume)",
+   "url": "https://docs.oracle.com/en-us/iaas/Content/Identity/policyreference/corepolicyreference_topic-ResourceTypes.htm"
+  },
+  {
+   "name": "remote-peering-connections",
+   "service": "Core Services (Networking, Compute, Block Volume)",
+   "url": "https://docs.oracle.com/en-us/iaas/Content/Identity/policyreference/corepolicyreference_topic-ResourceTypes.htm"
+  },
+  {
+   "name": "remote-peering-from",
+   "service": "Core Services (Networking, Compute, Block Volume)",
+   "url": "https://docs.oracle.com/en-us/iaas/Content/Identity/policyreference/corepolicyreference_topic-ResourceTypes.htm"
+  },
+  {
+   "name": "remote-peering-to",
+   "service": "Core Services (Networking, Compute, Block Volume)",
+   "url": "https://docs.oracle.com/en-us/iaas/Content/Identity/policyreference/corepolicyreference_topic-ResourceTypes.htm"
+  },
+  {
+   "name": "drg-attachments",
+   "service": "Core Services (Networking, Compute, Block Volume)",
+   "url": "https://docs.oracle.com/en-us/iaas/Content/Identity/policyreference/corepolicyreference_topic-ResourceTypes.htm"
+  },
+  {
+   "name": "drg-route-tables",
+   "service": "Core Services (Networking, Compute, Block Volume)",
+   "url": "https://docs.oracle.com/en-us/iaas/Content/Identity/policyreference/corepolicyreference_topic-ResourceTypes.htm"
+  },
+  {
+   "name": "drg-route-distributions",
+   "service": "Core Services (Networking, Compute, Block Volume)",
+   "url": "https://docs.oracle.com/en-us/iaas/Content/Identity/policyreference/corepolicyreference_topic-ResourceTypes.htm"
+  },
+  {
+   "name": "cpes",
+   "service": "Core Services (Networking, Compute, Block Volume)",
+   "url": "https://docs.oracle.com/en-us/iaas/Content/Identity/policyreference/corepolicyreference_topic-ResourceTypes.htm"
+  },
+  {
+   "name": "ipsec-connections",
+   "service": "Core Services (Networking, Compute, Block Volume)",
+   "url": "https://docs.oracle.com/en-us/iaas/Content/Identity/policyreference/corepolicyreference_topic-ResourceTypes.htm"
+  },
+  {
+   "name": "cross-connects",
+   "service": "Core Services (Networking, Compute, Block Volume)",
+   "url": "https://docs.oracle.com/en-us/iaas/Content/Identity/policyreference/corepolicyreference_topic-ResourceTypes.htm"
+  },
+  {
+   "name": "cross-connect-groups",
+   "service": "Core Services (Networking, Compute, Block Volume)",
+   "url": "https://docs.oracle.com/en-us/iaas/Content/Identity/policyreference/corepolicyreference_topic-ResourceTypes.htm"
+  },
+  {
+   "name": "virtual-circuits",
+   "service": "Core Services (Networking, Compute, Block Volume)",
+   "url": "https://docs.oracle.com/en-us/iaas/Content/Identity/policyreference/corepolicyreference_topic-ResourceTypes.htm"
+  },
+  {
+   "name": "vnics",
+   "service": "Core Services (Networking, Compute, Block Volume)",
+   "url": "https://docs.oracle.com/en-us/iaas/Content/Identity/policyreference/corepolicyreference_topic-ResourceTypes.htm"
+  },
+  {
+   "name": "vtaps",
+   "service": "Core Services (Networking, Compute, Block Volume)",
+   "url": "https://docs.oracle.com/en-us/iaas/Content/Identity/policyreference/corepolicyreference_topic-ResourceTypes.htm"
+  },
+  {
+   "name": "vnic-attachments",
+   "service": "Core Services (Networking, Compute, Block Volume)",
+   "url": "https://docs.oracle.com/en-us/iaas/Content/Identity/policyreference/corepolicyreference_topic-ResourceTypes.htm"
+  },
+  {
+   "name": "vlans",
+   "service": "Core Services (Networking, Compute, Block Volume)",
+   "url": "https://docs.oracle.com/en-us/iaas/Content/Identity/policyreference/corepolicyreference_topic-ResourceTypes.htm"
+  },
+  {
+   "name": "byoiprange",
+   "service": "Core Services (Networking, Compute, Block Volume)",
+   "url": "https://docs.oracle.com/en-us/iaas/Content/Identity/policyreference/corepolicyreference_topic-ResourceTypes.htm"
+  },
+  {
+   "name": "publicippool",
+   "service": "Core Services (Networking, Compute, Block Volume)",
+   "url": "https://docs.oracle.com/en-us/iaas/Content/Identity/policyreference/corepolicyreference_topic-ResourceTypes.htm"
+  },
+  {
+   "name": "ipam",
+   "service": "Core Services (Networking, Compute, Block Volume)",
+   "url": "https://docs.oracle.com/en-us/iaas/Content/Identity/policyreference/corepolicyreference_topic-ResourceTypes.htm"
+  },
+  {
+   "name": "instance-family",
+   "service": "Core Services (Networking, Compute, Block Volume)",
+   "family": true,
+   "url": "https://docs.oracle.com/en-us/iaas/Content/Identity/policyreference/corepolicyreference_topic-ResourceTypes.htm"
+  },
+  {
+   "name": "app-catalog-listing",
+   "service": "Core Services (Networking, Compute, Block Volume)",
+   "url": "https://docs.oracle.com/en-us/iaas/Content/Identity/policyreference/corepolicyreference_topic-ResourceTypes.htm"
+  },
+  {
+   "name": "console-histories",
+   "service": "Core Services (Networking, Compute, Block Volume)",
+   "url": "https://docs.oracle.com/en-us/iaas/Content/Identity/policyreference/corepolicyreference_topic-ResourceTypes.htm"
+  },
+  {
+   "name": "instances",
+   "service": "Core Services (Networking, Compute, Block Volume)",
+   "url": "https://docs.oracle.com/en-us/iaas/Content/Identity/policyreference/corepolicyreference_topic-ResourceTypes.htm"
+  },
+  {
+   "name": "instance-console-connection",
+   "service": "Core Services (Networking, Compute, Block Volume)",
+   "url": "https://docs.oracle.com/en-us/iaas/Content/Identity/policyreference/corepolicyreference_topic-ResourceTypes.htm"
+  },
+  {
+   "name": "instance-images",
+   "service": "Core Services (Networking, Compute, Block Volume)",
+   "url": "https://docs.oracle.com/en-us/iaas/Content/Identity/policyreference/corepolicyreference_topic-ResourceTypes.htm"
+  },
+  {
+   "name": "volume-attachments",
+   "service": "Core Services (Networking, Compute, Block Volume)",
+   "url": "https://docs.oracle.com/en-us/iaas/Content/Identity/policyreference/corepolicyreference_topic-ResourceTypes.htm"
+  },
+  {
+   "name": "compute-management-family",
+   "service": "Core Services (Networking, Compute, Block Volume)",
+   "family": true,
+   "url": "https://docs.oracle.com/en-us/iaas/Content/Identity/policyreference/corepolicyreference_topic-ResourceTypes.htm"
+  },
+  {
+   "name": "instance-configurations",
+   "service": "Core Services (Networking, Compute, Block Volume)",
+   "url": "https://docs.oracle.com/en-us/iaas/Content/Identity/policyreference/corepolicyreference_topic-ResourceTypes.htm"
+  },
+  {
+   "name": "instance-pools",
+   "service": "Core Services (Networking, Compute, Block Volume)",
+   "url": "https://docs.oracle.com/en-us/iaas/Content/Identity/policyreference/corepolicyreference_topic-ResourceTypes.htm"
+  },
+  {
+   "name": "cluster-networks",
+   "service": "Core Services (Networking, Compute, Block Volume)",
+   "url": "https://docs.oracle.com/en-us/iaas/Content/Identity/policyreference/corepolicyreference_topic-ResourceTypes.htm"
+  },
+  {
+   "name": "instance-agent-family",
+   "service": "Core Services (Networking, Compute, Block Volume)",
+   "family": true,
+   "url": "https://docs.oracle.com/en-us/iaas/Content/Identity/policyreference/corepolicyreference_topic-ResourceTypes.htm"
+  },
+  {
+   "name": "instance-agent-plugins",
+   "service": "Core Services (Networking, Compute, Block Volume)",
+   "url": "https://docs.oracle.com/en-us/iaas/Content/Identity/policyreference/corepolicyreference_topic-ResourceTypes.htm"
+  },
+  {
+   "name": "instance-agent-command-family",
+   "service": "Core Services (Networking, Compute, Block Volume)",
+   "family": true,
+   "url": "https://docs.oracle.com/en-us/iaas/Content/Identity/policyreference/corepolicyreference_topic-ResourceTypes.htm"
+  },
+  {
+   "name": "instance-agent-commands",
+   "service": "Core Services (Networking, Compute, Block Volume)",
+   "url": "https://docs.oracle.com/en-us/iaas/Content/Identity/policyreference/corepolicyreference_topic-ResourceTypes.htm"
+  },
+  {
+   "name": "auto-scaling-configurations",
+   "service": "Core Services (Networking, Compute, Block Volume)",
+   "url": "https://docs.oracle.com/en-us/iaas/Content/Identity/policyreference/corepolicyreference_topic-ResourceTypes.htm"
+  },
+  {
+   "name": "compute-bare-metal-hosts",
+   "service": "Core Services (Networking, Compute, Block Volume)",
+   "url": "https://docs.oracle.com/en-us/iaas/Content/Identity/policyreference/corepolicyreference_topic-ResourceTypes.htm"
+  },
+  {
+   "name": "compute-capacity-reports",
+   "service": "Core Services (Networking, Compute, Block Volume)",
+   "url": "https://docs.oracle.com/en-us/iaas/Content/Identity/policyreference/corepolicyreference_topic-ResourceTypes.htm"
+  },
+  {
+   "name": "compute-capacity-reservations",
+   "service": "Core Services (Networking, Compute, Block Volume)",
+   "url": "https://docs.oracle.com/en-us/iaas/Content/Identity/policyreference/corepolicyreference_topic-ResourceTypes.htm"
+  },
+  {
+   "name": "compute-clusters",
+   "service": "Core Services (Networking, Compute, Block Volume)",
+   "url": "https://docs.oracle.com/en-us/iaas/Content/Identity/policyreference/corepolicyreference_topic-ResourceTypes.htm"
+  },
+  {
+   "name": "compute-global-image-capability-schema",
+   "service": "Core Services (Networking, Compute, Block Volume)",
+   "url": "https://docs.oracle.com/en-us/iaas/Content/Identity/policyreference/corepolicyreference_topic-ResourceTypes.htm"
+  },
+  {
+   "name": "compute-gpu-memory-clusters",
+   "service": "Core Services (Networking, Compute, Block Volume)",
+   "url": "https://docs.oracle.com/en-us/iaas/Content/Identity/policyreference/corepolicyreference_topic-ResourceTypes.htm"
+  },
+  {
+   "name": "compute-gpu-memory-fabrics",
+   "service": "Core Services (Networking, Compute, Block Volume)",
+   "url": "https://docs.oracle.com/en-us/iaas/Content/Identity/policyreference/corepolicyreference_topic-ResourceTypes.htm"
+  },
+  {
+   "name": "compute-host-groups",
+   "service": "Core Services (Networking, Compute, Block Volume)",
+   "url": "https://docs.oracle.com/en-us/iaas/Content/Identity/policyreference/corepolicyreference_topic-ResourceTypes.htm"
+  },
+  {
+   "name": "compute-image-capability-schema",
+   "service": "Core Services (Networking, Compute, Block Volume)",
+   "url": "https://docs.oracle.com/en-us/iaas/Content/Identity/policyreference/corepolicyreference_topic-ResourceTypes.htm"
+  },
+  {
+   "name": "dedicated-vm-hosts",
+   "service": "Core Services (Networking, Compute, Block Volume)",
+   "url": "https://docs.oracle.com/en-us/iaas/Content/Identity/policyreference/corepolicyreference_topic-ResourceTypes.htm"
+  },
+  {
+   "name": "work-requests",
+   "service": "Core Services (Networking, Compute, Block Volume)",
+   "url": "https://docs.oracle.com/en-us/iaas/Content/Identity/policyreference/corepolicyreference_topic-ResourceTypes.htm"
+  },
+  {
+   "name": "volume-family",
+   "service": "Core Services (Networking, Compute, Block Volume)",
+   "family": true,
+   "url": "https://docs.oracle.com/en-us/iaas/Content/Identity/policyreference/corepolicyreference_topic-ResourceTypes.htm"
+  },
+  {
+   "name": "volumes",
+   "service": "Core Services (Networking, Compute, Block Volume)",
+   "url": "https://docs.oracle.com/en-us/iaas/Content/Identity/policyreference/corepolicyreference_topic-ResourceTypes.htm"
+  },
+  {
+   "name": "volume-backups",
+   "service": "Core Services (Networking, Compute, Block Volume)",
+   "url": "https://docs.oracle.com/en-us/iaas/Content/Identity/policyreference/corepolicyreference_topic-ResourceTypes.htm"
+  },
+  {
+   "name": "boot-volume-backups",
+   "service": "Core Services (Networking, Compute, Block Volume)",
+   "url": "https://docs.oracle.com/en-us/iaas/Content/Identity/policyreference/corepolicyreference_topic-ResourceTypes.htm"
+  },
+  {
+   "name": "backup-policies",
+   "service": "Core Services (Networking, Compute, Block Volume)",
+   "url": "https://docs.oracle.com/en-us/iaas/Content/Identity/policyreference/corepolicyreference_topic-ResourceTypes.htm"
+  },
+  {
+   "name": "backup-policy-assignments",
+   "service": "Core Services (Networking, Compute, Block Volume)",
+   "url": "https://docs.oracle.com/en-us/iaas/Content/Identity/policyreference/corepolicyreference_topic-ResourceTypes.htm"
+  },
+  {
+   "name": "volume-groups",
+   "service": "Core Services (Networking, Compute, Block Volume)",
+   "url": "https://docs.oracle.com/en-us/iaas/Content/Identity/policyreference/corepolicyreference_topic-ResourceTypes.htm"
+  },
+  {
+   "name": "volume-group-backups",
+   "service": "Core Services (Networking, Compute, Block Volume)",
+   "url": "https://docs.oracle.com/en-us/iaas/Content/Identity/policyreference/corepolicyreference_topic-ResourceTypes.htm"
+  },
+  {
+   "name": "objectstorage-namespaces",
+   "service": "Object Storage",
+   "url": "https://docs.oracle.com/en-us/iaas/Content/Identity/policyreference/objectstoragepolicyreference.htm"
+  },
+  {
+   "name": "buckets",
+   "service": "Object Storage",
+   "url": "https://docs.oracle.com/en-us/iaas/Content/Identity/policyreference/objectstoragepolicyreference.htm"
+  },
+  {
+   "name": "objects",
+   "service": "Object Storage",
+   "url": "https://docs.oracle.com/en-us/iaas/Content/Identity/policyreference/objectstoragepolicyreference.htm"
+  },
+  {
+   "name": "object-family",
+   "service": "Object Storage",
+   "family": true,
+   "url": "https://docs.oracle.com/en-us/iaas/Content/Identity/policyreference/objectstoragepolicyreference.htm"
+  },
+  {
+   "name": "vaults",
+   "service": "Vault, Key Management and Secrets",
+   "url": "https://docs.oracle.com/en-us/iaas/Content/Identity/policyreference/keypolicyreference.htm"
+  },
+  {
+   "name": "keys",
+   "service": "Vault, Key Management and Secrets",
+   "url": "https://docs.oracle.com/en-us/iaas/Content/Identity/policyreference/keypolicyreference.htm"
+  },
+  {
+   "name": "key-delegate",
+   "service": "Vault, Key Management and Secrets",
+   "url": "https://docs.oracle.com/en-us/iaas/Content/Identity/policyreference/keypolicyreference.htm"
+  },
+  {
+   "name": "hsm-cluster",
+   "service": "Vault, Key Management and Secrets",
+   "url": "https://docs.oracle.com/en-us/iaas/Content/Identity/policyreference/keypolicyreference.htm"
+  },
+  {
+   "name": "secrets",
+   "service": "Vault, Key Management and Secrets",
+   "url": "https://docs.oracle.com/en-us/iaas/Content/Identity/policyreference/keypolicyreference.htm"
+  },
+  {
+   "name": "secret-versions",
+   "service": "Vault, Key Management and Secrets",
+   "url": "https://docs.oracle.com/en-us/iaas/Content/Identity/policyreference/keypolicyreference.htm"
+  },
+  {
+   "name": "secret-bundles",
+   "service": "Vault, Key Management and Secrets",
+   "url": "https://docs.oracle.com/en-us/iaas/Content/Identity/policyreference/keypolicyreference.htm"
+  },
+  {
+   "name": "secret-family",
+   "service": "Vault, Key Management and Secrets",
+   "family": true,
+   "url": "https://docs.oracle.com/en-us/iaas/Content/Identity/policyreference/keypolicyreference.htm"
+  },
+  {
+   "name": "autonomous-database-family",
+   "service": "Autonomous Database",
+   "family": true,
+   "url": "https://docs.oracle.com/en-us/iaas/autonomous-database-serverless/doc/autonomous-database-iam-policies.html"
+  },
+  {
+   "name": "autonomous-databases",
+   "service": "Autonomous Database",
+   "url": "https://docs.oracle.com/en-us/iaas/autonomous-database-serverless/doc/autonomous-database-iam-policies.html"
+  },
+  {
+   "name": "autonomous-backups",
+   "service": "Autonomous Database",
+   "url": "https://docs.oracle.com/en-us/iaas/autonomous-database-serverless/doc/autonomous-database-iam-policies.html"
+  },
+  {
+   "name": "database-family",
+   "service": "Base Database",
+   "family": true,
+   "url": "https://docs.oracle.com/en/cloud/paas/base-database/iam-policy-details/index.html"
+  },
+  {
+   "name": "db-systems",
+   "service": "Base Database",
+   "url": "https://docs.oracle.com/en/cloud/paas/base-database/iam-policy-details/index.html"
+  },
+  {
+   "name": "db-nodes",
+   "service": "Base Database",
+   "url": "https://docs.oracle.com/en/cloud/paas/base-database/iam-policy-details/index.html"
+  },
+  {
+   "name": "db-homes",
+   "service": "Base Database",
+   "url": "https://docs.oracle.com/en/cloud/paas/base-database/iam-policy-details/index.html"
+  },
+  {
+   "name": "databases",
+   "service": "Base Database",
+   "url": "https://docs.oracle.com/en/cloud/paas/base-database/iam-policy-details/index.html"
+  },
+  {
+   "name": "database-software-image",
+   "service": "Base Database",
+   "url": "https://docs.oracle.com/en/cloud/paas/base-database/iam-policy-details/index.html"
+  },
+  {
+   "name": "db-backups",
+   "service": "Base Database",
+   "url": "https://docs.oracle.com/en/cloud/paas/base-database/iam-policy-details/index.html"
+  },
+  {
+   "name": "cluster-family",
+   "service": "Kubernetes Engine",
+   "family": true,
+   "url": "https://docs.oracle.com/en-us/iaas/Content/Identity/policyreference/contengpolicyreference.htm"
+  },
+  {
+   "name": "clusters",
+   "service": "Kubernetes Engine",
+   "url": "https://docs.oracle.com/en-us/iaas/Content/Identity/policyreference/contengpolicyreference.htm"
+  },
+  {
+   "name": "cluster-node-pools",
+   "service": "Kubernetes Engine",
+   "url": "https://docs.oracle.com/en-us/iaas/Content/Identity/policyreference/contengpolicyreference.htm"
+  },
+  {
+   "name": "cluster-pod-shapes",
+   "service": "Kubernetes Engine",
+   "url": "https://docs.oracle.com/en-us/iaas/Content/Identity/policyreference/contengpolicyreference.htm"
+  },
+  {
+   "name": "cluster-virtualnode-pools",
+   "service": "Kubernetes Engine",
+   "url": "https://docs.oracle.com/en-us/iaas/Content/Identity/policyreference/contengpolicyreference.htm"
+  },
+  {
+   "name": "cluster-work-requests",
+   "service": "Kubernetes Engine",
+   "url": "https://docs.oracle.com/en-us/iaas/Content/Identity/policyreference/contengpolicyreference.htm"
+  },
+  {
+   "name": "cluster-workload-mappings",
+   "service": "Kubernetes Engine",
+   "url": "https://docs.oracle.com/en-us/iaas/Content/Identity/policyreference/contengpolicyreference.htm"
+  },
+  {
+   "name": "file-family",
+   "service": "File Storage",
+   "family": true,
+   "url": "https://docs.oracle.com/en-us/iaas/Content/Identity/policyreference/filestoragepolicyreference.htm"
+  },
+  {
+   "name": "file-systems",
+   "service": "File Storage",
+   "url": "https://docs.oracle.com/en-us/iaas/Content/Identity/policyreference/filestoragepolicyreference.htm"
+  },
+  {
+   "name": "filesystem-snapshot-policies",
+   "service": "File Storage",
+   "url": "https://docs.oracle.com/en-us/iaas/Content/Identity/policyreference/filestoragepolicyreference.htm"
+  },
+  {
+   "name": "mount-targets",
+   "service": "File Storage",
+   "url": "https://docs.oracle.com/en-us/iaas/Content/Identity/policyreference/filestoragepolicyreference.htm"
+  },
+  {
+   "name": "outbound-connectors",
+   "service": "File Storage",
+   "url": "https://docs.oracle.com/en-us/iaas/Content/Identity/policyreference/filestoragepolicyreference.htm"
+  },
+  {
+   "name": "export-sets",
+   "service": "File Storage",
+   "url": "https://docs.oracle.com/en-us/iaas/Content/Identity/policyreference/filestoragepolicyreference.htm"
+  },
+  {
+   "name": "replications",
+   "service": "File Storage",
+   "url": "https://docs.oracle.com/en-us/iaas/Content/Identity/policyreference/filestoragepolicyreference.htm"
+  },
+  {
+   "name": "replication-targets",
+   "service": "File Storage",
+   "url": "https://docs.oracle.com/en-us/iaas/Content/Identity/policyreference/filestoragepolicyreference.htm"
+  },
+  {
+   "name": "fss-work-requests",
+   "service": "File Storage",
+   "url": "https://docs.oracle.com/en-us/iaas/Content/Identity/policyreference/filestoragepolicyreference.htm"
+  },
+  {
+   "name": "functions-family",
+   "service": "Functions",
+   "family": true,
+   "url": "https://docs.oracle.com/en-us/iaas/Content/Identity/policyreference/functionspolicyreference.htm"
+  },
+  {
+   "name": "fn-app",
+   "service": "Functions",
+   "url": "https://docs.oracle.com/en-us/iaas/Content/Identity/policyreference/functionspolicyreference.htm"
+  },
+  {
+   "name": "fn-function",
+   "service": "Functions",
+   "url": "https://docs.oracle.com/en-us/iaas/Content/Identity/policyreference/functionspolicyreference.htm"
+  },
+  {
+   "name": "fn-invocation",
+   "service": "Functions",
+   "url": "https://docs.oracle.com/en-us/iaas/Content/Identity/policyreference/functionspolicyreference.htm"
+  },
+  {
+   "name": "authentication-policies",
+   "service": "IAM",
+   "url": "https://docs.oracle.com/en-us/iaas/Content/Identity/policyreference/iampolicyreference.htm"
+  },
+  {
+   "name": "compartments",
+   "service": "IAM",
+   "url": "https://docs.oracle.com/en-us/iaas/Content/Identity/policyreference/iampolicyreference.htm"
+  },
+  {
+   "name": "credentials",
+   "service": "IAM",
+   "url": "https://docs.oracle.com/en-us/iaas/Content/Identity/policyreference/iampolicyreference.htm"
+  },
+  {
+   "name": "domains",
+   "service": "IAM",
+   "url": "https://docs.oracle.com/en-us/iaas/Content/Identity/policyreference/iampolicyreference.htm"
+  },
+  {
+   "name": "dynamic-groups",
+   "service": "IAM",
+   "url": "https://docs.oracle.com/en-us/iaas/Content/Identity/policyreference/iampolicyreference.htm"
+  },
+  {
+   "name": "groups",
+   "service": "IAM",
+   "url": "https://docs.oracle.com/en-us/iaas/Content/Identity/policyreference/iampolicyreference.htm"
+  },
+  {
+   "name": "iamworkrequest",
+   "service": "IAM",
+   "url": "https://docs.oracle.com/en-us/iaas/Content/Identity/policyreference/iampolicyreference.htm"
+  },
+  {
+   "name": "identity-providers",
+   "service": "IAM",
+   "url": "https://docs.oracle.com/en-us/iaas/Content/Identity/policyreference/iampolicyreference.htm"
+  },
+  {
+   "name": "network-sources",
+   "service": "IAM",
+   "url": "https://docs.oracle.com/en-us/iaas/Content/Identity/policyreference/iampolicyreference.htm"
+  },
+  {
+   "name": "policies",
+   "service": "IAM",
+   "url": "https://docs.oracle.com/en-us/iaas/Content/Identity/policyreference/iampolicyreference.htm"
+  },
+  {
+   "name": "tag-defaults",
+   "service": "IAM",
+   "url": "https://docs.oracle.com/en-us/iaas/Content/Identity/policyreference/iampolicyreference.htm"
+  },
+  {
+   "name": "tag-namespaces",
+   "service": "IAM",
+   "url": "https://docs.oracle.com/en-us/iaas/Content/Identity/policyreference/iampolicyreference.htm"
+  },
+  {
+   "name": "tenancies",
+   "service": "IAM",
+   "url": "https://docs.oracle.com/en-us/iaas/Content/Identity/policyreference/iampolicyreference.htm"
+  },
+  {
+   "name": "users",
+   "service": "IAM",
+   "url": "https://docs.oracle.com/en-us/iaas/Content/Identity/policyreference/iampolicyreference.htm"
+  },
+  {
+   "name": "workrequest",
+   "service": "IAM",
+   "url": "https://docs.oracle.com/en-us/iaas/Content/Identity/policyreference/iampolicyreference.htm"
+  },
+  {
+   "name": "load-balancers",
+   "service": "Load Balancing",
+   "url": "https://docs.oracle.com/en-us/iaas/Content/Identity/policyreference/lbpolicyreference.htm"
+  },
+  {
+   "name": "logging-family",
+   "service": "Logging",
+   "family": true,
+   "url": "https://docs.oracle.com/en-us/iaas/Content/Identity/policyreference/loggingpolicyreference.htm"
+  },
+  {
+   "name": "log-groups",
+   "service": "Logging",
+   "url": "https://docs.oracle.com/en-us/iaas/Content/Identity/policyreference/loggingpolicyreference.htm"
+  },
+  {
+   "name": "log-content",
+   "service": "Logging",
+   "url": "https://docs.oracle.com/en-us/iaas/Content/Identity/policyreference/loggingpolicyreference.htm"
+  },
+  {
+   "name": "unified-configuration",
+   "service": "Logging",
+   "url": "https://docs.oracle.com/en-us/iaas/Content/Identity/policyreference/loggingpolicyreference.htm"
+  },
+  {
+   "name": "logs",
+   "service": "Logging",
+   "family": true,
+   "url": "https://docs.oracle.com/en-us/iaas/Content/Identity/policyreference/loggingpolicyreference.htm"
+  },
+  {
+   "name": "repos",
+   "service": "Container Registry",
+   "url": "https://docs.oracle.com/en-us/iaas/Content/Identity/policyreference/registrypolicyreference.htm"
+  },
+  {
+   "name": "ons-family",
+   "service": "Notifications",
+   "family": true,
+   "url": "https://docs.oracle.com/en-us/iaas/Content/Identity/policyreference/notificationpolicyreference.htm"
+  },
+  {
+   "name": "ons-topics",
+   "service": "Notifications",
+   "url": "https://docs.oracle.com/en-us/iaas/Content/Identity/policyreference/notificationpolicyreference.htm"
+  },
+  {
+   "name": "ons-subscriptions",
+   "service": "Notifications",
+   "url": "https://docs.oracle.com/en-us/iaas/Content/Identity/policyreference/notificationpolicyreference.htm"
+  },
+  {
+   "name": "streams",
+   "service": "Streaming",
+   "url": "https://docs.oracle.com/en-us/iaas/Content/Identity/policyreference/streamingpolicyreference.htm"
+  },
+  {
+   "name": "stream-pull",
+   "service": "Streaming",
+   "url": "https://docs.oracle.com/en-us/iaas/Content/Identity/policyreference/streamingpolicyreference.htm"
+  },
+  {
+   "name": "stream-push",
+   "service": "Streaming",
+   "url": "https://docs.oracle.com/en-us/iaas/Content/Identity/policyreference/streamingpolicyreference.htm"
+  },
+  {
+   "name": "connect-harnesses",
+   "service": "Streaming",
+   "url": "https://docs.oracle.com/en-us/iaas/Content/Identity/policyreference/streamingpolicyreference.htm"
+  },
+  {
+   "name": "stream-pools",
+   "service": "Streaming",
+   "url": "https://docs.oracle.com/en-us/iaas/Content/Identity/policyreference/streamingpolicyreference.htm"
+  },
+  {
+   "name": "stream-family",
+   "service": "Streaming",
+   "family": true,
+   "url": "https://docs.oracle.com/en-us/iaas/Content/Identity/policyreference/streamingpolicyreference.htm"
+  },
+  {
+   "name": "dns",
+   "service": "DNS",
+   "family": true,
+   "url": "https://docs.oracle.com/en-us/iaas/Content/Identity/policyreference/dnspolicyreference.htm"
+  },
+  {
+   "name": "dns-zones",
+   "service": "DNS",
+   "url": "https://docs.oracle.com/en-us/iaas/Content/Identity/policyreference/dnspolicyreference.htm"
+  },
+  {
+   "name": "dns-records",
+   "service": "DNS",
+   "url": "https://docs.oracle.com/en-us/iaas/Content/Identity/policyreference/dnspolicyreference.htm"
+  },
+  {
+   "name": "dns-steering-policies",
+   "service": "DNS",
+   "url": "https://docs.oracle.com/en-us/iaas/Content/Identity/policyreference/dnspolicyreference.htm"
+  },
+  {
+   "name": "dns-steering-policy-attachments",
+   "service": "DNS",
+   "url": "https://docs.oracle.com/en-us/iaas/Content/Identity/policyreference/dnspolicyreference.htm"
+  },
+  {
+   "name": "dns-tsig-keys",
+   "service": "DNS",
+   "url": "https://docs.oracle.com/en-us/iaas/Content/Identity/policyreference/dnspolicyreference.htm"
+  },
+  {
+   "name": "dns-views",
+   "service": "DNS",
+   "url": "https://docs.oracle.com/en-us/iaas/Content/Identity/policyreference/dnspolicyreference.htm"
+  },
+  {
+   "name": "dns-resolvers",
+   "service": "DNS",
+   "url": "https://docs.oracle.com/en-us/iaas/Content/Identity/policyreference/dnspolicyreference.htm"
+  },
+  {
+   "name": "alarms",
+   "service": "Monitoring",
+   "url": "https://docs.oracle.com/en-us/iaas/Content/Identity/policyreference/monitoringpolicyreference.htm"
+  },
+  {
+   "name": "metrics",
+   "service": "Monitoring",
+   "url": "https://docs.oracle.com/en-us/iaas/Content/Identity/policyreference/monitoringpolicyreference.htm"
+  },
+  {
+   "name": "cloudevents-rules",
+   "service": "Events",
+   "url": "https://docs.oracle.com/en-us/iaas/Content/Identity/policyreference/cloudeventspolicyreference.htm"
+  },
+  {
+   "name": "api-gateway-family",
+   "service": "API Gateway",
+   "family": true,
+   "url": "https://docs.oracle.com/en-us/iaas/Content/Identity/policyreference/apigatewaypolicyreference.htm"
+  },
+  {
+   "name": "api-gateways",
+   "service": "API Gateway",
+   "url": "https://docs.oracle.com/en-us/iaas/Content/Identity/policyreference/apigatewaypolicyreference.htm"
+  },
+  {
+   "name": "api-deployments",
+   "service": "API Gateway",
+   "url": "https://docs.oracle.com/en-us/iaas/Content/Identity/policyreference/apigatewaypolicyreference.htm"
+  },
+  {
+   "name": "api-definitions",
+   "service": "API Gateway",
+   "url": "https://docs.oracle.com/en-us/iaas/Content/Identity/policyreference/apigatewaypolicyreference.htm"
+  },
+  {
+   "name": "api-workrequests",
+   "service": "API Gateway",
+   "url": "https://docs.oracle.com/en-us/iaas/Content/Identity/policyreference/apigatewaypolicyreference.htm"
+  },
+  {
+   "name": "api-certificates",
+   "service": "API Gateway",
+   "url": "https://docs.oracle.com/en-us/iaas/Content/Identity/policyreference/apigatewaypolicyreference.htm"
+  },
+  {
+   "name": "api-sdks",
+   "service": "API Gateway",
+   "url": "https://docs.oracle.com/en-us/iaas/Content/Identity/policyreference/apigatewaypolicyreference.htm"
+  },
+  {
+   "name": "api-subscribers",
+   "service": "API Gateway",
+   "url": "https://docs.oracle.com/en-us/iaas/Content/Identity/policyreference/apigatewaypolicyreference.htm"
+  },
+  {
+   "name": "api-usage-plans",
+   "service": "API Gateway",
+   "url": "https://docs.oracle.com/en-us/iaas/Content/Identity/policyreference/apigatewaypolicyreference.htm"
+  },
+  {
+   "name": "leaf-certificates",
+   "service": "Certificates",
+   "url": "https://docs.oracle.com/en-us/iaas/Content/Identity/policyreference/certificatespolicyreference.htm"
+  },
+  {
+   "name": "leaf-certificate-versions",
+   "service": "Certificates",
+   "url": "https://docs.oracle.com/en-us/iaas/Content/Identity/policyreference/certificatespolicyreference.htm"
+  },
+  {
+   "name": "leaf-certificate-bundles",
+   "service": "Certificates",
+   "url": "https://docs.oracle.com/en-us/iaas/Content/Identity/policyreference/certificatespolicyreference.htm"
+  },
+  {
+   "name": "certificate-authorities",
+   "service": "Certificates",
+   "url": "https://docs.oracle.com/en-us/iaas/Content/Identity/policyreference/certificatespolicyreference.htm"
+  },
+  {
+   "name": "certificate-authority-versions",
+   "service": "Certificates",
+   "url": "https://docs.oracle.com/en-us/iaas/Content/Identity/policyreference/certificatespolicyreference.htm"
+  },
+  {
+   "name": "certificate-authority-bundles",
+   "service": "Certificates",
+   "url": "https://docs.oracle.com/en-us/iaas/Content/Identity/policyreference/certificatespolicyreference.htm"
+  },
+  {
+   "name": "certificate-authority-delegates",
+   "service": "Certificates",
+   "url": "https://docs.oracle.com/en-us/iaas/Content/Identity/policyreference/certificatespolicyreference.htm"
+  },
+  {
+   "name": "cabundles",
+   "service": "Certificates",
+   "url": "https://docs.oracle.com/en-us/iaas/Content/Identity/policyreference/certificatespolicyreference.htm"
+  },
+  {
+   "name": "certificate-associations",
+   "service": "Certificates",
+   "url": "https://docs.oracle.com/en-us/iaas/Content/Identity/policyreference/certificatespolicyreference.htm"
+  },
+  {
+   "name": "certificate-authority-associations",
+   "service": "Certificates",
+   "url": "https://docs.oracle.com/en-us/iaas/Content/Identity/policyreference/certificatespolicyreference.htm"
+  },
+  {
+   "name": "cabundle-associations",
+   "service": "Certificates",
+   "url": "https://docs.oracle.com/en-us/iaas/Content/Identity/policyreference/certificatespolicyreference.htm"
+  },
+  {
+   "name": "leaf-certificate-family",
+   "service": "Certificates",
+   "family": true,
+   "url": "https://docs.oracle.com/en-us/iaas/Content/Identity/policyreference/certificatespolicyreference.htm"
+  },
+  {
+   "name": "certificate-authority-family",
+   "service": "Certificates",
+   "family": true,
+   "url": "https://docs.oracle.com/en-us/iaas/Content/Identity/policyreference/certificatespolicyreference.htm"
+  },
+  {
+   "name": "audit-events",
+   "service": "Audit",
+   "url": "https://docs.oracle.com/en-us/iaas/Content/Identity/policyreference/auditpolicyreference.htm"
+  },
+  {
+   "name": "orm-family",
+   "service": "Resource Manager",
+   "family": true,
+   "url": "https://docs.oracle.com/en-us/iaas/Content/Identity/policyreference/resourcemanagerpolicyreference.htm"
+  },
+  {
+   "name": "orm-config-source-providers",
+   "service": "Resource Manager",
+   "url": "https://docs.oracle.com/en-us/iaas/Content/Identity/policyreference/resourcemanagerpolicyreference.htm"
+  },
+  {
+   "name": "orm-jobs",
+   "service": "Resource Manager",
+   "url": "https://docs.oracle.com/en-us/iaas/Content/Identity/policyreference/resourcemanagerpolicyreference.htm"
+  },
+  {
+   "name": "orm-private-endpoints",
+   "service": "Resource Manager",
+   "url": "https://docs.oracle.com/en-us/iaas/Content/Identity/policyreference/resourcemanagerpolicyreference.htm"
+  },
+  {
+   "name": "orm-stacks",
+   "service": "Resource Manager",
+   "url": "https://docs.oracle.com/en-us/iaas/Content/Identity/policyreference/resourcemanagerpolicyreference.htm"
+  },
+  {
+   "name": "orm-template",
+   "service": "Resource Manager",
+   "url": "https://docs.oracle.com/en-us/iaas/Content/Identity/policyreference/resourcemanagerpolicyreference.htm"
+  },
+  {
+   "name": "orm-work-requests",
+   "service": "Resource Manager",
+   "url": "https://docs.oracle.com/en-us/iaas/Content/Identity/policyreference/resourcemanagerpolicyreference.htm"
+  }
+ ]
+}

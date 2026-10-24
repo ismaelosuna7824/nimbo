@@ -1,0 +1,22 @@
+# A location variable (Variables panel) linked from every location field
+# with Link to…; CAF names and tags are typed.
+steps:
+  - variable: {name: location, type: string, default: eastus, description: Azure region of every resource.}
+  - set:
+      node: azurerm_resource_group.main
+      attrs:
+        name: rg-shop-dev
+        location: {link: var.location}
+        tags: {project: shop, environment: dev, owner: platform}
+  - set:
+      node: azurerm_virtual_network.main
+      attrs:
+        name: vnet-shop-dev
+        location: {link: var.location}
+        tags: {project: shop, environment: dev, owner: platform}
+  - set:
+      node: azurerm_storage_account.data
+      attrs:
+        name: stshopdev001
+        location: {link: var.location}
+        tags: {project: shop, environment: dev, owner: platform}

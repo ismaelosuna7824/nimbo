@@ -1,0 +1,9 @@
+# Grant: drag the role onto the bucket and pick Read (s3:ListBucket on the
+# bucket, s3:GetObject on its objects, written into the existing inline
+# policy); then delete the admin statement in the AWS policy editor.
+steps:
+  - connect: {source: aws_iam_role.report_reader, target: aws_s3_bucket.reports, recipe: "access:read"}
+  - accessAWS:
+      node: aws_iam_role_policy.report_reader
+      path: policy
+      removeWhere: {actions: ["*"], resources: ['"*"']}

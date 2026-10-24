@@ -17,7 +17,7 @@ import { cn } from "@/lib/utils"
 import { useWorkflowStore } from "@/state/workflow-store"
 import { ChallengePage } from "./challenge-page"
 import { ProgressBadge, ProviderDot } from "./meta"
-import { DocLinks, LevelBadge, Sources } from "./parts"
+import { CodeBadge, DocLinks, LevelBadge, Sources } from "./parts"
 import { learnKeys, LEVEL_LABEL, LEVELS, PROVIDER_META, PROVIDERS, RUNTIME_LABEL, useAllChallenges, useLearnStore } from "./store"
 
 /**
@@ -440,6 +440,7 @@ function ChallengeCard({ challenge: c }: { challenge: ChallengeSummary }) {
         <span>
           {c.checks} {c.checks === 1 ? "goal" : "goals"}
         </span>
+        <CodeBadge solvableWithoutCode={c.solvableWithoutCode} place="card" />
         {c.tags.slice(0, 3).map((t) => (
           <span key={t} className="rounded bg-muted px-1.5 py-0.5">
             {t}

@@ -1,0 +1,13 @@
+# At rest: a palette SSE configuration linked to the bucket (nested rule
+# block, algorithm select). In transit: a palette bucket policy dragged onto
+# the bucket with the "Require HTTPS" recipe (Deny on aws:SecureTransport).
+steps:
+  - add: {type: aws_s3_bucket_server_side_encryption_configuration, name: records}
+  - set:
+      node: aws_s3_bucket_server_side_encryption_configuration.records
+      attrs:
+        bucket: {link: aws_s3_bucket.records.id}
+        rule[0].apply_server_side_encryption_by_default[0].sse_algorithm: "aws:kms"
+        rule[0].bucket_key_enabled: true
+  - add: {type: aws_s3_bucket_policy, name: records}
+  - connect: {source: aws_s3_bucket.records, target: aws_s3_bucket_policy.records, recipe: s3-require-tls}

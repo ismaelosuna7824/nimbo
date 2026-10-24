@@ -1,0 +1,16 @@
+# New environment prod (compose.prod.yaml), its variables in .env.prod,
+# limits in the environment editor, then with prod active and the service
+# form's "Only in prod" switch on: the code mount removed (volumes:
+# !override []), a restart policy and rotated logs, all in
+# compose.prod.yaml. compose.yaml stays the development setup.
+steps:
+  - envCreate: {name: prod}
+  - envVariable: {env: prod, key: APP_ENV, value: production}
+  - envVariable: {env: prod, key: LOG_LEVEL, value: info}
+  - envSettings: {env: prod, target: api, values: {cpus: "0.5", memory: 128M}}
+  - envActivate: {env: prod}
+  - composePatch: {service: api, patch: {scope: environment, volumes: []}}
+  - composePatch: {service: api, patch: {scope: environment, restart: always}}
+  - composePatch: {service: api, patch: {scope: environment, logging: {driver: json-file, maxSize: 10m, maxFile: "3"}}}
+  # base-stays-dev is graded in the active environment: back to the base.
+  - envActivate: {env: ""}

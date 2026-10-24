@@ -12,7 +12,7 @@ import {
   type Connection,
   type NodeChange,
 } from "@xyflow/react"
-import { ChevronsDownUpIcon, ChevronsUpDownIcon, Code2Icon, ExpandIcon, FileSlidersIcon, LayoutTemplateIcon, MousePointerClickIcon, RotateCwIcon, SplitIcon, Trash2Icon, WandSparklesIcon } from "lucide-react"
+import { ChevronsDownUpIcon, ChevronsUpDownIcon, Code2Icon, ExpandIcon, FileSlidersIcon, GlobeIcon, LayoutTemplateIcon, MousePointerClickIcon, RotateCwIcon, ShieldPlusIcon, SplitIcon, Trash2Icon, WandSparklesIcon } from "lucide-react"
 import { useTheme } from "next-themes"
 import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { toast } from "sonner"
@@ -42,6 +42,7 @@ import {
   applyRecipe,
   collapseChart,
   deleteObject,
+  giveOwnRole,
   KUBE_DRAG_TYPE,
   registerKubeCanvas,
   restartWorkload,
@@ -276,8 +277,32 @@ function CanvasInner() {
     focus(id)
   }, [nodes, focus])
 
+  const describe = useCallback(
+    (id: string): PendingKubeEnd => {
+      const n = byId.get(id)?.node
+      return { id, label: n?.name ?? id, kind: n?.kind ?? "" }
+    },
+    [byId],
+  )
+
+  /** The object card under the pointer when an identity (workload, ServiceAccount) card is dropped on it. */
+  const grantTarget = useCallback(
+    (event: MouseEvent | TouchEvent, dragged: KubeFlowNode[]) => {
+      const node = dragged.length === 1 ? byId.get(dragged[0].id)?.node : undefined
+      if (!node || !(isWorkload(node) || node.kind === "ServiceAccount")) return undefined
+      const point = "changedTouches" in event ? event.changedTouches[0] : event
+      if (!point) return undefined
+      const p = flow.screenToFlowPosition({ x: point.clientX, y: point.clientY })
+      const hit = flow
+        .getIntersectingNodes({ x: p.x, y: p.y, width: 1, height: 1 })
+        .find((n) => n.id !== node.id && n.type !== "frame" && !!n.data.node && !n.data.chart)
+      return hit?.id
+    },
+    [byId, flow],
+  )
+
   const onNodeDragStop = useCallback(
-    (_: unknown, __: KubeFlowNode, dragged: KubeFlowNode[]) => {
+    (event: MouseEvent | TouchEvent, _: KubeFlowNode, dragged: KubeFlowNode[]) => {
       const positions = new Map<string, Position>()
       const draggedIds = new Set(dragged.map((d) => d.id))
       for (const d of dragged) {
@@ -293,17 +318,25 @@ function CanvasInner() {
         if (item.kind === "frame" && moved.length === 0 && item.node) moved.push(item)
         for (const m of moved) positions.set(m.id, { x: m.x + dx, y: m.y + dy })
       }
-      void savePositions(withChartSpots(canvas, positions))
+      const target = grantTarget(event, dragged)
+      if (!target) {
+        void savePositions(withChartSpots(canvas, positions))
+        return
+      }
+      // Dropped onto a Role or an object: offer the grants ("What can it do?") and put the card back.
+      const from = dragged[0].id
+      void (async () => {
+        const wf = useWorkflowStore.getState().workflow!
+        const grants = (await api.kubernetesRecipes(wf.id, from, target).catch(() => [])).filter((r) => r.kind === "access")
+        if (grants.length === 0) {
+          await savePositions(withChartSpots(canvas, positions))
+          return
+        }
+        setNodes((ns) => ns.map((n) => (n.id === from ? (derivedNodes.find((d) => d.id === from) ?? n) : n)))
+        setPending({ from: describe(from), to: describe(target), recipes: grants })
+      })()
     },
-    [byId, canvas, flow],
-  )
-
-  const describe = useCallback(
-    (id: string): PendingKubeEnd => {
-      const n = byId.get(id)?.node
-      return { id, label: n?.name ?? id, kind: n?.kind ?? "" }
-    },
-    [byId],
+    [byId, canvas, flow, grantTarget, describe, derivedNodes, setNodes],
   )
 
   /** Asks the daemon how `from` can refer to `to` ("" = a new object) and applies or offers the recipes. */
@@ -488,6 +521,10 @@ function CanvasInner() {
                     <ExpandIcon />
                     Add HPA
                   </ContextMenuItem>
+                  <ContextMenuItem data-testid="k8s-menu-allow-all" onSelect={() => void connect(menu.id, "", "allowAll")}>
+                    <GlobeIcon />
+                    Accept traffic from anywhere
+                  </ContextMenuItem>
                   {menu.kind !== "Job" && menu.kind !== "CronJob" && menu.kind !== "Pod" && (
                     <ContextMenuItem disabled={status?.cluster.state !== "running"} onSelect={() => void restartWorkload(menu)}>
                       <RotateCwIcon />
@@ -495,6 +532,12 @@ function CanvasInner() {
                     </ContextMenuItem>
                   )}
                 </>
+              )}
+              {(isWorkload(menu) || (menu.kind === "ServiceAccount" && menu.apiVersion === "v1")) && (
+                <ContextMenuItem data-testid="k8s-menu-own-role" onSelect={() => void giveOwnRole(menu)}>
+                  <ShieldPlusIcon />
+                  Give it its own Role
+                </ContextMenuItem>
               )}
               <ContextMenuSeparator />
               <ContextMenuItem variant="destructive" onSelect={() => requestDelete(menu.id)}>

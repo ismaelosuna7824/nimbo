@@ -1,0 +1,3060 @@
+description: Marks which global challenges are solvable without code and rewrites their hints as UI steps
+operations:
+- op: upsert
+  kind: challenge
+  id: global-least-privilege
+  data:
+    provider: global
+    level: beginner
+    title: Grant only the access a workload needs
+    summary: Replace an "allow everything" policy with one that lets a reporting job read a single bucket.
+    minutes: 20
+    tags: [security, iam, least-privilege, well-architected]
+    runtime: design
+    problem: |
+      A nightly reporting job reads finished reports from a storage bucket. While prototyping, someone gave
+      its role a policy that allows **every action on every resource** "to get it working". The job works, but
+      if its credentials leak (a dependency compromise, a logged token) the attacker inherits full control of
+      the account: they can delete databases, create users and read every bucket.
+
+      All four cloud frameworks start security with the same principle: an identity gets only the
+      permissions it needs for its task, on the specific resources it touches, and nothing by default.
+
+      This challenge is graded on **AWS** (Terraform, design checks): the starter has an IAM role for the job,
+      the `reports` bucket and the over-broad inline policy. The adaptations explain how the same fix looks
+      on Azure, Google Cloud, OCI, Docker and Kubernetes.
+    requirements:
+    - The job's policy no longer allows `*` actions on `*` resources (no `bp_iam_wildcard` finding).
+    - 'The policy grants only the read actions the job uses: `s3:ListBucket` on the bucket and `s3:GetObject` on its objects.'
+    - Resources are referenced from the bucket itself (`aws_s3_bucket.reports.arn`), not written as `*`.
+    - No service-wide wildcard actions such as `s3:*` remain.
+    hints:
+    - 'Start from what the job actually does: list the bucket and download objects. Every other permission is risk without benefit.'
+    - Bucket-level actions (`s3:ListBucket`) apply to the bucket; object-level actions (`s3:GetObject`) apply to the objects inside it (`<bucket ARN>/*`). Nimbo's **Read** access writes both for you when you drag the role onto the bucket.
+    - Drag the role `report_reader` onto the bucket `reports` and pick **Read**. Then click the role policy, open its **Access** section and delete the statement that allows every action (`*`) on every resource.
+    solution: |
+      Least privilege means granting **only the actions a task needs, only on the resources it touches**. IAM
+      identities have no permissions by default, so every statement you add is a deliberate grant.
+
+      1. Identify the job's real API calls: listing the reports bucket and reading objects.
+      2. Replace the single `Action = "*"` / `Resource = "*"` statement with two scoped statements:
+         - `s3:ListBucket` on `aws_s3_bucket.reports.arn`;
+         - `s3:GetObject` on `"${aws_s3_bucket.reports.arn}/*"`.
+      3. Reference the bucket instead of hard-coding ARNs, so the policy follows the resource across
+         environments.
+
+      In a real account you would keep refining over time: IAM Access Analyzer can generate a policy from the
+      actions a role actually used (CloudTrail activity), and last-accessed information shows permissions you
+      can remove. The same thinking applies everywhere: predefined/custom roles instead of basic roles on Google
+      Cloud, built-in roles scoped to a resource on Azure, compartment-scoped policies on OCI, namespaced Roles
+      instead of `cluster-admin` on Kubernetes, and non-root users with dropped capabilities in containers.
+
+      **Without writing code in Nimbo**
+
+      1. Drag the IAM role `report_reader` onto the bucket `reports` and pick **Read**. Nimbo adds `s3:ListBucket` on the bucket and `s3:GetObject` on its objects to the role's inline policy.
+      2. Click the role policy `report_reader`, open its **Access** section and delete the admin statement (action `*` on resource `*`).
+    solutionFiles:
+      main.tf: |
+        resource "aws_s3_bucket" "reports" {
+          bucket_prefix = "${var.project}-reports-"
+        }
+
+        resource "aws_s3_bucket_server_side_encryption_configuration" "reports" {
+          bucket = aws_s3_bucket.reports.id
+
+          rule {
+            apply_server_side_encryption_by_default {
+              sse_algorithm = "AES256"
+            }
+          }
+        }
+
+        resource "aws_s3_bucket_public_access_block" "reports" {
+          bucket                  = aws_s3_bucket.reports.id
+          block_public_acls       = true
+          block_public_policy     = true
+          ignore_public_acls      = true
+          restrict_public_buckets = true
+        }
+
+        # The role the nightly reporting job runs as.
+        resource "aws_iam_role" "report_reader" {
+          name = "${var.project}-report-reader"
+          assume_role_policy = jsonencode({
+            Version = "2012-10-17"
+            Statement = [{
+              Effect    = "Allow"
+              Principal = { Service = "lambda.amazonaws.com" }
+              Action    = "sts:AssumeRole"
+            }]
+          })
+        }
+
+        # Only what the job does: list the bucket and read its objects.
+        resource "aws_iam_role_policy" "report_reader" {
+          name = "${var.project}-read-reports"
+          role = aws_iam_role.report_reader.id
+          policy = jsonencode({
+            Version = "2012-10-17"
+            Statement = [
+              {
+                Sid      = "ListReports"
+                Effect   = "Allow"
+                Action   = ["s3:ListBucket"]
+                Resource = [aws_s3_bucket.reports.arn]
+              },
+              {
+                Sid      = "ReadReports"
+                Effect   = "Allow"
+                Action   = ["s3:GetObject"]
+                Resource = ["${aws_s3_bucket.reports.arn}/*"]
+              }
+            ]
+          })
+        }
+    starter:
+      kind: terraform
+      cloud: aws
+      files:
+        versions.tf: |
+          terraform {
+            required_version = ">= 1.6"
+
+            required_providers {
+              aws = {
+                source  = "hashicorp/aws"
+                version = "~> 6.0"
+              }
+            }
+          }
+        providers.tf: |
+          provider "aws" {
+            region = var.aws_region
+
+            default_tags {
+              tags = {
+                Project   = var.project
+                ManagedBy = "nimbo"
+              }
+            }
+          }
+        variables.tf: |
+          variable "project" {
+            type        = string
+            default     = "reports"
+            description = "Project name: prefix of every resource name and the Project tag."
+          }
+
+          variable "aws_region" {
+            type        = string
+            default     = "us-east-1"
+            description = "AWS region to deploy into."
+          }
+        main.tf: |
+          resource "aws_s3_bucket" "reports" {
+            bucket_prefix = "${var.project}-reports-"
+          }
+
+          resource "aws_s3_bucket_server_side_encryption_configuration" "reports" {
+            bucket = aws_s3_bucket.reports.id
+
+            rule {
+              apply_server_side_encryption_by_default {
+                sse_algorithm = "AES256"
+              }
+            }
+          }
+
+          resource "aws_s3_bucket_public_access_block" "reports" {
+            bucket                  = aws_s3_bucket.reports.id
+            block_public_acls       = true
+            block_public_policy     = true
+            ignore_public_acls      = true
+            restrict_public_buckets = true
+          }
+
+          # The role the nightly reporting job runs as.
+          resource "aws_iam_role" "report_reader" {
+            name = "${var.project}-report-reader"
+            assume_role_policy = jsonencode({
+              Version = "2012-10-17"
+              Statement = [{
+                Effect    = "Allow"
+                Principal = { Service = "lambda.amazonaws.com" }
+                Action    = "sts:AssumeRole"
+              }]
+            })
+          }
+
+          # "Temporary" while prototyping: the job can do anything.
+          resource "aws_iam_role_policy" "report_reader" {
+            name = "${var.project}-read-reports"
+            role = aws_iam_role.report_reader.id
+            policy = jsonencode({
+              Version = "2012-10-17"
+              Statement = [{
+                Effect   = "Allow"
+                Action   = "*"
+                Resource = "*"
+              }]
+            })
+          }
+    checks:
+    - id: valid
+      label: The configuration is valid
+      type: validate
+    - id: no-admin-policy
+      label: No policy allows every action on every resource
+      type: rules_clean
+      rules_clean:
+        codes: [bp_iam_wildcard]
+        minSeverity: warning
+    - id: read-only-actions
+      label: The policy grants s3:GetObject and s3:ListBucket
+      type: has
+      has:
+        terraform:
+          type: aws_iam_role_policy
+          name: report_reader
+          where:
+            policy:
+              contains: s3:GetObject
+    - id: list-action
+      label: Listing is allowed on the bucket
+      type: has
+      has:
+        terraform:
+          type: aws_iam_role_policy
+          name: report_reader
+          where:
+            policy:
+              contains: s3:ListBucket
+    - id: scoped-resource
+      label: Resources reference the reports bucket
+      type: has
+      has:
+        terraform:
+          type: aws_iam_role_policy
+          name: report_reader
+          where:
+            policy:
+              ref: aws_s3_bucket.reports
+    - id: no-service-wildcard
+      label: No service-wide wildcard actions (s3:*)
+      type: has
+      has:
+        terraform:
+          type: aws_iam_role_policy
+          where:
+            policy:
+              contains: s3:*
+          count:
+            max: 0
+    adaptations:
+      aws: |
+        Attach an **IAM role** to the compute (Lambda execution role, EC2 instance profile, ECS task role) with
+        identity policies that list specific actions and resource ARNs; add conditions where they narrow access.
+        Use **IAM Access Analyzer** policy generation and last-accessed data to trim unused permissions.
+        Practice: `aws-lambda-least-privilege`.
+      azure: |
+        Give the workload a **managed identity** and assign it a **built-in role** (for example *Storage Blob
+        Data Reader*) at the narrowest scope that works: the storage account or container, not the subscription.
+        Avoid Owner/Contributor for workloads; add role-assignment conditions for finer control. Practice:
+        `azure-app-service-key-vault`.
+      gcp: |
+        Run the job as a **dedicated service account** and grant a **predefined role** (for example
+        `roles/storage.objectViewer`) on the bucket, not a basic role (Owner/Editor/Viewer) on the project.
+        Use role recommendations to remove excess permissions. Practice: `gcp-cloud-run-least-privilege`.
+      oci: |
+        Put the bucket in a **compartment** and write an IAM **policy** for a dynamic group (instance or
+        resource principal) such as `allow dynamic-group report-jobs to read objects in compartment reports`.
+        Prefer `read`/`use` verbs over `manage`, and never run workloads as the tenancy administrator. Practice:
+        `oci-compartment-least-privilege`.
+      docker: |
+        Least privilege for containers is about the process: run as a **non-root `USER`**, drop Linux
+        capabilities (`cap_drop: [ALL]`), set `read_only: true` where possible, and never mount the Docker
+        socket. Give each service only the secrets it needs (`secrets:`). Practice: `docker-multi-stage-nonroot`,
+        `docker-hardened-runtime`.
+      kubernetes: |
+        Give each workload its own **ServiceAccount** bound with a namespaced **Role/RoleBinding** listing only
+        the verbs and resources it uses; avoid wildcards and `cluster-admin`, and set
+        `automountServiceAccountToken: false` when the pod doesn't call the API. Practice:
+        `kubernetes-rbac-least-privilege`.
+    sources:
+    - title: AWS Well-Architected — SEC03-BP02 Grant least privilege access
+      url: https://docs.aws.amazon.com/wellarchitected/latest/framework/sec_permissions_least_privileges.html
+    - title: AWS IAM — Security best practices in IAM
+      url: https://docs.aws.amazon.com/IAM/latest/UserGuide/best-practices.html
+    - title: Azure Well-Architected — Identity and access management
+      url: https://learn.microsoft.com/en-us/azure/well-architected/security/identity-access
+    - title: Google Cloud — Use IAM securely
+      url: https://cloud.google.com/iam/docs/using-iam-securely
+    - title: OCI Well-Architected — Isolate resources and control access
+      url: https://docs.oracle.com/en/solutions/oci-best-practices/isolate-resources-and-control-access1.html
+    - title: Kubernetes — Role Based Access Control good practices
+      url: https://kubernetes.io/docs/concepts/security/rbac-good-practices/
+    - title: Docker — Docker Engine security
+      url: https://docs.docker.com/engine/security/
+    solvableWithoutCode: true
+- op: upsert
+  kind: challenge
+  id: global-encryption
+  data:
+    provider: global
+    level: beginner
+    title: Encrypt data at rest and in transit
+    summary: Turn on default encryption for a records bucket and refuse any request that isn't sent over TLS.
+    minutes: 25
+    tags: [security, encryption, tls, data-protection, well-architected]
+    prerequisites: [global-least-privilege]
+    runtime: design
+    problem: |
+      A clinic stores scanned patient records in an object storage bucket. Access is private, but the bucket
+      has **no default encryption** configured and clients may still talk to it over plain HTTP. An auditor asks
+      two questions: *"Is the data encrypted where it is stored?"* and *"Can it travel unencrypted?"* — today
+      the honest answer is "we don't control either".
+
+      Every framework treats these as two separate controls: **encryption at rest** (data is unreadable
+      without the key, and key access is controlled and audited) and **encryption in transit** (TLS on every
+      connection, with insecure protocols refused).
+
+      Graded on **AWS** (Terraform, design checks): the starter has the private `records` bucket with a public
+      access block and nothing else.
+    requirements:
+    - The `records` bucket has a server-side encryption configuration with `AES256`, `aws:kms` or `aws:kms:dsse` (no `bp_unencrypted_storage` finding).
+    - A bucket policy on `records` **denies** any request where `aws:SecureTransport` is `false`.
+    - Both resources reference the bucket (`aws_s3_bucket.records`).
+    hints:
+    - 'Encryption at rest is its own resource: add a server-side encryption configuration from the palette and link it to the bucket.'
+    - In its `rule` block pick `aws:kms` as the algorithm (in `apply_server_side_encryption_by_default`) and turn `bucket_key_enabled` on to reduce KMS request costs; a customer managed key lets you control and audit who can decrypt.
+    - Encryption in transit is a bucket policy that denies any request not made over HTTPS. Add a bucket policy from the palette, drag the bucket onto it and pick **Require HTTPS for the bucket (deny insecure transport)**.
+    solution: |
+      **At rest.** Add `aws_s3_bucket_server_side_encryption_configuration` for the bucket. `aws:kms` uses AWS KMS:
+      with a customer managed key you control the key policy and rotation and every decrypt is logged; S3
+      Bucket Keys cut the number of KMS calls. `AES256` (SSE-S3) also satisfies encrypt-by-default.
+
+      **In transit.** Allowing only HTTPS is done with a **deny** statement: anything that arrives with
+      `aws:SecureTransport = false` is refused, whatever other policies allow. A deny always wins over an allow,
+      which is why this pattern is robust.
+
+      Encryption complements access control, it doesn't replace it: keep the public access block, and limit who
+      may use the key (`kms:Decrypt`) as tightly as who may read the bucket.
+
+      **Without writing code in Nimbo**
+
+      1. From the palette add an **S3 bucket server side encryption configuration** and use **Link to…** on **bucket** to pick the bucket's id.
+      2. In its **rule** block, under **apply_server_side_encryption_by_default**, pick `aws:kms` in **sse_algorithm**, and turn **bucket_key_enabled** on.
+      3. From the palette add an **S3 bucket policy**. Drag the bucket `records` onto it and pick **Require HTTPS for the bucket (deny insecure transport)**.
+    solutionFiles:
+      main.tf: |
+        resource "aws_s3_bucket" "records" {
+          bucket_prefix = "${var.project}-records-"
+        }
+
+        resource "aws_s3_bucket_public_access_block" "records" {
+          bucket                  = aws_s3_bucket.records.id
+          block_public_acls       = true
+          block_public_policy     = true
+          ignore_public_acls      = true
+          restrict_public_buckets = true
+        }
+
+        # At rest: every new object is encrypted with KMS; the bucket key
+        # reduces KMS requests.
+        resource "aws_s3_bucket_server_side_encryption_configuration" "records" {
+          bucket = aws_s3_bucket.records.id
+
+          rule {
+            apply_server_side_encryption_by_default {
+              sse_algorithm = "aws:kms"
+            }
+            bucket_key_enabled = true
+          }
+        }
+
+        # In transit: refuse every request that doesn't use TLS.
+        resource "aws_s3_bucket_policy" "records" {
+          bucket = aws_s3_bucket.records.id
+          policy = jsonencode({
+            Version = "2012-10-17"
+            Statement = [{
+              Sid       = "DenyInsecureTransport"
+              Effect    = "Deny"
+              Principal = "*"
+              Action    = "s3:*"
+              Resource  = [aws_s3_bucket.records.arn, "${aws_s3_bucket.records.arn}/*"]
+              Condition = { Bool = { "aws:SecureTransport" = "false" } }
+            }]
+          })
+
+          depends_on = [aws_s3_bucket_public_access_block.records]
+        }
+    starter:
+      kind: terraform
+      cloud: aws
+      files:
+        versions.tf: |
+          terraform {
+            required_version = ">= 1.6"
+
+            required_providers {
+              aws = {
+                source  = "hashicorp/aws"
+                version = "~> 6.0"
+              }
+            }
+          }
+        providers.tf: |
+          provider "aws" {
+            region = var.aws_region
+
+            default_tags {
+              tags = {
+                Project   = var.project
+                ManagedBy = "nimbo"
+              }
+            }
+          }
+        variables.tf: |
+          variable "project" {
+            type        = string
+            default     = "clinic"
+            description = "Project name: prefix of every resource name and the Project tag."
+          }
+
+          variable "aws_region" {
+            type        = string
+            default     = "us-east-1"
+            description = "AWS region to deploy into."
+          }
+        main.tf: |
+          resource "aws_s3_bucket" "records" {
+            bucket_prefix = "${var.project}-records-"
+          }
+
+          resource "aws_s3_bucket_public_access_block" "records" {
+            bucket                  = aws_s3_bucket.records.id
+            block_public_acls       = true
+            block_public_policy     = true
+            ignore_public_acls      = true
+            restrict_public_buckets = true
+          }
+    checks:
+    - id: valid
+      label: The configuration is valid
+      type: validate
+    - id: no-unencrypted-storage
+      label: Storage is encrypted at rest
+      type: rules_clean
+      rules_clean:
+        codes: [bp_unencrypted_storage]
+        minSeverity: warning
+    - id: sse-records
+      label: The records bucket has default encryption
+      type: has
+      has:
+        terraform:
+          type: aws_s3_bucket_server_side_encryption_configuration
+          where:
+            bucket:
+              ref: aws_s3_bucket.records
+            rule.apply_server_side_encryption_by_default.sse_algorithm:
+              in: [AES256, 'aws:kms', 'aws:kms:dsse']
+    - id: tls-only
+      label: The bucket policy requires TLS (aws:SecureTransport)
+      type: has
+      has:
+        terraform:
+          type: aws_s3_bucket_policy
+          where:
+            bucket:
+              ref: aws_s3_bucket.records
+            policy:
+              contains: aws:SecureTransport
+    - id: tls-deny
+      label: Insecure requests are denied, not just not allowed
+      type: has
+      has:
+        terraform:
+          type: aws_s3_bucket_policy
+          where:
+            policy:
+              contains: Deny
+    adaptations:
+      aws: |
+        At rest: S3 default encryption (SSE-S3 or SSE-KMS with a customer managed key), `storage_encrypted` on
+        RDS, encrypted EBS (account-level EBS encryption by default), DynamoDB server-side encryption. In transit:
+        bucket policies with `aws:SecureTransport`, HTTPS listeners with ACM certificates on load balancers and
+        CloudFront. Practice: `aws-private-s3-bucket`, `aws-cloudfront-s3-oac`.
+      azure: |
+        Storage accounts encrypt at rest by default (customer-managed keys in **Key Vault** when you need key
+        control). For transit set **secure transfer required** (HTTPS only) and a **minimum TLS version of 1.2**;
+        Azure SQL also enforces a minimum TLS version. Practice: `azure-storage-secure-defaults`,
+        `azure-sql-private-endpoint`.
+      gcp: |
+        Google Cloud encrypts data at rest by default (AES-256); use **Cloud KMS** customer-managed encryption
+        keys (CMEK) when you must control the key. For transit, serve through HTTPS load balancers with managed
+        certificates and an SSL policy that sets a minimum TLS version. Practice: `gcp-https-lb-cloud-armor`.
+      oci: |
+        Block, file and object storage are encrypted at rest; use **OCI Vault** master encryption keys when you
+        need to manage and rotate the keys yourself. Terminate TLS on the load balancer (or end-to-end TLS to
+        backends). Practice: `oci-vault-customer-managed-keys`.
+      docker: |
+        Docker doesn't encrypt volumes for you: rely on host disk encryption and keep credentials out of images
+        and compose files with **secrets** (mounted as files under `/run/secrets`). Terminate TLS at a reverse
+        proxy and use TLS between services that cross untrusted networks. Practice: `docker-secrets-as-files`.
+      kubernetes: |
+        Enable **encryption at rest for Secrets** in the API server (EncryptionConfiguration, ideally with a KMS
+        provider) — managed clusters (EKS, AKS, GKE, OKE) offer it as a setting. Terminate TLS at the Ingress
+        with a certificate Secret, and consider a service mesh for mTLS between pods. Practice:
+        `kubernetes-config-and-secrets`.
+    sources:
+    - title: AWS Well-Architected — SEC08-BP02 Enforce encryption at rest
+      url: https://docs.aws.amazon.com/wellarchitected/latest/framework/sec_protect_data_rest_encrypt.html
+    - title: AWS Well-Architected — SEC09-BP02 Enforce encryption in transit
+      url: https://docs.aws.amazon.com/wellarchitected/latest/framework/sec_protect_data_transit_encrypt.html
+    - title: Amazon S3 — Security best practices
+      url: https://docs.aws.amazon.com/AmazonS3/latest/userguide/security-best-practices.html
+    - title: Azure Well-Architected — Encryption
+      url: https://learn.microsoft.com/en-us/azure/well-architected/security/encryption
+    - title: Google Cloud — Default encryption at rest
+      url: https://cloud.google.com/docs/security/encryption/default-encryption
+    - title: Google Cloud — Encryption in transit
+      url: https://cloud.google.com/docs/security/encryption-in-transit
+    - title: OCI Well-Architected — Protect data at rest
+      url: https://docs.oracle.com/en/solutions/oci-best-practices/protect-data-rest1.html
+    - title: Kubernetes — Encrypting confidential data at rest
+      url: https://kubernetes.io/docs/tasks/administer-cluster/encrypt-data/
+    - title: Docker — Manage secrets securely in Docker Compose
+      url: https://docs.docker.com/compose/how-tos/use-secrets/
+    solvableWithoutCode: true
+- op: upsert
+  kind: challenge
+  id: global-network-segmentation
+  data:
+    provider: global
+    level: intermediate
+    title: Segment the network into tiers
+    summary: Put a proxy, an API and a database on separate networks so only the API can reach the database.
+    minutes: 35
+    tags: [security, networking, segmentation, defense-in-depth, well-architected]
+    prerequisites: [global-least-privilege]
+    runtime: local
+    problem: |
+      A three-tier app — a reverse **proxy**, an **api** and a PostgreSQL **db** — runs on one flat network,
+      and the database is even published on every interface of the host. Anything that compromises the proxy
+      (the only component exposed to clients) can connect straight to the database, and so can anyone on the
+      same Wi-Fi.
+
+      The frameworks call this **network segmentation**: group components into layers by exposure and data
+      sensitivity, and allow only the flows each layer needs (the proxy talks to the API, the API talks to the
+      database, nothing else talks to the database).
+
+      Graded on **Docker** (local, deployed): the starter `compose.yaml` runs all three services on the default
+      network; the proxy forwards `/api/` to the api service.
+    requirements:
+    - 'Two networks: `frontend` (proxy and api) and `backend` (api and db).'
+    - '`backend` is an **internal** network (no external connectivity).'
+    - The proxy is not attached to `backend`; the db is not attached to `frontend`.
+    - The database is not published on the host (no `ports:`); only the proxy is published.
+    - After deploying, `GET /api/` through the proxy still reaches the api (HTTP 200).
+    hints:
+    - Compose puts every service on one default network unless you choose networks per service. Add two networks from the palette, `frontend` and `backend`.
+    - 'The api is the only service on both networks: it is the controlled path between tiers. Tick the networks in each service''s **Networks** section: proxy on frontend, api on both, db on backend.'
+    - 'Click the `backend` network and tick **Internal: no access to the outside world**, then delete the db''s row in its **Ports** section: services on the same network still reach it as `db:5432`.'
+    solution: |
+      Segmentation limits **who can reach what**, so a compromise of the exposed tier doesn't grant access to the
+      data tier.
+
+      1. Declare `frontend` and `backend` networks; mark `backend` as `internal: true` so containers on it have
+         no route to the outside world.
+      2. Attach the proxy to `frontend` only, the db to `backend` only and the api to both. The proxy can now
+         resolve and reach `api`, but not `db`.
+      3. Remove the db's published port: other services use the network, and nothing on the host or LAN can
+         connect to the database.
+
+      On a cloud provider the same design uses public subnets for the entry point, private subnets for the
+      application and data tiers and firewall rules (security groups, NSGs, firewall rules, NSGs/security
+      lists) that allow only tier-to-tier traffic on the needed ports.
+
+      **Without writing code in Nimbo**
+
+      1. From the palette add two networks, `frontend` and `backend`. Click `backend` and tick **Internal: no access to the outside world**.
+      2. In each service's **Networks** section tick: `proxy` → frontend; `api` → frontend and backend; `db` → backend.
+      3. Click `db` and remove its row in the **Ports** section.
+    solutionFiles:
+      compose.yaml: |
+        # Three tiers on two networks: only the proxy is published, only the
+        # api reaches the database, and the database network is internal.
+        services:
+          proxy:
+            image: nginx:1.27-alpine
+            ports:
+              - "80"
+            volumes:
+              - ./proxy/default.conf:/etc/nginx/conf.d/default.conf:ro
+            depends_on:
+              - api
+            networks:
+              - frontend
+
+          api:
+            image: traefik/whoami:v1.10
+            environment:
+              DATABASE_HOST: db
+            networks:
+              - frontend
+              - backend
+
+          db:
+            image: postgres:16-alpine
+            environment:
+              POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+            volumes:
+              - db-data:/var/lib/postgresql/data
+            networks:
+              - backend
+
+        networks:
+          frontend: {}
+          backend:
+            internal: true
+
+        volumes:
+          db-data: {}
+    starter:
+      kind: docker
+      files:
+        compose.yaml: |
+          # Everything shares the default network and the database is
+          # published on every interface of the host.
+          services:
+            proxy:
+              image: nginx:1.27-alpine
+              ports:
+                - "80"
+              volumes:
+                - ./proxy/default.conf:/etc/nginx/conf.d/default.conf:ro
+              depends_on:
+                - api
+
+            api:
+              image: traefik/whoami:v1.10
+              environment:
+                DATABASE_HOST: db
+
+            db:
+              image: postgres:16-alpine
+              environment:
+                POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+              ports:
+                - "15432:5432"
+              volumes:
+                - db-data:/var/lib/postgresql/data
+
+          volumes:
+            db-data: {}
+        .env: |
+          # Local development value only; never commit real credentials.
+          POSTGRES_PASSWORD=local-dev-only
+        proxy/default.conf: |
+          server {
+            listen 80;
+
+            location /api/ {
+              proxy_pass http://api:80/;
+            }
+
+            location / {
+              default_type text/plain;
+              return 200 "proxy is up\n";
+            }
+          }
+    checks:
+    - id: valid
+      label: The compose project is valid
+      type: validate
+    - id: db-not-published
+      label: The database is not published on every interface
+      type: rules_clean
+      rules_clean:
+        codes: [dk_db_published]
+        minSeverity: warning
+    - id: backend-internal
+      label: The backend network is internal
+      type: has
+      has:
+        compose:
+          where:
+            networks.backend.internal: true
+    - id: db-backend-only
+      label: The database is only on the backend network
+      type: has
+      has:
+        compose:
+          service: db
+          where:
+            networks.backend:
+              exists: true
+            networks.frontend:
+              exists: false
+            ports:
+              exists: false
+    - id: proxy-frontend-only
+      label: The proxy is only on the frontend network
+      type: has
+      has:
+        compose:
+          service: proxy
+          where:
+            networks.frontend:
+              exists: true
+            networks.backend:
+              exists: false
+    - id: api-bridges-tiers
+      label: The api is on both networks
+      type: has
+      has:
+        compose:
+          service: api
+          where:
+            networks.frontend:
+              exists: true
+            networks.backend:
+              exists: true
+    - id: proxy-reaches-api
+      label: GET /api/ through the proxy reaches the api
+      type: http
+      http:
+        service: proxy
+        port: 80
+        path: /api/
+        status: 200
+        contains: Hostname
+    adaptations:
+      aws: |
+        A **VPC** with public subnets (load balancer only) and private subnets for the app and data tiers, in
+        several Availability Zones. **Security groups** reference each other (db allows 5432 only from the app's
+        security group); network ACLs add a subnet-level layer. Practice: `aws-vpc-multi-az-subnets`.
+      azure: |
+        A **virtual network** with one subnet per tier and a **network security group** per subnet; use
+        **application security groups** to write rules by role instead of IP. Reach PaaS data services through
+        **private endpoints**. Practice: `azure-vnet-nsg`, `azure-sql-private-endpoint`, `azure-hub-spoke-firewall`.
+      gcp: |
+        A **custom-mode VPC** with subnets per tier, **firewall rules** that target service accounts or network
+        tags (allow app → db on 5432 only), VMs without external IPs behind **Cloud NAT**, and private IP for
+        Cloud SQL. Practice: `gcp-custom-vpc-firewall`, `gcp-private-vm-cloud-nat`.
+      oci: |
+        A **VCN** with a public subnet for the load balancer and private subnets for app and database;
+        **network security groups** per tier (db NSG allows 1521/5432 only from the app NSG) and security lists
+        with the minimum ports. Practice: `oci-vcn-public-private-subnets`, `oci-nsg-tiered-access`.
+      docker: |
+        User-defined networks per tier, an `internal: true` network for data services, and no published ports
+        for databases (or `127.0.0.1:` binds for local tools). Practice: `docker-network-isolation`.
+      kubernetes: |
+        Pods can reach each other by default. Apply a **default-deny NetworkPolicy** per namespace, then allow
+        ingress to the database only from pods labelled as the API, and to the API only from the ingress
+        controller. Requires a CNI that enforces policies. Practice: `kubernetes-network-policy-default-deny`.
+    sources:
+    - title: AWS Well-Architected — SEC05-BP01 Create network layers
+      url: https://docs.aws.amazon.com/wellarchitected/latest/framework/sec_network_protection_create_layers.html
+    - title: AWS Well-Architected — SEC05-BP02 Control traffic flow within your network layers
+      url: https://docs.aws.amazon.com/wellarchitected/latest/framework/sec_network_protection_layered.html
+    - title: Azure Well-Architected — Segmentation strategy
+      url: https://learn.microsoft.com/en-us/azure/well-architected/security/segmentation
+    - title: Google Cloud — VPC firewall rules
+      url: https://cloud.google.com/vpc/docs/firewalls
+    - title: OCI Well-Architected — Ensure secure network access
+      url: https://docs.oracle.com/en/solutions/oci-best-practices/ensure-secure-network-access1.html
+    - title: Docker — Networking in Compose
+      url: https://docs.docker.com/compose/how-tos/networking/
+    - title: Docker — Compose networks reference (internal)
+      url: https://docs.docker.com/reference/compose-file/networks/
+    - title: Kubernetes — Network Policies
+      url: https://kubernetes.io/docs/concepts/services-networking/network-policies/
+    solvableWithoutCode: true
+- op: upsert
+  kind: challenge
+  id: global-defense-in-depth
+  data:
+    provider: global
+    level: expert
+    title: Defense in depth for a web + database stack
+    summary: Layer network, identity, data and host controls so no single mistake exposes the database.
+    minutes: 75
+    tags: [security, defense-in-depth, networking, iam, encryption, well-architected]
+    prerequisites: [global-least-privilege, global-encryption, global-network-segmentation]
+    runtime: design
+    problem: |
+      A web server and its PostgreSQL database were deployed in a hurry. Today a single control stands between
+      the internet and the data — the database password — and even that is a Terraform variable:
+
+      - every subnet is public and the database is `publicly_accessible`;
+      - SSH (22) on the web server and PostgreSQL (5432) on the database are open to `0.0.0.0/0`;
+      - storage isn't encrypted;
+      - the web server's role can do anything (`*` on `*`);
+      - the instance metadata service accepts IMDSv1 requests.
+
+      **Defense in depth** assumes any one layer can fail and stacks independent controls — network, identity,
+      data, host — so a breach of one doesn't become a breach of everything.
+
+      Graded on **AWS** (Terraform, design checks).
+    requirements:
+    - No admin or database port is open to the internet, no storage is unencrypted and no policy grants `*` on `*` (no `bp_open_ingress`, `bp_unencrypted_storage`, `bp_iam_wildcard` findings).
+    - '**Network:** the database lives in **private** subnets (`aws_subnet.private`, no public IPs) through its DB subnet group and is not publicly accessible.'
+    - '**Network:** the database security group accepts PostgreSQL only from the web security group (a security group reference, no CIDR blocks).'
+    - '**Data:** the database storage is encrypted and its master password is managed by AWS Secrets Manager (`manage_master_user_password = true`) instead of a variable.'
+    - '**Host:** the web instance requires IMDSv2 (`metadata_options { http_tokens = "required" }`).'
+    - '**Identity:** the web role''s permissions are scoped to what it needs (for example reading the database secret).'
+    hints:
+    - 'Work layer by layer and re-check the findings after each: network first (subnets, security groups), then data, then identity and host.'
+    - 'Network: add two private subnets from the palette in the same VPC (two zones, `map_public_ip_on_launch` off) and make them the database subnet group''s only subnets. On the security groups'' ingress cards, keep only HTTPS on the web group and let the db group accept 5432 only from the web security group (no CIDR).'
+    - 'Data and host: on the database turn `manage_master_user_password` and `storage_encrypted` on, `publicly_accessible` off and clear `password` (RDS then keeps the password in Secrets Manager); on the instance set `http_tokens` to `required` in `metadata_options` (IMDSv2).'
+    - 'Identity: in the web role policy''s **Access** section, replace the admin statement with one that allows only `secretsmanager:GetSecretValue` on the database''s managed secret (**Link to…** → **More…** → `aws_db_instance.db.master_user_secret[0].secret_arn`).'
+    solution: |
+      Each fix is a **separate layer**; together they mean an attacker needs several independent failures:
+
+      1. **Network perimeter.** Add private subnets (no public IP, no internet route) and move the DB subnet
+         group to them; set `publicly_accessible = false`. Close port 22 and keep only HTTPS on the web security
+         group.
+      2. **East-west traffic.** The database security group allows 5432 only from `aws_security_group.web.id` —
+         a reference, not a CIDR, so only instances in that group can connect.
+      3. **Data.** `storage_encrypted = true` and `manage_master_user_password = true`: the credential lives
+         in Secrets Manager (rotated, audited) instead of state files and variables.
+      4. **Identity.** The web role gets Session Manager access plus `secretsmanager:GetSecretValue` on the one
+         secret, instead of `*`.
+      5. **Host.** `http_tokens = "required"` enforces IMDSv2 on the instance metadata service.
+
+      The frameworks add more layers you can stack the same way: a web application firewall in front of the
+      load balancer, flow logs and threat detection, and automated posture checks.
+
+      **Without writing code in Nimbo**
+
+      1. From the palette add two **subnets**, `private` and `private_b`: **Link to…** the VPC's id, CIDRs `10.20.10.0/24` and `10.20.11.0/24`, zones `us-east-1a` and `us-east-1b`, **map_public_ip_on_launch** off.
+      2. Click the DB subnet group `db`: clear **subnet_ids**, then use **Link to…** twice to add the two private subnets' ids.
+      3. Click the security group `web` and keep a single ingress card: HTTPS from clients, 443–443, `tcp`, `0.0.0.0/0`. Click the security group `db` and set its ingress card to PostgreSQL from the web tier: 5432–5432, `tcp`, no CIDR, and **Link to…** the web security group's id in **security_groups**.
+      4. Click the database `db`: clear **password**, turn **manage_master_user_password** and **storage_encrypted** on, and **publicly_accessible** off.
+      5. Click the instance `web` and, in its **metadata_options** block, pick `required` in **http_tokens**.
+      6. Click the role policy `web`, open its **Access** section, delete the admin statement (`*` on `*`) and click **Add statement**: Sid `ReadDatabaseSecret`, action `secretsmanager:GetSecretValue`, resource → **Link to…** → **More…** the database's `master_user_secret[0].secret_arn`.
+    solutionFiles:
+      main.tf: |
+        data "aws_availability_zones" "available" {
+          state = "available"
+        }
+
+        resource "aws_vpc" "main" {
+          cidr_block           = "10.20.0.0/16"
+          enable_dns_hostnames = true
+        }
+
+        # Public tier: only the web server (and later a load balancer).
+        resource "aws_subnet" "public" {
+          count                   = 2
+          vpc_id                  = aws_vpc.main.id
+          cidr_block              = cidrsubnet(aws_vpc.main.cidr_block, 8, count.index)
+          availability_zone       = data.aws_availability_zones.available.names[count.index]
+          map_public_ip_on_launch = true
+        }
+
+        # Private tier: the database, no public IPs and no internet route.
+        resource "aws_subnet" "private" {
+          count                   = 2
+          vpc_id                  = aws_vpc.main.id
+          cidr_block              = cidrsubnet(aws_vpc.main.cidr_block, 8, count.index + 10)
+          availability_zone       = data.aws_availability_zones.available.names[count.index]
+          map_public_ip_on_launch = false
+        }
+
+        resource "aws_internet_gateway" "main" {
+          vpc_id = aws_vpc.main.id
+        }
+
+        resource "aws_route_table" "public" {
+          vpc_id = aws_vpc.main.id
+        }
+
+        resource "aws_route" "internet" {
+          route_table_id         = aws_route_table.public.id
+          destination_cidr_block = "0.0.0.0/0"
+          gateway_id             = aws_internet_gateway.main.id
+        }
+
+        resource "aws_route_table_association" "public" {
+          count          = 2
+          subnet_id      = aws_subnet.public[count.index].id
+          route_table_id = aws_route_table.public.id
+        }
+
+        resource "aws_route_table" "private" {
+          vpc_id = aws_vpc.main.id
+        }
+
+        resource "aws_route_table_association" "private" {
+          count          = 2
+          subnet_id      = aws_subnet.private[count.index].id
+          route_table_id = aws_route_table.private.id
+        }
+
+        # HTTPS only; administration goes through Session Manager.
+        resource "aws_security_group" "web" {
+          name_prefix = "${var.project}-web-"
+          vpc_id      = aws_vpc.main.id
+
+          ingress {
+            description = "HTTPS from clients"
+            from_port   = 443
+            to_port     = 443
+            protocol    = "tcp"
+            cidr_blocks = ["0.0.0.0/0"]
+          }
+
+          egress {
+            from_port   = 0
+            to_port     = 0
+            protocol    = "-1"
+            cidr_blocks = ["0.0.0.0/0"]
+          }
+        }
+
+        # PostgreSQL only from the web tier.
+        resource "aws_security_group" "db" {
+          name_prefix = "${var.project}-db-"
+          vpc_id      = aws_vpc.main.id
+
+          ingress {
+            description     = "PostgreSQL from the web tier"
+            from_port       = 5432
+            to_port         = 5432
+            protocol        = "tcp"
+            security_groups = [aws_security_group.web.id]
+          }
+        }
+
+        resource "aws_db_subnet_group" "db" {
+          name_prefix = "${var.project}-db-"
+          subnet_ids  = aws_subnet.private[*].id
+        }
+
+        resource "aws_db_instance" "db" {
+          identifier_prefix           = "${var.project}-db-"
+          engine                      = "postgres"
+          engine_version              = "16"
+          instance_class              = "db.t4g.micro"
+          allocated_storage           = 20
+          username                    = "app"
+          manage_master_user_password = true
+          storage_encrypted           = true
+          publicly_accessible         = false
+          db_subnet_group_name        = aws_db_subnet_group.db.name
+          vpc_security_group_ids      = [aws_security_group.db.id]
+          skip_final_snapshot         = true
+        }
+
+        resource "aws_iam_role" "web" {
+          name = "${var.project}-web"
+          assume_role_policy = jsonencode({
+            Version = "2012-10-17"
+            Statement = [{
+              Effect    = "Allow"
+              Principal = { Service = "ec2.amazonaws.com" }
+              Action    = "sts:AssumeRole"
+            }]
+          })
+        }
+
+        # Shell access through Session Manager instead of SSH.
+        resource "aws_iam_role_policy_attachment" "web_ssm" {
+          role       = aws_iam_role.web.name
+          policy_arn = "arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore"
+        }
+
+        # The app reads the database credentials, nothing else.
+        resource "aws_iam_role_policy" "web" {
+          name = "${var.project}-web"
+          role = aws_iam_role.web.id
+          policy = jsonencode({
+            Version = "2012-10-17"
+            Statement = [{
+              Effect   = "Allow"
+              Action   = ["secretsmanager:GetSecretValue"]
+              Resource = [aws_db_instance.db.master_user_secret[0].secret_arn]
+            }]
+          })
+        }
+
+        resource "aws_iam_instance_profile" "web" {
+          name = "${var.project}-web"
+          role = aws_iam_role.web.name
+        }
+
+        resource "aws_instance" "web" {
+          ami                    = var.web_ami
+          instance_type          = "t4g.micro"
+          subnet_id              = aws_subnet.public[0].id
+          vpc_security_group_ids = [aws_security_group.web.id]
+          iam_instance_profile   = aws_iam_instance_profile.web.name
+
+          metadata_options {
+            http_tokens = "required"
+          }
+        }
+      variables.tf: |
+        variable "project" {
+          type        = string
+          default     = "shop"
+          description = "Project name: prefix of every resource name and the Project tag."
+        }
+
+        variable "aws_region" {
+          type        = string
+          default     = "us-east-1"
+          description = "AWS region to deploy into."
+        }
+
+        variable "web_ami" {
+          type        = string
+          default     = "ami-0123456789abcdef0"
+          description = "AMI of the web server (an arm64 image for t4g instances)."
+        }
+    starter:
+      kind: terraform
+      cloud: aws
+      files:
+        versions.tf: |
+          terraform {
+            required_version = ">= 1.6"
+
+            required_providers {
+              aws = {
+                source  = "hashicorp/aws"
+                version = "~> 6.0"
+              }
+            }
+          }
+        providers.tf: |
+          provider "aws" {
+            region = var.aws_region
+
+            default_tags {
+              tags = {
+                Project   = var.project
+                ManagedBy = "nimbo"
+              }
+            }
+          }
+        variables.tf: |
+          variable "project" {
+            type        = string
+            default     = "shop"
+            description = "Project name: prefix of every resource name and the Project tag."
+          }
+
+          variable "aws_region" {
+            type        = string
+            default     = "us-east-1"
+            description = "AWS region to deploy into."
+          }
+
+          variable "web_ami" {
+            type        = string
+            default     = "ami-0123456789abcdef0"
+            description = "AMI of the web server (an arm64 image for t4g instances)."
+          }
+
+          variable "db_password" {
+            type        = string
+            default     = "change-me-please"
+            description = "Master password of the database."
+          }
+        main.tf: |
+          data "aws_availability_zones" "available" {
+            state = "available"
+          }
+
+          resource "aws_vpc" "main" {
+            cidr_block           = "10.20.0.0/16"
+            enable_dns_hostnames = true
+          }
+
+          # Every subnet is public.
+          resource "aws_subnet" "public" {
+            count                   = 2
+            vpc_id                  = aws_vpc.main.id
+            cidr_block              = cidrsubnet(aws_vpc.main.cidr_block, 8, count.index)
+            availability_zone       = data.aws_availability_zones.available.names[count.index]
+            map_public_ip_on_launch = true
+          }
+
+          resource "aws_internet_gateway" "main" {
+            vpc_id = aws_vpc.main.id
+          }
+
+          resource "aws_route_table" "public" {
+            vpc_id = aws_vpc.main.id
+          }
+
+          resource "aws_route" "internet" {
+            route_table_id         = aws_route_table.public.id
+            destination_cidr_block = "0.0.0.0/0"
+            gateway_id             = aws_internet_gateway.main.id
+          }
+
+          resource "aws_route_table_association" "public" {
+            count          = 2
+            subnet_id      = aws_subnet.public[count.index].id
+            route_table_id = aws_route_table.public.id
+          }
+
+          resource "aws_security_group" "web" {
+            name_prefix = "${var.project}-web-"
+            vpc_id      = aws_vpc.main.id
+
+            ingress {
+              description = "HTTPS from clients"
+              from_port   = 443
+              to_port     = 443
+              protocol    = "tcp"
+              cidr_blocks = ["0.0.0.0/0"]
+            }
+
+            ingress {
+              description = "SSH for administration"
+              from_port   = 22
+              to_port     = 22
+              protocol    = "tcp"
+              cidr_blocks = ["0.0.0.0/0"]
+            }
+
+            egress {
+              from_port   = 0
+              to_port     = 0
+              protocol    = "-1"
+              cidr_blocks = ["0.0.0.0/0"]
+            }
+          }
+
+          resource "aws_security_group" "db" {
+            name_prefix = "${var.project}-db-"
+            vpc_id      = aws_vpc.main.id
+
+            ingress {
+              description = "PostgreSQL"
+              from_port   = 5432
+              to_port     = 5432
+              protocol    = "tcp"
+              cidr_blocks = ["0.0.0.0/0"]
+            }
+          }
+
+          resource "aws_db_subnet_group" "db" {
+            name_prefix = "${var.project}-db-"
+            subnet_ids  = aws_subnet.public[*].id
+          }
+
+          resource "aws_db_instance" "db" {
+            identifier_prefix      = "${var.project}-db-"
+            engine                 = "postgres"
+            engine_version         = "16"
+            instance_class         = "db.t4g.micro"
+            allocated_storage      = 20
+            username               = "app"
+            password               = var.db_password
+            storage_encrypted      = false
+            publicly_accessible    = true
+            db_subnet_group_name   = aws_db_subnet_group.db.name
+            vpc_security_group_ids = [aws_security_group.db.id]
+            skip_final_snapshot    = true
+          }
+
+          resource "aws_iam_role" "web" {
+            name = "${var.project}-web"
+            assume_role_policy = jsonencode({
+              Version = "2012-10-17"
+              Statement = [{
+                Effect    = "Allow"
+                Principal = { Service = "ec2.amazonaws.com" }
+                Action    = "sts:AssumeRole"
+              }]
+            })
+          }
+
+          resource "aws_iam_role_policy" "web" {
+            name = "${var.project}-web"
+            role = aws_iam_role.web.id
+            policy = jsonencode({
+              Version = "2012-10-17"
+              Statement = [{
+                Effect   = "Allow"
+                Action   = "*"
+                Resource = "*"
+              }]
+            })
+          }
+
+          resource "aws_iam_instance_profile" "web" {
+            name = "${var.project}-web"
+            role = aws_iam_role.web.name
+          }
+
+          resource "aws_instance" "web" {
+            ami                    = var.web_ami
+            instance_type          = "t4g.micro"
+            subnet_id              = aws_subnet.public[0].id
+            vpc_security_group_ids = [aws_security_group.web.id]
+            iam_instance_profile   = aws_iam_instance_profile.web.name
+          }
+    checks:
+    - id: valid
+      label: The configuration is valid
+      type: validate
+    - id: security-findings
+      label: No open admin/database ports, unencrypted storage or admin policies
+      type: rules_clean
+      rules_clean:
+        codes: [bp_open_ingress, bp_unencrypted_storage, bp_iam_wildcard, bp_public_bucket]
+        minSeverity: warning
+    - id: db-not-public
+      label: The database is not publicly accessible
+      type: has
+      has:
+        terraform:
+          type: aws_db_instance
+          where:
+            publicly_accessible: true
+          count:
+            max: 0
+    - id: db-private-subnets
+      label: The database subnet group uses the private subnets
+      type: has
+      has:
+        terraform:
+          type: aws_db_subnet_group
+          where:
+            subnet_ids:
+              ref: aws_subnet.private
+    - id: private-subnets-no-public-ip
+      label: Private subnets don't assign public IPs
+      type: has
+      has:
+        terraform:
+          type: aws_subnet
+          name: private
+          where:
+            map_public_ip_on_launch: false
+    - id: db-from-web-only
+      label: The database accepts PostgreSQL only from the web security group
+      type: has
+      has:
+        terraform:
+          type: aws_security_group
+          name: db
+          where:
+            ingress.security_groups:
+              ref: aws_security_group.web
+            ingress.cidr_blocks:
+              exists: false
+    - id: db-encrypted
+      label: Database storage is encrypted
+      type: has
+      has:
+        terraform:
+          type: aws_db_instance
+          where:
+            storage_encrypted: true
+    - id: db-managed-secret
+      label: The master password is managed in Secrets Manager
+      type: has
+      has:
+        terraform:
+          type: aws_db_instance
+          where:
+            manage_master_user_password: true
+    - id: imdsv2
+      label: The web instance requires IMDSv2
+      type: has
+      has:
+        terraform:
+          type: aws_instance
+          where:
+            metadata_options.http_tokens: required
+    adaptations:
+      aws: |
+        Layers: VPC public/private subnets and security group references (network), AWS WAF on the ALB or
+        CloudFront (edge), IAM roles with scoped policies (identity), KMS encryption and Secrets Manager (data),
+        IMDSv2 and Session Manager instead of SSH (host), GuardDuty, VPC Flow Logs and Security Hub (detection).
+        Practice: `aws-three-tier-well-architected`.
+      azure: |
+        Layers: Front Door or Application Gateway with **WAF** (edge), VNets with NSGs and private endpoints
+        (network), managed identities with scoped RBAC (identity), Key Vault and encryption settings (data),
+        Defender for Cloud and Azure Policy (posture). Practice: `azure-front-door-waf`, `azure-hub-spoke-firewall`.
+      gcp: |
+        Layers: **Cloud Armor** on the HTTPS load balancer (edge), VPC firewall rules and private IPs (network),
+        service accounts with predefined roles (identity), CMEK and Secret Manager (data), **organization
+        policies** as guardrails and Security Command Center (posture). Practice: `gcp-https-lb-cloud-armor`,
+        `gcp-org-policy-guardrails`.
+      oci: |
+        Layers: WAF on the load balancer (edge), VCN with private subnets, NSGs and security lists (network),
+        compartments and least-privilege policies (identity), Vault keys (data), **Security Zones**, **Cloud
+        Guard** and VCN flow logs (posture and detection). Practice: `oci-cis-landing-zone`.
+      docker: |
+        Layers: a reverse proxy as the only published service, internal networks for data services, non-root
+        users with dropped capabilities and read-only filesystems, secrets as files, pinned and scanned images.
+        Practice: `docker-hardened-runtime`.
+      kubernetes: |
+        Layers: Ingress with TLS (edge), default-deny **NetworkPolicies** (network), per-workload ServiceAccounts
+        with namespaced RBAC (identity), Secrets encryption at rest (data) and the **restricted Pod Security
+        Standard** (workload). Practice: `kubernetes-pod-security-restricted`,
+        `kubernetes-network-policy-default-deny`, `kubernetes-rbac-least-privilege`.
+    sources:
+    - title: AWS Well-Architected — SEC05-BP01 Create network layers
+      url: https://docs.aws.amazon.com/wellarchitected/latest/framework/sec_network_protection_create_layers.html
+    - title: AWS Well-Architected — SEC03-BP02 Grant least privilege access
+      url: https://docs.aws.amazon.com/wellarchitected/latest/framework/sec_permissions_least_privileges.html
+    - title: Amazon RDS — Password management with Amazon RDS and AWS Secrets Manager
+      url: https://docs.aws.amazon.com/AmazonRDS/latest/UserGuide/rds-secrets-manager.html
+    - title: Azure Well-Architected — Security design principles
+      url: https://learn.microsoft.com/en-us/azure/well-architected/security/principles
+    - title: Google Cloud Well-Architected — Implement security by design
+      url: https://cloud.google.com/architecture/framework/security/implement-security-by-design
+    - title: Google Cloud Well-Architected — Implement zero trust
+      url: https://cloud.google.com/architecture/framework/security/implement-zero-trust
+    - title: OCI Well-Architected — Effective strategies for security and compliance
+      url: https://docs.oracle.com/en/solutions/oci-best-practices/effective-strategies-security-and-compliance1.html
+    - title: Kubernetes — Security checklist
+      url: https://kubernetes.io/docs/concepts/security/security-checklist/
+    - title: CNCF Glossary — Zero Trust Architecture
+      url: https://glossary.cncf.io/zero-trust-architecture/
+    solvableWithoutCode: true
+- op: upsert
+  kind: challenge
+  id: global-multi-zone-ha
+  data:
+    provider: global
+    level: intermediate
+    title: Survive the loss of a zone
+    summary: Run a stateless web tier as several replicas spread across zones, with a disruption budget.
+    minutes: 30
+    tags: [reliability, high-availability, zones, kubernetes, well-architected]
+    runtime: design
+    problem: |
+      The storefront's web tier runs as **one replica** in production. A node upgrade, a crashed pod or the
+      failure of the data center (zone) it runs in takes the whole shop offline, even though the cloud region
+      has several independent zones available.
+
+      The frameworks agree on the fix: remove single points of failure by running **redundant instances
+      distributed across fault domains** (Availability Zones on AWS and Azure, zones on Google Cloud,
+      availability and fault domains on OCI) and keep enough of them up during planned maintenance.
+
+      Graded on **Kubernetes** (design checks on the `prod` Kustomize overlay): the starter has a `web`
+      Deployment with a single replica.
+    requirements:
+    - In `prod`, the `web` Deployment runs at least **3 replicas** (no `k8s_single_replica` finding).
+    - The pod template spreads replicas across zones with a `topologySpreadConstraints` entry on `topology.kubernetes.io/zone` (no `k8s_topology_spread` finding).
+    - A **PodDisruptionBudget** selects the `web` pods and still allows one eviction (no `k8s_pdb` finding).
+    hints:
+    - 'Three things protect the web Deployment from one failure: enough replicas in prod, replicas spread over zones, and a disruption budget so node drains evict one pod at a time.'
+    - Click the `web` Deployment and pick **Across zones** in **Spread replicas**. Then add a PodDisruptionBudget from the palette and set its **Selector** to `app = web`.
+    - 'Replicas are a per-environment setting: open the prod environment''s settings and set replicas to 3. With 3 replicas, the budget keeps two serving while one is evicted.'
+    solution: |
+      High availability across zones has three parts:
+
+      1. **Redundancy:** 3 replicas, so losing one still leaves capacity (and with 3 zones, one per zone).
+      2. **Placement:** `topologySpreadConstraints` with `topology.kubernetes.io/zone` (the well-known zone
+         label set on nodes by cloud providers) and `maxSkew: 1` keeps the replicas balanced across zones; a
+         second constraint on `kubernetes.io/hostname` keeps them on different nodes.
+      3. **Planned disruptions:** a PodDisruptionBudget (`minAvailable: 2`) stops voluntary evictions — node
+         drains, upgrades — from taking more than one replica down at a time, without blocking them entirely.
+
+      On a cloud provider the same pattern is a zone-redundant service: instances in several zones behind a
+      load balancer that health-checks them, with zone-redundant data stores.
+
+      **Without writing code in Nimbo**
+
+      1. From the palette add a **PodDisruptionBudget**. In its **Disruption budget** form set the **Selector** to `app = web`.
+      2. Click the Deployment `web` and pick **Across zones** in **Spread replicas**.
+      3. Open the **prod** environment's settings and set replicas to `3`.
+    solutionFiles:
+      overlays/prod/kustomization.yaml: |
+        # Production: three replicas spread over zones and nodes, protected
+        # by a PodDisruptionBudget, in the shop-prod namespace.
+        apiVersion: kustomize.config.k8s.io/v1beta1
+        kind: Kustomization
+        namespace: shop-prod
+        resources:
+          - ../../base
+          - namespace.yaml
+          - pdb.yaml
+        replicas:
+          - name: web
+            count: 3
+        patches:
+          - path: spread.yaml
+      overlays/prod/pdb.yaml: |
+        apiVersion: policy/v1
+        kind: PodDisruptionBudget
+        metadata:
+          name: web
+        spec:
+          minAvailable: 2
+          selector:
+            matchLabels:
+              app: web
+      overlays/prod/spread.yaml: |
+        apiVersion: apps/v1
+        kind: Deployment
+        metadata:
+          name: web
+        spec:
+          template:
+            spec:
+              topologySpreadConstraints:
+                - maxSkew: 1
+                  topologyKey: topology.kubernetes.io/zone
+                  whenUnsatisfiable: ScheduleAnyway
+                  labelSelector:
+                    matchLabels:
+                      app: web
+                - maxSkew: 1
+                  topologyKey: kubernetes.io/hostname
+                  whenUnsatisfiable: ScheduleAnyway
+                  labelSelector:
+                    matchLabels:
+                      app: web
+    starter:
+      kind: kubernetes
+      kubernetes:
+        sources:
+        - kind: kustomize
+          path: base
+          environments:
+            prod: overlays/prod
+      files:
+        base/kustomization.yaml: |
+          apiVersion: kustomize.config.k8s.io/v1beta1
+          kind: Kustomization
+          resources:
+            - deployment.yaml
+            - service.yaml
+        base/deployment.yaml: |
+          apiVersion: apps/v1
+          kind: Deployment
+          metadata:
+            name: web
+          spec:
+            replicas: 1
+            selector:
+              matchLabels:
+                app: web
+            template:
+              metadata:
+                labels:
+                  app: web
+              spec:
+                securityContext:
+                  runAsNonRoot: true
+                  runAsUser: 101
+                automountServiceAccountToken: false
+                containers:
+                  - name: nginx
+                    image: nginxinc/nginx-unprivileged:1.30-alpine
+                    ports:
+                      - name: http
+                        containerPort: 8080
+                    readinessProbe:
+                      httpGet:
+                        path: /
+                        port: http
+                      periodSeconds: 5
+                    livenessProbe:
+                      httpGet:
+                        path: /
+                        port: http
+                      periodSeconds: 20
+                    resources:
+                      requests:
+                        cpu: 50m
+                        memory: 64Mi
+                      limits:
+                        memory: 128Mi
+        base/service.yaml: |
+          apiVersion: v1
+          kind: Service
+          metadata:
+            name: web
+          spec:
+            selector:
+              app: web
+            ports:
+              - name: http
+                port: 80
+                targetPort: http
+        overlays/prod/kustomization.yaml: |
+          # Production: the storefront in the shop-prod namespace.
+          apiVersion: kustomize.config.k8s.io/v1beta1
+          kind: Kustomization
+          namespace: shop-prod
+          resources:
+            - ../../base
+            - namespace.yaml
+        overlays/prod/namespace.yaml: |
+          apiVersion: v1
+          kind: Namespace
+          metadata:
+            name: shop-prod
+    checks:
+    - id: valid
+      label: The prod overlay renders
+      type: validate
+      environment: prod
+    - id: redundancy-rules
+      label: Replicas, spread and disruption budget follow the rules
+      type: rules_clean
+      environment: prod
+      rules_clean:
+        codes: [k8s_single_replica, k8s_topology_spread, k8s_pdb]
+        minSeverity: warning
+    - id: three-replicas
+      label: web runs at least 3 replicas in prod
+      type: has
+      environment: prod
+      has:
+        kubernetes:
+          kind: Deployment
+          name: web
+          where:
+            spec.replicas:
+              min: 3
+    - id: zone-spread
+      label: Replicas are spread across zones
+      type: has
+      environment: prod
+      has:
+        kubernetes:
+          kind: Deployment
+          name: web
+          where:
+            spec.template.spec.topologySpreadConstraints.*.topologyKey: topology.kubernetes.io/zone
+    - id: pdb
+      label: A PodDisruptionBudget protects the web pods
+      type: has
+      environment: prod
+      has:
+        kubernetes:
+          kind: PodDisruptionBudget
+          where:
+            spec.selector.matchLabels.app: web
+    adaptations:
+      aws: |
+        Spread instances over **multiple Availability Zones**: an Auto Scaling group whose subnets cover 2–3
+        AZs behind an Application Load Balancer with health checks, and Multi-AZ data stores (RDS Multi-AZ,
+        DynamoDB is multi-AZ by design). On EKS, the same spread constraints apply. Practice:
+        `aws-alb-auto-scaling`, `aws-rds-multi-az`, `aws-vpc-multi-az-subnets`.
+      azure: |
+        Use **availability zones**: zone-redundant services (zone-redundant App Service plans, ZRS/GZRS
+        storage, zone-redundant SQL) or VM scale sets across zones 1–3 behind a Standard Load Balancer. AKS
+        node pools can span zones. Practice: `azure-aks-baseline`, `azure-storage-data-protection`.
+      gcp: |
+        Use **regional** resources: regional managed instance groups that distribute VMs across zones, regional
+        GKE clusters, Cloud SQL with high availability (a standby in another zone), behind a load balancer with
+        health checks. Practice: `gcp-cloud-sql-private-ip`.
+      oci: |
+        Distribute instances across **availability domains** (in multi-AD regions) and **fault domains**
+        (within an AD) — an instance pool placed in several ADs/FDs behind a load balancer. Practice:
+        `oci-lb-instance-pool-autoscaling`.
+      docker: |
+        A single Docker host is one failure domain: replicas behind a load balancer survive a crashed container
+        (with healthchecks and `restart:`), but not a lost host. Zone-level availability needs an orchestrator
+        across several hosts. Practice: `docker-lb-health-checks`.
+      kubernetes: |
+        Several replicas, `topologySpreadConstraints` (or pod anti-affinity) on `topology.kubernetes.io/zone`,
+        a PodDisruptionBudget, and a node pool spanning zones on the managed cluster. Practice:
+        `kubernetes-zero-downtime-prod`.
+    sources:
+    - title: AWS Well-Architected — REL10-BP01 Deploy the workload to multiple locations
+      url: https://docs.aws.amazon.com/wellarchitected/latest/framework/rel_fault_isolation_multiaz_region_system.html
+    - title: Azure Well-Architected — Designing for redundancy
+      url: https://learn.microsoft.com/en-us/azure/well-architected/reliability/redundancy
+    - title: Google Cloud Well-Architected — Build highly available systems through resource redundancy
+      url: https://cloud.google.com/architecture/framework/reliability/build-highly-available-systems
+    - title: OCI Well-Architected — Design for scalability (distribute traffic across availability domains)
+      url: https://docs.oracle.com/en/solutions/oci-best-practices/design-scalability1.html
+    - title: OCI — Regions and availability domains
+      url: https://docs.oracle.com/en-us/iaas/Content/General/Concepts/regions.htm
+    - title: Kubernetes — Running in multiple zones
+      url: https://kubernetes.io/docs/setup/best-practices/multiple-zones/
+    - title: Kubernetes — Pod topology spread constraints
+      url: https://kubernetes.io/docs/concepts/scheduling-eviction/topology-spread-constraints/
+    - title: Kubernetes — Specifying a disruption budget for your application
+      url: https://kubernetes.io/docs/tasks/run-application/configure-pdb/
+    solvableWithoutCode: true
+- op: upsert
+  kind: challenge
+  id: global-backup-recovery
+  data:
+    provider: global
+    level: intermediate
+    title: Meet a recovery point objective
+    summary: Protect an orders table and an invoices bucket so data can be restored within a 1-hour RPO.
+    minutes: 40
+    tags: [reliability, backup, disaster-recovery, rpo, rto, well-architected]
+    runtime: design
+    problem: |
+      The business has set recovery objectives for the order system: **RPO 1 hour** (lose at most one hour of
+      data) and **RTO 4 hours** (be back within four hours). Today the orders table has no backups at all,
+      nothing stops someone from deleting it, and an overwritten invoice in the bucket is gone forever.
+
+      **RPO** is the maximum acceptable time since the last recovery point; **RTO** is the maximum acceptable
+      time to restore service. Backup choices follow from them: continuous backups (point-in-time recovery)
+      meet tight RPOs, scheduled copies in a separate vault protect against mistakes and compromised
+      accounts, and only regular restore tests prove the RTO.
+
+      Graded on **AWS** (Terraform, design checks).
+    requirements:
+    - The `orders` DynamoDB table has **point-in-time recovery** enabled (RPO of minutes).
+    - The table has **deletion protection** enabled.
+    - The `invoices` bucket has **versioning** enabled, so overwritten or deleted objects can be recovered.
+    - An **AWS Backup plan** takes scheduled backups into a backup vault and keeps them at least 7 days.
+    - A **backup selection** assigns the `orders` table to that plan.
+    hints:
+    - 'Click the DynamoDB table: deletion protection is a switch, and point-in-time recovery (PITR) is its own block with an `enabled` switch. Bucket versioning is a separate resource you add from the palette and link to the bucket.'
+    - 'AWS Backup needs three palette nodes: a vault, a plan whose `rule` names the vault, runs on a cron `schedule` and deletes recovery points after 35 days (`lifecycle` block), and a selection that lists the table''s ARN in `resources` (**Link to…** adds it to the list).'
+    - 'The selection also needs an IAM role that AWS Backup can assume: add a role, and in its trust policy (**Access** section) add a statement allowing `sts:AssumeRole` with **Who** = Service `backup.amazonaws.com`. Attach the AWS managed policy `arn:aws:iam::aws:policy/service-role/AWSBackupServiceRolePolicyForBackup` with a role policy attachment.'
+    solution: |
+      Start from the objectives, then pick mechanisms that meet them:
+
+      1. **RPO 1 hour → continuous backups.** DynamoDB point-in-time recovery restores the table to any second
+         in the retention window (up to 35 days), far inside the RPO.
+      2. **Prevent the incident.** `deletion_protection_enabled = true` stops accidental table deletion;
+         S3 versioning keeps previous versions of invoices.
+      3. **Independent copies.** An AWS Backup plan writes scheduled recovery points to a backup vault with its
+         own access policy and retention (`delete_after = 35`). Copying to another Region or account
+         (`copy_action`) protects against regional events and compromised accounts.
+      4. **Prove the RTO.** Backups that were never restored are a hope, not a plan: schedule restore tests and
+         time them against the 4-hour RTO.
+
+      **Without writing code in Nimbo**
+
+      1. Click the table `orders`: turn **deletion_protection_enabled** on, and in the **point_in_time_recovery** block turn **enabled** on.
+      2. From the palette add an **S3 bucket versioning**: **Link to…** the bucket `invoices` id in **bucket**, and pick `Enabled` in **versioning_configuration** → **status**.
+      3. Add a **backup vault** named `orders-vault`.
+      4. Add a **backup plan** named `orders-daily`. In its **rule** block: rule name `daily`, **Link to…** the vault's name in **target_vault_name**, schedule `cron(0 3 * * ? *)`, and in **lifecycle** set **delete_after** to `35`.
+      5. Add an **IAM role** named `orders-backup`. In its **Access** section (trust policy) click **Add statement**: Allow `sts:AssumeRole`, **Who** → `Service` `backup.amazonaws.com`.
+      6. Add an **IAM role policy attachment**: **Link to…** the role's name in **role**, and type `arn:aws:iam::aws:policy/service-role/AWSBackupServiceRolePolicyForBackup` in **policy_arn**.
+      7. Add a **backup selection** named `orders`: **Link to…** the plan's id in **plan_id**, the role's arn in **iam_role_arn**, and the table's arn in **resources**.
+    solutionFiles:
+      main.tf: |
+        resource "aws_dynamodb_table" "orders" {
+          name                        = "${var.project}-orders"
+          billing_mode                = "PAY_PER_REQUEST"
+          hash_key                    = "id"
+          deletion_protection_enabled = true
+
+          attribute {
+            name = "id"
+            type = "S"
+          }
+
+          server_side_encryption {
+            enabled = true
+          }
+
+          # Continuous backups: restore to any second of the last 35 days.
+          point_in_time_recovery {
+            enabled = true
+          }
+        }
+
+        resource "aws_s3_bucket" "invoices" {
+          bucket_prefix = "${var.project}-invoices-"
+        }
+
+        resource "aws_s3_bucket_server_side_encryption_configuration" "invoices" {
+          bucket = aws_s3_bucket.invoices.id
+
+          rule {
+            apply_server_side_encryption_by_default {
+              sse_algorithm = "AES256"
+            }
+          }
+        }
+
+        resource "aws_s3_bucket_public_access_block" "invoices" {
+          bucket                  = aws_s3_bucket.invoices.id
+          block_public_acls       = true
+          block_public_policy     = true
+          ignore_public_acls      = true
+          restrict_public_buckets = true
+        }
+
+        # Overwritten or deleted invoices stay recoverable.
+        resource "aws_s3_bucket_versioning" "invoices" {
+          bucket = aws_s3_bucket.invoices.id
+
+          versioning_configuration {
+            status = "Enabled"
+          }
+        }
+      backup.tf: |
+        # Scheduled, independent recovery points kept in their own vault.
+        resource "aws_backup_vault" "main" {
+          name = "${var.project}-vault"
+        }
+
+        resource "aws_backup_plan" "daily" {
+          name = "${var.project}-daily"
+
+          rule {
+            rule_name         = "daily"
+            target_vault_name = aws_backup_vault.main.name
+            schedule          = "cron(0 3 * * ? *)"
+
+            lifecycle {
+              delete_after = 35
+            }
+          }
+        }
+
+        resource "aws_iam_role" "backup" {
+          name = "${var.project}-backup"
+          assume_role_policy = jsonencode({
+            Version = "2012-10-17"
+            Statement = [{
+              Effect    = "Allow"
+              Principal = { Service = "backup.amazonaws.com" }
+              Action    = "sts:AssumeRole"
+            }]
+          })
+        }
+
+        resource "aws_iam_role_policy_attachment" "backup" {
+          role       = aws_iam_role.backup.name
+          policy_arn = "arn:aws:iam::aws:policy/service-role/AWSBackupServiceRolePolicyForBackup"
+        }
+
+        resource "aws_iam_role_policy_attachment" "restore" {
+          role       = aws_iam_role.backup.name
+          policy_arn = "arn:aws:iam::aws:policy/service-role/AWSBackupServiceRolePolicyForRestores"
+        }
+
+        resource "aws_backup_selection" "orders" {
+          name         = "${var.project}-orders"
+          plan_id      = aws_backup_plan.daily.id
+          iam_role_arn = aws_iam_role.backup.arn
+          resources    = [aws_dynamodb_table.orders.arn]
+        }
+    starter:
+      kind: terraform
+      cloud: aws
+      files:
+        versions.tf: |
+          terraform {
+            required_version = ">= 1.6"
+
+            required_providers {
+              aws = {
+                source  = "hashicorp/aws"
+                version = "~> 6.0"
+              }
+            }
+          }
+        providers.tf: |
+          provider "aws" {
+            region = var.aws_region
+
+            default_tags {
+              tags = {
+                Project   = var.project
+                ManagedBy = "nimbo"
+              }
+            }
+          }
+        variables.tf: |
+          variable "project" {
+            type        = string
+            default     = "orders"
+            description = "Project name: prefix of every resource name and the Project tag."
+          }
+
+          variable "aws_region" {
+            type        = string
+            default     = "us-east-1"
+            description = "AWS region to deploy into."
+          }
+        main.tf: |
+          resource "aws_dynamodb_table" "orders" {
+            name         = "${var.project}-orders"
+            billing_mode = "PAY_PER_REQUEST"
+            hash_key     = "id"
+
+            attribute {
+              name = "id"
+              type = "S"
+            }
+
+            server_side_encryption {
+              enabled = true
+            }
+          }
+
+          resource "aws_s3_bucket" "invoices" {
+            bucket_prefix = "${var.project}-invoices-"
+          }
+
+          resource "aws_s3_bucket_server_side_encryption_configuration" "invoices" {
+            bucket = aws_s3_bucket.invoices.id
+
+            rule {
+              apply_server_side_encryption_by_default {
+                sse_algorithm = "AES256"
+              }
+            }
+          }
+
+          resource "aws_s3_bucket_public_access_block" "invoices" {
+            bucket                  = aws_s3_bucket.invoices.id
+            block_public_acls       = true
+            block_public_policy     = true
+            ignore_public_acls      = true
+            restrict_public_buckets = true
+          }
+    checks:
+    - id: valid
+      label: The configuration is valid
+      type: validate
+    - id: pitr
+      label: The orders table has point-in-time recovery
+      type: has
+      has:
+        terraform:
+          type: aws_dynamodb_table
+          name: orders
+          where:
+            point_in_time_recovery.enabled: true
+    - id: deletion-protection
+      label: The orders table has deletion protection
+      type: has
+      has:
+        terraform:
+          type: aws_dynamodb_table
+          name: orders
+          where:
+            deletion_protection_enabled: true
+    - id: versioning
+      label: The invoices bucket keeps previous versions
+      type: has
+      has:
+        terraform:
+          type: aws_s3_bucket_versioning
+          where:
+            bucket:
+              ref: aws_s3_bucket.invoices
+            versioning_configuration.status: Enabled
+    - id: backup-plan
+      label: A backup plan runs on a schedule and keeps recovery points 7+ days
+      type: has
+      has:
+        terraform:
+          type: aws_backup_plan
+          where:
+            rule.schedule:
+              exists: true
+            rule.target_vault_name:
+              ref: aws_backup_vault
+            rule.lifecycle.delete_after:
+              min: 7
+    - id: backup-selection
+      label: The orders table is assigned to the backup plan
+      type: has
+      has:
+        terraform:
+          type: aws_backup_selection
+          where:
+            resources:
+              ref: aws_dynamodb_table.orders
+    adaptations:
+      aws: |
+        **AWS Backup** plans and vaults (cross-Region/cross-account copies with `copy_action`), DynamoDB and RDS
+        **point-in-time recovery**, RDS automated backups (`backup_retention_period`), S3 versioning and
+        replication; AWS Elastic Disaster Recovery for servers. Practice: `aws-rds-multi-az`, `aws-backup-dr-cost`.
+      azure: |
+        **Azure Backup** (Recovery Services or Backup vaults with backup policies), Azure SQL automated backups
+        with point-in-time restore, Storage soft delete, versioning and GZRS replication, Azure Site Recovery for
+        VMs. Practice: `azure-storage-data-protection`.
+      gcp: |
+        **Backup and DR Service**, Cloud SQL automated backups with point-in-time recovery, Cloud Storage object
+        versioning and retention policies, and persistent disk snapshot schedules. Practice:
+        `gcp-cloud-sql-private-ip`, `gcp-storage-retention-lifecycle`.
+      oci: |
+        Block volume **backup policies** (and cross-region copies), Object Storage versioning and replication,
+        automatic backups for Autonomous/Base Database, and **Full Stack Disaster Recovery** for orchestrated
+        failover. Practice: `oci-autonomous-db-private-endpoint`.
+      docker: |
+        Data lives in **named volumes**; back them up by running a throwaway container that mounts the volume
+        and archives it (`docker run --rm --volumes-from ... tar`), or use the database's own dump tool
+        (`pg_dump`) on a schedule, and store the archives off the host. Test restores into a fresh volume.
+      kubernetes: |
+        Stateful data sits in PersistentVolumes: use **VolumeSnapshots** (CSI) or the managed disk's backup
+        service, database-native backups (or an operator) for consistency, and keep manifests in Git so the
+        cluster state itself is reproducible.
+    sources:
+    - title: AWS Well-Architected — REL13-BP01 Define recovery objectives for downtime and data loss
+      url: https://docs.aws.amazon.com/wellarchitected/latest/framework/rel_planning_for_recovery_objective_defined_recovery.html
+    - title: AWS Well-Architected — REL09-BP01 Identify and back up all data
+      url: https://docs.aws.amazon.com/wellarchitected/latest/framework/rel_backing_up_data_identified_backups_data.html
+    - title: AWS Well-Architected — REL09-BP04 Perform periodic recovery of the data
+      url: https://docs.aws.amazon.com/wellarchitected/latest/framework/rel_backing_up_data_periodic_recovery_testing_data.html
+    - title: Amazon DynamoDB — Point-in-time backups
+      url: https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/Point-in-time-recovery.html
+    - title: AWS Backup — Create a backup plan
+      url: https://docs.aws.amazon.com/aws-backup/latest/devguide/creating-a-backup-plan.html
+    - title: Azure Well-Architected — Defining reliability targets (RTO, RPO)
+      url: https://learn.microsoft.com/en-us/azure/well-architected/reliability/metrics
+    - title: Azure Well-Architected — Disaster recovery
+      url: https://learn.microsoft.com/en-us/azure/well-architected/reliability/disaster-recovery
+    - title: Google Cloud Well-Architected — Perform testing for recovery from data loss
+      url: https://cloud.google.com/architecture/framework/reliability/perform-testing-for-recovery-from-data-loss
+    - title: OCI Well-Architected — Back up your data
+      url: https://docs.oracle.com/en/solutions/oci-best-practices/back-your-data1.html
+    - title: OCI Well-Architected — Plan your disaster recovery strategy
+      url: https://docs.oracle.com/en/solutions/oci-best-practices/plan-your-disaster-recovery-strategy.html
+    - title: Docker — Volumes (back up, restore, or migrate data volumes)
+      url: https://docs.docker.com/engine/storage/volumes/
+    solvableWithoutCode: true
+- op: upsert
+  kind: challenge
+  id: global-autoscaling-signal
+  data:
+    provider: global
+    level: advanced
+    title: Autoscale on the signal that saturates
+    summary: Fix an autoscaler that watches memory for a CPU-bound API and can't compute utilization.
+    minutes: 40
+    tags: [reliability, performance, autoscaling, hpa, well-architected]
+    prerequisites: [global-multi-zone-ha]
+    runtime: design
+    problem: |
+      The `checkout` API spends its time hashing and signing payment payloads: under load it **runs out of
+      CPU** long before memory changes. Its production autoscaler, however, scales on **memory utilization**,
+      and the containers declare no resource requests — so utilization can't even be computed. During a sale
+      the API saturated, latency exploded and the autoscaler never added a pod.
+
+      Autoscaling works only when it follows the metric that actually limits the workload, with sensible
+      bounds: a floor that keeps redundancy, a ceiling that caps cost and protects dependencies.
+
+      Graded on **Kubernetes** (design checks on the `prod` Kustomize overlay).
+    requirements:
+    - Every container of `checkout` requests CPU and memory (no `k8s_no_requests` or `k8s_hpa_no_requests` finding).
+    - The `checkout` HorizontalPodAutoscaler scales on **CPU** utilization, not memory.
+    - The CPU target is between 50% and 80% average utilization (headroom while new pods start).
+    - '`minReplicas` is at least 2, so scaling in never removes redundancy.'
+    hints:
+    - 'Utilization is measured relative to the request: an HPA on CPU needs CPU and memory **Requests** on every container of the target, set in the container''s resources.'
+    - Click the `checkout` Deployment and, in the base environment, fill the container's **Requests** (CPU and memory) and a memory **Limit**. Then switch to the prod environment, where the HPA lives.
+    - In the HPA's **Autoscaling** section, set **Min** to 2, put 70 in **CPU target %** and clear **Memory target %**. Keep **Max** as a deliberate cap.
+    solution: |
+      1. **Measure the right thing.** A CPU-bound service saturates on CPU; scaling on memory reacts late or
+         never. Pick the metric that rises with load and degrades the user experience (CPU here; queue depth
+         for workers; request rate or latency through custom metrics for I/O-bound services).
+      2. **Give the controller a baseline.** Set `requests.cpu`/`requests.memory` on the container: the HPA
+         divides usage by the request to get utilization, and the scheduler packs pods by requests.
+      3. **Target with headroom.** `averageUtilization: 70` scales out before pods are pegged, leaving room for
+         the minutes new pods need to start.
+      4. **Bound it.** `minReplicas: 2` keeps redundancy at night; `maxReplicas` caps cost and protects the
+         database behind the API; a scale-down stabilization window avoids flapping.
+
+      Validate the choice with a load test: replicas should rise as CPU crosses the target while latency stays
+      within the objective.
+
+      **Without writing code in Nimbo**
+
+      1. Click the Deployment `checkout`. In the `api` container's resources set **Requests** CPU `100m` and memory `64Mi`, and **Limits** memory `128Mi`.
+      2. Switch to the **prod** environment and click the HorizontalPodAutoscaler `checkout`.
+      3. In its **Autoscaling** section set **Min** to `2`, **CPU target %** to `70`, and clear **Memory target %**.
+    solutionFiles:
+      base/deployment.yaml: |
+        apiVersion: apps/v1
+        kind: Deployment
+        metadata:
+          name: checkout
+        spec:
+          replicas: 1
+          selector:
+            matchLabels:
+              app: checkout
+          template:
+            metadata:
+              labels:
+                app: checkout
+            spec:
+              securityContext:
+                runAsNonRoot: true
+                runAsUser: 101
+              automountServiceAccountToken: false
+              containers:
+                - name: api
+                  image: nginxinc/nginx-unprivileged:1.30-alpine
+                  ports:
+                    - name: http
+                      containerPort: 8080
+                  readinessProbe:
+                    httpGet:
+                      path: /
+                      port: http
+                    periodSeconds: 5
+                  livenessProbe:
+                    httpGet:
+                      path: /
+                      port: http
+                    periodSeconds: 20
+                  # Utilization = usage / request: the HPA needs these.
+                  resources:
+                    requests:
+                      cpu: 200m
+                      memory: 64Mi
+                    limits:
+                      memory: 128Mi
+      overlays/prod/hpa.yaml: |
+        # CPU is what saturates checkout: scale out at 70% of the request,
+        # keep 2 replicas minimum and cap at 10.
+        apiVersion: autoscaling/v2
+        kind: HorizontalPodAutoscaler
+        metadata:
+          name: checkout
+        spec:
+          scaleTargetRef:
+            apiVersion: apps/v1
+            kind: Deployment
+            name: checkout
+          minReplicas: 2
+          maxReplicas: 10
+          metrics:
+            - type: Resource
+              resource:
+                name: cpu
+                target:
+                  type: Utilization
+                  averageUtilization: 70
+          behavior:
+            scaleDown:
+              stabilizationWindowSeconds: 300
+    starter:
+      kind: kubernetes
+      kubernetes:
+        sources:
+        - kind: kustomize
+          path: base
+          environments:
+            prod: overlays/prod
+      files:
+        base/kustomization.yaml: |
+          apiVersion: kustomize.config.k8s.io/v1beta1
+          kind: Kustomization
+          resources:
+            - deployment.yaml
+            - service.yaml
+        base/deployment.yaml: |
+          apiVersion: apps/v1
+          kind: Deployment
+          metadata:
+            name: checkout
+          spec:
+            replicas: 1
+            selector:
+              matchLabels:
+                app: checkout
+            template:
+              metadata:
+                labels:
+                  app: checkout
+              spec:
+                securityContext:
+                  runAsNonRoot: true
+                  runAsUser: 101
+                automountServiceAccountToken: false
+                containers:
+                  - name: api
+                    image: nginxinc/nginx-unprivileged:1.30-alpine
+                    ports:
+                      - name: http
+                        containerPort: 8080
+                    readinessProbe:
+                      httpGet:
+                        path: /
+                        port: http
+                      periodSeconds: 5
+                    livenessProbe:
+                      httpGet:
+                        path: /
+                        port: http
+                      periodSeconds: 20
+        base/service.yaml: |
+          apiVersion: v1
+          kind: Service
+          metadata:
+            name: checkout
+          spec:
+            selector:
+              app: checkout
+            ports:
+              - name: http
+                port: 80
+                targetPort: http
+        overlays/prod/kustomization.yaml: |
+          # Production: checkout in the pay-prod namespace with an autoscaler.
+          apiVersion: kustomize.config.k8s.io/v1beta1
+          kind: Kustomization
+          namespace: pay-prod
+          resources:
+            - ../../base
+            - namespace.yaml
+            - hpa.yaml
+        overlays/prod/namespace.yaml: |
+          apiVersion: v1
+          kind: Namespace
+          metadata:
+            name: pay-prod
+        overlays/prod/hpa.yaml: |
+          apiVersion: autoscaling/v2
+          kind: HorizontalPodAutoscaler
+          metadata:
+            name: checkout
+          spec:
+            scaleTargetRef:
+              apiVersion: apps/v1
+              kind: Deployment
+              name: checkout
+            minReplicas: 1
+            maxReplicas: 10
+            metrics:
+              - type: Resource
+                resource:
+                  name: memory
+                  target:
+                    type: Utilization
+                    averageUtilization: 80
+    checks:
+    - id: valid
+      label: The prod overlay renders
+      type: validate
+      environment: prod
+    - id: requests
+      label: Containers request CPU and memory for the autoscaler
+      type: rules_clean
+      environment: prod
+      rules_clean:
+        codes: [k8s_no_requests, k8s_hpa_no_requests]
+        minSeverity: warning
+    - id: cpu-metric
+      label: The autoscaler scales on CPU
+      type: has
+      environment: prod
+      has:
+        kubernetes:
+          kind: HorizontalPodAutoscaler
+          name: checkout
+          where:
+            spec.metrics.*.resource.name: cpu
+    - id: no-memory-metric
+      label: Memory is not the scaling signal
+      type: has
+      environment: prod
+      has:
+        kubernetes:
+          kind: HorizontalPodAutoscaler
+          where:
+            spec.metrics.*.resource.name: memory
+          count:
+            max: 0
+    - id: cpu-target
+      label: The utilization target leaves headroom (50–80%)
+      type: has
+      environment: prod
+      has:
+        kubernetes:
+          kind: HorizontalPodAutoscaler
+          name: checkout
+          where:
+            spec.metrics.*.resource.target.averageUtilization:
+              min: 50
+              max: 80
+    - id: min-replicas
+      label: Scaling in keeps at least 2 replicas
+      type: has
+      environment: prod
+      has:
+        kubernetes:
+          kind: HorizontalPodAutoscaler
+          name: checkout
+          where:
+            spec.minReplicas:
+              min: 2
+    adaptations:
+      aws: |
+        **EC2 Auto Scaling** target tracking on the metric that saturates (average CPU, ALB
+        `RequestCountPerTarget`), **Application Auto Scaling** for ECS services, DynamoDB and Lambda provisioned
+        concurrency; scale queue workers on SQS backlog per instance. Practice: `aws-alb-auto-scaling`.
+      azure: |
+        **Azure Monitor autoscale** rules on VM scale sets and App Service plans (CPU, memory, queue length,
+        custom metrics) with minimum/maximum instance counts; AKS combines the HPA with the cluster autoscaler.
+        Practice: `azure-aks-baseline`.
+      gcp: |
+        **Managed instance group autoscaler** with a CPU utilization target, load-balancing serving capacity or
+        Cloud Monitoring metrics (for example Pub/Sub backlog); Cloud Run scales on concurrent requests per
+        instance; GKE uses the HPA and cluster autoscaler.
+      oci: |
+        **Instance pool autoscaling**: metric-based policies on CPU or memory utilization with
+        minimum/maximum instances, or schedule-based policies for predictable peaks. Practice:
+        `oci-lb-instance-pool-autoscaling`.
+      docker: |
+        Compose doesn't autoscale: `deploy.replicas` is fixed. Size replicas and limits from a load test, and
+        move to an orchestrator (Kubernetes, a managed container service) when load varies.
+      kubernetes: |
+        **HorizontalPodAutoscaler** (`autoscaling/v2`) on CPU/memory utilization (needs requests) or custom and
+        external metrics; the cluster autoscaler adds nodes when pods can't be scheduled. Practice:
+        `kubernetes-resources-and-hpa`, and `kubernetes-autoscale-signal` to watch it scale under real load.
+    sources:
+    - title: AWS Well-Architected — REL07-BP01 Use automation when obtaining or scaling resources
+      url: https://docs.aws.amazon.com/wellarchitected/latest/framework/rel_adapt_to_changes_autoscale_adapt.html
+    - title: Azure Well-Architected — Designing a reliable scaling strategy
+      url: https://learn.microsoft.com/en-us/azure/well-architected/reliability/scaling
+    - title: Azure Monitor — Autoscale overview
+      url: https://learn.microsoft.com/en-us/azure/azure-monitor/autoscale/autoscale-overview
+    - title: Google Cloud Well-Architected — Take advantage of horizontal scalability
+      url: https://cloud.google.com/architecture/framework/reliability/horizontal-scalability
+    - title: Google Cloud — Autoscaling groups of instances
+      url: https://cloud.google.com/compute/docs/autoscaler
+    - title: OCI — Autoscaling instance pools
+      url: https://docs.oracle.com/en-us/iaas/Content/Compute/Tasks/autoscalinginstancepools.htm
+    - title: Kubernetes — Horizontal Pod Autoscaling
+      url: https://kubernetes.io/docs/tasks/run-application/horizontal-pod-autoscale/
+    - title: Kubernetes — Resource management for pods and containers
+      url: https://kubernetes.io/docs/concepts/configuration/manage-resources-containers/
+    solvableWithoutCode: true
+- op: upsert
+  kind: challenge
+  id: global-zero-downtime-deploy
+  data:
+    provider: global
+    level: advanced
+    title: Deploy without downtime
+    summary: Turn a stop-everything rollout into a rolling update that only sends traffic to ready pods.
+    minutes: 35
+    tags: [reliability, deployments, rolling-update, probes, well-architected]
+    prerequisites: [global-multi-zone-ha]
+    runtime: design
+    problem: |
+      Every release of the `api` causes a short outage. Its production Deployment runs 3 replicas but uses
+      the **Recreate** strategy — all old pods stop before any new one starts — and its containers have **no
+      readiness probe**, so new pods receive traffic before they can answer.
+
+      The frameworks call for **safe deployment strategies**: change a little at a time (rolling, canary,
+      blue/green), keep serving capacity during the change, and only route users to instances that passed
+      their health checks, so a bad version can be stopped and rolled back before everyone is affected.
+
+      Graded on **Kubernetes** (design checks on the `prod` Kustomize overlay).
+    requirements:
+    - 'The `api` Deployment uses a **RollingUpdate** that never removes a pod before its replacement is ready: `maxUnavailable: 0` (no `k8s_rollout_strategy` finding).'
+    - Every serving container has a **readinessProbe** (no `k8s_no_readiness_probe` finding).
+    hints:
+    - Recreate is only needed when two versions can't run side by side (for example a ReadWriteOnce volume). Look at the `api` Deployment's **Rollout** section.
+    - 'Pick `RollingUpdate` with **Max unavailable** 0 and max surge 1: Kubernetes starts one new pod, waits until it is Ready, then removes an old one.'
+    - 'Ready means the readiness probe passes. Add a **Readiness** probe to the `api` container: HTTP GET on path `/`, port `http`, every 5 seconds. Without it, a pod counts as ready as soon as its process starts.'
+    solution: |
+      1. **Rolling instead of Recreate.** `RollingUpdate` with `maxUnavailable: 0` and `maxSurge: 1` keeps all 3
+         replicas serving while one extra new pod starts; capacity never drops during the rollout.
+      2. **Readiness gates traffic.** The Service only routes to pods whose readiness probe passes, and the
+         rollout only proceeds when the new pod is Ready. A broken version stalls the rollout instead of taking
+         traffic, and `kubectl rollout undo` brings the previous ReplicaSet back.
+      3. **Keep going safer.** `minReadySeconds` waits a little longer before counting a pod as available, a
+         PodDisruptionBudget protects capacity during node drains, and canary or blue/green releases (two
+         Deployments behind traffic splitting) limit the blast radius further.
+
+      **Without writing code in Nimbo**
+
+      1. Click the Deployment `api`. In its **Rollout** section pick `RollingUpdate` as the **Rollout strategy**, with **Max unavailable** `0` and max surge `1`.
+      2. On the `api` container add a **Readiness** probe: HTTP GET, path `/`, port `http`, period `5` seconds.
+    solutionFiles:
+      base/deployment.yaml: |
+        apiVersion: apps/v1
+        kind: Deployment
+        metadata:
+          name: api
+        spec:
+          replicas: 1
+          selector:
+            matchLabels:
+              app: api
+          # One new pod at a time, never fewer ready pods than replicas.
+          strategy:
+            type: RollingUpdate
+            rollingUpdate:
+              maxUnavailable: 0
+              maxSurge: 1
+          minReadySeconds: 5
+          template:
+            metadata:
+              labels:
+                app: api
+            spec:
+              securityContext:
+                runAsNonRoot: true
+                runAsUser: 101
+              automountServiceAccountToken: false
+              containers:
+                - name: api
+                  image: nginxinc/nginx-unprivileged:1.30-alpine
+                  ports:
+                    - name: http
+                      containerPort: 8080
+                  # Traffic only reaches pods that answer.
+                  readinessProbe:
+                    httpGet:
+                      path: /
+                      port: http
+                    periodSeconds: 5
+                  livenessProbe:
+                    httpGet:
+                      path: /
+                      port: http
+                    periodSeconds: 20
+                  resources:
+                    requests:
+                      cpu: 50m
+                      memory: 64Mi
+                    limits:
+                      memory: 128Mi
+      overlays/prod/kustomization.yaml: |
+        # Production: three api replicas in the api-prod namespace, kept
+        # available during node drains by a PodDisruptionBudget.
+        apiVersion: kustomize.config.k8s.io/v1beta1
+        kind: Kustomization
+        namespace: api-prod
+        resources:
+          - ../../base
+          - namespace.yaml
+          - pdb.yaml
+        replicas:
+          - name: api
+            count: 3
+      overlays/prod/pdb.yaml: |
+        apiVersion: policy/v1
+        kind: PodDisruptionBudget
+        metadata:
+          name: api
+        spec:
+          maxUnavailable: 1
+          selector:
+            matchLabels:
+              app: api
+    starter:
+      kind: kubernetes
+      kubernetes:
+        sources:
+        - kind: kustomize
+          path: base
+          environments:
+            prod: overlays/prod
+      files:
+        base/kustomization.yaml: |
+          apiVersion: kustomize.config.k8s.io/v1beta1
+          kind: Kustomization
+          resources:
+            - deployment.yaml
+            - service.yaml
+        base/deployment.yaml: |
+          apiVersion: apps/v1
+          kind: Deployment
+          metadata:
+            name: api
+          spec:
+            replicas: 1
+            selector:
+              matchLabels:
+                app: api
+            strategy:
+              type: Recreate
+            template:
+              metadata:
+                labels:
+                  app: api
+              spec:
+                securityContext:
+                  runAsNonRoot: true
+                  runAsUser: 101
+                automountServiceAccountToken: false
+                containers:
+                  - name: api
+                    image: nginxinc/nginx-unprivileged:1.30-alpine
+                    ports:
+                      - name: http
+                        containerPort: 8080
+                    resources:
+                      requests:
+                        cpu: 50m
+                        memory: 64Mi
+                      limits:
+                        memory: 128Mi
+        base/service.yaml: |
+          apiVersion: v1
+          kind: Service
+          metadata:
+            name: api
+          spec:
+            selector:
+              app: api
+            ports:
+              - name: http
+                port: 80
+                targetPort: http
+        overlays/prod/kustomization.yaml: |
+          # Production: three api replicas in the api-prod namespace.
+          apiVersion: kustomize.config.k8s.io/v1beta1
+          kind: Kustomization
+          namespace: api-prod
+          resources:
+            - ../../base
+            - namespace.yaml
+          replicas:
+            - name: api
+              count: 3
+        overlays/prod/namespace.yaml: |
+          apiVersion: v1
+          kind: Namespace
+          metadata:
+            name: api-prod
+    checks:
+    - id: valid
+      label: The prod overlay renders
+      type: validate
+      environment: prod
+    - id: rollout-rules
+      label: Rollouts keep serving and pods have readiness probes
+      type: rules_clean
+      environment: prod
+      rules_clean:
+        codes: [k8s_rollout_strategy, k8s_no_readiness_probe]
+        minSeverity: warning
+    - id: rolling-update
+      label: The rolling update never removes a pod before its replacement is ready
+      type: has
+      environment: prod
+      has:
+        kubernetes:
+          kind: Deployment
+          name: api
+          where:
+            spec.strategy.rollingUpdate.maxUnavailable: 0
+    - id: readiness
+      label: The api container has a readiness probe
+      type: has
+      environment: prod
+      has:
+        kubernetes:
+          kind: Deployment
+          name: api
+          where:
+            spec.template.spec.containers.api.readinessProbe:
+              exists: true
+    adaptations:
+      aws: |
+        **CodeDeploy** blue/green or canary for ECS and Lambda (traffic shifting with automatic rollback on
+        alarms), rolling updates or **instance refresh** for Auto Scaling groups behind an ALB whose target
+        health checks gate traffic.
+      azure: |
+        **App Service deployment slots** (deploy to staging, warm up, swap), revision traffic splitting in
+        Container Apps, rolling upgrades of VM scale sets with health probes; progressive exposure and feature
+        flags per the safe deployment guidance.
+      gcp: |
+        **Rolling updates** of managed instance groups (`maxSurge`/`maxUnavailable`) with health checks, Cloud
+        Run **revisions with traffic splitting** for canaries, and Cloud Deploy canary or blue/green strategies.
+      oci: |
+        Update instance pools behind a load balancer whose health checks gate traffic, use OCI DevOps deployment
+        strategies (rolling, canary, blue/green) and make frequent, small, tested deployments.
+      docker: |
+        `docker compose up` replaces containers in place. Put a load balancer with health checks in front of
+        several replicas so a restarting one is skipped, and use `healthcheck:` so dependants wait for
+        readiness. Practice: `docker-lb-health-checks`.
+      kubernetes: |
+        Deployment `RollingUpdate` (`maxUnavailable: 0`, `maxSurge: 1`), readiness probes, `minReadySeconds`, a
+        PodDisruptionBudget and `kubectl rollout undo`; canaries with two Deployments or a service mesh/Gateway
+        traffic split. Practice: `kubernetes-zero-downtime-prod`, `kubernetes-readiness-probe`,
+        `kubernetes-health-probes`.
+    sources:
+    - title: AWS Well-Architected — OPS06-BP03 Employ safe deployment strategies
+      url: https://docs.aws.amazon.com/wellarchitected/latest/framework/ops_mit_deploy_risks_deploy_mgmt_sys.html
+    - title: AWS Well-Architected — REL08-BP05 Deploy changes with automation
+      url: https://docs.aws.amazon.com/wellarchitected/latest/framework/rel_tracking_change_management_automated_changemgmt.html
+    - title: Azure Well-Architected — Safe deployment practices
+      url: https://learn.microsoft.com/en-us/azure/well-architected/operational-excellence/safe-deployments
+    - title: Google Cloud Well-Architected — Automate and manage change
+      url: https://cloud.google.com/architecture/framework/operational-excellence/automate-and-manage-change
+    - title: OCI Well-Architected — Plan your deployment strategy
+      url: https://docs.oracle.com/en/solutions/oci-best-practices/plan-your-deployment-strategy1.html
+    - title: Kubernetes — Deployments
+      url: https://kubernetes.io/docs/concepts/workloads/controllers/deployment/
+    - title: Kubernetes — Performing a rolling update
+      url: https://kubernetes.io/docs/tutorials/kubernetes-basics/update/update-intro/
+    - title: Kubernetes — Configure liveness, readiness and startup probes
+      url: https://kubernetes.io/docs/tasks/configure-pod-container/configure-liveness-readiness-startup-probes/
+    solvableWithoutCode: true
+- op: upsert
+  kind: challenge
+  id: global-cost-awareness
+  data:
+    provider: global
+    level: beginner
+    title: Make costs visible and bounded
+    summary: Tag every resource, stop logs from piling up forever and get an alert before the bill surprises you.
+    minutes: 25
+    tags: [cost, finops, tagging, lifecycle, well-architected]
+    runtime: design
+    problem: |
+      A small team runs a web app's log pipeline: application logs go to a log group and archived log files to
+      a bucket. Nobody can tell which project the resources belong to, the log group keeps every line forever,
+      the bucket grows without limit and the first sign of overspending is the monthly invoice.
+
+      The cost pillars of all four frameworks start with the same habits: **attribute** every resource to an
+      owner (tags/labels), **expire or tier** data you no longer need, and **set budgets with alerts** so
+      spending is watched, not discovered.
+
+      Graded on **AWS** (Terraform, design checks).
+    requirements:
+    - Every taggable resource carries cost-allocation tags (no `bp_missing_tags` finding); provider `default_tags` count.
+    - The `/app/web` log group sets a retention (`retention_in_days`).
+    - The `logs` bucket has a lifecycle configuration that **expires** old objects.
+    - An AWS **budget** for monthly cost sends a notification when a threshold is crossed.
+    hints:
+    - 'Cost allocation starts with tags: give every taggable resource the same `Project`, `Environment`, `Owner` and `CostCenter` keys in its **tags** editor. Then look for data that is kept forever.'
+    - 'Logs: set the log group''s `retention_in_days`. Bucket: add an S3 lifecycle configuration from the palette, link it to the bucket, and give its `rule` a status `Enabled`, a `filter`, a `transition` to a cheaper storage class and an `expiration` in days.'
+    - Add a budget from the palette with budget type `COST`, time unit `MONTHLY`, a limit amount and unit, and a `notification` block (comparison operator, threshold, threshold type, notification type and subscriber email addresses).
+    solution: |
+      1. **Attribution.** `default_tags` on the provider puts Project/Environment/Owner/CostCenter on every
+         resource; activate them as cost allocation tags and group spending by them.
+      2. **Data lifecycle.** A log group retention (30 days here) and an S3 lifecycle rule (move to Infrequent
+         Access after 30 days, delete after 365, clean up incomplete uploads) stop storage from growing forever.
+         Pick retention from real requirements (audits, debugging), not "keep everything".
+      3. **Guardrails.** A monthly cost budget with an alert at 80% of actual spend tells the owner while there
+         is still time to react; forecast-based alerts warn even earlier.
+
+      Cost awareness is a habit, not a one-off: review the cost reports by tag regularly and remove resources
+      nobody owns.
+
+      **Without writing code in Nimbo**
+
+      1. Click the log group `web`: set **retention_in_days** to `30` and add the tags `Project = weblogs`, `Environment = prod`, `Owner = platform-team`, `CostCenter = cc-1234` in the **tags** editor. Add the same four tags to the bucket `logs`.
+      2. From the palette add an **S3 bucket lifecycle configuration**: **Link to…** the bucket's id. In its **rule** block set id `archive-then-expire` and status `Enabled`, add an empty-prefix **filter**, a **transition** after `30` days to `STANDARD_IA`, an **expiration** after `365` days and **abort_incomplete_multipart_upload** after `7` days.
+      3. Add a **budget**: name `weblogs-monthly`, budget type `COST`, limit `50` `USD`, time unit `MONTHLY`, the same four tags, and a **notification** block: `GREATER_THAN`, threshold `80`, `PERCENTAGE`, `ACTUAL`, subscriber `platform-team@example.com`.
+    solutionFiles:
+      providers.tf: |
+        provider "aws" {
+          region = var.aws_region
+
+          # Cost allocation: every resource says whose it is.
+          default_tags {
+            tags = {
+              Project     = var.project
+              Environment = var.environment
+              Owner       = var.owner
+              CostCenter  = var.cost_center
+            }
+          }
+        }
+      variables.tf: |
+        variable "project" {
+          type        = string
+          default     = "weblogs"
+          description = "Project name: prefix of every resource name and the Project tag."
+        }
+
+        variable "environment" {
+          type        = string
+          default     = "prod"
+          description = "Environment tag (dev, staging, prod)."
+        }
+
+        variable "owner" {
+          type        = string
+          default     = "platform-team"
+          description = "Team that owns the resources (Owner tag)."
+        }
+
+        variable "cost_center" {
+          type        = string
+          default     = "cc-1234"
+          description = "Cost center the spending is charged to (CostCenter tag)."
+        }
+
+        variable "aws_region" {
+          type        = string
+          default     = "us-east-1"
+          description = "AWS region to deploy into."
+        }
+
+        variable "monthly_budget_usd" {
+          type        = string
+          default     = "50"
+          description = "Monthly cost budget in USD."
+        }
+
+        variable "budget_email" {
+          type        = string
+          default     = "platform-team@example.com"
+          description = "Who gets the budget alerts."
+        }
+      main.tf: |
+        resource "aws_cloudwatch_log_group" "web" {
+          name              = "/app/web"
+          retention_in_days = 30
+        }
+
+        resource "aws_s3_bucket" "logs" {
+          bucket_prefix = "${var.project}-archive-"
+        }
+
+        resource "aws_s3_bucket_server_side_encryption_configuration" "logs" {
+          bucket = aws_s3_bucket.logs.id
+
+          rule {
+            apply_server_side_encryption_by_default {
+              sse_algorithm = "AES256"
+            }
+          }
+        }
+
+        resource "aws_s3_bucket_public_access_block" "logs" {
+          bucket                  = aws_s3_bucket.logs.id
+          block_public_acls       = true
+          block_public_policy     = true
+          ignore_public_acls      = true
+          restrict_public_buckets = true
+        }
+
+        # Archives get cheaper after a month and disappear after a year.
+        resource "aws_s3_bucket_lifecycle_configuration" "logs" {
+          bucket = aws_s3_bucket.logs.id
+
+          rule {
+            id     = "archive-then-expire"
+            status = "Enabled"
+
+            filter {}
+
+            transition {
+              days          = 30
+              storage_class = "STANDARD_IA"
+            }
+
+            expiration {
+              days = 365
+            }
+
+            abort_incomplete_multipart_upload {
+              days_after_initiation = 7
+            }
+          }
+        }
+
+        # Alert the owner at 80% of the monthly budget.
+        resource "aws_budgets_budget" "monthly" {
+          name         = "${var.project}-monthly"
+          budget_type  = "COST"
+          limit_amount = var.monthly_budget_usd
+          limit_unit   = "USD"
+          time_unit    = "MONTHLY"
+
+          notification {
+            comparison_operator        = "GREATER_THAN"
+            threshold                  = 80
+            threshold_type             = "PERCENTAGE"
+            notification_type          = "ACTUAL"
+            subscriber_email_addresses = [var.budget_email]
+          }
+        }
+    starter:
+      kind: terraform
+      cloud: aws
+      files:
+        versions.tf: |
+          terraform {
+            required_version = ">= 1.6"
+
+            required_providers {
+              aws = {
+                source  = "hashicorp/aws"
+                version = "~> 6.0"
+              }
+            }
+          }
+        providers.tf: |
+          provider "aws" {
+            region = var.aws_region
+          }
+        variables.tf: |
+          variable "project" {
+            type        = string
+            default     = "weblogs"
+            description = "Project name: prefix of every resource name."
+          }
+
+          variable "aws_region" {
+            type        = string
+            default     = "us-east-1"
+            description = "AWS region to deploy into."
+          }
+        main.tf: |
+          resource "aws_cloudwatch_log_group" "web" {
+            name = "/app/web"
+          }
+
+          resource "aws_s3_bucket" "logs" {
+            bucket_prefix = "${var.project}-archive-"
+          }
+
+          resource "aws_s3_bucket_server_side_encryption_configuration" "logs" {
+            bucket = aws_s3_bucket.logs.id
+
+            rule {
+              apply_server_side_encryption_by_default {
+                sse_algorithm = "AES256"
+              }
+            }
+          }
+
+          resource "aws_s3_bucket_public_access_block" "logs" {
+            bucket                  = aws_s3_bucket.logs.id
+            block_public_acls       = true
+            block_public_policy     = true
+            ignore_public_acls      = true
+            restrict_public_buckets = true
+          }
+    checks:
+    - id: valid
+      label: The configuration is valid
+      type: validate
+    - id: tags
+      label: Resources carry cost-allocation tags
+      type: rules_clean
+      rules_clean:
+        codes: [bp_missing_tags]
+        minSeverity: info
+    - id: log-retention
+      label: The log group has a retention
+      type: has
+      has:
+        terraform:
+          type: aws_cloudwatch_log_group
+          where:
+            retention_in_days:
+              exists: true
+    - id: lifecycle
+      label: Old archives expire
+      type: has
+      has:
+        terraform:
+          type: aws_s3_bucket_lifecycle_configuration
+          where:
+            bucket:
+              ref: aws_s3_bucket.logs
+            rule.expiration.days:
+              exists: true
+    - id: budget
+      label: A monthly cost budget alerts the owner
+      type: has
+      has:
+        terraform:
+          type: aws_budgets_budget
+          where:
+            budget_type: COST
+            notification.threshold:
+              exists: true
+    adaptations:
+      aws: |
+        `default_tags` plus **cost allocation tags** and **Cost Categories**, **AWS Budgets** with alerts,
+        CloudWatch Logs retention, S3 lifecycle rules (transition/expiration) and Cost Explorer reports.
+        Practice: `aws-backup-dr-cost`, `aws-lambda-least-privilege` (log retention).
+      azure: |
+        **Tags** enforced with Azure Policy, **Cost Management budgets** with action groups, Log Analytics
+        retention, Blob lifecycle management (cool/archive tiers, deletion). Practice: `azure-naming-tagging`,
+        `azure-landing-zone-governance`.
+      gcp: |
+        A consistent **labeling** policy (`default_labels` on the provider), **Cloud Billing budgets** with
+        alerts, Cloud Logging bucket retention and Cloud Storage **Object Lifecycle Management**. Practice:
+        `gcp-storage-retention-lifecycle`.
+      oci: |
+        **Compartments** per cost owner and **cost-tracking tags**, **Budgets** with alert rules, Object Storage
+        **lifecycle policies** and Logging retention; review Cost Analysis and terminate unused resources.
+        Practice: `oci-private-bucket-lifecycle`, `oci-cis-landing-zone`.
+      docker: |
+        Locally, cost is disk and memory: rotate container logs (`max-size`/`max-file`), cap memory with
+        `deploy.resources.limits`, prune unused images and volumes, and use small base images.
+      kubernetes: |
+        **Requests and limits** sized from measurements (requests drive node count), **ResourceQuotas** per
+        namespace, recommended/cost labels on every workload for chargeback, autoscaling down at quiet times.
+    sources:
+    - title: AWS Well-Architected — COST03-BP03 Identify cost attribution categories
+      url: https://docs.aws.amazon.com/wellarchitected/latest/framework/cost_monitor_usage_define_attribution.html
+    - title: AWS Well-Architected — COST04-BP01 Track resources over their lifetime
+      url: https://docs.aws.amazon.com/wellarchitected/latest/framework/cost_decomissioning_resources_track.html
+    - title: AWS Budgets — Managing your costs with AWS Budgets
+      url: https://docs.aws.amazon.com/cost-management/latest/userguide/budgets-managing-costs.html
+    - title: Amazon S3 — Managing the lifecycle of objects
+      url: https://docs.aws.amazon.com/AmazonS3/latest/userguide/object-lifecycle-mgmt.html
+    - title: Azure Well-Architected — Cost Optimization design principles
+      url: https://learn.microsoft.com/en-us/azure/well-architected/cost-optimization/principles
+    - title: Google Cloud Well-Architected — Foster a culture of cost awareness
+      url: https://cloud.google.com/architecture/framework/cost-optimization/foster-culture-cost-awareness
+    - title: Google Cloud Well-Architected — Optimize resource usage
+      url: https://cloud.google.com/architecture/framework/cost-optimization/optimize-resource-usage
+    - title: OCI Well-Architected — Track and manage usage and cost
+      url: https://docs.oracle.com/en/solutions/oci-best-practices/track-and-manage-usage-and-cost1.html
+    - title: Kubernetes — Resource quotas
+      url: https://kubernetes.io/docs/concepts/policy/resource-quotas/
+    solvableWithoutCode: true
+- op: upsert
+  kind: challenge
+  id: global-observability-slo
+  data:
+    provider: global
+    level: advanced
+    title: Observe a service and hold it to an SLO
+    summary: Send traces, logs and metrics to an OpenTelemetry Collector, add a health signal and meet an availability SLO under load.
+    minutes: 50
+    tags: [observability, opentelemetry, slo, monitoring, logging, well-architected]
+    runtime: local
+    problem: |
+      The `web` service (podinfo, a small Go demo app instrumented with Prometheus metrics and
+      OpenTelemetry) runs in Docker, but nobody sees what it does: no health signal, no
+      telemetry pipeline and logs written with no size limit. When users complain, the team has nothing to
+      look at.
+
+      Observability means being able to ask *why* from the system's outputs: **metrics** (how much, how
+      fast), **logs** (what happened) and **traces** (where a request spent its time). Their purpose is the
+      user experience, expressed as **SLIs** (measurements from the user's point of view) and **SLOs**
+      (targets for them) that alerts and priorities are based on.
+
+      Graded on **Docker** (local, deployed, load tested). The service's SLO for this exercise: **fewer than
+      1% failed requests and a p95 latency under 1 second** at 20 requests/second.
+    requirements:
+    - An `otel-collector` service runs the OpenTelemetry Collector image (`otel/opentelemetry-collector-contrib`) with a config that receives OTLP and scrapes the app's Prometheus metrics.
+    - '`web` exports telemetry to the collector: `OTEL_EXPORTER_OTLP_ENDPOINT` points at `otel-collector:4317` and podinfo''s `--otel-service-name` flag is set (it enables trace and log export).'
+    - '`web` has a **healthcheck** (its `/healthz` endpoint), so Docker reports when it stops answering.'
+    - '`web` logs are rotated (json-file with `max-size`; no `dk_log_rotation` finding).'
+    - 'Deployed and loaded at 20 rps, `web` meets the SLO: error rate below 1% and p95 below 1000 ms.'
+    hints:
+    - 'Add the OpenTelemetry Collector from the palette. OpenTelemetry SDKs read standard environment variables: `OTEL_EXPORTER_OTLP_ENDPOINT` (an `http://` gRPC endpoint means no TLS); podinfo also needs `--otel-service-name=<name>` on its command line to turn export on.'
+    - On `web`, switch to Pro mode to edit the **Command** (`./podinfo --port=9898 --otel-service-name=web`) and add an **Environment** row `OTEL_EXPORTER_OTLP_ENDPOINT` = `http://otel-collector:4317` (port 4317 is gRPC, which podinfo uses).
+    - 'In the **Health check** section, use the podinfo image''s `podcli`: test `podcli check http localhost:9898/healthz` with interval 10s, timeout 3s and 3 retries. In **Logging**, pick **Rotate logs (10m × 3)**.'
+    solution: |
+      1. **A telemetry pipeline.** The OpenTelemetry Collector receives OTLP (traces and logs from the app) and
+         scrapes podinfo's Prometheus `/metrics`, then exports everything (here to its own log with the `debug`
+         exporter; in production to your backend). Apps speak one vendor-neutral protocol; the backend can
+         change without touching them.
+      2. **Instrumented app.** `OTEL_EXPORTER_OTLP_ENDPOINT=http://otel-collector:4317` and
+         `--otel-service-name=web` make podinfo export spans and logs tagged with `service.name=web`.
+      3. **Health signal.** A healthcheck on `/healthz` turns "the process runs" into "the service answers".
+      4. **Bounded logs.** `max-size`/`max-file` rotation keeps local logs from filling the disk; ship them
+         through the pipeline instead of keeping them forever.
+      5. **SLO.** Availability (failed requests < 1%) and latency (p95 < 1 s) are SLIs measured where users feel
+         them. The load check is the SLO test; in production you would compute them continuously from metrics,
+         alert on burning the error budget (symptoms), not on every CPU spike (causes).
+
+      **Without writing code in Nimbo**
+
+      1. From the palette add the **OpenTelemetry Collector** service (`otel-collector`).
+      2. Switch to Pro mode, click `web` and set **Command** to `./podinfo --port=9898 --otel-service-name=web`.
+      3. In its **Environment** section add `OTEL_EXPORTER_OTLP_ENDPOINT` with the value `http://otel-collector:4317`.
+      4. In its **Health check** section set the test `podcli check http localhost:9898/healthz`, interval `10s`, timeout `3s`, retries `3`, start period `5s`.
+      5. In its **Logging** section pick **Rotate logs (10m × 3)**.
+      6. In its **Depends on** section add `otel-collector` (started).
+    solutionFiles:
+      compose.yaml: |
+        services:
+          web:
+            image: ghcr.io/stefanprodan/podinfo:6.15.0
+            # --otel-service-name turns on trace and log export (OTLP).
+            command: ["./podinfo", "--port=9898", "--otel-service-name=web"]
+            ports:
+              - "9898"
+            environment:
+              OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4317
+            healthcheck:
+              test: ["CMD", "podcli", "check", "http", "localhost:9898/healthz"]
+              interval: 10s
+              timeout: 3s
+              retries: 3
+              start_period: 5s
+            logging:
+              driver: json-file
+              options:
+                max-size: "10m"
+                max-file: "3"
+            depends_on:
+              - otel-collector
+
+          otel-collector:
+            image: otel/opentelemetry-collector-contrib:0.111.0
+            volumes:
+              - ./otel/config.yaml:/etc/otelcol-contrib/config.yaml:ro
+            logging:
+              driver: json-file
+              options:
+                max-size: "10m"
+                max-file: "3"
+      otel/config.yaml: |
+        # Receive OTLP from the app, scrape its Prometheus metrics and print
+        # everything to the collector's log (swap debug for your backend).
+        receivers:
+          otlp:
+            protocols:
+              grpc:
+                endpoint: 0.0.0.0:4317
+          prometheus:
+            config:
+              scrape_configs:
+                - job_name: web
+                  scrape_interval: 15s
+                  static_configs:
+                    - targets: ["web:9898"]
+
+        processors:
+          batch: {}
+
+        exporters:
+          debug:
+            verbosity: basic
+
+        service:
+          pipelines:
+            traces:
+              receivers: [otlp]
+              processors: [batch]
+              exporters: [debug]
+            metrics:
+              receivers: [otlp, prometheus]
+              processors: [batch]
+              exporters: [debug]
+            logs:
+              receivers: [otlp]
+              processors: [batch]
+              exporters: [debug]
+    starter:
+      kind: docker
+      files:
+        compose.yaml: |
+          services:
+            web:
+              image: ghcr.io/stefanprodan/podinfo:6.15.0
+              command: ["./podinfo", "--port=9898"]
+              ports:
+                - "9898"
+              logging:
+                driver: json-file
+    checks:
+    - id: valid
+      label: The compose project is valid
+      type: validate
+    - id: log-rotation
+      label: Container logs are rotated
+      type: rules_clean
+      rules_clean:
+        codes: [dk_log_rotation]
+        minSeverity: info
+    - id: collector
+      label: An OpenTelemetry Collector runs in the project
+      type: has
+      has:
+        compose:
+          image: otel/opentelemetry-collector
+    - id: otlp-endpoint
+      label: web exports OTLP to the collector
+      type: has
+      has:
+        compose:
+          service: web
+          where:
+            environment.OTEL_EXPORTER_OTLP_ENDPOINT:
+              contains: otel-collector:4317
+    - id: service-name
+      label: web turns on telemetry export with a service name
+      type: has
+      has:
+        compose:
+          service: web
+          where:
+            command:
+              contains: --otel-service-name
+    - id: healthcheck
+      label: web has a healthcheck
+      type: has
+      has:
+        compose:
+          service: web
+          where:
+            healthcheck.test:
+              exists: true
+    - id: slo
+      label: 'SLO at 20 rps: under 1% errors and p95 under 1 s'
+      type: load
+      load:
+        target:
+          service: web
+          port: 9898
+          path: /
+        spec:
+          mode: rps
+          stages:
+          - durationSec: 30
+            target: 20
+        expect:
+        - metric: error_rate
+          op: lt
+          value: 0.01
+        - metric: p95_ms
+          op: lt
+          value: 1000
+    adaptations:
+      aws: |
+        **CloudWatch** metrics, Logs and alarms, **X-Ray**/CloudWatch Application Signals for traces and
+        **service level objectives**; the AWS Distro for OpenTelemetry collects OTLP. Alarm on symptoms tied to
+        KPIs. Practice: `aws-sqs-dead-letter-queue` (DLQ alarm).
+      azure: |
+        **Azure Monitor**: Application Insights (OpenTelemetry distro) for traces and requests, Log Analytics
+        workspaces for logs, metric alerts with action groups, and SLO-driven alerts and dashboards. Practice:
+        `azure-aks-baseline` (Container Insights).
+      gcp: |
+        **Cloud Monitoring** (metrics, uptime checks, **SLO monitoring** with error-budget burn-rate alerts),
+        Cloud Logging and **Cloud Trace**; the OpenTelemetry Collector exports to all three.
+      oci: |
+        **Monitoring** metrics with **alarms** per metric (tuned to avoid noise), **Logging** for service and
+        custom logs, **Application Performance Monitoring** for traces, health checks on load balancers.
+      docker: |
+        Healthchecks, rotated logs, Prometheus metrics endpoints and an **OpenTelemetry Collector** container as
+        the pipeline. Practice: `docker-observability`.
+      kubernetes: |
+        Readiness/liveness probes, **metrics-server** and Prometheus for metrics, node-level log collection, the
+        OpenTelemetry Collector (DaemonSet or Deployment, or the Operator) for traces, and alerts on SLO burn.
+        Practice: `kubernetes-health-probes`.
+    sources:
+    - title: OpenTelemetry — Observability primer (SLI, SLO, traces)
+      url: https://opentelemetry.io/docs/concepts/observability-primer/
+    - title: OpenTelemetry — Collector configuration
+      url: https://opentelemetry.io/docs/collector/configuration/
+    - title: OpenTelemetry — General SDK configuration
+      url: https://opentelemetry.io/docs/languages/sdk-configuration/general/
+    - title: Prometheus — Alerting practices
+      url: https://prometheus.io/docs/practices/alerting/
+    - title: AWS Well-Architected — REL06-BP01 Monitor all components for the workload
+      url: https://docs.aws.amazon.com/wellarchitected/latest/framework/rel_monitor_aws_resources_monitor_resources.html
+    - title: Azure Well-Architected — Designing a monitoring system
+      url: https://learn.microsoft.com/en-us/azure/well-architected/operational-excellence/observability
+    - title: Google Cloud Well-Architected — Set realistic targets for reliability
+      url: https://cloud.google.com/architecture/framework/reliability/set-targets
+    - title: Google Cloud Well-Architected — Detect potential failures by using observability
+      url: https://cloud.google.com/architecture/framework/reliability/observability
+    - title: OCI Well-Architected — Monitor your workload
+      url: https://docs.oracle.com/en/solutions/oci-best-practices/monitor-your-workload1.html
+    - title: Docker — JSON File logging driver
+      url: https://docs.docker.com/engine/logging/drivers/json-file/
+    - title: Kubernetes — Observability
+      url: https://kubernetes.io/docs/concepts/cluster-administration/observability/
+    solvableWithoutCode: true

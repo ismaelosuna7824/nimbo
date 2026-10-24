@@ -35,6 +35,9 @@ type ConnectRecipe struct {
 	Port        int    `json:"port,omitempty"`
 	Path        string `json:"path,omitempty"` // mount path, ingress path
 	Key         string `json:"key,omitempty"`  // env variable name
+	// Level is the grant level of an "access:<level>" recipe (Kind
+	// RecipeAccess; see rbac_grant.go).
+	Level model.AccessLevel `json:"level,omitempty"`
 }
 
 // ConnectRequest applies a recipe (POST /workflows/{id}/kubernetes/connect).
@@ -114,8 +117,13 @@ func (p *Project) Recipes(from, to string) ([]ConnectRecipe, error) {
 		if src.Kind == "Deployment" || src.Kind == "StatefulSet" {
 			add(ConnectRecipe{Kind: RecipeScale, Label: "Autoscale (HPA)", Description: fmt.Sprintf("Add a HorizontalPodAutoscaler scaling %s between 1 and 3 replicas at 80%% CPU (needs CPU requests).", src.Name)})
 		}
+		for _, r := range p.netpolRecipes(src, nil) {
+			add(r)
+		}
 	case dst == nil && src.Kind == "Service":
 		add(ConnectRecipe{Kind: RecipeIngress, Port: firstServicePort(src), Path: "/", Label: "Publish with an Ingress", Description: fmt.Sprintf("Add an Ingress routing / to %s:%d.", src.Name, firstServicePort(src))})
+	case dst == nil && isServiceAccount(src):
+		// Grants only (below).
 	case dst == nil:
 		return nil, editErrorf("%s has nothing to add on its own: pick an object to connect it to", src.Kind)
 	case isWorkload(src) && (dst.Kind == "ConfigMap" || dst.Kind == "Secret"):
@@ -141,7 +149,12 @@ func (p *Project) Recipes(from, to string) ([]ConnectRecipe, error) {
 		add(ConnectRecipe{Kind: RecipeRoute, Port: firstServicePort(dst), Path: "/" + dst.Name, Label: "Route a path to " + dst.Name, Description: fmt.Sprintf("Add a rule to %s sending /%s to %s:%d.", src.Name, dst.Name, dst.Name, firstServicePort(dst))})
 	case src.Kind == "HorizontalPodAutoscaler" && isWorkload(dst):
 		add(ConnectRecipe{Kind: RecipeScale, Label: "Scale " + dst.Name, Description: fmt.Sprintf("Point %s's scaleTargetRef at %s %s.", src.Name, dst.Kind, dst.Name)})
+	case isWorkload(src) && isWorkload(dst):
+		for _, r := range p.netpolRecipes(src, dst) {
+			add(r)
+		}
 	}
+	out = append(out, p.accessRecipes(src, dst)...)
 	if len(out) == 0 && dst != nil {
 		return nil, editErrorf("no recipe connects %s %s to %s %s", src.Kind, src.Name, dst.Kind, dst.Name)
 	}
@@ -228,6 +241,10 @@ func (e *Editor) Connect(req ConnectRequest) ([]string, error) {
 		return ""
 	}
 	switch rc.Kind {
+	case RecipeAccess:
+		return e.applyGrant(src, dst, rc.ID)
+	case RecipeAllowTraffic, RecipeAllowAll:
+		return e.connectNetpol(rc.Kind, src, dst)
 	case RecipeExpose:
 		labels := PodTemplateLabels(src)
 		if len(labels) == 0 {

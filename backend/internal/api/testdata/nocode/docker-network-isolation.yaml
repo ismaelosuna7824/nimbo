@@ -1,0 +1,11 @@
+# Two networks from the palette (back marked internal in its inspector),
+# the Networks checkboxes of each service, and the api/db port rows removed.
+steps:
+  - composeAddTop: {kind: network, name: front}
+  - composeAddTop: {kind: network, name: back}
+  - composePatchTop: {kind: network, name: back, patch: {internal: true}}
+  - composePatch: {service: proxy, patch: {networks: [front]}}
+  - composePatch: {service: api, patch: {networks: [front, back]}}
+  - composePatch: {service: db, patch: {networks: [back]}}
+  - composePatch: {service: api, patch: {ports: []}}
+  - composePatch: {service: db, patch: {ports: []}}

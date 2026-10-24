@@ -1,0 +1,21 @@
+# Base workload form: Rollout strategy RollingUpdate (max unavailable 0,
+# max surge 1) and the Spread select ("across nodes"). In prod, the
+# PodDisruptionBudget form: max unavailable 1 instead of min available 3.
+steps:
+  - kubePatch:
+      node: Deployment/default/checkout
+      set:
+        spec.strategy.type: RollingUpdate
+        spec.strategy.rollingUpdate.maxUnavailable: 0
+        spec.strategy.rollingUpdate.maxSurge: 1
+        spec.template.spec.topologySpreadConstraints:
+          - maxSkew: 1
+            topologyKey: kubernetes.io/hostname
+            whenUnsatisfiable: ScheduleAnyway
+            labelSelector: {matchLabels: {app: checkout}}
+  - envActivate: {env: prod}
+  - kubePatch:
+      node: PodDisruptionBudget/checkout-prod/checkout
+      set:
+        spec.maxUnavailable: 1
+      unset: [spec.minAvailable]

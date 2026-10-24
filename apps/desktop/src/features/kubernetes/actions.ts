@@ -5,6 +5,7 @@ import { api } from "@/lib/api/client"
 import type { KubeConnectRecipe, KubeConnectRequest, KubeNode, Position, Workflow } from "@/lib/api/types"
 import { useWorkflowStore } from "@/state/workflow-store"
 import { setChartExpanded } from "./canvas/charts"
+import { addedNodes } from "./inspector/rbac-model"
 
 /** MIME type of palette entries dragged onto the Kubernetes canvas (JSON: a KubePaletteDrag). */
 export const KUBE_DRAG_TYPE = "application/x-nimbo-kubernetes"
@@ -101,6 +102,30 @@ export function applyRecipe(from: string, to: string, recipe: KubeConnectRecipe,
     "Couldn't connect",
     editableFiles,
   )
+}
+
+/**
+ * "Give it its own Role" (recipe access:role) for a workload or ServiceAccount: an empty Role bound to its
+ * ServiceAccount, selected so its rules can be picked right away.
+ */
+export async function giveOwnRole(node: KubeNode) {
+  const wf = current()
+  if (!wf) return
+  let recipe: KubeConnectRecipe | undefined
+  try {
+    recipe = (await api.kubernetesRecipes(wf.id, node.id, "")).find((r) => r.id === "access:role")
+  } catch (err) {
+    toast.error("Couldn't load the grant options", { description: errorMessage(err) })
+    return
+  }
+  if (!recipe) {
+    toast.info(`${node.name} can't get a Role of its own`)
+    return
+  }
+  const before = wf.kubernetes?.graph
+  if (!(await applyRecipe(node.id, "", recipe))) return
+  const [role] = addedNodes(before, current()?.kubernetes?.graph, "Role")
+  if (role) await showObject(role)
 }
 
 /** Writes inspector edits of an object (field paths of GET …/kubernetes/fields). */

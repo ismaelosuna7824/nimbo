@@ -1,0 +1,56 @@
+# Table switches and a nested PITR block; bucket versioning from the
+# palette; a vault, a plan (rule + lifecycle blocks, Link to… the vault
+# name), a backup role whose trust policy gets a backup.amazonaws.com
+# statement in the AWS policy editor (principals), the AWS managed backup
+# policy attached (policy_arn typed), and a selection whose resources list
+# gets the table's arn appended with Link to….
+steps:
+  - set:
+      node: aws_dynamodb_table.orders
+      attrs:
+        deletion_protection_enabled: true
+        point_in_time_recovery[0].enabled: true
+  - add: {type: aws_s3_bucket_versioning, name: invoices}
+  - set:
+      node: aws_s3_bucket_versioning.invoices
+      attrs:
+        bucket: {link: aws_s3_bucket.invoices.id}
+        versioning_configuration[0].status: Enabled
+  - add: {type: aws_backup_vault, name: main}
+  - set:
+      node: aws_backup_vault.main
+      attrs: {name: orders-vault}
+  - add: {type: aws_backup_plan, name: daily}
+  - set:
+      node: aws_backup_plan.daily
+      attrs:
+        name: orders-daily
+        rule[0].rule_name: daily
+        rule[0].target_vault_name: {link: aws_backup_vault.main.name}
+        rule[0].schedule: cron(0 3 * * ? *)
+        rule[0].lifecycle[0].delete_after: 35
+  - add: {type: aws_iam_role, name: backup}
+  - set:
+      node: aws_iam_role.backup
+      attrs: {name: orders-backup}
+  - accessAWS:
+      node: aws_iam_role.backup
+      path: assume_role_policy
+      add:
+        - effect: Allow
+          actions: ["sts:AssumeRole"]
+          principals: [{type: Service, values: ['"backup.amazonaws.com"']}]
+  - add: {type: aws_iam_role_policy_attachment, name: backup}
+  - set:
+      node: aws_iam_role_policy_attachment.backup
+      attrs:
+        role: {link: aws_iam_role.backup.name}
+        policy_arn: arn:aws:iam::aws:policy/service-role/AWSBackupServiceRolePolicyForBackup
+  - add: {type: aws_backup_selection, name: orders}
+  - set:
+      node: aws_backup_selection.orders
+      attrs:
+        name: orders
+        plan_id: {link: aws_backup_plan.daily.id}
+        iam_role_arn: {link: aws_iam_role.backup.arn}
+        resources: {link: aws_dynamodb_table.orders.arn, append: true}

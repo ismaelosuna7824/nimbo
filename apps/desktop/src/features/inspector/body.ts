@@ -1,4 +1,4 @@
-import type { Block, Body, CtyType, Value, WorkflowNode } from "@/lib/api/types"
+import type { Attr, Block, Body, CtyType, Value, WorkflowNode } from "@/lib/api/types"
 import { nodeAddress } from "../canvas/catalog"
 
 export const emptyBody = (): Body => ({ attrs: [], blocks: [] })
@@ -40,6 +40,174 @@ export function exprOf(v: Value | undefined): string {
   if (v.expr !== undefined) return v.expr
   return v.literal === undefined ? "" : JSON.stringify(v.literal, null, 2)
 }
+
+/** Index after the HCL string starting at `i` (a quote), across escapes and nested interpolations; -1 if unterminated. */
+function skipString(src: string, i: number): number {
+  i++
+  while (i < src.length) {
+    const c = src[i]
+    if (c === "\\") {
+      i += 2
+    } else if (c === '"') {
+      return i + 1
+    } else if ((c === "$" || c === "%") && src[i + 1] === c && src[i + 2] === "{") {
+      i += 3
+    } else if ((c === "$" || c === "%") && src[i + 1] === "{") {
+      let depth = 1
+      i += 2
+      while (i < src.length && depth > 0) {
+        if (src[i] === '"') {
+          i = skipString(src, i)
+          if (i < 0) return -1
+          continue
+        }
+        if (src[i] === "{") depth++
+        else if (src[i] === "}") depth--
+        i++
+      }
+    } else {
+      i++
+    }
+  }
+  return -1
+}
+
+/**
+ * Splits HCL source at its top-level commas (and newlines when `newlines`), trimming and dropping
+ * empty pieces; null when it holds comments or heredocs, or its brackets don't balance.
+ */
+export function splitTopLevel(src: string, newlines: boolean): string[] | null {
+  const out: string[] = []
+  let depth = 0
+  let start = 0
+  let i = 0
+  while (i < src.length) {
+    const c = src[i]
+    if (c === '"') {
+      i = skipString(src, i)
+      if (i < 0) return null
+      continue
+    }
+    if (c === "#" || (c === "/" && (src[i + 1] === "/" || src[i + 1] === "*")) || (c === "<" && src[i + 1] === "<")) return null
+    if (c === "(" || c === "[" || c === "{") depth++
+    else if (c === ")" || c === "]" || c === "}") {
+      if (--depth < 0) return null
+    } else if (depth === 0 && (c === "," || (newlines && c === "\n"))) {
+      out.push(src.slice(start, i))
+      start = i + 1
+    }
+    i++
+  }
+  if (depth !== 0) return null
+  out.push(src.slice(start))
+  return out.map((s) => s.trim()).filter((s) => s !== "")
+}
+
+/** The inner source of `src` when it is one bracketed constructor (`open … close`), else null. */
+export function bracketed(src: string, open: "[" | "{"): string | null {
+  const s = src.trim()
+  if (!s.startsWith(open) || !s.endsWith(open === "[" ? "]" : "}")) return null
+  return s.slice(1, -1)
+}
+
+/** The string a quoted HCL literal stands for (no interpolation), else undefined. */
+export function stringLiteral(src: string): string | undefined {
+  if (!src.startsWith('"') || /[$%]\{/.test(src)) return undefined
+  try {
+    const v: unknown = JSON.parse(src)
+    return typeof v === "string" ? v : undefined
+  } catch {
+    return undefined
+  }
+}
+
+/**
+ * The HCL source of each element of a list value (a literal array or a `[a, b]` constructor); null
+ * when the value is another expression (a reference to a whole list, a function, a `for`).
+ */
+export function listItems(v: Value | undefined): string[] | null {
+  if (!v) return []
+  if (v.expr === undefined) return Array.isArray(v.literal) ? v.literal.map((x) => JSON.stringify(x)) : null
+  const inner = bracketed(v.expr, "[")
+  if (inner === null) return null
+  const items = splitTopLevel(inner, false)
+  return items && !/^for\s/.test(items[0] ?? "") ? items : null
+}
+
+/** A list of elements as a value: a literal when every element is a quoted string, unset when empty. */
+export function listValue(items: string[]): Value | undefined {
+  if (items.length === 0) return undefined
+  const strings = items.map(stringLiteral)
+  if (strings.every((s) => s !== undefined)) return { literal: strings }
+  return { expr: `[${items.join(", ")}]` }
+}
+
+/** Link to… on a list field: `ref` appended to the list (a new `[ref]` when the value isn't a list constructor). */
+export function appendToList(v: Value | undefined, ref: string): Value | undefined {
+  const items = listItems(v) ?? []
+  if (v && items.includes(ref)) return v
+  return listValue([...items, ref])
+}
+
+/** The list without its element `index` (unchanged when the value isn't a list constructor). */
+export function removeListItem(v: Value | undefined, index: number): Value | undefined {
+  const items = listItems(v)
+  return items ? listValue(items.filter((_, i) => i !== index)) : v
+}
+
+/** A value from its HCL source: a literal when it is JSON (constant), else the expression. */
+export function sourceValue(src: string): Value {
+  if (!/[$%]\{/.test(src)) {
+    try {
+      return { literal: JSON.parse(src) as unknown }
+    } catch {
+      // not a constant
+    }
+  }
+  return { expr: src }
+}
+
+const ITEM_RE = /^("(?:[^"\\]|\\.)*"|[A-Za-z_][\w-]*)\s*[=:]\s*([\s\S]+)$/
+
+/** The items of one `{ k = v, … }` object constructor in order; null for any other expression. */
+export function objectConstructor(src: string): Attr[] | null {
+  const inner = bracketed(src, "{")
+  if (inner === null) return null
+  const pieces = splitTopLevel(inner, true)
+  if (!pieces || /^for\s/.test(pieces[0] ?? "")) return null
+  const out: Attr[] = []
+  for (const p of pieces) {
+    const m = ITEM_RE.exec(p)
+    if (!m || m[2].startsWith("=")) return null
+    out.push({ name: m[1].startsWith('"') ? (JSON.parse(m[1]) as string) : m[1], value: sourceValue(m[2].trim()) })
+  }
+  return out
+}
+
+/**
+ * The entries of a map value (a literal object or a `{ k = v }` constructor), each value a literal or
+ * the expression it holds; null when the value is another expression (merge(), a reference).
+ */
+export function mapEntries(v: Value | undefined): Attr[] | null {
+  if (!v) return []
+  if (v.expr !== undefined) return objectConstructor(v.expr)
+  const lit = v.literal
+  if (!lit || typeof lit !== "object" || Array.isArray(lit)) return null
+  return Object.entries(lit).map(([name, literal]) => ({ name, value: { literal } }))
+}
+
+/** Map entries as a value: a literal when every value is constant, a `{ k = v }` constructor otherwise, unset when empty. */
+export function mapValue(entries: Attr[]): Value | undefined {
+  if (entries.length === 0) return undefined
+  if (entries.every((e) => e.value.literal !== undefined)) {
+    return { literal: Object.fromEntries(entries.map((e) => [e.name, e.value.literal])) }
+  }
+  const key = (k: string) => (/^[A-Za-z_][\w-]*$/.test(k) ? k : JSON.stringify(k))
+  return { expr: `{\n${entries.map((e) => `  ${key(e.name)} = ${e.value.expr ?? JSON.stringify(e.value.literal)}`).join("\n")}\n}` }
+}
+
+/** Link to… with "Base64-encode" (user data). */
+export const base64Of = (expr: string) => `base64encode(${expr})`
 
 export type CtyKind = "string" | "number" | "bool" | "string-list" | "string-map" | "complex"
 

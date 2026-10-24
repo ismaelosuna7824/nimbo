@@ -1,0 +1,48 @@
+# The starter NSG's inline security_rule shows as an object-list card:
+# its source becomes the VNet instead of anywhere.
+steps:
+  - set:
+      node: azurerm_network_security_group.app
+      attrs:
+        security_rule:
+          - name: allow-ssh-from-vnet
+            priority: 100
+            direction: Inbound
+            access: Allow
+            protocol: Tcp
+            source_port_range: "*"
+            destination_port_range: "22"
+            source_address_prefix: VirtualNetwork
+            destination_address_prefix: "*"
+  - add: {type: azurerm_subnet_network_security_group_association, name: app}
+  - set:
+      node: azurerm_subnet_network_security_group_association.app
+      attrs:
+        subnet_id: {link: azurerm_subnet.app.id}
+        network_security_group_id: {link: azurerm_network_security_group.app.id}
+  - add: {type: azurerm_subnet, name: bastion}
+  - connect: {source: azurerm_resource_group.main, target: azurerm_subnet.bastion, recipe: azure-resource-group}
+  - set:
+      node: azurerm_subnet.bastion
+      attrs:
+        name: AzureBastionSubnet
+        virtual_network_name: {link: azurerm_virtual_network.main.name}
+        address_prefixes: [10.20.255.0/26]
+  - add: {type: azurerm_public_ip, name: bastion}
+  - connect: {source: azurerm_resource_group.main, target: azurerm_public_ip.bastion, recipe: azure-resource-group}
+  - set:
+      node: azurerm_public_ip.bastion
+      attrs:
+        name: pip-learn-dev-bastion
+        allocation_method: Static
+        sku: Standard
+  - add: {type: azurerm_bastion_host, name: main}
+  - connect: {source: azurerm_resource_group.main, target: azurerm_bastion_host.main, recipe: azure-resource-group}
+  - set:
+      node: azurerm_bastion_host.main
+      attrs:
+        name: bas-learn-dev
+        sku: Standard
+        ip_configuration[0].name: configuration
+        ip_configuration[0].subnet_id: {link: azurerm_subnet.bastion.id}
+        ip_configuration[0].public_ip_address_id: {link: azurerm_public_ip.bastion.id}

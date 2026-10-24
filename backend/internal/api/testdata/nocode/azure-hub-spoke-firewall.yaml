@@ -1,0 +1,98 @@
+# The UDR's next hop is the firewall's private IP, picked with Link to…
+# under More… (ip_configuration[0].private_ip_address). The NSG's RDP
+# rule is an object-list card, removed with its Trash button.
+steps:
+  - set:
+      node: azurerm_network_security_group.spoke_b_app
+      attrs:
+        security_rule: []
+  - set:
+      node: azurerm_virtual_network_peering.hub_to_spoke_a
+      attrs:
+        allow_forwarded_traffic: true
+  - set:
+      node: azurerm_virtual_network_peering.hub_to_spoke_b
+      attrs:
+        allow_forwarded_traffic: true
+  - add: {type: azurerm_virtual_network_peering, name: spoke_a_to_hub}
+  - set:
+      node: azurerm_virtual_network_peering.spoke_a_to_hub
+      attrs:
+        name: peer-spoke-a-to-hub
+        resource_group_name: {link: azurerm_resource_group.main.name}
+        virtual_network_name: {link: azurerm_virtual_network.spoke_a.name}
+        remote_virtual_network_id: {link: azurerm_virtual_network.hub.id}
+        allow_forwarded_traffic: true
+  - add: {type: azurerm_virtual_network_peering, name: spoke_b_to_hub}
+  - set:
+      node: azurerm_virtual_network_peering.spoke_b_to_hub
+      attrs:
+        name: peer-spoke-b-to-hub
+        resource_group_name: {link: azurerm_resource_group.main.name}
+        virtual_network_name: {link: azurerm_virtual_network.spoke_b.name}
+        remote_virtual_network_id: {link: azurerm_virtual_network.hub.id}
+        allow_forwarded_traffic: true
+  - add: {type: azurerm_subnet, name: firewall}
+  - set:
+      node: azurerm_subnet.firewall
+      attrs:
+        name: AzureFirewallSubnet
+        resource_group_name: {link: azurerm_resource_group.main.name}
+        virtual_network_name: {link: azurerm_virtual_network.hub.name}
+        address_prefixes: [10.0.0.0/26]
+  - add: {type: azurerm_public_ip, name: firewall}
+  - connect: {source: azurerm_resource_group.main, target: azurerm_public_ip.firewall, recipe: azure-resource-group}
+  - set:
+      node: azurerm_public_ip.firewall
+      attrs:
+        name: pip-corpnet-prod-fw
+        allocation_method: Static
+        sku: Standard
+        zones: ["1", "2", "3"]
+  - add: {type: azurerm_firewall_policy, name: hub}
+  - connect: {source: azurerm_resource_group.main, target: azurerm_firewall_policy.hub, recipe: azure-resource-group}
+  - set:
+      node: azurerm_firewall_policy.hub
+      attrs:
+        name: afwp-corpnet-prod
+  - add: {type: azurerm_firewall, name: hub}
+  - connect: {source: azurerm_resource_group.main, target: azurerm_firewall.hub, recipe: azure-resource-group}
+  - set:
+      node: azurerm_firewall.hub
+      attrs:
+        name: afw-corpnet-prod-hub
+        sku_name: AZFW_VNet
+        sku_tier: Standard
+        zones: ["1", "2", "3"]
+        firewall_policy_id: {link: azurerm_firewall_policy.hub.id}
+        ip_configuration[0].name: configuration
+        ip_configuration[0].subnet_id: {link: azurerm_subnet.firewall.id}
+        ip_configuration[0].public_ip_address_id: {link: azurerm_public_ip.firewall.id}
+  - add: {type: azurerm_route_table, name: spokes}
+  - connect: {source: azurerm_resource_group.main, target: azurerm_route_table.spokes, recipe: azure-resource-group}
+  - set:
+      node: azurerm_route_table.spokes
+      attrs:
+        name: rt-corpnet-prod-spokes
+  - add: {type: azurerm_route, name: default}
+  - set:
+      node: azurerm_route.default
+      attrs:
+        name: default-via-firewall
+        resource_group_name: {link: azurerm_resource_group.main.name}
+        route_table_name: {link: azurerm_route_table.spokes.name}
+        address_prefix: 0.0.0.0/0
+        next_hop_type: VirtualAppliance
+        next_hop_in_ip_address: {link: "azurerm_firewall.hub.ip_configuration[0].private_ip_address"}
+  - add: {type: azurerm_subnet_route_table_association, name: spoke_a_app}
+  - set:
+      node: azurerm_subnet_route_table_association.spoke_a_app
+      attrs:
+        subnet_id: {link: azurerm_subnet.spoke_a_app.id}
+        route_table_id: {link: azurerm_route_table.spokes.id}
+  - add: {type: azurerm_subnet_route_table_association, name: spoke_b_app}
+  - set:
+      node: azurerm_subnet_route_table_association.spoke_b_app
+      attrs:
+        subnet_id: {link: azurerm_subnet.spoke_b_app.id}
+        route_table_id: {link: azurerm_route_table.spokes.id}

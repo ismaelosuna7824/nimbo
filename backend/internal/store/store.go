@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -151,13 +152,20 @@ func (s *Store) AssignMissingIcons() (int, error) {
 	}
 	var recent []*model.WorkflowIcon // most recent first
 	changed := 0
-	for _, sum := range list {
+	for i, sum := range list {
 		if sum.Icon == nil {
 			wf, err := s.read(sum.ID)
 			if err != nil {
 				return changed, err
 			}
-			wf.Icon = model.RandomWorkflowIcon(recent...)
+			// Avoid the newer neighbours (already assigned) and the older
+			// one when it already has an icon: list is walked newest first,
+			// so without it the new glyph could repeat the next card's.
+			avoid := recent
+			if i+1 < len(list) && list[i+1].Icon != nil {
+				avoid = append(slices.Clone(recent), list[i+1].Icon)
+			}
+			wf.Icon = model.RandomWorkflowIcon(avoid...)
 			if err := s.write(wf); err != nil {
 				return changed, err
 			}

@@ -1,0 +1,28 @@
+# Namespace form: Pod Security "restricted" (the enforce label). Workload
+# form: remove the hostPath volume and its mount, then every switch of
+# the Hardening section (non-root user, RuntimeDefault seccomp, privileged
+# off, added capabilities removed, no privilege escalation, read-only
+# root filesystem, drop ALL); the identity section turns the API token off.
+steps:
+  - kubePatch:
+      node: Namespace/payments
+      set:
+        metadata.labels: {pod-security.kubernetes.io/enforce: restricted}
+  - kubePatch:
+      node: Deployment/payments/payments
+      unset:
+        - spec.template.spec.containers[name=payments].volumeMounts
+        - spec.template.spec.volumes[name=node-logs]
+  - kubePatch:
+      node: Deployment/payments/payments
+      set:
+        spec.template.spec.securityContext.runAsNonRoot: true
+        spec.template.spec.securityContext.runAsUser: 10001
+        spec.template.spec.securityContext.seccompProfile: {type: RuntimeDefault}
+        spec.template.spec.containers[name=payments].securityContext.allowPrivilegeEscalation: false
+        spec.template.spec.containers[name=payments].securityContext.readOnlyRootFilesystem: true
+        spec.template.spec.containers[name=payments].securityContext.capabilities.drop: [ALL]
+      unset:
+        - spec.template.spec.containers[name=payments].securityContext.privileged
+        - spec.template.spec.containers[name=payments].securityContext.capabilities.add
+  - kubeAccess: {node: Deployment/payments/payments, automountToken: false}

@@ -1,0 +1,40 @@
+# Cost-allocation tags (key/value editor) on every taggable resource, the
+# log group's retention, a lifecycle configuration with an expiration
+# rule, and a monthly cost budget with a notification block.
+steps:
+  - set:
+      node: aws_cloudwatch_log_group.web
+      attrs:
+        retention_in_days: 30
+        tags: &tags {Project: weblogs, Environment: prod, Owner: platform-team, CostCenter: cc-1234}
+  - set:
+      node: aws_s3_bucket.logs
+      attrs:
+        tags: *tags
+  - add: {type: aws_s3_bucket_lifecycle_configuration, name: logs}
+  - set:
+      node: aws_s3_bucket_lifecycle_configuration.logs
+      attrs:
+        bucket: {link: aws_s3_bucket.logs.id}
+        rule[0].id: archive-then-expire
+        rule[0].status: Enabled
+        rule[0].filter[0].prefix: ""
+        rule[0].transition[0].days: 30
+        rule[0].transition[0].storage_class: STANDARD_IA
+        rule[0].expiration[0].days: 365
+        rule[0].abort_incomplete_multipart_upload[0].days_after_initiation: 7
+  - add: {type: aws_budgets_budget, name: monthly}
+  - set:
+      node: aws_budgets_budget.monthly
+      attrs:
+        name: weblogs-monthly
+        budget_type: COST
+        limit_amount: "50"
+        limit_unit: USD
+        time_unit: MONTHLY
+        tags: *tags
+        notification[0].comparison_operator: GREATER_THAN
+        notification[0].threshold: 80
+        notification[0].threshold_type: PERCENTAGE
+        notification[0].notification_type: ACTUAL
+        notification[0].subscriber_email_addresses: [platform-team@example.com]

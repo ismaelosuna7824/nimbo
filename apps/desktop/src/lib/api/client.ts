@@ -53,6 +53,11 @@ import type {
   ModuleView,
   AgentClient,
   BestPracticeRule,
+  AccessCatalog,
+  AccessEdit,
+  AccessView,
+  KubeAccessEdit,
+  KubeAccessView,
   ApiErrorBody,
   Connection,
   ConnectionCheck,
@@ -203,6 +208,20 @@ export const api = {
     request<ConnectionRecipe[]>("GET", `/workflows/${id}/connections${qs({ source, target })}`),
   connect: (id: string, body: { source: string; target: string; recipeId: string }) =>
     request<Workflow>("POST", `/workflows/${id}/connections`, body),
+
+  // access editors (Terraform; Kubernetes RBAC below)
+  /** The structured permissions of a node (404 when it has no access editor). */
+  access: (id: string, node: string) => request<AccessView>("GET", `/workflows/${id}/access${qs({ node })}`),
+  /** Writes one access editor of a node; returns the whole workflow. */
+  putAccess: (id: string, edit: AccessEdit) => request<Workflow>("PUT", `/workflows/${id}/access`, edit),
+  /** Pinned official reference data (actions, roles, verbs, resource types) of a provider. */
+  accessCatalog: (provider: string, params: { service?: string; resourceType?: string; q?: string } = {}) =>
+    request<AccessCatalog>("GET", `/access/catalog/${provider}${qs(params)}`),
+  /** The RBAC of a Kubernetes object (Role, binding, ServiceAccount or workload). */
+  kubernetesAccess: (id: string, node: string) =>
+    request<KubeAccessView>("GET", `/workflows/${id}/kubernetes/access${qs({ node })}`),
+  putKubernetesAccess: (id: string, edit: KubeAccessEdit) =>
+    request<Workflow>("PUT", `/workflows/${id}/kubernetes/access`, edit),
 
   // terraform
   /** Creates, edits, moves and deletes workflow files in one request; code re-imports into the diagram. */
@@ -357,6 +376,9 @@ export const api = {
   /** Saves canvas positions (null forgets one: automatic layout again). */
   composeLayout: (id: string, positions: Record<string, Position | null>) =>
     request<Workflow>("PATCH", `/workflows/${id}/compose/layout`, { positions }),
+  /** Rewrites the FROM image of a build stage (a stage node, or a single-stage service: its only stage). */
+  patchComposeStage: (id: string, nodeId: string, from: string) =>
+    request<Workflow>("PATCH", `/workflows/${id}/compose/stages/${encodeURIComponent(nodeId)}`, { from }),
   /** docker compose up/down/build/pull/restart; 409 code "port_conflict" when fixed host ports are busy. */
   startComposeRun: (id: string, body: ComposeRunRequest) => request<Run>("POST", `/workflows/${id}/runs`, body),
   composeStatus: (id: string) => request<ComposeStatus>("GET", `/workflows/${id}/compose/status`),

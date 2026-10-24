@@ -1,0 +1,8 @@
+# The readiness probe editor: HTTP GET /health on the http port, every 2 s.
+steps:
+  - kubePatch:
+      node: Deployment/catalog/catalog
+      set:
+        spec.template.spec.containers[name=catalog].readinessProbe:
+          httpGet: {path: /health, port: http}
+          periodSeconds: 2

@@ -1,0 +1,13 @@
+# A CPU request in the container's Resources section, and the HPA form's
+# target switched from memory to CPU (70%).
+steps:
+  - kubePatch:
+      node: Deployment/recs/api
+      set:
+        spec.template.spec.containers[name=api].resources.requests.cpu: 100m
+  - kubePatch:
+      node: HorizontalPodAutoscaler/recs/api
+      set:
+        spec.metrics:
+          - type: Resource
+            resource: {name: cpu, target: {type: Utilization, averageUtilization: 70}}

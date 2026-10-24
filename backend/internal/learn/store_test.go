@@ -35,6 +35,7 @@ func challengeYAML(id, provider, level, title string, tags string, prereqs strin
       adaptations: ` + adaptations(provider) + `
       sources:
         - { title: Compose file reference, url: "https://docs.docker.com/reference/compose-file/" }
+      solvableWithoutCode: false
 `
 }
 

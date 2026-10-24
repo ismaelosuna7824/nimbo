@@ -1,0 +1,23 @@
+# Custom-mode switch, a subnetwork from the palette placed in the VPC, and
+# the SSH rule narrowed to IAP's range and a network tag (tag inputs).
+steps:
+  - set:
+      node: google_compute_network.main
+      attrs:
+        auto_create_subnetworks: false
+        routing_mode: REGIONAL
+  - add: {type: google_compute_subnetwork, name: app}
+  - set:
+      node: google_compute_subnetwork.app
+      attrs:
+        name: app-us-central1
+        network: {link: google_compute_network.main.id}
+        ip_cidr_range: 10.10.0.0/24
+        private_ip_google_access: true
+  - set:
+      node: google_compute_firewall.ssh
+      attrs:
+        name: allow-ssh-from-iap
+        direction: INGRESS
+        source_ranges: [35.235.240.0/20]
+        target_tags: [ssh]

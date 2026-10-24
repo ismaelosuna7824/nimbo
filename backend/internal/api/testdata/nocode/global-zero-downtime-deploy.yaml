@@ -1,0 +1,12 @@
+# Workload form: Rollout strategy RollingUpdate with max unavailable 0 and
+# max surge 1, and a readiness probe in the probe editor.
+steps:
+  - kubePatch:
+      node: Deployment/default/api
+      set:
+        spec.strategy.type: RollingUpdate
+        spec.strategy.rollingUpdate.maxUnavailable: 0
+        spec.strategy.rollingUpdate.maxSurge: 1
+        spec.template.spec.containers[name=api].readinessProbe:
+          httpGet: {path: /, port: http}
+          periodSeconds: 5

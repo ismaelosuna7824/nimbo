@@ -153,6 +153,10 @@ func (s *Server) routes() {
 	h("DELETE "+p+"/workflows/{id}/nodes/{nodeId}", s.terraformOnly("Terraform nodes", "use DELETE /compose/services/{name}", s.deleteNode))
 	h("GET "+p+"/workflows/{id}/connections", s.terraformOnly("Terraform connection recipes", "use /compose/connect", s.connections))
 	h("POST "+p+"/workflows/{id}/connections", s.terraformOnly("Terraform connection recipes", "use /compose/connect", s.connect))
+	// access editors (access.go; Kubernetes RBAC: kube_access.go)
+	h("GET "+p+"/workflows/{id}/access", s.terraformOnly("Terraform access editors", "use /kubernetes/access for RBAC", s.getAccess))
+	h("PUT "+p+"/workflows/{id}/access", s.terraformOnly("Terraform access editors", "use /kubernetes/access for RBAC", s.putAccess))
+	h("GET "+p+"/access/catalog/{provider}", s.accessCatalog)
 
 	h("GET "+p+"/workflows/{id}/terraform", s.terraformOnly("Generated Terraform", "read the files with /files", s.getTerraform))
 	h("PUT "+p+"/workflows/{id}/terraform", s.putTerraform)
@@ -198,6 +202,8 @@ func (s *Server) routes() {
 	h("DELETE "+p+"/workflows/{id}/kubernetes/objects", s.deleteKubeObject)
 	h("GET "+p+"/workflows/{id}/kubernetes/connect", s.kubeConnectRecipes)
 	h("POST "+p+"/workflows/{id}/kubernetes/connect", s.kubeConnect)
+	h("GET "+p+"/workflows/{id}/kubernetes/access", s.kubeAccess)
+	h("PUT "+p+"/workflows/{id}/kubernetes/access", s.putKubeAccess)
 
 	// environments of docker and Kubernetes workflows (environments.go)
 	h("GET "+p+"/workflows/{id}/environments", s.listEnvironments)

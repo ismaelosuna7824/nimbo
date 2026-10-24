@@ -106,6 +106,9 @@ type challengeListView struct {
 	Runtime  string   `json:"runtime"`
 	Tags     []string `json:"tags,omitempty"`
 	Status   string   `json:"status"`
+	// SolvableWithoutCode: every step can be done in the canvas and
+	// inspector (false: some step needs code or file edits).
+	SolvableWithoutCode *bool `json:"solvableWithoutCode,omitempty"`
 }
 
 func (t *tools) listChallenges(ctx context.Context, in listChallengesIn) (any, error) {
@@ -126,7 +129,7 @@ func (t *tools) listChallenges(ctx context.Context, in listChallengesIn) (any, e
 	out := make([]challengeListView, 0, len(list))
 	for _, c := range list {
 		out = append(out, challengeListView{ID: c.ID, Provider: c.Provider, Level: c.Level, Title: c.Title, Summary: c.Summary,
-			Minutes: c.Minutes, Runtime: c.Runtime, Tags: c.Tags, Status: c.Progress.Status})
+			Minutes: c.Minutes, Runtime: c.Runtime, Tags: c.Tags, Status: c.Progress.Status, SolvableWithoutCode: c.SolvableWithoutCode})
 	}
 	return out, nil
 }

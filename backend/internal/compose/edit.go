@@ -20,6 +20,11 @@ import (
 type Editor struct {
 	p       *Project
 	changed map[string]bool
+	// created are other project files the edits write (a secret's file).
+	created map[string][]byte
+	// scoped: service edits go to the active environment's override file
+	// only (PatchService "scope": "environment").
+	scoped bool
 }
 
 // EditError is a request the project can't apply (bad input, unknown
@@ -51,7 +56,10 @@ func (p *Project) Edit() (*Editor, error) {
 
 // Files returns the content of every file the edits changed.
 func (e *Editor) Files() map[string][]byte {
-	out := map[string][]byte{}
+	out := maps.Clone(e.created)
+	if out == nil {
+		out = map[string][]byte{}
+	}
 	for rel := range e.changed {
 		out[rel] = e.p.Docs[rel].Bytes()
 	}
@@ -94,6 +102,9 @@ func (e *Editor) requireService(name string) error {
 // fieldDoc is the file a service attribute is edited in: the last file
 // writing it (overrides win), else the first file declaring the service.
 func (e *Editor) fieldDoc(svc, field string) *Doc {
+	if e.scoped {
+		return e.p.Docs[e.p.Override]
+	}
 	docs := e.serviceDocs(svc)
 	for i := len(docs) - 1; i >= 0; i-- {
 		_, sv := docs[i].Get("services", svc)
@@ -175,6 +186,9 @@ func (e *Editor) deleteDocs(svc string, sets func(d *Doc) bool) []*Doc {
 // active environment's override when it sets it, see deleteDocs); an
 // attribute only inherited through a merge key is reset (!reset).
 func (e *Editor) deleteField(svc string, field ...string) error {
+	if e.scoped {
+		return e.resetInOverride(svc, append([]string{"services", svc}, field...))
+	}
 	path := append([]string{"services", svc}, field...)
 	sets := func(d *Doc) bool {
 		if k, _ := d.Get(path...); k != nil {
@@ -186,7 +200,7 @@ func (e *Editor) deleteField(svc string, field ...string) error {
 	for _, d := range e.deleteDocs(svc, sets) {
 		if k, _ := d.Get(path...); k != nil {
 			e.mark(d.Path)
-			if err := d.Delete(path, true); err != nil {
+			if err := deleteUnder(d, path); err != nil {
 				return err
 			}
 			continue
@@ -665,10 +679,30 @@ func mapKeys(d *Doc, path ...string) []string {
 // PatchService applies a partial update: every key present is set (null
 // deletes it); lists replace the whole value, keeping the source text
 // (quoting, ${VAR}) of the items that did not change. "resetOverrides"
-// (a list of attributes, see ResetOverrides) goes first.
+// (a list of attributes, see ResetOverrides) goes first. "scope":
+// "environment" writes every key to the active environment's override file
+// only (a removed key is reset there), leaving the base files as they are.
 func (e *Editor) PatchService(name string, patch map[string]json.RawMessage) error {
 	if err := e.requireService(name); err != nil {
 		return err
+	}
+	if raw, ok := patch["scope"]; ok {
+		var scope string
+		if err := json.Unmarshal(raw, &scope); err != nil || scope != "" && scope != "environment" {
+			return badf(`scope must be "environment" (or "" for the usual files)`)
+		}
+		if scope == "environment" {
+			if e.p.Docs[e.p.Override] == nil {
+				return badf("no environment with an override file is active: switch to one first")
+			}
+			for k := range patch {
+				if k != "scope" && !slices.Contains(scopedKeys, k) {
+					return badf("%s can't be changed for one environment only: edit it in the base files", k)
+				}
+			}
+			e.scoped = true
+			defer func() { e.scoped = false }()
+		}
 	}
 	if raw, ok := patch["resetOverrides"]; ok {
 		var attrs []string
@@ -683,7 +717,7 @@ func (e *Editor) PatchService(name string, patch map[string]json.RawMessage) err
 	// The rename goes last so the other fields find the service.
 	keys := make([]string, 0, len(patch))
 	for k := range patch {
-		if k != "name" && k != "resetOverrides" {
+		if k != "name" && k != "resetOverrides" && k != "scope" {
 			keys = append(keys, k)
 		}
 	}
@@ -831,6 +865,19 @@ func (e *Editor) PatchService(name string, patch map[string]json.RawMessage) err
 				n.Content[1] = src
 			}
 			err = e.setField(name, "healthcheck", n)
+		case "labels":
+			var labels map[string]string
+			if !null {
+				if err := json.Unmarshal(raw, &labels); err != nil {
+					return badf("labels must be an object of strings")
+				}
+			}
+			for k := range labels {
+				if k == "" || strings.ContainsAny(k, " \t\n") {
+					return badf("invalid label %q: no spaces", k)
+				}
+			}
+			err = e.setLabels(name, labels)
 		case "replicas":
 			if null {
 				err = e.deleteDeploy(name, "replicas")
@@ -847,8 +894,8 @@ func (e *Editor) PatchService(name string, patch map[string]json.RawMessage) err
 				break
 			}
 			var r model.ServiceResources
-			if err := json.Unmarshal(raw, &r); err != nil {
-				return badf("resources must be {cpus?, memory?}")
+			if err := json.Unmarshal(raw, &r); err != nil || r.Pids < 0 {
+				return badf("resources must be {cpus?, memory?, pids?}")
 			}
 			for _, kv := range [][2]string{{"cpus", r.CPUs}, {"memory", r.Memory}} {
 				if kv[1] == "" {
@@ -860,6 +907,77 @@ func (e *Editor) PatchService(name string, patch map[string]json.RawMessage) err
 					break
 				}
 			}
+			if err == nil && r.Pids == 0 {
+				err = e.deleteDeploy(name, "resources", "limits", "pids")
+			} else if err == nil {
+				err = e.setDeploy(name, []string{"resources", "limits", "pids"}, Int(r.Pids))
+			}
+		case "logging":
+			if null {
+				err = e.deleteField(name, "logging")
+				break
+			}
+			var l model.ServiceLogging
+			if err := json.Unmarshal(raw, &l); err != nil {
+				return badf("logging must be {driver?, maxSize?, maxFile?}")
+			}
+			err = e.setLogging(name, l)
+		case "readOnly", "privileged", "init":
+			// true sets the key; false (or null) removes it: compose's default.
+			field := map[string]string{"readOnly": "read_only"}[k]
+			if field == "" {
+				field = k
+			}
+			var on bool
+			if !null {
+				if err := json.Unmarshal(raw, &on); err != nil {
+					return badf("%s must be a boolean", k)
+				}
+			}
+			if on {
+				err = e.setField(name, field, Bool(true))
+			} else {
+				err = e.deleteField(name, field)
+			}
+		case "capDrop", "capAdd", "securityOpt", "tmpfs":
+			field := map[string]string{"capDrop": "cap_drop", "capAdd": "cap_add", "securityOpt": "security_opt", "tmpfs": "tmpfs"}[k]
+			var list []string
+			if !null {
+				if err := json.Unmarshal(raw, &list); err != nil {
+					return badf("%s must be a list of strings", k)
+				}
+			}
+			items := make([]listItem, 0, len(list))
+			for _, s := range list {
+				if s = strings.TrimSpace(s); s == "" {
+					return badf("%s: empty item", k)
+				}
+				if k == "tmpfs" && !strings.HasPrefix(s, "/") {
+					return badf("tmpfs: %q is not an absolute path in the container", s)
+				}
+				items = append(items, listItem{canon: s, node: Str(s)})
+			}
+			err = e.setList(name, field, items, func(n *yaml.Node, p *Project) string { return p.interpolate(n.Value) })
+		case "secrets":
+			var list []string
+			if !null {
+				if err := json.Unmarshal(raw, &list); err != nil {
+					return badf("secrets must be a list of secret names")
+				}
+			}
+			err = e.setSecrets(name, list)
+		case "secretFromEnv":
+			if _, ok := patch["environment"]; ok {
+				return badf("secretFromEnv changes the environment: send it alone")
+			}
+			if _, ok := patch["secrets"]; ok {
+				return badf("secretFromEnv changes secrets: send it alone")
+			}
+			var req SecretFromEnv
+			if err := json.Unmarshal(raw, &req); err != nil {
+				return badf("secretFromEnv must be {key, secret?, fileEnv?}")
+			}
+			err = e.secretFromEnv(name, req)
 		default:
 			return badf("unknown service attribute %q", k)
 		}
@@ -888,14 +1006,150 @@ func (e *Editor) setDeploy(svc string, path []string, v *yaml.Node) error {
 
 func (e *Editor) deleteDeploy(svc string, path ...string) error {
 	full := append([]string{"services", svc, "deploy"}, path...)
+	if e.scoped {
+		return e.resetInOverride(svc, full)
+	}
 	sets := func(d *Doc) bool { k, _ := d.Get(full...); return k != nil }
 	for _, d := range e.deleteDocs(svc, sets) {
 		if sets(d) {
 			e.mark(d.Path)
-			if err := d.Delete(full, true); err != nil {
+			if err := deleteUnder(d, full); err != nil {
 				return err
 			}
 		}
+	}
+	return nil
+}
+
+// deleteUnder removes the service attribute at path (services.<svc>.…)
+// with the parents it leaves empty, up to the attribute itself: a service
+// left without keys stays ({}) so the rest of an edit still finds it.
+func deleteUnder(d *Doc, path []string) error {
+	top := path
+	for len(top) > 3 {
+		parent := Resolve(d.Node(top[:len(top)-1]...))
+		if parent == nil || parent.Kind != yaml.MappingNode || len(parent.Content) != 2 {
+			break
+		}
+		top = top[:len(top)-1]
+	}
+	return d.Delete(top, false)
+}
+
+// setLogging writes a service's logging driver and rotation options: an
+// empty value removes its key, and a logging: left empty is removed. Other
+// keys and options are kept.
+func (e *Editor) setLogging(svc string, l model.ServiceLogging) error {
+	d := e.fieldDoc(svc, "logging")
+	if err := e.own(d, svc, "logging"); err != nil {
+		return err
+	}
+	e.mark(d.Path)
+	logging := []string{"services", svc, "logging"}
+	for _, kv := range [][2]string{{"driver", l.Driver}, {"options.max-size", l.MaxSize}, {"options.max-file", l.MaxFile}} {
+		path := append(slices.Clone(logging), strings.Split(kv[0], ".")...)
+		if kv[1] == "" {
+			if err := d.Delete(path, false); err != nil {
+				return err
+			}
+			continue
+		}
+		v := Str(kv[1])
+		if kv[0] != "driver" {
+			// Option values are strings ("3", not 3).
+			v.Style = yaml.DoubleQuotedStyle
+		}
+		if err := d.Set(path, v); err != nil {
+			return err
+		}
+	}
+	options := append(slices.Clone(logging), "options")
+	if _, v := d.Get(options...); v != nil && v.Kind == yaml.MappingNode && len(v.Content) == 0 {
+		if err := d.Delete(options, false); err != nil {
+			return err
+		}
+	}
+	if _, v := d.Get(logging...); v != nil && v.Kind == yaml.MappingNode && len(v.Content) == 0 {
+		return e.deleteField(svc, "logging")
+	}
+	return nil
+}
+
+// setLabels makes the service's labels exactly labels (none removes
+// labels:): kept labels keep their source, removed ones are deleted, new
+// and changed ones are written quoted. A list form (- key=value) is
+// rewritten as a mapping.
+func (e *Editor) setLabels(svc string, labels map[string]string) error {
+	if len(labels) == 0 {
+		return e.deleteField(svc, "labels")
+	}
+	d := e.fieldDoc(svc, "labels")
+	if err := e.own(d, svc, "labels"); err != nil {
+		return err
+	}
+	e.mark(d.Path)
+	path := []string{"services", svc, "labels"}
+	quoted := func(s string) *yaml.Node {
+		v := Str(s)
+		v.Style = yaml.DoubleQuotedStyle
+		return v
+	}
+	if _, cur := d.Get(path...); cur == nil || Resolve(cur).Kind != yaml.MappingNode {
+		m := &yaml.Node{Kind: yaml.MappingNode}
+		for _, k := range slices.Sorted(maps.Keys(labels)) {
+			m.Content = append(m.Content, Str(k), quoted(labels[k]))
+		}
+		return d.Set(path, m)
+	}
+	for _, k := range mapKeys(d, path...) {
+		if _, keep := labels[k]; !keep && k != "<<" {
+			if err := d.Delete(append(slices.Clone(path), k), false); err != nil {
+				return err
+			}
+		}
+	}
+	for _, k := range slices.Sorted(maps.Keys(labels)) {
+		if _, old := d.Get(append(slices.Clone(path), k)...); old != nil && Resolve(old).Value == labels[k] {
+			continue
+		}
+		if err := d.Set(append(slices.Clone(path), k), quoted(labels[k])); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// scopedKeys are the ServicePatch keys that can be written to the active
+// environment's override file alone ("scope": "environment").
+var scopedKeys = []string{
+	"image", "restart", "user", "containerName", "hostname", "workingDir", "platform", "command", "entrypoint",
+	"ports", "volumes", "expose", "profiles", "healthcheck", "replicas", "resources", "logging",
+	"readOnly", "privileged", "init", "capDrop", "capAdd", "securityOpt", "tmpfs",
+}
+
+// resetInOverride removes path from the active environment's override
+// file and, when an earlier file sets it, resets it there (!reset), so
+// the environment runs without it and the base files keep theirs.
+func (e *Editor) resetInOverride(svc string, path []string) error {
+	o := e.p.Docs[e.p.Override]
+	e.mark(o.Path)
+	if err := o.Delete(path, false); err != nil {
+		return err
+	}
+	for _, d := range e.serviceDocs(svc) {
+		if d == o {
+			continue
+		}
+		k, _ := d.Get(path...)
+		if k == nil && len(path) == 3 {
+			_, sv := d.Get(path[:2]...)
+			if mergedGet(sv, path[2]) == nil {
+				continue
+			}
+		} else if k == nil {
+			continue
+		}
+		return o.Set(path, Raw("!reset null"))
 	}
 	return nil
 }
@@ -1371,6 +1625,110 @@ func (e *Editor) envDelete(svc, key string) error {
 		}
 	}
 	return nil
+}
+
+// ---------------------------------------------------------------------------
+// Secrets
+
+// SecretFromEnv moves an environment variable of a service into a secret
+// file: the value is written to ./secrets/<Secret>.txt (unless the secret
+// is already declared), declared as a top-level secret, granted to the
+// service and removed from its environment. FileEnv also sets
+// <Key>_FILE=/run/secrets/<Secret>, for images that read it.
+type SecretFromEnv struct {
+	Key     string `json:"key"`
+	Secret  string `json:"secret,omitempty"` // default: the key in lower case
+	FileEnv bool   `json:"fileEnv,omitempty"`
+}
+
+// secretSource is the secret a service's secrets item grants (short
+// syntax "x", long syntax {source: x}).
+func secretSource(n *yaml.Node, _ *Project) string {
+	if n.Kind == yaml.MappingNode {
+		if src := mergedGet(n, "source"); src != nil {
+			return src.Value
+		}
+	}
+	return n.Value
+}
+
+// setSecrets makes the service's secrets list grant the named top-level
+// secrets; long-syntax items that stay keep their target, uid and mode.
+func (e *Editor) setSecrets(svc string, names []string) error {
+	items := make([]listItem, 0, len(names))
+	for _, n := range names {
+		if _, ok := e.p.Model.Secrets[n]; !ok {
+			return badf("secret %q is not declared: add it under the top-level secrets: first", n)
+		}
+		items = append(items, listItem{canon: n, node: Str(n)})
+	}
+	return e.setList(svc, "secrets", items, secretSource)
+}
+
+func (e *Editor) secretFromEnv(svc string, req SecretFromEnv) error {
+	s := e.p.Model.Services[svc]
+	value, inEnv := s.Environment[req.Key]
+	if _, written := e.p.RawEnv(svc)[req.Key]; !inEnv || !written {
+		if _, fromFile := e.p.serviceEnv(s); fromFile[req.Key] != "" {
+			return badf("%s comes from %s: move it to a secret there", req.Key, fromFile[req.Key])
+		}
+		return badf("service %s has no environment variable %s", svc, req.Key)
+	}
+	if value == nil {
+		return badf("%s has no value in the compose files (it is passed from the shell)", req.Key)
+	}
+	name := req.Secret
+	if name == "" {
+		name = strings.ToLower(req.Key)
+	}
+	if err := ValidName("secret", name); err != nil {
+		return err
+	}
+	if _, declared := e.p.Model.Secrets[name]; !declared {
+		file := "secrets/" + name + ".txt"
+		rel := path.Join(e.p.ProjectDir, file)
+		if _, err := e.p.read(rel); err == nil {
+			return &EditError{Msg: fmt.Sprintf("%s already exists: choose another secret name", rel), Conflict: true}
+		}
+		if e.created == nil {
+			e.created = map[string][]byte{}
+		}
+		e.created[rel] = []byte(*value)
+		d := e.primary()
+		e.mark(d.Path)
+		if err := d.Set([]string{"secrets", name}, Map("file", Str("./"+file))); err != nil {
+			return err
+		}
+	}
+	if err := e.envDelete(svc, req.Key); err != nil {
+		return err
+	}
+	// Where the service sees the secret: /run/secrets/<name>, or the
+	// target of a long-syntax grant it already has.
+	mounted := "/run/secrets/" + name
+	granted := make([]listItem, 0, len(s.Secrets)+1)
+	already := false
+	for _, sec := range s.Secrets {
+		if sec.Source == name {
+			already = true
+			if sec.Target != "" {
+				mounted = sec.Target
+				if !strings.HasPrefix(mounted, "/") {
+					mounted = "/run/secrets/" + mounted
+				}
+			}
+		}
+		granted = append(granted, listItem{canon: sec.Source, node: Str(sec.Source)})
+	}
+	if req.FileEnv {
+		if err := e.envSet(svc, req.Key+"_FILE", &mounted); err != nil {
+			return err
+		}
+	}
+	if already {
+		return nil
+	}
+	return e.setList(svc, "secrets", append(granted, listItem{canon: name, node: Str(name)}), secretSource)
 }
 
 // ---------------------------------------------------------------------------

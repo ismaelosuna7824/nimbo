@@ -1,0 +1,62 @@
+# Each tier gets one subnet per zone, added separately (public +
+# public_b, private + private_b): the zones are the zone lookup's
+# names[0] / names[1] picked with Link to… → More…, the CIDRs typed.
+steps:
+  - add: {type: aws_availability_zones, kind: data, name: available}
+  - set:
+      node: data.aws_availability_zones.available
+      attrs:
+        state: available
+  - set:
+      node: aws_subnet.public
+      attrs:
+        availability_zone: {link: "data.aws_availability_zones.available.names[0]"}
+  - add: {type: aws_subnet, name: public_b}
+  - set:
+      node: aws_subnet.public_b
+      attrs:
+        vpc_id: {link: aws_vpc.main.id}
+        cidr_block: 10.0.1.0/24
+        availability_zone: {link: "data.aws_availability_zones.available.names[1]"}
+        map_public_ip_on_launch: true
+        tags: {Name: learn-dev-public-b}
+  - add: {type: aws_route_table_association, name: public_b}
+  - set:
+      node: aws_route_table_association.public_b
+      attrs:
+        subnet_id: {link: aws_subnet.public_b.id}
+        route_table_id: {link: aws_route_table.public.id}
+  - add: {type: aws_route_table, name: private}
+  - set:
+      node: aws_route_table.private
+      attrs:
+        vpc_id: {link: aws_vpc.main.id}
+        tags: {Name: learn-dev-private}
+  - add: {type: aws_subnet, name: private}
+  - set:
+      node: aws_subnet.private
+      attrs:
+        vpc_id: {link: aws_vpc.main.id}
+        cidr_block: 10.0.10.0/24
+        availability_zone: {link: "data.aws_availability_zones.available.names[0]"}
+        tags: {Name: learn-dev-private-a}
+  - add: {type: aws_subnet, name: private_b}
+  - set:
+      node: aws_subnet.private_b
+      attrs:
+        vpc_id: {link: aws_vpc.main.id}
+        cidr_block: 10.0.11.0/24
+        availability_zone: {link: "data.aws_availability_zones.available.names[1]"}
+        tags: {Name: learn-dev-private-b}
+  - add: {type: aws_route_table_association, name: private}
+  - set:
+      node: aws_route_table_association.private
+      attrs:
+        subnet_id: {link: aws_subnet.private.id}
+        route_table_id: {link: aws_route_table.private.id}
+  - add: {type: aws_route_table_association, name: private_b}
+  - set:
+      node: aws_route_table_association.private_b
+      attrs:
+        subnet_id: {link: aws_subnet.private_b.id}
+        route_table_id: {link: aws_route_table.private.id}

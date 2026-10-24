@@ -1,0 +1,5 @@
+# The api's knobs (documented in api/server.js) as Environment rows.
+steps:
+  - composeEnv:
+      service: api
+      set: {PRICING_TIMEOUT_MS: "250", PRICE_FALLBACK: list-price, CIRCUIT_BREAKER: "on"}

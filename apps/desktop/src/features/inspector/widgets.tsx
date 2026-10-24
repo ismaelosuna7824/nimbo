@@ -1,8 +1,6 @@
-import { PlusIcon, XIcon } from "lucide-react"
+import { XIcon } from "lucide-react"
 import { useState } from "react"
 import { useSyncedState } from "@/components/use-synced-state"
-import { Button } from "@/components/ui/button"
-import { Input } from "@/components/ui/input"
 import { Textarea } from "@/components/ui/textarea"
 import { cn } from "@/lib/utils"
 
@@ -59,74 +57,6 @@ export function TagInput({
         placeholder={value.length ? "" : (placeholder ?? "Type and press Enter")}
         className="h-6 min-w-24 flex-1 bg-transparent px-1 text-sm outline-none placeholder:text-muted-foreground"
       />
-    </div>
-  )
-}
-
-type Row = { key: string; value: string }
-
-const toRows = (m: Record<string, string>): Row[] => Object.entries(m).map(([key, value]) => ({ key, value }))
-
-export function KeyValueEditor({
-  value,
-  onChange,
-  keyPlaceholder = "key",
-  valuePlaceholder = "value",
-}: {
-  value: Record<string, string>
-  onChange: (v: Record<string, string>) => void
-  keyPlaceholder?: string
-  valuePlaceholder?: string
-}) {
-  const [rows, setRows] = useState<Row[]>(() => toRows(value))
-  const external = JSON.stringify(value)
-  const [seen, setSeen] = useState(external)
-  if (seen !== external) {
-    setSeen(external)
-    const current = JSON.stringify(Object.fromEntries(rows.filter((r) => r.key.trim()).map((r) => [r.key.trim(), r.value])))
-    if (current !== external) setRows(toRows(value))
-  }
-
-  const emit = (next: Row[]) => {
-    setRows(next)
-    onChange(Object.fromEntries(next.filter((r) => r.key.trim()).map((r) => [r.key.trim(), r.value])))
-  }
-
-  return (
-    <div className="flex flex-col gap-1.5">
-      {rows.map((r, i) => (
-        <div key={i} className="flex items-center gap-1.5">
-          <Input
-            value={r.key}
-            placeholder={keyPlaceholder}
-            className="h-7 flex-1 font-mono text-xs"
-            onChange={(e) => emit(rows.map((x, j) => (j === i ? { ...x, key: e.target.value } : x)))}
-          />
-          <Input
-            value={r.value}
-            placeholder={valuePlaceholder}
-            className="h-7 flex-[1.4] text-xs"
-            onChange={(e) => emit(rows.map((x, j) => (j === i ? { ...x, value: e.target.value } : x)))}
-          />
-          <Button
-            variant="ghost"
-            size="icon-xs"
-            onClick={() => emit(rows.filter((_, j) => j !== i))}
-            aria-label="Remove entry"
-          >
-            <XIcon />
-          </Button>
-        </div>
-      ))}
-      <Button
-        variant="outline"
-        size="xs"
-        className="self-start"
-        onClick={() => setRows([...rows, { key: "", value: "" }])}
-      >
-        <PlusIcon />
-        Add entry
-      </Button>
     </div>
   )
 }

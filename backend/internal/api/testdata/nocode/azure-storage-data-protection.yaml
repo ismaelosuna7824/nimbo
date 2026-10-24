@@ -1,0 +1,21 @@
+# Replication select, nested blob_properties / network_rules blocks (Add +
+# fields), and a management lock dropped from the palette and linked to
+# the account.
+steps:
+  - set:
+      node: azurerm_storage_account.invoices
+      attrs:
+        account_replication_type: GZRS
+        blob_properties[0].versioning_enabled: true
+        blob_properties[0].delete_retention_policy[0].days: 14
+        blob_properties[0].container_delete_retention_policy[0].days: 14
+        network_rules[0].default_action: Deny
+        network_rules[0].bypass: [AzureServices]
+  - add: {type: azurerm_management_lock, name: invoices}
+  - set:
+      node: azurerm_management_lock.invoices
+      attrs:
+        name: lock-invoices
+        lock_level: CanNotDelete
+        notes: Invoices are retained for compliance.
+        scope: {link: azurerm_storage_account.invoices.id}

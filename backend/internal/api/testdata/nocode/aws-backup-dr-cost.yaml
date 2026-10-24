@@ -1,0 +1,141 @@
+# The recovery Region is a second AWS provider configuration added in the
+# workflow overview's Providers section (alias dr, region = var.dr_region);
+# the recovery vault, its key, the replica bucket and its versioning pick
+# aws.dr in Meta-arguments. Roles get their trust policies in the AWS
+# policy editor (principals) and the replication role Read/Write grants by
+# dragging it onto the buckets; the selection's resources and the plan's
+# copy action are Link to… picks.
+steps:
+  - variable: {name: dr_region, type: string, default: us-west-2, description: Recovery AWS Region.}
+  - provider: {name: aws, alias: dr, region: {link: var.dr_region}}
+  - set:
+      node: aws_dynamodb_table.orders
+      attrs:
+        point_in_time_recovery[0].enabled: true
+  # Vaults with customer managed, rotating keys (one per Region)
+  - add: {type: aws_kms_key, name: backup}
+  - set:
+      node: aws_kms_key.backup
+      attrs:
+        description: Backup vault key
+        enable_key_rotation: true
+  - add: {type: aws_kms_key, name: backup_dr}
+  - set:
+      node: aws_kms_key.backup_dr
+      attrs:
+        provider: aws.dr
+        description: Recovery backup vault key
+        enable_key_rotation: true
+  - add: {type: aws_backup_vault, name: main}
+  - set:
+      node: aws_backup_vault.main
+      attrs:
+        name: orders-prod-vault
+        kms_key_arn: {link: aws_kms_key.backup.arn}
+  - add: {type: aws_backup_vault, name: dr}
+  - set:
+      node: aws_backup_vault.dr
+      attrs:
+        provider: aws.dr
+        name: orders-prod-vault-dr
+        kms_key_arn: {link: aws_kms_key.backup_dr.arn}
+  - add: {type: aws_backup_plan, name: daily}
+  - set:
+      node: aws_backup_plan.daily
+      attrs:
+        name: orders-prod-daily
+        rule[0].rule_name: daily
+        rule[0].target_vault_name: {link: aws_backup_vault.main.name}
+        rule[0].schedule: cron(0 3 * * ? *)
+        rule[0].lifecycle[0].cold_storage_after: 30
+        rule[0].lifecycle[0].delete_after: 365
+        rule[0].copy_action[0].destination_vault_arn: {link: aws_backup_vault.dr.arn}
+        rule[0].copy_action[0].lifecycle[0].delete_after: 365
+  - add: {type: aws_iam_role, name: backup}
+  - set:
+      node: aws_iam_role.backup
+      attrs: {name: orders-prod-backup}
+  - accessAWS:
+      node: aws_iam_role.backup
+      path: assume_role_policy
+      add:
+        - effect: Allow
+          actions: ["sts:AssumeRole"]
+          principals: [{type: Service, values: ['"backup.amazonaws.com"']}]
+  - add: {type: aws_iam_role_policy_attachment, name: backup}
+  - set:
+      node: aws_iam_role_policy_attachment.backup
+      attrs:
+        role: {link: aws_iam_role.backup.name}
+        policy_arn: arn:aws:iam::aws:policy/service-role/AWSBackupServiceRolePolicyForBackup
+  - add: {type: aws_backup_selection, name: orders}
+  - set:
+      node: aws_backup_selection.orders
+      attrs:
+        name: orders
+        plan_id: {link: aws_backup_plan.daily.id}
+        iam_role_arn: {link: aws_iam_role.backup.arn}
+        resources: {link: aws_dynamodb_table.orders.arn, append: true}
+  # Documents: versioned, replicated to the recovery Region, old versions cheaper then gone
+  - add: {type: aws_s3_bucket_versioning, name: documents}
+  - set:
+      node: aws_s3_bucket_versioning.documents
+      attrs:
+        bucket: {link: aws_s3_bucket.documents.id}
+        versioning_configuration[0].status: Enabled
+  - add: {type: aws_s3_bucket, name: replica}
+  - set:
+      node: aws_s3_bucket.replica
+      attrs:
+        provider: aws.dr
+        bucket_prefix: orders-prod-replica-
+  - add: {type: aws_s3_bucket_versioning, name: replica}
+  - set:
+      node: aws_s3_bucket_versioning.replica
+      attrs:
+        provider: aws.dr
+        bucket: {link: aws_s3_bucket.replica.id}
+        versioning_configuration[0].status: Enabled
+  - add: {type: aws_s3_bucket_public_access_block, name: replica}
+  - set:
+      node: aws_s3_bucket_public_access_block.replica
+      attrs:
+        provider: aws.dr
+        bucket: {link: aws_s3_bucket.replica.id}
+        block_public_acls: true
+        block_public_policy: true
+        ignore_public_acls: true
+        restrict_public_buckets: true
+  - add: {type: aws_iam_role, name: replication}
+  - set:
+      node: aws_iam_role.replication
+      attrs: {name: orders-prod-replication}
+  - accessAWS:
+      node: aws_iam_role.replication
+      path: assume_role_policy
+      add:
+        - effect: Allow
+          actions: ["sts:AssumeRole"]
+          principals: [{type: Service, values: ['"s3.amazonaws.com"']}]
+  - connect: {source: aws_iam_role.replication, target: aws_s3_bucket.documents, recipe: "access:read"}
+  - connect: {source: aws_iam_role.replication, target: aws_s3_bucket.replica, recipe: "access:write"}
+  - add: {type: aws_s3_bucket_replication_configuration, name: documents}
+  - set:
+      node: aws_s3_bucket_replication_configuration.documents
+      attrs:
+        bucket: {link: aws_s3_bucket.documents.id}
+        role: {link: aws_iam_role.replication.arn}
+        rule[0].id: to-recovery-region
+        rule[0].status: Enabled
+        rule[0].destination[0].bucket: {link: aws_s3_bucket.replica.arn}
+        depends_on: [aws_s3_bucket_versioning.documents]
+  - add: {type: aws_s3_bucket_lifecycle_configuration, name: documents}
+  - set:
+      node: aws_s3_bucket_lifecycle_configuration.documents
+      attrs:
+        bucket: {link: aws_s3_bucket.documents.id}
+        rule[0].id: noncurrent-versions
+        rule[0].status: Enabled
+        rule[0].noncurrent_version_transition[0].noncurrent_days: 30
+        rule[0].noncurrent_version_transition[0].storage_class: STANDARD_IA
+        rule[0].noncurrent_version_expiration[0].noncurrent_days: 365

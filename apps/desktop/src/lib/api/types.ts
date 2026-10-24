@@ -476,6 +476,194 @@ export interface ConnectionRecipe {
   sourceType: string
   targetType: string
   curated: boolean
+  /** "access" marks grant recipes ("access:read" …), shown as "What can it do?". */
+  group?: "access" | string
+  level?: AccessLevel
+}
+
+// ---------------------------------------------------------------------------
+// Access editors (mirror backend/internal/model/access.go). Fields documented
+// as HCL expressions hold Terraform source: `aws_dynamodb_table.orders.arn`,
+// `"*"`, `"${aws_s3_bucket.b.arn}/*"`.
+
+export type AccessLevel = "read" | "write" | "manage"
+
+/** GET /workflows/{id}/access?node=: exactly the field of `provider` is set. */
+export interface AccessView {
+  nodeId: string
+  provider: "aws" | "azure" | "gcp" | "oci"
+  aws?: AWSPolicyDocument[]
+  azure?: AzureRoleAssignment
+  gcp?: GCPIAMBinding
+  oci?: OCIPolicy
+  related?: AccessRelated[]
+  warnings: AccessWarning[]
+}
+
+/** PUT /workflows/{id}/access (one provider field) → Workflow. */
+export interface AccessEdit {
+  nodeId: string
+  aws?: AWSPolicyDocument
+  azure?: AzureRoleAssignment
+  gcp?: GCPIAMBinding
+  oci?: OCIPolicy
+}
+
+export interface AccessRelated {
+  nodeId: string
+  address: string
+  label: string
+}
+
+export interface AccessWarning {
+  code: string
+  severity: "warning" | "info"
+  message: string
+  fix?: string
+  /** "<document path>/statements/<i>" (AWS), "statements/<i>" (OCI), "rules/<i>" (Kubernetes), "role", "scope", "members/<i>". */
+  path?: string
+}
+
+export interface AWSPolicyDocument {
+  /** "policy", "assume_role_policy", "inline_policy[0].policy"; "" for a data aws_iam_policy_document. */
+  path: string
+  label: string
+  encoding: "jsonencode" | "json" | "document" | "reference" | "unsupported"
+  editable: boolean
+  reason?: string
+  source?: string
+  /** Node ID of the policy document a "reference" document reads. */
+  linked?: string
+  version?: string
+  statements: AWSStatement[]
+}
+
+export interface AWSStatement {
+  sid?: string
+  effect: "Allow" | "Deny" | string
+  actions: string[]
+  /** HCL expressions. */
+  resources: string[]
+  principals?: AWSPrincipal[]
+  /** Read-only keys kept verbatim (Condition, NotAction, …). */
+  extra?: { key: string; source: string }[]
+  editable: boolean
+  reason?: string
+  /** Original source; empty for new statements. Send it back unchanged. */
+  source?: string
+}
+
+export interface AWSPrincipal {
+  type: "AWS" | "Service" | "Federated" | "CanonicalUser" | "*" | string
+  /** HCL expressions. */
+  values: string[]
+}
+
+export interface AzureRoleAssignment {
+  /** HCL expression. */
+  scope: string
+  roleName?: string
+  /** HCL expression. */
+  roleId?: string
+  /** HCL expression. */
+  principalId: string
+  principalType?: string
+  editable: boolean
+  reason?: string
+}
+
+export interface GCPIAMBinding {
+  kind: "member" | "binding"
+  resourceAttr?: string
+  /** HCL expression. */
+  resource?: string
+  role: string
+  /** HCL expressions. */
+  members: string[]
+  condition?: string
+  editable: boolean
+  reason?: string
+}
+
+export interface OCIPolicy {
+  statements: OCIStatement[]
+  editable: boolean
+  reason?: string
+}
+
+export interface OCIStatement {
+  source?: string
+  editable: boolean
+  reason?: string
+  subjectType?: "group" | "dynamic-group" | "any-user" | "any-group" | "service" | string
+  subjects?: string[]
+  verb?: "inspect" | "read" | "use" | "manage" | string
+  resourceType?: string
+  location?: "tenancy" | "compartment" | string
+  compartment?: string
+  condition?: string
+}
+
+/** GET /workflows/{id}/kubernetes/access?node=. */
+export interface KubeAccessView {
+  nodeId: string
+  kind: string
+  editable: boolean
+  reason?: string
+  rules?: KubeRule[]
+  roleRef?: KubeRoleRef
+  subjects?: KubeSubject[]
+  serviceAccount?: string
+  automountToken?: boolean
+  related?: AccessRelated[]
+  warnings: AccessWarning[]
+}
+
+/** PUT /workflows/{id}/kubernetes/access (omitted fields unchanged) → Workflow. */
+export interface KubeAccessEdit {
+  nodeId: string
+  rules?: KubeRule[]
+  roleRef?: KubeRoleRef
+  subjects?: KubeSubject[]
+  serviceAccount?: string
+  automountToken?: boolean
+}
+
+export interface KubeRule {
+  apiGroups: string[]
+  resources?: string[]
+  resourceNames?: string[]
+  verbs: string[]
+  nonResourceURLs?: string[]
+}
+
+export interface KubeRoleRef {
+  kind: "Role" | "ClusterRole" | string
+  name: string
+}
+
+export interface KubeSubject {
+  kind: "ServiceAccount" | "User" | "Group" | string
+  name: string
+  namespace?: string
+}
+
+/** GET /access/catalog/{provider}: pinned official reference data. */
+export interface AccessCatalog {
+  provider: "aws" | "azure" | "gcp" | "oci" | "kubernetes" | string
+  source: { title: string; url: string; retrieved: string }
+  services?: { prefix: string; name: string }[]
+  actions?: { name: string; level: string; resourceTypes?: string[] }[]
+  roles?: {
+    id: string
+    name: string
+    description?: string
+    category?: string
+    privileged?: boolean
+    suggested?: AccessLevel
+  }[]
+  verbs?: { name: string; description?: string }[]
+  resourceTypes?: { name: string; group?: string; description?: string }[]
 }
 
 export interface Template {
@@ -1915,6 +2103,23 @@ export interface ComposeHealthcheck {
   disabled?: boolean
 }
 
+/** deploy.resources.limits of a service. */
+export interface ComposeResources {
+  cpus?: string
+  memory?: string
+  /** Maximum number of processes (pids). */
+  pids?: number
+}
+
+/** A service's `logging:`: driver ("" = Docker's default, json-file) and the json-file/local rotation options. */
+export interface ComposeLogging {
+  driver?: string
+  /** options.max-size ("10m"). */
+  maxSize?: string
+  /** options.max-file ("3"). */
+  maxFile?: string
+}
+
 export type DependsOnCondition = "service_started" | "service_healthy" | "service_completed_successfully"
 
 export interface ComposeEnvVar {
@@ -1958,8 +2163,13 @@ export interface ServiceFacts {
   healthcheckFrom?: "compose" | "dockerfile"
   restart?: string
   replicas?: number
-  resources?: { cpus?: string; memory?: string }
+  /** deploy.resources.limits (pids: the number of processes). */
+  resources?: ComposeResources
+  /** `logging:` (driver, json-file/local rotation options max-size and max-file); absent when the service has none. */
+  logging?: ComposeLogging
   profiles?: string[]
+  /** Container labels (`labels:`), e.g. prometheus.io/scrape for Add monitoring. */
+  labels?: Record<string, string>
   environment: ComposeEnvVar[]
   envFiles?: string[]
   volumes: ComposeMount[]
@@ -1969,6 +2179,22 @@ export interface ServiceFacts {
   containerName?: string
   hostname?: string
   user?: string
+  /** Where `user` comes from: the service's `user:` or the final Dockerfile stage's USER. */
+  userFrom?: "compose" | "dockerfile"
+  /** The unprivileged user the image (or the final stage's base image) documents; absent when unknown. */
+  nonRootUser?: string
+  /** Variables the image also reads from a file named by `<VAR>_FILE` (Docker secrets). */
+  fileEnv?: string[]
+  /** Runtime hardening: read_only, cap_drop, cap_add, security_opt, tmpfs, privileged, init. */
+  readOnly?: boolean
+  capDrop?: string[]
+  capAdd?: string[]
+  securityOpt?: string[]
+  tmpfs?: string[]
+  privileged?: boolean
+  init?: boolean
+  /** Secrets granted to the service (top-level secret names), mounted under /run/secrets. */
+  secrets?: string[]
   workingDir?: string
   platform?: string
   /** "svc" or "file#svc". */
@@ -2105,12 +2331,39 @@ export interface ServicePatch {
   healthcheck?: ComposeHealthcheck | null
   restart?: string | null
   replicas?: number | null
-  resources?: { cpus?: string; memory?: string } | null
+  /** deploy.resources.limits: empty fields (pids 0 or absent) remove their key. */
+  resources?: ComposeResources | null
+  /** `logging:` driver and rotation options: empty fields remove their key, null removes `logging:`. */
+  logging?: ComposeLogging | null
+  /**
+   * "environment": write every field of this patch to the active environment's override file only (removed fields
+   * are reset there); the base files stay as they are.
+   */
+  scope?: "environment"
+  /** The service's labels, exactly (null or {} removes `labels:`). */
+  labels?: Record<string, string> | null
   networks?: string[] | null
   command?: string | string[] | null
   entrypoint?: string | string[] | null
   profiles?: string[] | null
   user?: string | null
+  /** `read_only`, `privileged`, `init`: true sets the key, false/null removes it. */
+  readOnly?: boolean | null
+  privileged?: boolean | null
+  init?: boolean | null
+  /** `cap_drop`, `cap_add`, `security_opt`, `tmpfs` (absolute paths); null or [] removes the key. */
+  capDrop?: string[] | null
+  capAdd?: string[] | null
+  securityOpt?: string[] | null
+  tmpfs?: string[] | null
+  /** Top-level secrets granted to the service (they must be declared). */
+  secrets?: string[] | null
+  /**
+   * Moves an environment variable into a secret file (send alone): its value goes to ./secrets/<secret>.txt (unless
+   * the secret exists), the secret is declared, granted and the variable removed; `fileEnv` also sets
+   * `<key>_FILE=/run/secrets/<secret>`.
+   */
+  secretFromEnv?: { key: string; secret?: string; fileEnv?: boolean }
   containerName?: string | null
   expose?: string[] | null
   envFiles?: string[] | null
@@ -2701,9 +2954,11 @@ export interface KubeObjectPatch {
 
 export interface KubeConnectRecipe {
   id: string
-  kind: "expose" | "selects" | "route" | "envFrom" | "volume" | "env" | "serviceaccount" | "scale" | string
+  kind: "expose" | "selects" | "route" | "envFrom" | "volume" | "env" | "serviceaccount" | "scale" | "access" | "allowTraffic" | "allowAll" | string
   label: string
   description: string
+  /** Grant recipes (kind "access", id "access:<level>"). */
+  level?: AccessLevel
 }
 
 export interface KubeConnectRequest {
@@ -3225,6 +3480,8 @@ export interface Challenge {
   tags: string[]
   prerequisites?: string[]
   runtime: LearnRuntime
+  /** Every step can be done in the canvas and inspectors; false: some step needs editing code or files. Undeclared: unknown. */
+  solvableWithoutCode?: boolean
   /** Markdown. */
   problem: string
   requirements: string[]
@@ -3305,6 +3562,8 @@ export interface ChallengeSummary {
   minutes: number
   tags: string[]
   runtime: LearnRuntime
+  /** Mirrors Challenge.solvableWithoutCode (absent: undeclared). */
+  solvableWithoutCode?: boolean
   prerequisites: string[]
   checks: number
   progress: ChallengeProgress

@@ -1,0 +1,12 @@
+# The Ingress form's route rows (host, path, Service, port); every path is
+# written with pathType Prefix.
+steps:
+  - kubePatch:
+      node: Ingress/shop/shop
+      set:
+        spec.rules:
+          - host: shop.localhost
+            http:
+              paths:
+                - {path: /api, pathType: Prefix, backend: {service: {name: api, port: {name: http}}}}
+                - {path: /, pathType: Prefix, backend: {service: {name: web, port: {name: http}}}}

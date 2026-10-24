@@ -1,0 +1,12 @@
+# The job leaves the api (RUN_JOBS=false) for a worker built from the same
+# ./app folder: "Build from Dockerfile" from the palette (named app, it
+# builds ./app, which already has the Dockerfile), renamed worker, with
+# ROLE=worker, REDIS_URL, a CPU limit and an init process.
+steps:
+  - composeEnv: {service: api, set: {RUN_JOBS: "false"}}
+  - composeAddService: {build: {}}
+  - composePatch: {service: app, patch: {name: worker}}
+  - composeEnv: {service: worker, set: {ROLE: worker, REDIS_URL: "redis://cache:6379"}}
+  - composePatch: {service: worker, patch: {resources: {cpus: "0.5", memory: 128M}}}
+  - composePatch: {service: worker, patch: {dependsOn: [{service: cache, condition: service_healthy}]}}
+  - composePatch: {service: worker, patch: {init: true}}

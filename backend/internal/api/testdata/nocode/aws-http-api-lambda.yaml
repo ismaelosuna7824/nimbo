@@ -1,0 +1,30 @@
+# A palette HTTP API dragged onto the function ("Route HTTP requests to the
+# function": proxy integration 2.0, route, $default auto-deploy stage,
+# invoke permission scoped to the API). The route key is edited to
+# GET /hello; the stage gets throttling and access logs to a palette log
+# group (Link to… its arn, retention set).
+steps:
+  - add: {type: aws_apigatewayv2_api, name: http}
+  - set:
+      node: aws_apigatewayv2_api.http
+      attrs:
+        name: learn-dev-http
+        protocol_type: HTTP
+  - connect: {source: aws_apigatewayv2_api.http, target: aws_lambda_function.hello, recipe: apigwv2-lambda}
+  - set:
+      node: aws_apigatewayv2_route.hello_route
+      attrs:
+        route_key: GET /hello
+  - add: {type: aws_cloudwatch_log_group, name: api_access}
+  - set:
+      node: aws_cloudwatch_log_group.api_access
+      attrs:
+        name: /aws/apigateway/learn-dev-http
+        retention_in_days: 14
+  - set:
+      node: aws_apigatewayv2_stage.http_default
+      attrs:
+        default_route_settings[0].throttling_burst_limit: 50
+        default_route_settings[0].throttling_rate_limit: 100
+        access_log_settings[0].destination_arn: {link: aws_cloudwatch_log_group.api_access.arn}
+        access_log_settings[0].format: '{"requestId":"$context.requestId","routeKey":"$context.routeKey","status":"$context.status"}'

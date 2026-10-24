@@ -20,6 +20,7 @@ progress lives in the same database, and migrations never change it.
 - [Challenge reference](#challenge-reference)
 - [Roadmap reference](#roadmap-reference)
 - [Check types](#check-types)
+- [No code needed](#no-code-needed)
 - [Sourcing rule](#sourcing-rule)
 - [Verify locally](#verify-locally)
 
@@ -37,7 +38,10 @@ progress lives in the same database, and migrations never change it.
 4. Grade it for real in Nimbo. The starter must fail at least one check,
    and the reference solution must pass every check (see
    [Verify locally](#verify-locally)).
-5. Open a pull request. Do not edit migrations that are already merged.
+5. Try to solve it **without writing code** (canvas + inspector) and
+   record it: `solvableWithoutCode: true` plus a no-code script, or
+   `false` (see [No code needed](#no-code-needed)).
+6. Open a pull request. Do not edit migrations that are already merged.
 
 ## Migration files
 
@@ -76,13 +80,14 @@ operations:
       tags: [s3, storage, static-site]
       prerequisites: []
       runtime: emulated
+      solvableWithoutCode: true
       problem: |
         Your team needs a landing page…
       requirements:
         - An S3 bucket holds the site.
         - "Block Public Access stays on: serve it through the website endpoint only if your policy allows it."
       hints:
-        - Look at the `aws_s3_bucket_website_configuration` resource.
+        - Add a website configuration to the bucket from the palette and link its bucket field to the bucket.
       solution: |
         1. …
       solutionFiles:
@@ -133,6 +138,7 @@ earlier file. A `global` roadmap may link to challenges of any provider.
 | `starter` | `{templateId}` or `{kind, cloud?, files, kubernetes?}` | `templateId` is an existing template id (`GET /api/v1/catalog/templates`: Terraform, `docker-*`, `k8s-*`). Inline starters use `kind: terraform\|docker\|kubernetes`, `cloud` for Terraform, and `files` (relative paths). For Kubernetes, `kubernetes: {sources, builds}` is optional (sources are detected otherwise) |
 | `checks` | Check[] | At least one; ids are unique kebab-case; every check has a `label` (shown as a goal) |
 | `adaptations` | `{provider: markdown}` | **Only for `global`, and required there**: which services and how, per provider (`aws`, `azure`, `gcp`, `oci`, `docker`, `kubernetes`) |
+| `solvableWithoutCode` | `true`\|`false` | **Required** on every challenge (checked on the content left after all migrations). `true` when every step can be done in the canvas and inspector; then a no-code script must exist and the hints must be UI steps. `false` shows a *Requires code* badge (see [No code needed](#no-code-needed)) |
 | `sources` | `[{title, url}]` | At least one official https page (see [Sourcing rule](#sourcing-rule)) |
 
 The Learn page renders markdown safely. It supports paragraphs, `#`
@@ -223,6 +229,50 @@ Design-only challenges (`runtime: design`) use only `validate`,
 `rules_clean`, `has` and `readiness`. Keep thresholds generous so they
 don't depend on the speed of the machine.
 
+## No code needed
+
+Nimbo is meant to be learned without writing code: the canvas, the
+inspector and the access editors (drag an identity onto a resource → *What
+can it do? Read / Write / Manage*; statement cards for AWS policies, role
+pickers for Azure and GCP, sentences for OCI policies, Kubernetes RBAC
+forms, the Docker *Hardening* section) cover most of what challenges ask.
+
+- **Declare it**: `solvableWithoutCode: true` only when the whole starter
+  can be solved through the UI. Use `false` when some step truly needs code
+  or a file edit (application code, a Dockerfile instruction, a Helm
+  template, a Terraform function call such as `cidrsubnet()`); the Learn
+  catalog and the challenge page then show a **Requires code** badge.
+- **Prove it**: add `backend/internal/api/testdata/nocode/<id>.yaml`, a list
+  of UI gestures the test replays as the desktop app's own requests (from
+  `POST /learn/challenges/{id}/start`), then grades the static checks:
+
+  ```yaml
+  # testdata/nocode/aws-lambda-least-privilege.yaml (the file name is the challenge id)
+  steps:
+    - connect: {source: aws_lambda_function.reader, target: aws_dynamodb_table.orders, recipe: "access:read"}
+    - add: {type: aws_cloudwatch_log_group, name: reader}
+    - connect: {source: aws_lambda_function.reader, target: aws_cloudwatch_log_group.reader, recipe: lambda-log-group}
+    - connect: {source: aws_lambda_function.reader, target: aws_cloudwatch_log_group.reader, recipe: "access:write"}
+    - accessAWS: {node: aws_iam_role_policy.reader, path: policy, removeWhere: {actions: ["*"]}}
+  ```
+
+  Gestures (`backend/internal/api/nocode_test.go` lists them all):
+  Terraform `add`, `rename`, `delete`, `set` (values only as the inspector
+  widgets produce them: literals, `{link}` to an attribute the Link to…
+  picker lists, `append`/`remove` on lists, object-list cards, `{unset}`),
+  `variable`, `connect` (recipes and grants `access:<level>`), `accessAWS`,
+  `accessAzure`, `accessGCP`, `accessOCI`; Docker `compose*` (services,
+  networks, volumes, secrets, stage base image, connect), environments
+  `env*`; Kubernetes `kubeAdd`, `kubePatch` (form fields only), `kubeRename`,
+  `kubeConnect`, `kubeAccess`, `kubeDelete`. A gesture that no UI control can
+  produce is rejected, so a raw expression or file edit can't sneak in.
+  Challenges declared `false` must not have a script.
+- **Hints are UI steps** for `true` challenges: name the palette items,
+  canvas gestures, inspector sections, fields and buttons (field names in
+  backticks are fine), never HCL/YAML/Dockerfile code. Keep code in the
+  `solution` as the reference, and add a short *Without writing code in
+  Nimbo* list of the steps there.
+
 ## Sourcing rule
 
 Every fact, recommendation and roadmap structure must come from
@@ -291,6 +341,12 @@ and by validating the workflow in Nimbo.
 
    ```sh
    cd backend && go test ./internal/challenge/ -run TestContentStaticChecks
+   ```
+
+   Then replay the no-code scripts:
+
+   ```sh
+   cd backend && go test ./internal/api/ -run 'TestNoCode/<id>' -v
    ```
 
 2. **Grade it for real** with a throwaway home, so your own

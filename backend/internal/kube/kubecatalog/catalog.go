@@ -370,6 +370,27 @@ var starters = []starter{
 				)),
 			))}
 		}},
+	{Item{ID: "default-deny", Label: "Default deny + DNS", Description: "Isolates every pod of the namespace (no traffic in or out unless a NetworkPolicy allows it) and still lets them resolve names with the cluster DNS. Then drag a workload onto another to allow that connection", Category: model.KubeCatNetwork, Kinds: []string{"NetworkPolicy", "NetworkPolicy"}},
+		func(name, ns string) []*yaml.Node {
+			dns := func(protocol string) *yaml.Node { return m("protocol", protocol, "port", 53) }
+			return []*yaml.Node{
+				comment(obj("networking.k8s.io/v1", "NetworkPolicy", meta(name, ns, nil), "spec", m(
+					"podSelector", flow(m()),
+					"policyTypes", flow(strs("Ingress", "Egress")),
+				)), "Every pod of the namespace: no rule, so nothing is allowed in or out."),
+				comment(obj("networking.k8s.io/v1", "NetworkPolicy", meta(name+"-dns", ns, nil), "spec", m(
+					"podSelector", flow(m()),
+					"policyTypes", flow(strs("Egress")),
+					"egress", seq(m(
+						"to", seq(m(
+							"namespaceSelector", m("matchLabels", m("kubernetes.io/metadata.name", "kube-system")),
+							"podSelector", m("matchLabels", m("k8s-app", "kube-dns")),
+						)),
+						"ports", seq(dns("UDP"), dns("TCP")),
+					)),
+				)), "Every pod may query the cluster DNS (kube-dns in kube-system) on port 53."),
+			}
+		}},
 	{Item{ID: "serviceaccount-role", Label: "ServiceAccount + Role", Description: "An identity for pods that call the Kubernetes API, allowed to read pods, services and config maps of its namespace", Category: model.KubeCatRBAC, Kinds: []string{"ServiceAccount", "Role", "RoleBinding"}},
 		func(name, ns string) []*yaml.Node {
 			return []*yaml.Node{

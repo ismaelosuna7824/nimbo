@@ -1,0 +1,45 @@
+# The service gateway and its route come from data.oci_core_services:
+# Link to… → More… lists the fields of its first service
+# (services[0].id, services[0].cidr_block); the data source's filter
+# keeps only "All … Services In Oracle Services Network".
+steps:
+  - add: {type: oci_core_services, kind: data, name: all}
+  - set:
+      node: data.oci_core_services.all
+      attrs:
+        filter[0].name: name
+        filter[0].values: [All .* Services In Oracle Services Network]
+        filter[0].regex: true
+  - add: {type: oci_core_nat_gateway, name: main}
+  - set:
+      node: oci_core_nat_gateway.main
+      attrs:
+        compartment_id: {link: var.compartment_ocid}
+        vcn_id: {link: oci_core_vcn.main.id}
+        display_name: learn-dev-nat
+  - add: {type: oci_core_service_gateway, name: main}
+  - set:
+      node: oci_core_service_gateway.main
+      attrs:
+        compartment_id: {link: var.compartment_ocid}
+        vcn_id: {link: oci_core_vcn.main.id}
+        display_name: learn-dev-sgw
+        services[0].service_id: {link: "data.oci_core_services.all.services[0].id"}
+  - add: {type: oci_core_route_table, name: private}
+  - set:
+      node: oci_core_route_table.private
+      attrs:
+        compartment_id: {link: var.compartment_ocid}
+        vcn_id: {link: oci_core_vcn.main.id}
+        display_name: learn-dev-private
+        route_rules[0].destination: 0.0.0.0/0
+        route_rules[0].destination_type: CIDR_BLOCK
+        route_rules[0].network_entity_id: {link: oci_core_nat_gateway.main.id}
+        route_rules[1].destination: {link: "data.oci_core_services.all.services[0].cidr_block"}
+        route_rules[1].destination_type: SERVICE_CIDR_BLOCK
+        route_rules[1].network_entity_id: {link: oci_core_service_gateway.main.id}
+  - set:
+      node: oci_core_subnet.app
+      attrs:
+        prohibit_public_ip_on_vnic: true
+        route_table_id: {link: oci_core_route_table.private.id}

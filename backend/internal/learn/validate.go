@@ -298,8 +298,8 @@ func checkRoadmap(r model.Roadmap) error {
 }
 
 // references checks what crosses content items: roadmap steps and
-// prerequisites name existing challenges, and prerequisites have no
-// cycles.
+// prerequisites name existing challenges, prerequisites have no cycles,
+// and every challenge declares solvableWithoutCode.
 func (st state) references() []error {
 	var errs []error
 	ids := make([]string, 0, len(st.roadmaps))
@@ -331,6 +331,7 @@ func (st state) references() []error {
 			}
 		}
 	}
+	errs = append(errs, st.undeclared(ids)...)
 	// Cycles: depth-first search over prerequisites.
 	const (
 		visiting = 1
@@ -356,6 +357,18 @@ func (st state) references() []error {
 	}
 	for _, id := range ids {
 		visit(id, nil)
+	}
+	return errs
+}
+
+// undeclared reports the challenges (ids, sorted) that do not declare
+// solvableWithoutCode.
+func (st state) undeclared(ids []string) []error {
+	var errs []error
+	for _, id := range ids {
+		if st.challenges[id].SolvableWithoutCode == nil {
+			errs = append(errs, fmt.Errorf("challenge %s: solvableWithoutCode must be declared (true: every step can be done in the canvas and inspectors; false: some step needs editing code or files)", id))
+		}
 	}
 	return errs
 }

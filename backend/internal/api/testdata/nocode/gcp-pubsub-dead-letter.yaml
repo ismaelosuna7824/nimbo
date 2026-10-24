@@ -1,0 +1,41 @@
+# Dead-letter topic and its subscription from the palette (Link to… the
+# topic id), dead_letter_policy and retry_policy nested blocks on the
+# billing subscription, and two IAM members from the palette filled in the
+# GCP IAM editor: On what = Link to… the topic / subscription, Can do =
+# roles/pubsub.publisher / roles/pubsub.subscriber from the role picker, Who
+# = Service account › "Pub/Sub service agent of data.google_project.current"
+# (the project data source comes from the palette).
+steps:
+  - add: {type: google_project, kind: data, name: current}
+  - add: {type: google_pubsub_topic, name: orders_dead_letter}
+  - set:
+      node: google_pubsub_topic.orders_dead_letter
+      attrs:
+        name: orders-dead-letter
+  - add: {type: google_pubsub_subscription, name: orders_dead_letter}
+  - set:
+      node: google_pubsub_subscription.orders_dead_letter
+      attrs:
+        name: orders-dead-letter-inspect
+        topic: {link: google_pubsub_topic.orders_dead_letter.id}
+  - set:
+      node: google_pubsub_subscription.billing
+      attrs:
+        dead_letter_policy[0].dead_letter_topic: {link: google_pubsub_topic.orders_dead_letter.id}
+        dead_letter_policy[0].max_delivery_attempts: 10
+        retry_policy[0].minimum_backoff: 10s
+        retry_policy[0].maximum_backoff: 600s
+  - add: {type: google_pubsub_topic_iam_member, name: agent_publishes_dead_letters}
+  - accessGCP:
+      node: google_pubsub_topic_iam_member.agent_publishes_dead_letters
+      set:
+        resource: google_pubsub_topic.orders_dead_letter.id
+        role: roles/pubsub.publisher
+        members: ['"serviceAccount:service-${data.google_project.current.number}@gcp-sa-pubsub.iam.gserviceaccount.com"']
+  - add: {type: google_pubsub_subscription_iam_member, name: agent_acks_billing}
+  - accessGCP:
+      node: google_pubsub_subscription_iam_member.agent_acks_billing
+      set:
+        resource: google_pubsub_subscription.billing.id
+        role: roles/pubsub.subscriber
+        members: ['"serviceAccount:service-${data.google_project.current.number}@gcp-sa-pubsub.iam.gserviceaccount.com"']

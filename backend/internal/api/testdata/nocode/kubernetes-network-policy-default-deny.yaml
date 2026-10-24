@@ -1,0 +1,9 @@
+# Palette "Default deny + DNS" (deny all in and out, DNS egress to
+# kube-dns), then drag web onto api and api onto cache ("Allow … traffic":
+# ingress on the target's policy, egress on the source's), and "Accept
+# traffic from anywhere" on web.
+steps:
+  - kubeAdd: {itemId: default-deny}
+  - kubeConnect: {from: Deployment/bank/web, to: Deployment/bank/api, recipe: allowTraffic}
+  - kubeConnect: {from: Deployment/bank/api, to: Deployment/bank/cache, recipe: allowTraffic}
+  - kubeConnect: {from: Deployment/bank/web, to: "", recipe: allowAll}
