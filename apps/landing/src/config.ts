@@ -15,6 +15,7 @@ export const DOCS = {
   mcp: `${GITHUB_URL}/blob/main/docs/MCP.md`,
   architecture: `${GITHUB_URL}/blob/main/docs/ARCHITECTURE.md`,
   install: `${GITHUB_URL}/blob/main/docs/INSTALL.md`,
+  learn: `${GITHUB_URL}/blob/main/docs/CONTRIBUTING-learn.md`,
   readme: `${GITHUB_URL}#readme`,
 } as const;
 export const FLOCI_URL = "https://floci.io";

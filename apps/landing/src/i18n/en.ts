@@ -2,7 +2,7 @@ export const en = {
   meta: {
     title: "Nimbo — Design, deploy and load-test cloud infrastructure on your laptop",
     description:
-      "Nimbo is a free desktop app to design cloud infrastructure by connecting nodes, export or import Terraform, deploy to a private local cloud (AWS, Azure, GCP, OCI), run Docker Compose and Kubernetes projects on your machine and load-test it all — without touching a real account.",
+      "Nimbo is a free desktop app to design cloud infrastructure by connecting nodes, export or import Terraform, deploy to a private local cloud (AWS, Azure, GCP, OCI), run Docker Compose and Kubernetes projects on your machine, load-test them, check their production readiness and learn with graded challenges — without touching a real account.",
     ogImageAlt: "Nimbo mascot next to the headline: Design, deploy and load-test cloud infrastructure on your laptop.",
   },
   a11y: {
@@ -19,6 +19,7 @@ export const en = {
     how: "How it works",
     agents: "AI agents",
     start: "Get started",
+    learn: "Learn",
     faq: "FAQ",
     github: "GitHub",
     download: "Download",
@@ -100,6 +101,27 @@ export const en = {
           "Overlays and values files become environments",
           "Completion and checks from the Kubernetes schema, with quick fixes",
           "Convert to Kubernetes: a compose project becomes manifests, Kustomize or a Helm chart",
+        ],
+      },
+      readiness: {
+        eyebrow: "Production readiness",
+        title: "A readiness score backed by real tests.",
+        body: "Docker and Kubernetes workspaces get a Readiness score per environment, with a row per component. It combines the best-practice checks with evidence from your machine: load tests, incident scenarios, a capacity plan and monitoring. Every gap links to the check, test or fix that closes it.",
+        bullets: [
+          "Incidents during a load test — kill a replica, take a dependency down or slow it, flush the cache, spike the traffic — with a survived, degraded or failed verdict",
+          "Capacity planner: replicas, nodes and monthly cost on AWS, Azure, Google Cloud and OCI from their list prices, applied to an environment in one click",
+          "Add monitoring in one click: Prometheus, Grafana and alerts, HTTP 5xx rate and p95 latency included",
+          "Environments from compose.<env>.yaml and .env.<env>, Kustomize overlays or Helm values, with compare and edit",
+        ],
+      },
+      learn: {
+        eyebrow: "Learn",
+        title: "Roadmaps and challenges that Nimbo grades for real.",
+        body: "Roadmaps from beginner to expert and 78 hands-on challenges for AWS, Azure, Google Cloud, Oracle Cloud, Docker, Kubernetes and cross-cloud problems, based on the official docs and certification guides. Each one has a problem, requirements, hints and a solution. Press Check my solution and Nimbo grades your work.",
+        bullets: [
+          "Docker and Kubernetes challenges run on your machine: Nimbo deploys them and, depending on the goal, calls, load-tests or breaks them on purpose; most AWS ones run on the local emulator",
+          "Azure, Google Cloud and Oracle Cloud challenges are graded on the design: validation, best-practice rules and structure",
+          "Progress stays in a local database; new content arrives as community-contributed migrations",
         ],
       },
       sandbox: {
@@ -230,6 +252,11 @@ export const en = {
         a: "Through Nimbo's built-in MCP server. Open Settings → AI agents and click Install for Claude Code, Claude Desktop, Cursor, Codex, VS Code, Windsurf or Gemini CLI — or register `nimbo mcp` manually. The agent's edits show up live in the app.",
       },
       {
+        id: "learn",
+        q: "How are Learn challenges graded?",
+        a: "Every challenge lists its checks. Check my solution validates the workflow, runs the best-practice rules and inspects its structure. When a goal needs it, which happens in Docker, Kubernetes and most AWS challenges, Nimbo deploys locally and calls the endpoint, runs a load test or injects an incident. Azure, Google Cloud and Oracle Cloud challenges are graded on the design only: nothing is deployed for them.",
+      },
+      {
         id: "data",
         q: "Is my data sent anywhere?",
         a: "The app is local-first: workflows, Connections and secrets stay on your computer (in ~/.nimbo). This website uses Google Analytics for Firebase only if you accept the cookie banner, and you can change your choice anytime from “Cookie settings” in the footer.",
@@ -248,6 +275,7 @@ export const en = {
     docsSetup: "Setup",
     docsMcp: "MCP server",
     docsArchitecture: "Architecture",
+    docsLearn: "Contribute challenges",
     releases: "Releases",
     poweredBy: "Local cloud powered by",
     poweredByName: "Floci emulators",

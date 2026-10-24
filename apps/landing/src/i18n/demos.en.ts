@@ -15,6 +15,8 @@ export const demosEn = {
     architecture: "Build and Architecture views",
     docker: "Docker workspaces",
     kubernetes: "Kubernetes workspaces",
+    readiness: "Production readiness",
+    learn: "Learn roadmaps and challenges",
   },
   common: {
     local: "Local",
@@ -172,6 +174,20 @@ export const demosEn = {
     windowTitle: "Shop on Kubernetes",
     cluster: "Local cluster",
     convert: "Compose → K8s",
+  },
+  readiness: {
+    label:
+      "The Readiness tab of a Docker workspace in Nimbo: the prod environment's score with reliability, performance, resilience, monitoring, security and hygiene scores, a row per service with its checks, load test, incidents and capacity plan, and the checklist. Then a load test with an incident: one API replica is killed mid-test and the verdict says whether the service survived, with the fault window shaded on the charts.",
+    windowTitle: "Notes API · prod",
+    score: "Readiness",
+    incident: "Incident",
+  },
+  learn: {
+    label:
+      "Nimbo's Learn page: the Docker roadmap from beginner to expert with its steps, linked challenges and official docs. Then a challenge workflow after Check my solution: the problem, the requirements and the graded goals, passed after Nimbo deployed the project, killed a replica during a load test and measured the error rate.",
+    windowTitle: "Learn · Docker",
+    roadmap: "Roadmap",
+    challenge: "Challenge",
   },
   modes: {
     label:

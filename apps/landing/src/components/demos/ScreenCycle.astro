@@ -10,7 +10,7 @@ import DemoFrame from "./ui/DemoFrame.astro"
 
 interface Props {
   /** Demo id (data-demo); must be listed in this component's script. */
-  id: "docker" | "kubernetes"
+  id: "docker" | "kubernetes" | "readiness" | "learn"
   lang: Lang
   /** Accessible description of both captures. */
   label: string
@@ -89,7 +89,9 @@ const aspect = `${shots[0].src.width} / ${shots[0].src.height}`
   /* Narrow frames (phones): the view switch needs the title's room. */
   @container (max-width: 560px) {
     :global([data-demo="docker"] .demo-title),
-    :global([data-demo="kubernetes"] .demo-title) {
+    :global([data-demo="kubernetes"] .demo-title),
+    :global([data-demo="readiness"] .demo-title),
+    :global([data-demo="learn"] .demo-title) {
       display: none;
     }
   }
@@ -98,7 +100,7 @@ const aspect = `${shots[0].src.width} / ${shots[0].src.height}`
 <script>
   import { mountDemo } from "./lib/timeline"
 
-  for (const id of ["docker", "kubernetes"]) {
+  for (const id of ["docker", "kubernetes", "readiness", "learn"]) {
     mountDemo(id, (tl) => {
       tl.state(3200, ".seg, .shots", "1")
       return { length: 8400 }

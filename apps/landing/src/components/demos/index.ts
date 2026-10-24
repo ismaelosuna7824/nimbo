@@ -13,8 +13,10 @@ import FlowSteps from "./FlowSteps.astro";
 import GuidedPro from "./GuidedPro.astro";
 import HeroCanvas from "./HeroCanvas.astro";
 import KubernetesWorkspace from "./KubernetesWorkspace.astro";
+import LearnWorkspace from "./LearnWorkspace.astro";
 import LoadTestLive from "./LoadTestLive.astro";
 import LocalCloud from "./LocalCloud.astro";
+import ReadinessWorkspace from "./ReadinessWorkspace.astro";
 import TerraformBothWays from "./TerraformBothWays.astro";
 
 export const demos = [
@@ -25,6 +27,8 @@ export const demos = [
   { id: "architecture", component: ArchitectureViews, titleKey: "architecture" },
   { id: "docker", component: DockerWorkspace, titleKey: "docker" },
   { id: "kubernetes", component: KubernetesWorkspace, titleKey: "kubernetes" },
+  { id: "readiness", component: ReadinessWorkspace, titleKey: "readiness" },
+  { id: "learn", component: LearnWorkspace, titleKey: "learn" },
   { id: "sandbox", component: LocalCloud, titleKey: "sandbox" },
   { id: "endpoints", component: EndpointsTry, titleKey: "endpoints" },
   { id: "loadtest", component: LoadTestLive, titleKey: "loadtest" },

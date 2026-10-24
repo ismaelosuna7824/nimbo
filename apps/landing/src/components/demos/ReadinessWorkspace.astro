@@ -1,0 +1,28 @@
+---
+/** The Readiness tab of a compose project's prod environment, then a load test with an injected incident and its verdict. */
+import type { Lang } from "../../i18n"
+import incident from "../../assets/screens/readiness-incident.png"
+import score from "../../assets/screens/readiness-score.png"
+import { demoStrings } from "./lib/strings"
+import ScreenCycle from "./ScreenCycle.astro"
+
+interface Props {
+  lang: Lang
+  class?: string
+}
+
+const { lang, class: className } = Astro.props
+const s = demoStrings(lang).readiness
+---
+
+<ScreenCycle
+  id="readiness"
+  lang={lang}
+  label={s.label}
+  title={s.windowTitle}
+  class={className}
+  shots={[
+    { src: score, label: s.score },
+    { src: incident, label: s.incident },
+  ]}
+/>
