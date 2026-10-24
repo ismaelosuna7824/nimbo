@@ -100,7 +100,7 @@ export function BottomPanel() {
       useWorkflowStore.setState({ bottomTab: "terraform" })
   }, [containers, challenge, tab])
 
-  const [stripRef, compact] = useCompactStrip(`${tabs.map((t) => t.id).join()}|${alertCount > 0}`)
+  const strip = useStripOverflow(`${tabs.map((t) => t.id).join()}|${alertCount > 0}`)
 
   if (!workflowId) return null
 
@@ -110,29 +110,38 @@ export function BottomPanel() {
       onValueChange={(v) => showBottom(v as BottomTab)}
       className="flex h-full min-h-0 flex-col gap-0 bg-background"
     >
-      {/* When the names don't fit (narrow panel), the tabs show only their icons, the active one keeps its name (the
-          others keep it as accessible text and a tooltip); a strip that still doesn't fit scrolls sideways. */}
+      {/* Every tab keeps its name: when they do not fit, the strip scrolls sideways and a fade marks the hidden ones,
+          instead of collapsing into bare icons on a wide, half-empty bar. */}
       <div className="flex h-9 shrink-0 items-center gap-2 border-b px-2">
-        <TabsList
-          ref={stripRef}
-          variant="line"
-          className="h-full min-w-0 flex-1 justify-start gap-0 overflow-x-auto overflow-y-hidden [scrollbar-width:none]"
-        >
-          {tabs.map(({ id, label, icon, pixel }) => (
-            <StripTab key={id} id={id} label={label} active={id === tab} iconOnly={compact && id !== tab} onSelect={() => !open && showBottom(id)}>
-              <ThemedIcon icon={icon} pixel={pixel} />
-              <span className={cn(compact && id !== tab && "sr-only")}>{label}</span>
-              {id === "problems" && alertCount > 0 && (
-                <Badge
-                  variant={errorCount > 0 ? "destructive" : "secondary"}
-                  className="h-4 min-w-4 px-1 text-[10px] tabular-nums"
-                >
-                  {alertCount}
-                </Badge>
-              )}
-            </StripTab>
-          ))}
-        </TabsList>
+        <div className="relative min-w-0 flex-1">
+          <TabsList
+            ref={strip.ref}
+            onScroll={strip.onScroll}
+            variant="line"
+            className="h-full w-full justify-start gap-0 overflow-x-auto overflow-y-hidden [scrollbar-width:none]"
+          >
+            {tabs.map(({ id, label, icon, pixel }) => (
+              <StripTab key={id} id={id} label={label} active={id === tab} onSelect={() => !open && showBottom(id)}>
+                <ThemedIcon icon={icon} pixel={pixel} />
+                <span>{label}</span>
+                {id === "problems" && alertCount > 0 && (
+                  <Badge
+                    variant={errorCount > 0 ? "destructive" : "secondary"}
+                    className="h-4 min-w-4 px-1 text-[10px] tabular-nums"
+                  >
+                    {alertCount}
+                  </Badge>
+                )}
+              </StripTab>
+            ))}
+          </TabsList>
+          {strip.more.left && (
+            <span aria-hidden className="pointer-events-none absolute inset-y-0 left-0 w-6 bg-gradient-to-r from-background to-transparent" />
+          )}
+          {strip.more.right && (
+            <span aria-hidden className="pointer-events-none absolute inset-y-0 right-0 w-6 bg-gradient-to-l from-background to-transparent" />
+          )}
+        </div>
         <div className="ml-auto flex items-center">
           <Tooltip>
             <TooltipTrigger asChild>
@@ -168,67 +177,59 @@ export function BottomPanel() {
 }
 
 /**
- * A bottom tab, named by a tooltip while it shows only its icon. The tooltip hangs on a wrapper so its data-state
- * doesn't replace the tab's.
+ * A bottom tab. Every tab shows its name; the strip scrolls instead of collapsing to icons, and the active tab
+ * scrolls itself into view when it is opened from elsewhere (palette, canvas, toast).
  */
 function StripTab({
   id,
   label,
   active,
-  iconOnly,
   onSelect,
   children,
 }: {
   id: BottomTab
   label: string
   active: boolean
-  iconOnly: boolean
   onSelect: () => void
   children: ReactNode
 }) {
-  const [tip, setTip] = useState(false)
   const ref = useRef<HTMLButtonElement>(null)
-  // A tab opened from elsewhere (palette, canvas, toast) scrolls into a strip too narrow to show them all.
   useEffect(() => {
     if (active) ref.current?.scrollIntoView({ block: "nearest", inline: "nearest" })
   }, [active])
   return (
-    <Tooltip open={iconOnly && tip} onOpenChange={setTip}>
-      <TooltipTrigger asChild>
-        <span className="flex h-full shrink-0">
-          <TabsTrigger ref={ref} value={id} className="flex-none px-2.5 text-xs" onClick={onSelect}>
-            {children}
-          </TabsTrigger>
-        </span>
-      </TooltipTrigger>
-      <TooltipContent side="top">{label}</TooltipContent>
-    </Tooltip>
+    <span className="flex h-full shrink-0" title={label}>
+      <TabsTrigger ref={ref} value={id} className="flex-none px-2.5 text-xs" onClick={onSelect}>
+        {children}
+      </TabsTrigger>
+    </span>
   )
 }
 
 /**
- * Whether the tab strip is compact (icons only): it turns compact when its tabs overflow with their names and back
- * once it is as wide as they needed. `layout` names what changes that width (which tabs, the problems badge); a new
- * one measures again from the full names.
+ * Whether the strip scrolls past either edge, so the fades can point at the hidden tabs. `layout` names what changes
+ * the tab widths (which tabs exist, the problems badge); a resize or a scroll re-measures.
  */
-function useCompactStrip(layout: string) {
+function useStripOverflow(layout: string) {
   const ref = useRef<HTMLDivElement>(null)
-  const [compactFor, setCompactFor] = useState<{ layout: string; needed: number } | null>(null)
-  const compact = compactFor?.layout === layout
+  const [more, setMore] = useState({ left: false, right: false })
+  const measure = () => {
+    const list = ref.current
+    if (!list) return
+    const left = list.scrollLeft > 1
+    const right = list.scrollLeft + list.clientWidth < list.scrollWidth - 1
+    setMore((m) => (m.left === left && m.right === right ? m : { left, right }))
+  }
+  const onScroll = () => measure()
   useLayoutEffect(() => {
     const list = ref.current
     if (!list) return
-    const check = () => {
-      if (compact) {
-        if (list.clientWidth >= compactFor.needed) setCompactFor(null)
-      } else if (list.scrollWidth > list.clientWidth + 1) setCompactFor({ layout, needed: list.scrollWidth })
-    }
-    check()
-    const observer = new ResizeObserver(check)
+    measure()
+    const observer = new ResizeObserver(measure)
     observer.observe(list)
     return () => observer.disconnect()
-  }, [compact, compactFor, layout])
-  return [ref, compact] as const
+  }, [layout])
+  return { ref, more, onScroll } as const
 }
 
 /** Memoized so switching tabs or collapsing the panel doesn't re-render every (always mounted) tab. */
