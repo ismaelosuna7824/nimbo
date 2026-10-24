@@ -1,11 +1,14 @@
 package sandbox
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
+	"maps"
 	"net"
 	"os"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strings"
 	"testing"
@@ -37,6 +40,38 @@ func TestComposeCmdArgs(t *testing.T) {
 		" -f " + filepath.Join("/h/wf/compose", "docker", "compose.yaml") + " config"
 	if got != want {
 		t.Errorf("nested args =\n%s\nwant\n%s", got, want)
+	}
+}
+
+// Compose v5 builds through buildx bake, which only reads local paths
+// (build secret files) under its working directory without --allow: compose
+// commands run in the workflow's files, not the daemon's cwd.
+func TestComposeRunsInProjectDir(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("shell script docker stand-in")
+	}
+	dir, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	bin := filepath.Join(t.TempDir(), "docker")
+	// `config` fails unless run in dir; other commands print their cwd.
+	script := "#!/bin/sh\ncase \"$*\" in\n*' config '*) [ \"$(pwd -P)\" = \"$WANT_DIR\" ] || exit 1; echo '{}';;\n*) pwd -P;;\nesac\n"
+	t.Setenv("WANT_DIR", dir)
+	if err := os.WriteFile(bin, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	m := &Manager{cfg: Config{Docker: bin}}
+	cmd := composeCmd{project: "nimbo-dk-x", dir: dir, files: []string{"compose.yaml"}}
+	rs := &runState{}
+	if err := m.composeSteps(context.Background(), rs, cmd, []string{"build"}); err != nil {
+		t.Fatal(err)
+	}
+	if !slices.ContainsFunc(rs.run.Log, func(l model.LogLine) bool { return l.Text == dir }) {
+		t.Errorf("compose build ran elsewhere: %+v", rs.run.Log)
+	}
+	if _, err := m.composeConfig(context.Background(), cmd); err != nil {
+		t.Fatal(err)
 	}
 }
 
@@ -229,6 +264,51 @@ func TestPlanPorts(t *testing.T) {
 	}
 }
 
+// A published range ("3100-3101", replicas sharing a range) moves as a
+// whole when one of its ports is busy, to consecutive free ports, and the
+// override writes the new range.
+func TestPlanPortsRange(t *testing.T) {
+	cfg := &composeConfig{Services: map[string]configService{
+		"api": {Ports: []configPort{{Target: 3000, Published: "3100-3101"}}},
+	}}
+	// 3101 is taken by another program; 49152 is free but 49153 is not, so
+	// the range has to start at 49154.
+	pr := &fakeProber{busy: map[string]bool{"tcp/3101": true, "tcp/49153": true}, next: 49151, holders: map[string]string{"tcp/3101": "node"}}
+	plan := planPorts(cfg, nil, nil, pr)
+	if len(plan.conflicts) != 1 {
+		t.Fatalf("conflicts = %+v", plan.conflicts)
+	}
+	c := plan.conflicts[0]
+	if c.HostPort != 3100 || c.Count != 2 || c.Holder != "node" || c.SuggestedPort != 49154 {
+		t.Errorf("conflict = %+v", c)
+	}
+	remaps := plan.remaps(true)
+	want := model.PortRemap{Service: "api", ContainerPort: 3000, Protocol: "tcp", HostPort: 3100, Count: 2, Port: 49154}
+	if len(remaps) != 1 || remaps[0] != want {
+		t.Fatalf("remaps = %+v", remaps)
+	}
+	if got := string(overrideYAML("wf", cfg, remaps)); !strings.Contains(got, `"published":"49154-49155"`) || !strings.Contains(got, "ports: !override") {
+		t.Errorf("override:\n%s", got)
+	}
+
+	// The saved remap is kept while 3101 stays busy and its own range is free.
+	pr.busy = map[string]bool{"tcp/3101": true}
+	if plan := planPorts(cfg, nil, remaps, pr); len(plan.kept) != 1 || len(plan.conflicts) != 0 {
+		t.Errorf("kept range: %+v", plan)
+	}
+	// Both ports free again: no remap.
+	pr.busy = map[string]bool{}
+	if plan := planPorts(cfg, nil, remaps, pr); len(plan.kept) != 0 || len(plan.conflicts) != 0 {
+		t.Errorf("free range: %+v", plan)
+	}
+	// A single fixed port is unchanged by the range logic.
+	single := &composeConfig{Services: map[string]configService{"web": {Ports: []configPort{{Target: 80, Published: "8080"}}}}}
+	pr.busy = map[string]bool{"tcp/8080": true}
+	if p := planPorts(single, nil, nil, pr); len(p.conflicts) != 1 || p.conflicts[0].Count != 0 {
+		t.Errorf("single port: %+v", p.conflicts)
+	}
+}
+
 func TestRemapsRoundTrip(t *testing.T) {
 	dir := t.TempDir()
 	if got := loadRemaps(dir); got == nil || len(got) != 0 {
@@ -264,6 +344,34 @@ func TestPortProberSeesListeners(t *testing.T) {
 	used := map[string]bool{}
 	p, err := pr.pick("", "tcp", used)
 	if err != nil || p == 0 || !pr.free("", p, "tcp") {
+		t.Errorf("pick = %d, %v", p, err)
+	}
+}
+
+func TestPublishedPorts(t *testing.T) {
+	out := "0.0.0.0:49153->3000/tcp, [::]:49153->3000/tcp\n5432/tcp\n127.0.0.1:8000-8002->80-82/tcp\n0.0.0.0:49171->80/udp\n\n"
+	got := publishedPorts(out)
+	want := map[string]bool{"tcp/49153": true, "tcp/8000": true, "tcp/8001": true, "tcp/8002": true, "udp/49171": true}
+	if !maps.Equal(got, want) {
+		t.Errorf("published %v, want %v", got, want)
+	}
+}
+
+// A port Docker publishes is busy even when nothing on the host answers on
+// it: the engine would refuse it with "port is already allocated". A stale
+// remap onto it is dropped and the port is never suggested.
+func TestPortProberSeesDockerPublishedPorts(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	port := ln.Addr().(*net.TCPAddr).Port
+	ln.Close()
+	pr := portProber{published: map[string]bool{portKey("tcp", port): true}}
+	if pr.free("", port, "tcp") || !pr.free("", port, "udp") {
+		t.Errorf("free(%d) ignores the published tcp port", port)
+	}
+	if p, err := pr.pick("", "tcp", map[string]bool{}); err != nil || p == port {
 		t.Errorf("pick = %d, %v", p, err)
 	}
 }

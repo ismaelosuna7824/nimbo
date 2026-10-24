@@ -1,0 +1,489 @@
+description: Adds the Docker advanced challenges (production environment override, observability with Prometheus metrics)
+operations:
+  - op: upsert
+    kind: challenge
+    id: docker-prod-environment
+    data:
+      provider: docker
+      level: advanced
+      title: A production environment with compose.prod.yaml
+      summary: Keep compose.yaml for development and add a prod override plus .env.prod that removes code bind mounts, quiets logs, rotates them, caps resources and restarts the service.
+      minutes: 35
+      tags: [compose, environments, overrides, production, merge]
+      prerequisites: [docker-app-with-postgres, docker-cache-friendly-dockerfile]
+      runtime: local
+      problem: |
+        The pricing API's `compose.yaml` is tuned for development: it bind-mounts
+        `server.js` so edits show up without a rebuild, logs every request at
+        `debug` level and has no restart policy or limits. Now the same files
+        must also run in production.
+
+        Copying the file into a second, diverging `compose.yaml` is how drift
+        starts. Instead, follow the official multi-file pattern: keep the base
+        file for development and add only the differences for production in
+        `compose.prod.yaml` (Nimbo shows it as the **prod** environment), with
+        production values in `.env.prod`.
+      requirements:
+        - "`compose.yaml` stays the development setup (`LOG_LEVEL` resolves to `debug` and the code bind mount stays there)."
+        - "A `prod` environment exists: `compose.prod.yaml` (and/or `.env.prod`)."
+        - "In prod, the `api` service has no bind mount of application code (`volumes` is reset)."
+        - "In prod, `APP_ENV` is `production` and `LOG_LEVEL` is `info`, `warn` or `error`."
+        - "In prod, `api` has a restart policy, memory/CPU limits and json-file log rotation (`max-size`)."
+      hints:
+        - "Compose merges files in order: `docker compose -f compose.yaml -f compose.prod.yaml`. The override only needs the attributes that change."
+        - "Mappings such as `environment` merge key by key, but sequences such as `volumes` and `ports` are appended. To drop the base's bind mount, write `volumes: !reset []` in the override."
+        - "The base reads `${LOG_LEVEL:-debug}`. An `.env.prod` with `LOG_LEVEL=info` changes it for prod only (Nimbo passes it after `.env`, so its values win)."
+        - "Restart, limits and logging belong only in the override: `restart: always`, `deploy.resources.limits` (`cpus`, `memory`) and `logging: {driver: json-file, options: {max-size: \"10m\", max-file: \"3\"}}`."
+      solution: |
+        **Why.** Docker's "Use Compose in production" guide lists the usual
+        production changes (remove code bind mounts, different environment
+        values such as less verbose logs, a restart policy, extra services) and
+        recommends putting them in an additional Compose file applied over the
+        base one. The merge guide explains how files combine: scalars are
+        replaced, mappings merge, and sequences are combined unless reset with
+        `!reset`. Resource limits come from the `deploy.resources` section of the
+        Compose spec, and the json-file logging driver keeps logs forever unless
+        `max-size` is set.
+
+        **Steps.**
+        1. Leave `compose.yaml` as is.
+        2. Create `compose.prod.yaml` overriding `api`: `volumes: !reset []`,
+           `restart: always`, `deploy.resources.limits` (`cpus: "0.5"`,
+           `memory: 128M`) and json-file logging with `max-size`/`max-file`.
+        3. Create `.env.prod` with `APP_ENV=production` and `LOG_LEVEL=info`.
+        4. Switch to the **prod** environment in Nimbo (or run
+           `docker compose -f compose.yaml -f compose.prod.yaml --env-file .env --env-file .env.prod config`)
+           and check the merged result: no bind mount, quieter logs, limits and
+           rotation in place.
+      solutionFiles:
+        compose.prod.yaml: |
+          # Production differences only; merged over compose.yaml.
+          services:
+            api:
+              # The image already contains server.js: no code from the host.
+              volumes: !reset []
+              restart: always
+              logging:
+                driver: json-file
+                options:
+                  max-size: "10m"
+                  max-file: "3"
+              deploy:
+                resources:
+                  limits:
+                    cpus: "0.5"
+                    memory: 128M
+        .env.prod: |
+          APP_ENV=production
+          LOG_LEVEL=info
+      starter:
+        kind: docker
+        files:
+          compose.yaml: |
+            # Development setup: server.js is bind-mounted so edits apply on a
+            # container restart, and every request is logged.
+            services:
+              api:
+                build: ./api
+                init: true
+                ports:
+                  - "3000:3000"
+                environment:
+                  APP_ENV: ${APP_ENV:-development}
+                  LOG_LEVEL: ${LOG_LEVEL:-debug}
+                volumes:
+                  - ./api/server.js:/app/server.js:ro
+          api/Dockerfile: |
+            FROM node:22-alpine
+            ENV NODE_ENV=production
+            WORKDIR /app
+            COPY package.json ./
+            RUN npm install --omit=dev --no-audit --no-fund
+            COPY server.js ./
+            USER node
+            EXPOSE 3000
+            HEALTHCHECK --interval=10s --timeout=3s --start-period=5s --retries=3 \
+              CMD wget -qO- http://127.0.0.1:3000/health >/dev/null || exit 1
+            CMD ["node", "server.js"]
+          api/.dockerignore: |
+            node_modules
+            npm-debug.log*
+            .env*
+            Dockerfile
+            .dockerignore
+          api/package.json: |
+            {
+              "name": "pricing-api",
+              "version": "1.0.0",
+              "private": true,
+              "main": "server.js"
+            }
+          api/server.js: |
+            const http = require("node:http");
+
+            const port = Number(process.env.PORT ?? 3000);
+            const appEnv = process.env.APP_ENV ?? "development";
+            const logLevel = process.env.LOG_LEVEL ?? "info";
+
+            const prices = { "NB-001": 4.5, "PN-002": 1.2 };
+
+            function send(res, status, body) {
+              res.writeHead(status, { "Content-Type": "application/json" });
+              res.end(JSON.stringify(body));
+            }
+
+            const server = http.createServer((req, res) => {
+              const path = new URL(req.url, "http://localhost").pathname;
+              if (logLevel === "debug") console.log(`${req.method} ${path}`);
+              if (path === "/health") return send(res, 200, { status: "ok" });
+              if (path === "/") return send(res, 200, { env: appEnv, logLevel, prices });
+              send(res, 404, { error: "not found" });
+            });
+
+            server.listen(port, () => console.log(`pricing API (${appEnv}) listening on :${port}`));
+
+            process.on("SIGTERM", () => server.close(() => process.exit(0)));
+      checks:
+        - id: base-stays-dev
+          label: compose.yaml is still the development setup
+          type: has
+          has:
+            compose:
+              service: api
+              where:
+                environment.LOG_LEVEL: debug
+                volumes: { exists: true }
+        - id: prod-valid
+          label: The prod environment exists and is valid
+          type: validate
+          environment: prod
+        - id: prod-no-bind
+          label: Prod runs the code baked into the image (no bind mount)
+          type: has
+          environment: prod
+          has:
+            compose:
+              service: api
+              where: { volumes: { exists: false } }
+        - id: prod-values
+          label: Prod sets APP_ENV=production and a quieter log level
+          type: has
+          environment: prod
+          has:
+            compose:
+              service: api
+              where:
+                environment.APP_ENV: production
+                environment.LOG_LEVEL: { in: [info, warn, error] }
+        - id: prod-rotated-logs
+          label: Prod rotates the json-file logs
+          type: has
+          environment: prod
+          has:
+            compose:
+              service: api
+              where: { logging.options.max-size: { exists: true } }
+        - id: prod-operational
+          label: Prod restarts the service and caps its resources
+          type: rules_clean
+          environment: prod
+          rules_clean: { codes: [dk_no_restart, dk_no_limits, dk_log_rotation, dk_unresolved_var], minSeverity: info }
+        - id: deploy
+          label: The project deploys
+          type: deploy
+        - id: health
+          label: GET /health answers 200
+          type: http
+          http: { service: api, port: 3000, path: /health, status: 200 }
+      sources:
+        - { title: "Docker Docs: Use Compose in production", url: "https://docs.docker.com/compose/how-tos/production/" }
+        - { title: "Docker Docs: Merge Compose files", url: "https://docs.docker.com/compose/how-tos/multiple-compose-files/merge/" }
+        - { title: "Docker Docs: Use multiple Compose files", url: "https://docs.docker.com/compose/how-tos/multiple-compose-files/" }
+        - { title: "Docker Docs: Environment variables in Compose", url: "https://docs.docker.com/compose/how-tos/environment-variables/" }
+        - { title: "Docker Docs: Environment variables precedence", url: "https://docs.docker.com/compose/how-tos/environment-variables/envvars-precedence/" }
+        - { title: "Docker Docs: Compose deploy specification (resources)", url: "https://docs.docker.com/reference/compose-file/deploy/" }
+        - { title: "Docker Docs: JSON File logging driver", url: "https://docs.docker.com/engine/logging/drivers/json-file/" }
+
+  - op: upsert
+    kind: challenge
+    id: docker-observability
+    data:
+      provider: docker
+      level: advanced
+      title: See your service with Prometheus metrics
+      summary: Instrument a Node.js API with an OpenTelemetry-named request duration histogram, expose it at /metrics, label it for scraping and add Prometheus with Add monitoring.
+      minutes: 40
+      tags: [observability, prometheus, opentelemetry, metrics, monitoring, grafana]
+      prerequisites: [docker-first-web-service, docker-cache-friendly-dockerfile]
+      runtime: local
+      problem: |
+        Customers say the quotes API "feels slow sometimes", and nobody can tell
+        how slow, how often, or since when: the service has no metrics at all.
+
+        Give it the standard HTTP server metrics and a Prometheus that collects
+        them:
+
+        - the API must expose Prometheus metrics at `GET /metrics`, including a
+          request duration **histogram** named after the OpenTelemetry HTTP
+          semantic conventions (`http.server.request.duration`, in seconds, which
+          Prometheus spells `http_server_request_duration_seconds`);
+        - the service must tell a scraper where its metrics are;
+        - a Prometheus must run in the project and scrape it. Nimbo's **Add
+          monitoring** (Monitoring tab, or the `add_monitoring` MCP tool) adds
+          Prometheus, Grafana and cAdvisor for you once the service is labelled.
+      requirements:
+        - "`GET /metrics` on the API answers 200 in the Prometheus text format and includes `http_server_request_duration_seconds`."
+        - "The histogram's labels stay low-cardinality: method, route template and status code (never raw URLs or user ids)."
+        - "The `api` service carries the labels `prometheus.io/scrape: \"true\"`, `prometheus.io/port: \"3000\"` and `prometheus.io/path: /metrics`."
+        - "A Prometheus service (`prom/prometheus`) runs in the project, is ready, and has the API as a scrape target."
+      hints:
+        - "The official Prometheus client for Node.js is `prom-client`: add `\"prom-client\": \"15.1.3\"` to `package.json` dependencies."
+        - "Create a `client.Histogram` named `http_server_request_duration_seconds` with `labelNames: [\"http_request_method\", \"http_route\", \"http_response_status_code\"]`, time each request with `startTimer()` and serve `client.register.metrics()` at `/metrics`."
+        - "Use the route template (`/quotes/:id`) or an empty string for unknown paths as `http_route`: every distinct label value is a new time series."
+        - "Once the labels are on the service, open the Monitoring tab and click **Add monitoring**, then deploy. It writes `monitoring/compose.yaml` with a pinned Prometheus that discovers the API by its service name."
+      solution: |
+        **Why.** Prometheus' instrumentation practices recommend instrumenting
+        services with request counts and latency, using histograms for latency
+        so quantiles can be aggregated, using base units (seconds), and keeping
+        label cardinality low. OpenTelemetry's HTTP semantic conventions define
+        `http.server.request.duration` (seconds) with the attributes
+        `http.request.method`, `http.route` and `http.response.status_code`;
+        in Prometheus naming that becomes
+        `http_server_request_duration_seconds` with underscore labels.
+        Prometheus pulls metrics over HTTP from the targets it is configured to
+        scrape, which is what the scrape labels and Add monitoring set up.
+
+        **Steps.**
+        1. Add `prom-client` to `api/package.json`.
+        2. In `api/server.js`, create the histogram, collect default process
+           metrics, time each routed request and serve `/metrics` (not measured
+           itself, so scrapes don't skew the numbers).
+        3. Add the `prometheus.io/scrape`, `prometheus.io/port` and
+           `prometheus.io/path` labels to `api` in `compose.yaml`.
+        4. Add a Prometheus that scrapes it. Either:
+           - **Nimbo:** Monitoring tab → **Add monitoring** → deploy. It adds
+             Prometheus, Grafana (a per-service dashboard) and cAdvisor, with alert
+             rules on the same histogram (5xx share, p95); or
+           - **By hand** (the reference files): a pinned `prom/prometheus` service
+             with a `prometheus.yml` whose `api` job scrapes `api:3000/metrics`.
+             Published on `127.0.0.1` only.
+        5. Open Prometheus (Status → Targets): the `api` job is UP.
+      solutionFiles:
+        compose.yaml: |
+          services:
+            api:
+              build: ./api
+              init: true
+              ports:
+                - "3000:3000"
+              # Scrapers (Nimbo's Add monitoring) read GET /metrics on this port.
+              labels:
+                prometheus.io/scrape: "true"
+                prometheus.io/port: "3000"
+                prometheus.io/path: /metrics
+              restart: unless-stopped
+
+            prometheus:
+              image: prom/prometheus:v2.54.1
+              command:
+                - --config.file=/etc/prometheus/prometheus.yml
+                - --storage.tsdb.path=/prometheus
+                - --storage.tsdb.retention.time=7d
+              ports:
+                - "127.0.0.1:9090:9090"
+              volumes:
+                - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+                - promdata:/prometheus
+              healthcheck:
+                test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:9090/-/ready >/dev/null || exit 1"]
+                interval: 10s
+                timeout: 5s
+                retries: 5
+              restart: unless-stopped
+
+          volumes:
+            promdata:
+        prometheus/prometheus.yml: |
+          global:
+            scrape_interval: 15s
+          scrape_configs:
+            - job_name: prometheus
+              static_configs:
+                - targets: ["localhost:9090"]
+            # The API, found by its Compose service name.
+            - job_name: api
+              metrics_path: /metrics
+              static_configs:
+                - targets: ["api:3000"]
+        api/package.json: |
+          {
+            "name": "quotes-api",
+            "version": "1.0.0",
+            "private": true,
+            "main": "server.js",
+            "dependencies": {
+              "prom-client": "15.1.3"
+            }
+          }
+        api/server.js: |
+          const http = require("node:http");
+          const client = require("prom-client");
+
+          const port = Number(process.env.PORT ?? 3000);
+
+          // HTTP server request duration, named after the OpenTelemetry semantic
+          // conventions (http.server.request.duration, seconds) in Prometheus form.
+          const requestDuration = new client.Histogram({
+            name: "http_server_request_duration_seconds",
+            help: "Duration of HTTP server requests.",
+            labelNames: ["http_request_method", "http_route", "http_response_status_code"],
+            buckets: [0.005, 0.01, 0.025, 0.05, 0.075, 0.1, 0.25, 0.5, 0.75, 1, 2.5, 5, 7.5, 10],
+          });
+          client.collectDefaultMetrics();
+
+          const quotes = ["Measure twice, cut once.", "Make it work, make it right, make it fast."];
+
+          function send(res, status, body) {
+            res.writeHead(status, { "Content-Type": "application/json" });
+            res.end(JSON.stringify(body));
+          }
+
+          // Route templates: the http_route label never holds raw paths.
+          function route(path) {
+            if (path === "/" || path === "/health") return path;
+            if (/^\/quotes\/\d+$/.test(path)) return "/quotes/:id";
+            return "";
+          }
+
+          const server = http.createServer(async (req, res) => {
+            const path = new URL(req.url, "http://localhost").pathname;
+            if (path === "/metrics") {
+              // Not measured itself: scrapes would skew the request metrics.
+              res.writeHead(200, { "Content-Type": client.register.contentType });
+              res.end(await client.register.metrics());
+              return;
+            }
+            const stop = requestDuration.startTimer({ http_request_method: req.method, http_route: route(path) });
+            res.on("finish", () => stop({ http_response_status_code: res.statusCode }));
+
+            if (path === "/health") return send(res, 200, { status: "ok" });
+            if (path === "/") return send(res, 200, { count: quotes.length });
+            const m = path.match(/^\/quotes\/(\d+)$/);
+            if (m && quotes[Number(m[1])]) {
+              // Some quotes take longer to "compute": visible in the histogram.
+              const delay = Number(m[1]) === 1 ? 300 : 5;
+              return setTimeout(() => send(res, 200, { quote: quotes[Number(m[1])] }), delay);
+            }
+            send(res, 404, { error: "not found" });
+          });
+
+          server.listen(port, () => console.log(`listening on :${port}`));
+
+          process.on("SIGTERM", () => server.close(() => process.exit(0)));
+      starter:
+        kind: docker
+        files:
+          compose.yaml: |
+            services:
+              api:
+                build: ./api
+                init: true
+                ports:
+                  - "3000:3000"
+                restart: unless-stopped
+          api/Dockerfile: |
+            # Dependencies first (cached until package.json changes), then the code.
+            FROM node:22-alpine
+            ENV NODE_ENV=production
+            WORKDIR /app
+            COPY package.json ./
+            RUN npm install --omit=dev --no-audit --no-fund
+            COPY server.js ./
+            USER node
+            EXPOSE 3000
+            HEALTHCHECK --interval=10s --timeout=3s --start-period=5s --retries=3 \
+              CMD wget -qO- http://127.0.0.1:3000/health >/dev/null || exit 1
+            CMD ["node", "server.js"]
+          api/.dockerignore: |
+            node_modules
+            npm-debug.log*
+            .env*
+            Dockerfile
+            .dockerignore
+          api/package.json: |
+            {
+              "name": "quotes-api",
+              "version": "1.0.0",
+              "private": true,
+              "main": "server.js"
+            }
+          api/server.js: |
+            const http = require("node:http");
+
+            const port = Number(process.env.PORT ?? 3000);
+
+            const quotes = ["Measure twice, cut once.", "Make it work, make it right, make it fast."];
+
+            function send(res, status, body) {
+              res.writeHead(status, { "Content-Type": "application/json" });
+              res.end(JSON.stringify(body));
+            }
+
+            const server = http.createServer((req, res) => {
+              const path = new URL(req.url, "http://localhost").pathname;
+              if (path === "/health") return send(res, 200, { status: "ok" });
+              if (path === "/") return send(res, 200, { count: quotes.length });
+              const m = path.match(/^\/quotes\/(\d+)$/);
+              if (m && quotes[Number(m[1])]) {
+                // Some quotes take longer to "compute".
+                const delay = Number(m[1]) === 1 ? 300 : 5;
+                return setTimeout(() => send(res, 200, { quote: quotes[Number(m[1])] }), delay);
+              }
+              send(res, 404, { error: "not found" });
+            });
+
+            server.listen(port, () => console.log(`listening on :${port}`));
+
+            process.on("SIGTERM", () => server.close(() => process.exit(0)));
+      checks:
+        - id: valid
+          label: The compose project is valid
+          type: validate
+        - id: scrape-labels
+          label: The API is labelled for scraping
+          type: has
+          has:
+            compose:
+              service: api
+              where:
+                'labels."prometheus.io/scrape"': "true"
+                'labels."prometheus.io/port"': "3000"
+                'labels."prometheus.io/path"': /metrics
+        - id: prometheus
+          label: A Prometheus service runs in the project
+          type: has
+          has:
+            compose:
+              image: prom/prometheus
+        - id: deploy
+          label: The project deploys
+          type: deploy
+        - id: metrics
+          label: GET /metrics exposes the request duration histogram
+          type: http
+          http: { service: api, port: 3000, path: /metrics, status: 200, contains: http_server_request_duration_seconds }
+        - id: prometheus-ready
+          label: Prometheus is ready
+          type: http
+          http: { service: prometheus, port: 9090, path: /-/ready, status: 200 }
+        - id: api-target
+          label: Prometheus has the API as a scrape target
+          type: http
+          http: { service: prometheus, port: 9090, path: /api/v1/targets, status: 200, contains: '"job":"api"' }
+      sources:
+        - { title: "Prometheus: Overview", url: "https://prometheus.io/docs/introduction/overview/" }
+        - { title: "Prometheus: Instrumentation best practices", url: "https://prometheus.io/docs/practices/instrumentation/" }
+        - { title: "Prometheus: Metric and label naming", url: "https://prometheus.io/docs/practices/naming/" }
+        - { title: "Prometheus: Histograms and summaries", url: "https://prometheus.io/docs/practices/histograms/" }
+        - { title: "OpenTelemetry: Semantic conventions for HTTP metrics", url: "https://opentelemetry.io/docs/specs/semconv/http/http-metrics/" }
+        - { title: "OpenTelemetry: What is OpenTelemetry?", url: "https://opentelemetry.io/docs/what-is-opentelemetry/" }

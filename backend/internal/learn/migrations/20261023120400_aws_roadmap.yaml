@@ -1,0 +1,282 @@
+description: Adds the AWS roadmap (beginner to expert)
+operations:
+  - op: upsert
+    kind: roadmap
+    id: aws-roadmap
+    data:
+      provider: aws
+      title: AWS roadmap
+      summary: From cloud fundamentals to Well-Architected reviews and disaster recovery, following the AWS certification exam guides and the AWS Well-Architected Framework.
+      levels:
+        - level: beginner
+          title: "Foundations: global infrastructure, identity, storage and networks"
+          goals: |
+            Explain the value of the AWS Cloud, the shared responsibility
+            model and the global infrastructure (Regions and Availability
+            Zones), and build private-by-default storage, a least-privilege
+            role and a two-zone VPC with Terraform. Roughly the scope of the
+            **AWS Certified Cloud Practitioner (CLF-C02)** exam, applied
+            hands-on.
+          steps:
+            - title: Cloud concepts and the Well-Architected Framework
+              description: |
+                Learn what the cloud changes (pay-as-you-go, elasticity,
+                global reach) and the six pillars of the AWS Well-Architected
+                Framework: operational excellence, security, reliability,
+                performance efficiency, cost optimization and sustainability.
+                Every later step maps to one or more pillars.
+              docs:
+                - title: AWS Certified Cloud Practitioner (CLF-C02) exam guide
+                  url: https://docs.aws.amazon.com/aws-certification/latest/cloud-practitioner-02/cloud-practitioner-02.html
+                - title: AWS Well-Architected Framework
+                  url: https://docs.aws.amazon.com/wellarchitected/latest/framework/welcome.html
+                - title: The pillars of the framework
+                  url: https://docs.aws.amazon.com/wellarchitected/latest/framework/the-pillars-of-the-framework.html
+            - title: Shared responsibility and IAM least privilege
+              description: |
+                AWS secures the cloud; you secure what you put in it. Learn IAM
+                principals, roles and policies, and grant workloads only the
+                actions and resources they use: replace an admin policy on a
+                Lambda execution role with scoped permissions.
+              challenges: [aws-lambda-least-privilege]
+              docs:
+                - title: Shared responsibility model
+                  url: https://docs.aws.amazon.com/whitepapers/latest/aws-risk-and-compliance/shared-responsibility-model.html
+                - title: What is IAM?
+                  url: https://docs.aws.amazon.com/IAM/latest/UserGuide/introduction.html
+                - title: Security best practices in IAM
+                  url: https://docs.aws.amazon.com/IAM/latest/UserGuide/best-practices.html
+                - title: "CLF-C02 Domain 2: Security and Compliance"
+                  url: https://docs.aws.amazon.com/aws-certification/latest/cloud-practitioner-02/cloud-practitioner-02-domain2.html
+            - title: Private, encrypted, versioned S3 storage
+              description: |
+                Amazon S3 is the default home for objects. Keep buckets private
+                with Block Public Access and disabled ACLs, declare default
+                encryption, turn on versioning to recover from deletes, and
+                require TLS with a bucket policy.
+              challenges: [aws-private-s3-bucket]
+              docs:
+                - title: What is Amazon S3?
+                  url: https://docs.aws.amazon.com/AmazonS3/latest/userguide/Welcome.html
+                - title: Security best practices for Amazon S3
+                  url: https://docs.aws.amazon.com/AmazonS3/latest/userguide/security-best-practices.html
+                - title: Blocking public access to your Amazon S3 storage
+                  url: https://docs.aws.amazon.com/AmazonS3/latest/userguide/access-control-block-public-access.html
+            - title: Regions, Availability Zones and your first VPC
+              description: |
+                A Region holds several isolated Availability Zones. A VPC spans
+                the zones of its Region and is split into subnets, one zone
+                each; route tables decide which subnets are public (route to an
+                internet gateway) and which are private. Build public and
+                private tiers in two zones.
+              challenges: [aws-vpc-multi-az-subnets]
+              docs:
+                - title: Regions and Availability Zones
+                  url: https://docs.aws.amazon.com/global-infrastructure/latest/regions/aws-regions-availability-zones.html
+                - title: What is Amazon VPC?
+                  url: https://docs.aws.amazon.com/vpc/latest/userguide/what-is-amazon-vpc.html
+                - title: Subnets for your VPC
+                  url: https://docs.aws.amazon.com/vpc/latest/userguide/configure-subnets.html
+                - title: "CLF-C02 Domain 3: Cloud Technology and Services"
+                  url: https://docs.aws.amazon.com/aws-certification/latest/cloud-practitioner-02/cloud-practitioner-02-domain3.html
+            - title: Infrastructure as code with the Terraform AWS provider
+              description: |
+                Every challenge is Terraform: one resource per S3 feature,
+                `default_tags` on the provider, names from a prefix, versions
+                pinned. Read the provider documentation for the exact arguments
+                of each resource you use.
+              docs:
+                - title: Terraform AWS provider documentation
+                  url: https://registry.terraform.io/providers/hashicorp/aws/latest/docs
+        - level: intermediate
+          title: "Associate architect: serverless, decoupled and elastic building blocks"
+          goals: |
+            Design scalable, loosely coupled and highly available
+            architectures: serverless APIs, queues with failure handling, and
+            load-balanced, self-healing compute across Availability Zones,
+            with logs and alarms. Follows the **AWS Certified Solutions
+            Architect – Associate (SAA-C03)** domains *Design Resilient
+            Architectures* and *Design High-Performing Architectures*.
+          steps:
+            - title: Serverless APIs with API Gateway and Lambda
+              description: |
+                Lambda runs code without servers; an API Gateway HTTP API gives
+                it routes, stages, throttling and access logs. Learn the proxy
+                integration, the `$default` stage and resource-based
+                permissions.
+              challenges: [aws-http-api-lambda]
+              docs:
+                - title: What is AWS Lambda?
+                  url: https://docs.aws.amazon.com/lambda/latest/dg/welcome.html
+                - title: Create AWS Lambda proxy integrations for HTTP APIs in API Gateway
+                  url: https://docs.aws.amazon.com/apigateway/latest/developerguide/http-api-develop-integrations-lambda.html
+                - title: Throttle requests to your HTTP APIs
+                  url: https://docs.aws.amazon.com/apigateway/latest/developerguide/http-api-throttling.html
+            - title: Decoupling with queues and events
+              description: |
+                Queues let producers and consumers scale and fail
+                independently. Configure dead-letter queues, visibility
+                timeouts and partial batch responses so one bad message can't
+                block the rest, and alarm on the DLQ.
+              challenges: [aws-sqs-dead-letter-queue]
+              docs:
+                - title: What is Amazon SQS?
+                  url: https://docs.aws.amazon.com/AWSSimpleQueueService/latest/SQSDeveloperGuide/welcome.html
+                - title: Using dead-letter queues in Amazon SQS
+                  url: https://docs.aws.amazon.com/AWSSimpleQueueService/latest/SQSDeveloperGuide/sqs-dead-letter-queues.html
+                - title: What is Amazon EventBridge?
+                  url: https://docs.aws.amazon.com/eventbridge/latest/userguide/eb-what-is.html
+                - title: "SAA-C03 Domain 2: Design Resilient Architectures"
+                  url: https://docs.aws.amazon.com/aws-certification/latest/solutions-architect-associate-03/solutions-architect-associate-03-domain2.html
+            - title: Load balancing and Auto Scaling across zones
+              description: |
+                An Application Load Balancer spreads traffic over healthy
+                targets in several zones; an Auto Scaling group keeps the
+                desired number of instances and replaces unhealthy ones.
+                Chain security groups and drop SSH in favour of Session
+                Manager.
+              challenges: [aws-alb-auto-scaling]
+              docs:
+                - title: What is Amazon EC2 Auto Scaling?
+                  url: https://docs.aws.amazon.com/autoscaling/ec2/userguide/what-is-amazon-ec2-auto-scaling.html
+                - title: Use Elastic Load Balancing with your Auto Scaling group
+                  url: https://docs.aws.amazon.com/autoscaling/ec2/userguide/autoscaling-load-balancer.html
+                - title: "SAA-C03 Domain 3: Design High-Performing Architectures"
+                  url: https://docs.aws.amazon.com/aws-certification/latest/solutions-architect-associate-03/solutions-architect-associate-03-domain3.html
+            - title: Logs, metrics and alarms
+              description: |
+                CloudWatch collects logs and metrics from every service. Give
+                log groups a retention period and alarm on the signals that need
+                a human (messages in a DLQ, unhealthy targets).
+              challenges: [aws-lambda-least-privilege, aws-sqs-dead-letter-queue]
+              docs:
+                - title: Using Amazon CloudWatch alarms
+                  url: https://docs.aws.amazon.com/AmazonCloudWatch/latest/monitoring/CloudWatch_Alarms.html
+                - title: Sending Lambda function logs to CloudWatch Logs
+                  url: https://docs.aws.amazon.com/lambda/latest/dg/monitoring-cloudwatchlogs.html
+                - title: Operational excellence pillar
+                  url: https://docs.aws.amazon.com/wellarchitected/latest/operational-excellence-pillar/welcome.html
+        - level: advanced
+          title: "Secure data and edge: databases, secrets and content delivery"
+          goals: |
+            Protect and keep data available: Multi-AZ databases with backups,
+            encryption with KMS, secrets in Secrets Manager, and private
+            origins behind CloudFront over HTTPS. Covers the SAA-C03 domain
+            *Design Secure Architectures* in depth and the security and
+            reliability pillars.
+          steps:
+            - title: Highly available relational databases
+              description: |
+                RDS Multi-AZ keeps a synchronous standby in another zone and
+                fails over automatically; automated backups give point-in-time
+                restore. Place databases in private subnets reachable only
+                from the app tier.
+              challenges: [aws-rds-multi-az]
+              docs:
+                - title: Multi-AZ DB instance deployments for Amazon RDS
+                  url: https://docs.aws.amazon.com/AmazonRDS/latest/UserGuide/Concepts.MultiAZSingleStandby.html
+                - title: Introduction to backups (Amazon RDS)
+                  url: https://docs.aws.amazon.com/AmazonRDS/latest/UserGuide/USER_WorkingWithAutomatedBackups.html
+                - title: Reliability pillar
+                  url: https://docs.aws.amazon.com/wellarchitected/latest/reliability-pillar/welcome.html
+            - title: Encryption and secrets
+              description: |
+                AWS KMS manages the keys behind encryption at rest across
+                services; Secrets Manager stores and rotates credentials so
+                they never live in code or Terraform variables.
+              challenges: [aws-rds-multi-az, aws-private-s3-bucket]
+              docs:
+                - title: AWS Key Management Service concepts
+                  url: https://docs.aws.amazon.com/kms/latest/developerguide/overview.html
+                - title: What is AWS Secrets Manager?
+                  url: https://docs.aws.amazon.com/secretsmanager/latest/userguide/intro.html
+                - title: "SAA-C03 Domain 1: Design Secure Architectures"
+                  url: https://docs.aws.amazon.com/aws-certification/latest/solutions-architect-associate-03/solutions-architect-associate-03-domain1.html
+            - title: Content delivery and edge security
+              description: |
+                CloudFront serves content from edge locations over HTTPS. With
+                origin access control the S3 origin stays private; AWS WAF on
+                the distribution or the ALB filters malicious requests.
+              challenges: [aws-cloudfront-s3-oac]
+              docs:
+                - title: What is Amazon CloudFront?
+                  url: https://docs.aws.amazon.com/AmazonCloudFront/latest/DeveloperGuide/Introduction.html
+                - title: Restrict access to an Amazon S3 origin
+                  url: https://docs.aws.amazon.com/AmazonCloudFront/latest/DeveloperGuide/private-content-restricting-access-to-s3.html
+                - title: AWS WAF
+                  url: https://docs.aws.amazon.com/waf/latest/developerguide/waf-chapter.html
+                - title: Security pillar
+                  url: https://docs.aws.amazon.com/wellarchitected/latest/security-pillar/welcome.html
+        - level: expert
+          title: "Professional architect: reviews, recovery, cost and organizations"
+          goals: |
+            Review and improve whole workloads against every Well-Architected
+            pillar, choose disaster recovery strategies from RTO/RPO, balance
+            cost against resilience, and govern many accounts. Follows the
+            **AWS Certified Solutions Architect – Professional (SAP-C02)**
+            domains.
+          steps:
+            - title: Well-Architected reviews of existing workloads
+              description: |
+                Take a running workload and improve it pillar by pillar:
+                tiered networks, chained security groups, HTTPS everywhere,
+                self-healing and scaling compute, managed databases, alarms.
+              challenges: [aws-three-tier-well-architected]
+              docs:
+                - title: "SAP-C02 Domain 3: Continuous Improvement for Existing Solutions"
+                  url: https://docs.aws.amazon.com/aws-certification/latest/solutions-architect-professional-02/solutions-architect-professional-02-domain3.html
+                - title: Performance efficiency pillar
+                  url: https://docs.aws.amazon.com/wellarchitected/latest/performance-efficiency-pillar/welcome.html
+                - title: Sustainability pillar
+                  url: https://docs.aws.amazon.com/wellarchitected/latest/sustainability-pillar/sustainability-pillar.html
+            - title: Disaster recovery strategies
+              description: |
+                Backup and restore, pilot light, warm standby and multi-site
+                active/active trade cost for lower RTO and RPO. Implement
+                backup and restore across Regions with AWS Backup, PITR and S3
+                replication, and know when to move up.
+              challenges: [aws-backup-dr-cost]
+              docs:
+                - title: Disaster recovery options in the cloud
+                  url: https://docs.aws.amazon.com/whitepapers/latest/disaster-recovery-workloads-on-aws/disaster-recovery-options-in-the-cloud.html
+                - title: Use defined recovery strategies to meet the recovery objectives
+                  url: https://docs.aws.amazon.com/wellarchitected/latest/reliability-pillar/rel_planning_for_recovery_disaster_recovery.html
+                - title: "SAP-C02 Domain 2: Design for New Solutions"
+                  url: https://docs.aws.amazon.com/aws-certification/latest/solutions-architect-professional-02/solutions-architect-professional-02-domain2.html
+            - title: Cost optimization trade-offs
+              description: |
+                Every resilience feature has a price: Multi-AZ databases, NAT
+                gateways per zone, cross-Region copies. Decide per environment,
+                move cold data to cheaper storage classes and track spend with
+                budgets and Cost Explorer.
+              challenges: [aws-backup-dr-cost, aws-three-tier-well-architected]
+              docs:
+                - title: Cost optimization pillar
+                  url: https://docs.aws.amazon.com/wellarchitected/latest/cost-optimization-pillar/welcome.html
+                - title: Managing your costs with AWS Budgets
+                  url: https://docs.aws.amazon.com/cost-management/latest/userguide/budgets-managing-costs.html
+                - title: Analyzing your costs with AWS Cost Explorer
+                  url: https://docs.aws.amazon.com/cost-management/latest/userguide/ce-what-is.html
+            - title: Multi-account governance
+              description: |
+                Large organizations separate workloads into accounts grouped in
+                organizational units, guarded by service control policies and
+                set up with a landing zone (AWS Control Tower).
+              docs:
+                - title: Organizing your AWS environment using multiple accounts
+                  url: https://docs.aws.amazon.com/whitepapers/latest/organizing-your-aws-environment/organizing-your-aws-environment.html
+                - title: Service control policies (SCPs)
+                  url: https://docs.aws.amazon.com/organizations/latest/userguide/orgs_manage_policies_scps.html
+                - title: What is AWS Control Tower?
+                  url: https://docs.aws.amazon.com/controltower/latest/userguide/what-is-control-tower.html
+                - title: "SAP-C02 Domain 1: Design Solutions for Organizational Complexity"
+                  url: https://docs.aws.amazon.com/aws-certification/latest/solutions-architect-professional-02/solutions-architect-professional-02-domain1.html
+      sources:
+        - title: AWS Certified Cloud Practitioner (CLF-C02) exam guide
+          url: https://docs.aws.amazon.com/aws-certification/latest/cloud-practitioner-02/cloud-practitioner-02.html
+        - title: AWS Certified Solutions Architect – Associate (SAA-C03) exam guide
+          url: https://docs.aws.amazon.com/aws-certification/latest/solutions-architect-associate-03/solutions-architect-associate-03.html
+        - title: AWS Certified Solutions Architect – Professional (SAP-C02) exam guide
+          url: https://docs.aws.amazon.com/aws-certification/latest/solutions-architect-professional-02/solutions-architect-professional-02.html
+        - title: AWS Well-Architected Framework
+          url: https://docs.aws.amazon.com/wellarchitected/latest/framework/welcome.html

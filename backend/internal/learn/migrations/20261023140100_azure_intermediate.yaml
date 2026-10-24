@@ -1,0 +1,919 @@
+description: Adds the Azure intermediate challenges (App Service with managed identity and Key Vault, storage data protection, Azure SQL behind a private endpoint)
+operations:
+  - op: upsert
+    kind: challenge
+    id: azure-app-service-key-vault
+    data:
+      provider: azure
+      level: intermediate
+      title: Give a web app a managed identity and read secrets from Key Vault
+      summary: Remove a plaintext password from App Service settings using a managed identity, Key Vault RBAC and a Key Vault reference.
+      minutes: 40
+      tags: [app-service, identity, key-vault, secrets, least-privilege]
+      prerequisites: [azure-naming-tagging]
+      runtime: design
+      problem: |
+        A Linux web app on App Service reads its database password from an app setting that holds the password in
+        plain text — it lives in the Terraform code, the state and the portal for anyone with read access. The app
+        also accepts plain HTTP, negotiates TLS 1.0 and allows FTP deployments. The team already created a Key Vault,
+        but it uses legacy access policies and can be purged by accident.
+
+        Follow the App Service and Key Vault guidance: the app authenticates to Key Vault with its own **managed
+        identity**, gets only the **Key Vault Secrets User** role on that vault, and the app setting becomes a
+        **Key Vault reference** that App Service resolves at runtime.
+      requirements:
+        - "The web app has a managed identity (`identity { type = \"SystemAssigned\" }` or a user-assigned identity)."
+        - "The web app sets `https_only = true`, `site_config.minimum_tls_version` 1.2 or higher and `site_config.ftps_state = \"Disabled\"`."
+        - "The `DB_PASSWORD` app setting is a Key Vault reference (`@Microsoft.KeyVault(...)`), not the secret value."
+        - "The Key Vault uses Azure RBAC (`rbac_authorization_enabled = true`) and has purge protection on (`purge_protection_enabled = true`)."
+        - "An `azurerm_role_assignment` grants **Key Vault Secrets User** on the vault (scope) to the web app's identity (principal)."
+        - The workflow validates.
+      hints:
+        - "A system-assigned identity exposes its object ID as `azurerm_linux_web_app.<name>.identity[0].principal_id`."
+        - "Key Vault reference syntax: `@Microsoft.KeyVault(SecretUri=${azurerm_key_vault.main.vault_uri}secrets/db-password/)` — without a version it follows the latest version."
+        - "`azurerm_role_assignment` needs `scope`, `role_definition_name` and `principal_id`. Scope it to the vault, not the resource group or subscription."
+        - Create the secret value outside Terraform (pipeline or portal) so it never lands in code or state; the reference only needs its name.
+      solution: |
+        ```hcl
+        resource "azurerm_key_vault" "main" {
+          # ...
+          rbac_authorization_enabled = true
+          purge_protection_enabled   = true
+          soft_delete_retention_days = 90
+        }
+
+        resource "azurerm_linux_web_app" "api" {
+          # ...
+          https_only = true
+          identity { type = "SystemAssigned" }
+          site_config {
+            minimum_tls_version = "1.2"
+            ftps_state          = "Disabled"
+          }
+          app_settings = {
+            DB_PASSWORD = "@Microsoft.KeyVault(SecretUri=${azurerm_key_vault.main.vault_uri}secrets/db-password/)"
+          }
+        }
+
+        resource "azurerm_role_assignment" "api_secrets" {
+          scope                = azurerm_key_vault.main.id
+          role_definition_name = "Key Vault Secrets User"
+          principal_id         = azurerm_linux_web_app.api.identity[0].principal_id
+        }
+        ```
+
+        **Why:** a managed identity is a Microsoft Entra identity that Azure manages for the app, so no credential
+        is stored anywhere. With the RBAC permission model the role assignment is least privilege: *Key Vault Secrets
+        User* can read secret values of this vault only. App Service resolves the `@Microsoft.KeyVault(...)` reference
+        with the app's identity, so the code still reads an ordinary environment variable. Purge protection keeps a
+        deleted vault or secret recoverable for the soft-delete retention period. HTTPS only, TLS 1.2+ and FTP disabled
+        are the App Service Well-Architected security baseline.
+      solutionFiles:
+        main.tf: |
+          data "azurerm_client_config" "current" {}
+
+          resource "azurerm_resource_group" "main" {
+            name     = "rg-${local.name_prefix}"
+            location = var.location
+            tags     = local.common_tags
+          }
+
+          resource "azurerm_key_vault" "main" {
+            name                       = "kv-${local.name_prefix}"
+            resource_group_name        = azurerm_resource_group.main.name
+            location                   = azurerm_resource_group.main.location
+            tenant_id                  = data.azurerm_client_config.current.tenant_id
+            sku_name                   = "standard"
+            rbac_authorization_enabled = true
+            purge_protection_enabled   = true
+            soft_delete_retention_days = 90
+            tags                       = local.common_tags
+          }
+
+          resource "azurerm_service_plan" "main" {
+            name                = "asp-${local.name_prefix}"
+            resource_group_name = azurerm_resource_group.main.name
+            location            = azurerm_resource_group.main.location
+            os_type             = "Linux"
+            sku_name            = "P1v3"
+            tags                = local.common_tags
+          }
+
+          resource "azurerm_linux_web_app" "api" {
+            name                = "app-${local.name_prefix}-api"
+            resource_group_name = azurerm_resource_group.main.name
+            location            = azurerm_resource_group.main.location
+            service_plan_id     = azurerm_service_plan.main.id
+            https_only          = true
+            tags                = local.common_tags
+
+            identity {
+              type = "SystemAssigned"
+            }
+
+            site_config {
+              minimum_tls_version = "1.2"
+              ftps_state          = "Disabled"
+
+              application_stack {
+                node_version = "20-lts"
+              }
+            }
+
+            app_settings = {
+              DB_HOST     = var.db_host
+              DB_PASSWORD = "@Microsoft.KeyVault(SecretUri=${azurerm_key_vault.main.vault_uri}secrets/db-password/)"
+            }
+          }
+
+          resource "azurerm_role_assignment" "api_secrets" {
+            scope                = azurerm_key_vault.main.id
+            role_definition_name = "Key Vault Secrets User"
+            principal_id         = azurerm_linux_web_app.api.identity[0].principal_id
+          }
+      starter:
+        kind: terraform
+        cloud: azure
+        files:
+          versions.tf: |
+            terraform {
+              required_version = ">= 1.6"
+
+              required_providers {
+                azurerm = {
+                  source  = "hashicorp/azurerm"
+                  version = "~> 4.0"
+                }
+              }
+            }
+          providers.tf: |
+            provider "azurerm" {
+              features {}
+            }
+          variables.tf: |
+            variable "project" {
+              type        = string
+              default     = "shopapi"
+              description = "Project name: part of every resource name."
+            }
+
+            variable "environment" {
+              type        = string
+              default     = "dev"
+              description = "Deployment environment (dev, test, prod)."
+            }
+
+            variable "location" {
+              type        = string
+              default     = "eastus"
+              description = "Azure region of the resource group and its resources."
+            }
+
+            variable "db_host" {
+              type        = string
+              default     = "sql-shopapi-dev.database.windows.net"
+              description = "Database host name the API connects to."
+            }
+          locals.tf: |
+            locals {
+              name_prefix = "${var.project}-${var.environment}"
+              common_tags = {
+                project     = var.project
+                environment = var.environment
+                managedby   = "terraform"
+              }
+            }
+          main.tf: |
+            data "azurerm_client_config" "current" {}
+
+            resource "azurerm_resource_group" "main" {
+              name     = "rg-${local.name_prefix}"
+              location = var.location
+              tags     = local.common_tags
+            }
+
+            resource "azurerm_key_vault" "main" {
+              name                = "kv-${local.name_prefix}"
+              resource_group_name = azurerm_resource_group.main.name
+              location            = azurerm_resource_group.main.location
+              tenant_id           = data.azurerm_client_config.current.tenant_id
+              sku_name            = "standard"
+              tags                = local.common_tags
+            }
+
+            resource "azurerm_service_plan" "main" {
+              name                = "asp-${local.name_prefix}"
+              resource_group_name = azurerm_resource_group.main.name
+              location            = azurerm_resource_group.main.location
+              os_type             = "Linux"
+              sku_name            = "P1v3"
+              tags                = local.common_tags
+            }
+
+            resource "azurerm_linux_web_app" "api" {
+              name                = "app-${local.name_prefix}-api"
+              resource_group_name = azurerm_resource_group.main.name
+              location            = azurerm_resource_group.main.location
+              service_plan_id     = azurerm_service_plan.main.id
+              tags                = local.common_tags
+
+              site_config {
+                minimum_tls_version = "1.0"
+                ftps_state          = "AllAllowed"
+
+                application_stack {
+                  node_version = "20-lts"
+                }
+              }
+
+              app_settings = {
+                DB_HOST     = var.db_host
+                DB_PASSWORD = "Sup3r-Secret-Passw0rd!"
+              }
+            }
+      checks:
+        - id: validate
+          label: The workflow validates
+          type: validate
+        - id: identity
+          label: The web app has a managed identity
+          type: has
+          has:
+            terraform:
+              type: azurerm_linux_web_app
+              where:
+                identity.type:
+                  in: [SystemAssigned, UserAssigned, "SystemAssigned, UserAssigned"]
+        - id: transport
+          label: The web app is HTTPS only with TLS 1.2+ and FTP disabled
+          type: has
+          has:
+            terraform:
+              type: azurerm_linux_web_app
+              where:
+                https_only: true
+                site_config.minimum_tls_version:
+                  in: ["1.2", "1.3"]
+                site_config.ftps_state: Disabled
+        - id: kv-reference
+          label: The DB_PASSWORD app setting is a Key Vault reference
+          type: has
+          has:
+            terraform:
+              type: azurerm_linux_web_app
+              where:
+                app_settings.DB_PASSWORD:
+                  contains: "@Microsoft.KeyVault("
+        - id: no-plaintext-secret
+          label: The plaintext password is gone from the app settings
+          type: has
+          has:
+            terraform:
+              type: azurerm_linux_web_app
+              where:
+                app_settings:
+                  contains: Sup3r-Secret-Passw0rd
+              count:
+                max: 0
+        - id: kv-hardening
+          label: Key Vault uses RBAC and purge protection
+          type: has
+          has:
+            terraform:
+              type: azurerm_key_vault
+              where:
+                rbac_authorization_enabled: true
+                purge_protection_enabled: true
+        - id: least-privilege
+          label: The app's identity has Key Vault Secrets User on the vault
+          type: has
+          has:
+            terraform:
+              type: azurerm_role_assignment
+              where:
+                role_definition_name: Key Vault Secrets User
+                scope:
+                  ref: azurerm_key_vault
+                principal_id:
+                  ref: azurerm_linux_web_app
+      sources:
+        - title: Well-Architected Framework service guide — App Service (web apps)
+          url: https://learn.microsoft.com/en-us/azure/well-architected/service-guides/app-service-web-apps
+        - title: Use Key Vault references as app settings in App Service
+          url: https://learn.microsoft.com/en-us/azure/app-service/app-service-key-vault-references
+        - title: What are managed identities for Azure resources?
+          url: https://learn.microsoft.com/en-us/entra/identity/managed-identities-azure-resources/overview
+        - title: Best practices for using Azure Key Vault
+          url: https://learn.microsoft.com/en-us/azure/key-vault/general/best-practices
+        - title: Provide access to Key Vault keys, certificates, and secrets with Azure RBAC
+          url: https://learn.microsoft.com/en-us/azure/key-vault/general/rbac-guide
+        - title: Azure Key Vault soft-delete overview
+          url: https://learn.microsoft.com/en-us/azure/key-vault/general/soft-delete-overview
+        - title: azurerm_linux_web_app (azurerm 4.x)
+          url: https://registry.terraform.io/providers/hashicorp/azurerm/4.81.0/docs/resources/linux_web_app
+        - title: azurerm_key_vault (azurerm 4.x)
+          url: https://registry.terraform.io/providers/hashicorp/azurerm/4.81.0/docs/resources/key_vault
+        - title: azurerm_role_assignment (azurerm 4.x)
+          url: https://registry.terraform.io/providers/hashicorp/azurerm/4.81.0/docs/resources/role_assignment
+
+  - op: upsert
+    kind: challenge
+    id: azure-storage-data-protection
+    data:
+      provider: azure
+      level: intermediate
+      title: Protect blob data against deletion, corruption and outages
+      summary: Add zone-redundant replication, soft delete, versioning, a network default-deny and a delete lock to a storage account.
+      minutes: 35
+      tags: [storage, reliability, backup, data-protection, network]
+      prerequisites: [azure-storage-secure-defaults]
+      runtime: design
+      problem: |
+        The invoices storage account is now private and TLS-only, but it is still fragile: it keeps its three copies
+        in a single datacenter (LRS), a script that deletes the wrong container or overwrites blobs loses data for
+        good, it accepts connections from every network, and anyone with Contributor rights can delete the whole
+        account.
+
+        Use the Azure Storage data-protection and redundancy guidance to make the account survive a zone outage and
+        human mistakes, and narrow who can reach it.
+      requirements:
+        - "Replication survives a zone outage: `account_replication_type` is `ZRS`, `GZRS` or `RAGZRS`."
+        - "`blob_properties` enables `versioning_enabled = true`, blob soft delete (`delete_retention_policy`) and container soft delete (`container_delete_retention_policy`), each kept for at least 7 days."
+        - "`network_rules` sets `default_action = \"Deny\"` (allow only the networks that need access, plus the trusted Azure services bypass)."
+        - "An `azurerm_management_lock` with `lock_level = \"CanNotDelete\"` protects the storage account."
+        - The workflow validates.
+      hints:
+        - "Zone-redundant storage (ZRS) copies data synchronously across three availability zones; GZRS adds an asynchronous copy in the paired region."
+        - "Soft delete and versioning live in one `blob_properties { ... }` block with two nested retention blocks."
+        - "A lock's `scope` is the ID of the resource it protects: `azurerm_storage_account.invoices.id`. Remember a lock protects the resource, not the data inside it."
+      solution: |
+        ```hcl
+        resource "azurerm_storage_account" "invoices" {
+          # ...
+          account_replication_type = "GZRS"
+
+          blob_properties {
+            versioning_enabled = true
+            delete_retention_policy { days = 14 }
+            container_delete_retention_policy { days = 14 }
+          }
+
+          network_rules {
+            default_action             = "Deny"
+            bypass                     = ["AzureServices"]
+            virtual_network_subnet_ids = [azurerm_subnet.app.id]
+          }
+        }
+
+        resource "azurerm_management_lock" "invoices" {
+          name       = "lock-invoices-nodelete"
+          scope      = azurerm_storage_account.invoices.id
+          lock_level = "CanNotDelete"
+        }
+        ```
+
+        **Why:** LRS only survives disk and rack failures inside one datacenter; Microsoft recommends ZRS for high
+        availability in the primary region and GZRS when you also need regional disaster recovery. Blob and container
+        soft delete let you restore deleted data during the retention window and versioning keeps previous versions of
+        overwritten blobs (the Well-Architected guide suggests at least 7 days; versions and soft-deleted data are
+        billed, so pair them with lifecycle rules). A default-deny firewall starts from zero network access. A
+        `CanNotDelete` lock stops accidental deletion of the account through Azure Resource Manager — it does not
+        protect data-plane operations, which is why you need soft delete as well.
+      solutionFiles:
+        main.tf: |
+          resource "azurerm_resource_group" "main" {
+            name     = "rg-${local.name_prefix}"
+            location = var.location
+            tags     = local.common_tags
+          }
+
+          resource "azurerm_virtual_network" "main" {
+            name                = "vnet-${local.name_prefix}"
+            resource_group_name = azurerm_resource_group.main.name
+            location            = azurerm_resource_group.main.location
+            address_space       = ["10.30.0.0/16"]
+            tags                = local.common_tags
+          }
+
+          resource "azurerm_subnet" "app" {
+            name                 = "snet-app"
+            resource_group_name  = azurerm_resource_group.main.name
+            virtual_network_name = azurerm_virtual_network.main.name
+            address_prefixes     = ["10.30.1.0/24"]
+            service_endpoints    = ["Microsoft.Storage"]
+          }
+
+          resource "azurerm_storage_account" "invoices" {
+            name                            = substr("st${replace(local.name_prefix, "-", "")}inv", 0, 24)
+            resource_group_name             = azurerm_resource_group.main.name
+            location                        = azurerm_resource_group.main.location
+            account_tier                    = "Standard"
+            account_replication_type        = "GZRS"
+            min_tls_version                 = "TLS1_2"
+            https_traffic_only_enabled      = true
+            allow_nested_items_to_be_public = false
+            tags                            = local.common_tags
+
+            blob_properties {
+              versioning_enabled = true
+
+              delete_retention_policy {
+                days = 14
+              }
+
+              container_delete_retention_policy {
+                days = 14
+              }
+            }
+
+            network_rules {
+              default_action             = "Deny"
+              bypass                     = ["AzureServices"]
+              virtual_network_subnet_ids = [azurerm_subnet.app.id]
+            }
+          }
+
+          resource "azurerm_storage_container" "invoices" {
+            name                  = "invoices"
+            storage_account_id    = azurerm_storage_account.invoices.id
+            container_access_type = "private"
+          }
+
+          resource "azurerm_management_lock" "invoices" {
+            name       = "lock-${local.name_prefix}-invoices"
+            scope      = azurerm_storage_account.invoices.id
+            lock_level = "CanNotDelete"
+            notes      = "Invoices are retained for compliance; remove this lock only through a reviewed change."
+          }
+      starter:
+        kind: terraform
+        cloud: azure
+        files:
+          versions.tf: |
+            terraform {
+              required_version = ">= 1.6"
+
+              required_providers {
+                azurerm = {
+                  source  = "hashicorp/azurerm"
+                  version = "~> 4.0"
+                }
+              }
+            }
+          providers.tf: |
+            provider "azurerm" {
+              features {}
+            }
+          variables.tf: |
+            variable "project" {
+              type        = string
+              default     = "billing"
+              description = "Project name: part of every resource name."
+            }
+
+            variable "environment" {
+              type        = string
+              default     = "prod"
+              description = "Deployment environment (dev, test, prod)."
+            }
+
+            variable "location" {
+              type        = string
+              default     = "eastus2"
+              description = "Azure region of the resource group and its resources."
+            }
+          locals.tf: |
+            locals {
+              name_prefix = "${var.project}-${var.environment}"
+              common_tags = {
+                project     = var.project
+                environment = var.environment
+                managedby   = "terraform"
+              }
+            }
+          main.tf: |
+            resource "azurerm_resource_group" "main" {
+              name     = "rg-${local.name_prefix}"
+              location = var.location
+              tags     = local.common_tags
+            }
+
+            resource "azurerm_virtual_network" "main" {
+              name                = "vnet-${local.name_prefix}"
+              resource_group_name = azurerm_resource_group.main.name
+              location            = azurerm_resource_group.main.location
+              address_space       = ["10.30.0.0/16"]
+              tags                = local.common_tags
+            }
+
+            resource "azurerm_subnet" "app" {
+              name                 = "snet-app"
+              resource_group_name  = azurerm_resource_group.main.name
+              virtual_network_name = azurerm_virtual_network.main.name
+              address_prefixes     = ["10.30.1.0/24"]
+              service_endpoints    = ["Microsoft.Storage"]
+            }
+
+            resource "azurerm_storage_account" "invoices" {
+              name                            = substr("st${replace(local.name_prefix, "-", "")}inv", 0, 24)
+              resource_group_name             = azurerm_resource_group.main.name
+              location                        = azurerm_resource_group.main.location
+              account_tier                    = "Standard"
+              account_replication_type        = "LRS"
+              min_tls_version                 = "TLS1_2"
+              https_traffic_only_enabled      = true
+              allow_nested_items_to_be_public = false
+              tags                            = local.common_tags
+            }
+
+            resource "azurerm_storage_container" "invoices" {
+              name                  = "invoices"
+              storage_account_id    = azurerm_storage_account.invoices.id
+              container_access_type = "private"
+            }
+      checks:
+        - id: validate
+          label: The workflow validates
+          type: validate
+        - id: zone-redundant
+          label: Replication survives a zone outage (ZRS, GZRS or RA-GZRS)
+          type: has
+          has:
+            terraform:
+              type: azurerm_storage_account
+              where:
+                account_replication_type:
+                  in: [ZRS, GZRS, RAGZRS]
+        - id: versioning
+          label: Blob versioning is enabled
+          type: has
+          has:
+            terraform:
+              type: azurerm_storage_account
+              where:
+                blob_properties.versioning_enabled: true
+        - id: soft-delete
+          label: Blob and container soft delete keep data at least 7 days
+          type: has
+          has:
+            terraform:
+              type: azurerm_storage_account
+              where:
+                blob_properties.delete_retention_policy.days:
+                  min: 7
+                blob_properties.container_delete_retention_policy.days:
+                  min: 7
+        - id: network-deny
+          label: The storage firewall denies by default
+          type: has
+          has:
+            terraform:
+              type: azurerm_storage_account
+              where:
+                network_rules.default_action: Deny
+        - id: delete-lock
+          label: A CanNotDelete lock protects the storage account
+          type: has
+          has:
+            terraform:
+              type: azurerm_management_lock
+              where:
+                lock_level: CanNotDelete
+                scope:
+                  ref: azurerm_storage_account
+      sources:
+        - title: Azure Storage redundancy
+          url: https://learn.microsoft.com/en-us/azure/storage/common/storage-redundancy
+        - title: Security recommendations for Blob Storage (data protection and networking)
+          url: https://learn.microsoft.com/en-us/azure/storage/blobs/security-recommendations
+        - title: Well-Architected Framework service guide — Azure Blob Storage
+          url: https://learn.microsoft.com/en-us/azure/well-architected/service-guides/azure-blob-storage
+        - title: Lock your Azure resources to protect your infrastructure
+          url: https://learn.microsoft.com/en-us/azure/azure-resource-manager/management/lock-resources
+        - title: Study guide for Exam AZ-104 (configure Azure Files and Blob Storage)
+          url: https://learn.microsoft.com/en-us/credentials/certifications/resources/study-guides/az-104
+        - title: azurerm_storage_account (azurerm 4.x)
+          url: https://registry.terraform.io/providers/hashicorp/azurerm/4.81.0/docs/resources/storage_account
+        - title: azurerm_management_lock (azurerm 4.x)
+          url: https://registry.terraform.io/providers/hashicorp/azurerm/4.81.0/docs/resources/management_lock
+
+  - op: upsert
+    kind: challenge
+    id: azure-sql-private-endpoint
+    data:
+      provider: azure
+      level: intermediate
+      title: Put Azure SQL Database behind a private endpoint
+      summary: Close a SQL server's public endpoint, reach it through Private Link with private DNS, and switch to Microsoft Entra-only authentication.
+      minutes: 45
+      tags: [database, networking, private-link, identity, security]
+      prerequisites: [azure-vnet-nsg]
+      runtime: design
+      problem: |
+        The orders database runs on Azure SQL Database. To "make connections work" someone added a firewall rule
+        that allows every IPv4 address, left public network access on, and the server uses a SQL login whose password
+        is a Terraform variable that isn't even marked sensitive.
+
+        Azure SQL security guidance says to deny public network access, connect from your virtual network through a
+        **private endpoint** (Azure Private Link) with the `privatelink.database.windows.net` private DNS zone, and use
+        **Microsoft Entra authentication** instead of SQL passwords. Rebuild the data tier that way.
+      requirements:
+        - "`azurerm_mssql_server` sets `public_network_access_enabled = false` and `minimum_tls_version = \"1.2\"`, and there are no `azurerm_mssql_firewall_rule` resources."
+        - "The server uses Microsoft Entra-only authentication: an `azuread_administrator` block with `azuread_authentication_only = true` (no SQL admin password)."
+        - "An `azurerm_private_endpoint` in the data subnet connects to the server with the `sqlServer` subresource."
+        - "An `azurerm_private_dns_zone` named `privatelink.database.windows.net` is linked to the virtual network and attached to the private endpoint through `private_dns_zone_group`."
+        - The workflow validates and no secret variable is left unmarked (`bp_sensitive_not_marked`).
+      hints:
+        - "Adding a private endpoint does **not** close the public endpoint by itself; you also need `public_network_access_enabled = false` on the server."
+        - "`private_service_connection { private_connection_resource_id = azurerm_mssql_server.orders.id, subresource_names = [\"sqlServer\"], is_manual_connection = false }`."
+        - "Clients keep using the normal `<server>.database.windows.net` name; the private DNS zone (linked with `azurerm_private_dns_zone_virtual_network_link`) makes it resolve to the private IP inside the VNet."
+        - "With `azuread_authentication_only = true` you can drop `administrator_login` and `administrator_login_password` — and the password variable with them."
+      solution: |
+        1. Delete the `allow-all` firewall rule and the password variable.
+        2. On the server set `public_network_access_enabled = false`, `minimum_tls_version = "1.2"` and an
+           `azuread_administrator` block (an Entra group as admin) with `azuread_authentication_only = true`.
+        3. Create the private DNS zone `privatelink.database.windows.net`, link it to the VNet, and add an
+           `azurerm_private_endpoint` in `snet-data` with `subresource_names = ["sqlServer"]` and a
+           `private_dns_zone_group` pointing to the zone.
+
+        **Why:** Private Link gives the server a private IP inside your VNet, so traffic never crosses the internet,
+        and denying public network access removes the public attack surface entirely (the private endpoint alone
+        would leave it open). The private DNS zone keeps connection strings unchanged. Microsoft Entra authentication
+        centralizes identities and lets apps use managed identities, so there is no SQL password to leak or rotate.
+      solutionFiles:
+        variables.tf: |
+          variable "project" {
+            type        = string
+            default     = "orders"
+            description = "Project name: part of every resource name."
+          }
+
+          variable "environment" {
+            type        = string
+            default     = "prod"
+            description = "Deployment environment (dev, test, prod)."
+          }
+
+          variable "location" {
+            type        = string
+            default     = "eastus2"
+            description = "Azure region of the resource group and its resources."
+          }
+
+          variable "sql_admin_group_name" {
+            type        = string
+            default     = "sg-orders-dba"
+            description = "Display name of the Microsoft Entra group that administers the SQL server."
+          }
+
+          variable "sql_admin_group_object_id" {
+            type        = string
+            default     = "00000000-0000-0000-0000-000000000000"
+            description = "Object ID of the Microsoft Entra group that administers the SQL server."
+          }
+        data.tf: |
+          resource "azurerm_mssql_server" "orders" {
+            name                          = "sql-${local.name_prefix}"
+            resource_group_name           = azurerm_resource_group.main.name
+            location                      = azurerm_resource_group.main.location
+            version                       = "12.0"
+            minimum_tls_version           = "1.2"
+            public_network_access_enabled = false
+            tags                          = local.common_tags
+
+            azuread_administrator {
+              login_username              = var.sql_admin_group_name
+              object_id                   = var.sql_admin_group_object_id
+              azuread_authentication_only = true
+            }
+          }
+
+          resource "azurerm_mssql_database" "orders" {
+            name      = "sqldb-${local.name_prefix}"
+            server_id = azurerm_mssql_server.orders.id
+            sku_name  = "S0"
+            tags      = local.common_tags
+          }
+
+          resource "azurerm_private_dns_zone" "sql" {
+            name                = "privatelink.database.windows.net"
+            resource_group_name = azurerm_resource_group.main.name
+            tags                = local.common_tags
+          }
+
+          resource "azurerm_private_dns_zone_virtual_network_link" "sql" {
+            name                  = "link-${local.name_prefix}-sql"
+            resource_group_name   = azurerm_resource_group.main.name
+            private_dns_zone_name = azurerm_private_dns_zone.sql.name
+            virtual_network_id    = azurerm_virtual_network.main.id
+            tags                  = local.common_tags
+          }
+
+          resource "azurerm_private_endpoint" "sql" {
+            name                = "pep-${local.name_prefix}-sql"
+            resource_group_name = azurerm_resource_group.main.name
+            location            = azurerm_resource_group.main.location
+            subnet_id           = azurerm_subnet.data.id
+            tags                = local.common_tags
+
+            private_service_connection {
+              name                           = "psc-${local.name_prefix}-sql"
+              private_connection_resource_id = azurerm_mssql_server.orders.id
+              subresource_names              = ["sqlServer"]
+              is_manual_connection           = false
+            }
+
+            private_dns_zone_group {
+              name                 = "default"
+              private_dns_zone_ids = [azurerm_private_dns_zone.sql.id]
+            }
+          }
+      starter:
+        kind: terraform
+        cloud: azure
+        files:
+          versions.tf: |
+            terraform {
+              required_version = ">= 1.6"
+
+              required_providers {
+                azurerm = {
+                  source  = "hashicorp/azurerm"
+                  version = "~> 4.0"
+                }
+              }
+            }
+          providers.tf: |
+            provider "azurerm" {
+              features {}
+            }
+          variables.tf: |
+            variable "project" {
+              type        = string
+              default     = "orders"
+              description = "Project name: part of every resource name."
+            }
+
+            variable "environment" {
+              type        = string
+              default     = "prod"
+              description = "Deployment environment (dev, test, prod)."
+            }
+
+            variable "location" {
+              type        = string
+              default     = "eastus2"
+              description = "Azure region of the resource group and its resources."
+            }
+
+            variable "sql_admin_password" {
+              type        = string
+              description = "Password of the SQL administrator login."
+            }
+          locals.tf: |
+            locals {
+              name_prefix = "${var.project}-${var.environment}"
+              common_tags = {
+                project     = var.project
+                environment = var.environment
+                managedby   = "terraform"
+              }
+            }
+          main.tf: |
+            resource "azurerm_resource_group" "main" {
+              name     = "rg-${local.name_prefix}"
+              location = var.location
+              tags     = local.common_tags
+            }
+
+            resource "azurerm_virtual_network" "main" {
+              name                = "vnet-${local.name_prefix}"
+              resource_group_name = azurerm_resource_group.main.name
+              location            = azurerm_resource_group.main.location
+              address_space       = ["10.40.0.0/16"]
+              tags                = local.common_tags
+            }
+
+            resource "azurerm_subnet" "app" {
+              name                 = "snet-app"
+              resource_group_name  = azurerm_resource_group.main.name
+              virtual_network_name = azurerm_virtual_network.main.name
+              address_prefixes     = ["10.40.1.0/24"]
+            }
+
+            resource "azurerm_subnet" "data" {
+              name                 = "snet-data"
+              resource_group_name  = azurerm_resource_group.main.name
+              virtual_network_name = azurerm_virtual_network.main.name
+              address_prefixes     = ["10.40.2.0/24"]
+            }
+          data.tf: |
+            resource "azurerm_mssql_server" "orders" {
+              name                         = "sql-${local.name_prefix}"
+              resource_group_name          = azurerm_resource_group.main.name
+              location                     = azurerm_resource_group.main.location
+              version                      = "12.0"
+              administrator_login          = "sqladmin"
+              administrator_login_password = var.sql_admin_password
+              tags                         = local.common_tags
+            }
+
+            resource "azurerm_mssql_firewall_rule" "allow_all" {
+              name             = "allow-all"
+              server_id        = azurerm_mssql_server.orders.id
+              start_ip_address = "0.0.0.0"
+              end_ip_address   = "255.255.255.255"
+            }
+
+            resource "azurerm_mssql_database" "orders" {
+              name      = "sqldb-${local.name_prefix}"
+              server_id = azurerm_mssql_server.orders.id
+              sku_name  = "S0"
+              tags      = local.common_tags
+            }
+      checks:
+        - id: validate
+          label: The workflow validates
+          type: validate
+        - id: public-off
+          label: The SQL server denies public network access and requires TLS 1.2
+          type: has
+          has:
+            terraform:
+              type: azurerm_mssql_server
+              where:
+                public_network_access_enabled: false
+                minimum_tls_version: "1.2"
+        - id: no-firewall-rules
+          label: No SQL firewall rules open the server
+          type: has
+          has:
+            terraform:
+              type: azurerm_mssql_firewall_rule
+              count:
+                max: 0
+        - id: entra-only
+          label: The server uses Microsoft Entra-only authentication
+          type: has
+          has:
+            terraform:
+              type: azurerm_mssql_server
+              where:
+                azuread_administrator.azuread_authentication_only: true
+                administrator_login_password:
+                  exists: false
+        - id: private-endpoint
+          label: A private endpoint connects to the server (sqlServer subresource)
+          type: has
+          has:
+            terraform:
+              type: azurerm_private_endpoint
+              where:
+                private_service_connection.private_connection_resource_id:
+                  ref: azurerm_mssql_server
+                private_service_connection.subresource_names:
+                  contains: sqlServer
+                private_dns_zone_group.private_dns_zone_ids:
+                  ref: azurerm_private_dns_zone
+        - id: private-dns
+          label: The privatelink.database.windows.net zone is linked to the VNet
+          type: has
+          has:
+            terraform:
+              type: azurerm_private_dns_zone_virtual_network_link
+              where:
+                private_dns_zone_name:
+                  ref: azurerm_private_dns_zone
+                virtual_network_id:
+                  ref: azurerm_virtual_network
+        - id: private-dns-zone
+          label: The private DNS zone is privatelink.database.windows.net
+          type: has
+          has:
+            terraform:
+              type: azurerm_private_dns_zone
+              where:
+                name: privatelink.database.windows.net
+        - id: secrets
+          label: No unmarked secret variables (bp_sensitive_not_marked)
+          type: rules_clean
+          rules_clean:
+            codes: [bp_sensitive_not_marked]
+            minSeverity: info
+      sources:
+        - title: Azure SQL Database security best practices
+          url: https://learn.microsoft.com/en-us/azure/azure-sql/database/security-best-practice
+        - title: Azure Private Link for Azure SQL Database
+          url: https://learn.microsoft.com/en-us/azure/azure-sql/database/private-endpoint-overview
+        - title: Azure SQL connectivity settings (deny public network access, minimum TLS)
+          url: https://learn.microsoft.com/en-us/azure/azure-sql/database/connectivity-settings
+        - title: Azure private endpoint DNS configuration
+          url: https://learn.microsoft.com/en-us/azure/private-link/private-endpoint-dns
+        - title: Microsoft Entra authentication for Azure SQL
+          url: https://learn.microsoft.com/en-us/azure/azure-sql/database/authentication-aad-overview
+        - title: azurerm_mssql_server (azurerm 4.x)
+          url: https://registry.terraform.io/providers/hashicorp/azurerm/4.81.0/docs/resources/mssql_server
+        - title: azurerm_private_endpoint (azurerm 4.x)
+          url: https://registry.terraform.io/providers/hashicorp/azurerm/4.81.0/docs/resources/private_endpoint
+        - title: azurerm_private_dns_zone_virtual_network_link (azurerm 4.x)
+          url: https://registry.terraform.io/providers/hashicorp/azurerm/4.81.0/docs/resources/private_dns_zone_virtual_network_link

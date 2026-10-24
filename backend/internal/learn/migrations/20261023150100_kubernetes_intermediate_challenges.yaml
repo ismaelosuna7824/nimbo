@@ -1,0 +1,785 @@
+description: Adds the Kubernetes intermediate challenges (liveness/readiness/startup probes, requests/limits with a HorizontalPodAutoscaler, Kustomize overlays)
+operations:
+  - op: upsert
+    kind: challenge
+    id: kubernetes-health-probes
+    data:
+      provider: kubernetes
+      level: intermediate
+      title: Liveness, readiness and startup probes
+      summary: Tell the kubelet when a container has started, when it can take traffic and when it is stuck and must be restarted.
+      minutes: 30
+      tags: [probes, health-checks, reliability, deployment]
+      prerequisites: [kubernetes-first-deployment]
+      runtime: local
+      problem: |
+        The **catalog** API loads its data when it starts, which can take
+        up to a minute, and once in a while it deadlocks: the process keeps
+        running but never answers again. Right now Kubernetes only knows
+        whether the process is running.
+
+        The kubelet can run three kinds of **probes** against a container:
+
+        - a **startup probe** tells it when the app has finished starting;
+          liveness and readiness probes only begin after it succeeds;
+        - a **liveness probe** detects a container that is running but
+          stuck, and restarts it;
+        - a **readiness probe** decides whether the pod receives traffic
+          from Services; a failing pod is removed from the endpoints without
+          being restarted.
+
+        The current `k8s/catalog.yaml` has a single readiness probe and it
+        targets a port the container does not declare, so the pod can never
+        become ready. The app answers `GET /healthz` (process is alive) and
+        `GET /readyz` (ready to serve) on its `http` port.
+      requirements:
+        - "The `catalog` container has a **readinessProbe**: `httpGet` on `/readyz`, port `http`."
+        - "It has a **livenessProbe**: `httpGet` on `/healthz`, port `http`."
+        - "It has a **startupProbe** on `/healthz`, port `http`, that allows at least 60 s to start: set `periodSeconds` to at least 5 and `failureThreshold` to at least 12."
+        - Every probe targets a port the container declares.
+        - The workflow deploys and `GET /readyz` through the `catalog` Service answers 200.
+      hints:
+        - The probe's `port` can be the container port number or its name. The container declares one port, named `http`; `metrics` does not exist.
+        - "The startup budget is `failureThreshold × periodSeconds`. With `periodSeconds: 5` and `failureThreshold: 12` the app has 60 s before the kubelet gives up and restarts it."
+        - "A common pattern from the Kubernetes docs: liveness uses the same cheap endpoint as readiness but with a higher `failureThreshold`, so a short hiccup removes the pod from traffic before it gets restarted."
+      solution: |
+        **Startup probe** first: it protects slow starters. Until it
+        succeeds, the kubelet does not run the liveness probe, so a long
+        initial load is not mistaken for a deadlock. The Kubernetes docs
+        suggest a startup probe on the same endpoint as liveness with a
+        `failureThreshold` high enough to cover the worst-case start
+        instead of stretching the liveness timings.
+
+        ```yaml
+        startupProbe:
+          httpGet: {path: /healthz, port: http}
+          periodSeconds: 5
+          failureThreshold: 12   # 12 × 5 s = 60 s to start
+        livenessProbe:
+          httpGet: {path: /healthz, port: http}
+          periodSeconds: 10
+          failureThreshold: 3    # stuck for ~30 s → restart
+        readinessProbe:
+          httpGet: {path: /readyz, port: http}
+          periodSeconds: 5
+        ```
+
+        **Liveness** restarts a container that stopped making progress.
+        Keep it cheap and independent of downstream dependencies, or an
+        outage of a database would restart every pod.
+
+        **Readiness** controls traffic only: a pod that fails it is taken
+        out of the Service endpoints and comes back when it passes again.
+
+        The original probe targeted `port: metrics`, which the container
+        does not declare, so it always failed and the pod never became
+        ready. Use the declared port name `http`.
+
+        To see readiness protect real traffic during a pod loss, continue
+        with the **kubernetes-readiness-probe** challenge.
+      solutionFiles:
+        k8s/catalog.yaml: |
+          apiVersion: v1
+          kind: Namespace
+          metadata:
+            name: catalog
+          ---
+          apiVersion: apps/v1
+          kind: Deployment
+          metadata:
+            name: catalog
+            namespace: catalog
+          spec:
+            replicas: 2
+            selector:
+              matchLabels:
+                app: catalog
+            template:
+              metadata:
+                labels:
+                  app: catalog
+              spec:
+                containers:
+                  - name: catalog
+                    image: ghcr.io/stefanprodan/podinfo:6.15.0
+                    ports:
+                      - name: http
+                        containerPort: 9898
+                    # Liveness and readiness wait until this passes:
+                    # 12 × 5 s = 60 s to finish starting.
+                    startupProbe:
+                      httpGet:
+                        path: /healthz
+                        port: http
+                      periodSeconds: 5
+                      failureThreshold: 12
+                    # Restart the container when it is stuck (~30 s).
+                    livenessProbe:
+                      httpGet:
+                        path: /healthz
+                        port: http
+                      periodSeconds: 10
+                      failureThreshold: 3
+                    # Only receive traffic while ready.
+                    readinessProbe:
+                      httpGet:
+                        path: /readyz
+                        port: http
+                      periodSeconds: 5
+          ---
+          apiVersion: v1
+          kind: Service
+          metadata:
+            name: catalog
+            namespace: catalog
+          spec:
+            selector:
+              app: catalog
+            ports:
+              - name: http
+                port: 80
+                targetPort: http
+      starter:
+        kind: kubernetes
+        kubernetes:
+          sources:
+            - {kind: manifests, path: k8s}
+        files:
+          k8s/catalog.yaml: |
+            apiVersion: v1
+            kind: Namespace
+            metadata:
+              name: catalog
+            ---
+            apiVersion: apps/v1
+            kind: Deployment
+            metadata:
+              name: catalog
+              namespace: catalog
+            spec:
+              replicas: 2
+              selector:
+                matchLabels:
+                  app: catalog
+              template:
+                metadata:
+                  labels:
+                    app: catalog
+                spec:
+                  containers:
+                    - name: catalog
+                      image: ghcr.io/stefanprodan/podinfo:6.15.0
+                      ports:
+                        - name: http
+                          containerPort: 9898
+                      readinessProbe:
+                        httpGet:
+                          path: /readyz
+                          port: metrics
+                        periodSeconds: 5
+            ---
+            apiVersion: v1
+            kind: Service
+            metadata:
+              name: catalog
+              namespace: catalog
+            spec:
+              selector:
+                app: catalog
+              ports:
+                - name: http
+                  port: 80
+                  targetPort: http
+      checks:
+        - id: renders
+          label: The manifests are valid Kubernetes objects
+          type: validate
+        - id: probes-present
+          label: Readiness and liveness probes exist and target declared ports
+          type: rules_clean
+          rules_clean:
+            codes: [k8s_no_readiness_probe, k8s_no_liveness_probe, k8s_probe_port]
+            minSeverity: info
+        - id: startup-probe
+          label: A startup probe on /healthz allows at least 60 s to start
+          type: has
+          has:
+            kubernetes:
+              kind: Deployment
+              name: catalog
+              namespace: catalog
+              where:
+                spec.template.spec.containers.catalog.startupProbe.httpGet.path: /healthz
+                spec.template.spec.containers.catalog.startupProbe.periodSeconds: {min: 5}
+                spec.template.spec.containers.catalog.startupProbe.failureThreshold: {min: 12}
+        - id: liveness-endpoint
+          label: The liveness probe checks /healthz
+          type: has
+          has:
+            kubernetes:
+              kind: Deployment
+              name: catalog
+              namespace: catalog
+              where:
+                spec.template.spec.containers.catalog.livenessProbe.httpGet.path: /healthz
+        - id: readiness-endpoint
+          label: The readiness probe checks /readyz
+          type: has
+          has:
+            kubernetes:
+              kind: Deployment
+              name: catalog
+              namespace: catalog
+              where:
+                spec.template.spec.containers.catalog.readinessProbe.httpGet.path: /readyz
+        - id: deploys
+          label: The pods become ready on the local cluster
+          type: deploy
+        - id: ready
+          label: GET /readyz through the Service answers 200
+          type: http
+          http:
+            service: catalog
+            port: 80
+            path: /readyz
+            status: 200
+      sources:
+        - title: Kubernetes docs — Liveness, Readiness, and Startup Probes
+          url: https://kubernetes.io/docs/concepts/workloads/pods/probes/
+        - title: Kubernetes docs — Configure Liveness, Readiness and Startup Probes
+          url: https://kubernetes.io/docs/tasks/configure-pod-container/configure-liveness-readiness-startup-probes/
+        - title: Kubernetes docs — Pod Lifecycle (container probes)
+          url: https://kubernetes.io/docs/concepts/workloads/pods/pod-lifecycle/
+        - title: CNCF CKAD curriculum (Application Observability and Maintenance — implement probes and health checks)
+          url: https://github.com/cncf/curriculum/blob/master/CKAD_Curriculum_v1.37.pdf
+
+  - op: upsert
+    kind: challenge
+    id: kubernetes-resources-and-hpa
+    data:
+      provider: kubernetes
+      level: intermediate
+      title: Requests, limits and a HorizontalPodAutoscaler
+      summary: Give every container CPU and memory requests and a memory limit, and let a HorizontalPodAutoscaler own the replica count.
+      minutes: 30
+      tags: [resources, requests, limits, autoscaling, hpa]
+      prerequisites: [kubernetes-health-probes]
+      runtime: local
+      problem: |
+        The **search** service was given a HorizontalPodAutoscaler (HPA)
+        that should keep average CPU utilization around 70%. It never
+        scales: `kubectl describe hpa` reports that the CPU utilization
+        cannot be computed.
+
+        An HPA on a `Utilization` target divides the pods' measured usage by
+        their **resource requests**. Without a CPU request there is nothing
+        to divide by, so the HPA takes no action. Requests matter beyond
+        autoscaling: the scheduler places pods by their requests, and a pod
+        with no requests at all gets the `BestEffort` QoS class, the first
+        to be evicted when a node runs short of memory. A **memory limit**
+        caps a container that leaks: it is OOM-killed and restarted instead
+        of starving its neighbours.
+
+        The Deployment also still sets `spec.replicas`, which fights the
+        HPA on every apply.
+      requirements:
+        - "The `search` container requests CPU and memory (`resources.requests.cpu` and `resources.requests.memory`) and sets a memory limit (`resources.limits.memory`)."
+        - "The `search` HPA (`autoscaling/v2`) targets the `search` Deployment, scales on CPU `Utilization` with `averageUtilization: 70`, with `minReplicas` at least 2 and `maxReplicas` at least 4."
+        - The Deployment no longer sets `spec.replicas`; the HPA owns the replica count.
+      hints:
+        - "Start small and measurable, for example `requests: {cpu: 100m, memory: 64Mi}` and `limits: {memory: 128Mi}`. `100m` is a tenth of a CPU."
+        - "In `autoscaling/v2` the CPU target is `metrics: [{type: Resource, resource: {name: cpu, target: {type: Utilization, averageUtilization: 70}}}]`."
+        - "The HPA docs recommend removing `spec.replicas` from a Deployment once an HPA manages it; otherwise every `kubectl apply` resets the count."
+      solution: |
+        **Requests and limits.** The HPA computes utilization as usage ÷
+        request, per container, averaged over the pods. Add requests for
+        both CPU and memory; memory requests also matter to the scheduler
+        and decide the pod's QoS class. Add a memory limit so a leak only
+        restarts this container. (A CPU limit is optional: CPU is
+        compressible, a container over its CPU limit is throttled, not
+        killed.)
+
+        ```yaml
+        resources:
+          requests: {cpu: 100m, memory: 64Mi}
+          limits: {memory: 128Mi}
+        ```
+
+        **The HPA.** Scale between 2 and 5 pods on 70% average CPU of the
+        requests:
+
+        ```yaml
+        apiVersion: autoscaling/v2
+        kind: HorizontalPodAutoscaler
+        spec:
+          scaleTargetRef: {apiVersion: apps/v1, kind: Deployment, name: search}
+          minReplicas: 2
+          maxReplicas: 5
+          metrics:
+            - type: Resource
+              resource:
+                name: cpu
+                target: {type: Utilization, averageUtilization: 70}
+        ```
+
+        **Who owns replicas.** Remove `spec.replicas` from the Deployment
+        so applies don't reset the count the HPA chose. On a live cluster,
+        the HPA docs describe removing it from the last-applied
+        configuration first to avoid a one-time drop to 1 replica.
+
+        Resource metrics come from the Metrics Server add-on; k3s ships it.
+        To prove the autoscaler reacts to real traffic, continue with
+        **kubernetes-autoscale-signal**.
+      solutionFiles:
+        k8s/search.yaml: |
+          apiVersion: v1
+          kind: Namespace
+          metadata:
+            name: search
+          ---
+          apiVersion: apps/v1
+          kind: Deployment
+          metadata:
+            name: search
+            namespace: search
+          spec:
+            # No spec.replicas: the HorizontalPodAutoscaler below owns it.
+            selector:
+              matchLabels:
+                app: search
+            template:
+              metadata:
+                labels:
+                  app: search
+              spec:
+                containers:
+                  - name: search
+                    image: ghcr.io/stefanprodan/podinfo:6.15.0
+                    ports:
+                      - name: http
+                        containerPort: 9898
+                    readinessProbe:
+                      httpGet:
+                        path: /readyz
+                        port: http
+                    livenessProbe:
+                      httpGet:
+                        path: /healthz
+                        port: http
+                    # Requests: what the scheduler reserves and what HPA
+                    # utilization is measured against. Memory limit: a leak
+                    # restarts this container only.
+                    resources:
+                      requests:
+                        cpu: 100m
+                        memory: 64Mi
+                      limits:
+                        memory: 128Mi
+          ---
+          apiVersion: v1
+          kind: Service
+          metadata:
+            name: search
+            namespace: search
+          spec:
+            selector:
+              app: search
+            ports:
+              - name: http
+                port: 80
+                targetPort: http
+          ---
+          apiVersion: autoscaling/v2
+          kind: HorizontalPodAutoscaler
+          metadata:
+            name: search
+            namespace: search
+          spec:
+            scaleTargetRef:
+              apiVersion: apps/v1
+              kind: Deployment
+              name: search
+            minReplicas: 2
+            maxReplicas: 5
+            metrics:
+              - type: Resource
+                resource:
+                  name: cpu
+                  target:
+                    type: Utilization
+                    averageUtilization: 70
+      starter:
+        kind: kubernetes
+        kubernetes:
+          sources:
+            - {kind: manifests, path: k8s}
+        files:
+          k8s/search.yaml: |
+            apiVersion: v1
+            kind: Namespace
+            metadata:
+              name: search
+            ---
+            apiVersion: apps/v1
+            kind: Deployment
+            metadata:
+              name: search
+              namespace: search
+            spec:
+              replicas: 3
+              selector:
+                matchLabels:
+                  app: search
+              template:
+                metadata:
+                  labels:
+                    app: search
+                spec:
+                  containers:
+                    - name: search
+                      image: ghcr.io/stefanprodan/podinfo:6.15.0
+                      ports:
+                        - name: http
+                          containerPort: 9898
+                      readinessProbe:
+                        httpGet:
+                          path: /readyz
+                          port: http
+                      livenessProbe:
+                        httpGet:
+                          path: /healthz
+                          port: http
+            ---
+            apiVersion: v1
+            kind: Service
+            metadata:
+              name: search
+              namespace: search
+            spec:
+              selector:
+                app: search
+              ports:
+                - name: http
+                  port: 80
+                  targetPort: http
+            ---
+            apiVersion: autoscaling/v2
+            kind: HorizontalPodAutoscaler
+            metadata:
+              name: search
+              namespace: search
+            spec:
+              scaleTargetRef:
+                apiVersion: apps/v1
+                kind: Deployment
+                name: search
+              minReplicas: 1
+              maxReplicas: 3
+              metrics:
+                - type: Resource
+                  resource:
+                    name: cpu
+                    target:
+                      type: Utilization
+                      averageUtilization: 70
+      checks:
+        - id: renders
+          label: The manifests are valid Kubernetes objects
+          type: validate
+        - id: resources
+          label: Requests and a memory limit are set, so the HPA can compute utilization
+          type: rules_clean
+          rules_clean:
+            codes: [k8s_no_requests, k8s_no_memory_limit, k8s_hpa_no_requests, k8s_unknown_ref]
+            minSeverity: info
+        - id: hpa-range
+          label: The HPA keeps 2 to at least 4 replicas
+          type: has
+          has:
+            kubernetes:
+              kind: HorizontalPodAutoscaler
+              name: search
+              namespace: search
+              where:
+                spec.scaleTargetRef.name: search
+                spec.minReplicas: {min: 2}
+                spec.maxReplicas: {min: 4}
+        - id: hpa-cpu
+          label: The HPA scales on 70% average CPU utilization
+          type: has
+          has:
+            kubernetes:
+              kind: HorizontalPodAutoscaler
+              name: search
+              namespace: search
+              where:
+                spec.metrics[*].resource.name: cpu
+                spec.metrics[*].resource.target.averageUtilization: 70
+        - id: hpa-owns-replicas
+          label: The Deployment leaves spec.replicas to the HPA
+          type: has
+          has:
+            kubernetes:
+              kind: Deployment
+              name: search
+              namespace: search
+              where:
+                spec.replicas: {exists: false}
+      sources:
+        - title: Kubernetes docs — Resource Management for Pods and Containers
+          url: https://kubernetes.io/docs/concepts/configuration/manage-resources-containers/
+        - title: Kubernetes docs — Pod Quality of Service Classes
+          url: https://kubernetes.io/docs/concepts/workloads/pods/pod-qos/
+        - title: Kubernetes docs — Horizontal Pod Autoscaling
+          url: https://kubernetes.io/docs/tasks/run-application/horizontal-pod-autoscale/
+        - title: Kubernetes docs — HorizontalPodAutoscaler Walkthrough
+          url: https://kubernetes.io/docs/tasks/run-application/horizontal-pod-autoscale-walkthrough/
+        - title: CNCF CKA curriculum (Workloads and Scheduling — configure workload autoscaling)
+          url: https://github.com/cncf/curriculum/blob/master/CKA_Curriculum_v1.37.pdf
+
+  - op: upsert
+    kind: challenge
+    id: kubernetes-kustomize-overlays
+    data:
+      provider: kubernetes
+      level: intermediate
+      title: One base, dev and prod overlays with Kustomize
+      summary: Keep the shared manifests in a base and express what differs in production as a Kustomize overlay.
+      minutes: 35
+      tags: [kustomize, environments, overlays, configuration]
+      prerequisites: [kubernetes-resources-and-hpa]
+      runtime: local
+      problem: |
+        The **storefront** team copied its manifests once per environment
+        and the copies drifted apart. They switched to **Kustomize**, which
+        is built into `kubectl` (`kubectl apply -k`): a **base** holds the
+        manifests every environment shares and each **overlay** refers to
+        the base and lists only what is different.
+
+        `base/` and `overlays/dev/` are done. `overlays/prod/` exists but
+        only points at the base, so production would run in the wrong
+        namespace with one replica and development-sized memory. Switch the
+        workflow's environment to **prod** in Nimbo to see what it renders.
+      requirements:
+        - "The **prod** overlay places everything in namespace `storefront-prod` and adds that Namespace object."
+        - The prod overlay runs the `storefront` Deployment with **3 replicas**.
+        - "The prod overlay raises the container's memory limit to `256Mi` with a patch; the base keeps `128Mi`."
+        - "The **dev** environment still renders in `storefront-dev` with 1 replica: the base is not edited for production."
+      hints:
+        - "`namespace: storefront-prod` in `overlays/prod/kustomization.yaml` sets the namespace of every resource; list a `namespace.yaml` under `resources` to create it. Look at `overlays/dev` for the pattern."
+        - "The `replicas:` field of a kustomization changes a workload's count without a patch: `replicas: [{name: storefront, count: 3}]`."
+        - "A strategic-merge patch is a partial Deployment with just the fields to change (same `kind` and `metadata.name`), listed under `patches: [{path: memory.yaml}]`. Containers merge by `name`."
+      solution: |
+        An overlay is a kustomization whose `resources` include the base.
+        Everything else in it is a transformation applied on top:
+
+        ```yaml
+        # overlays/prod/kustomization.yaml
+        apiVersion: kustomize.config.k8s.io/v1beta1
+        kind: Kustomization
+        namespace: storefront-prod
+        resources:
+          - ../../base
+          - namespace.yaml
+        replicas:
+          - name: storefront
+            count: 3
+        patches:
+          - path: memory.yaml
+        ```
+
+        ```yaml
+        # overlays/prod/memory.yaml — a strategic-merge patch
+        apiVersion: apps/v1
+        kind: Deployment
+        metadata:
+          name: storefront
+        spec:
+          template:
+            spec:
+              containers:
+                - name: storefront
+                  resources:
+                    limits:
+                      memory: 256Mi
+        ```
+
+        The Kubernetes docs recommend small patches that each do one
+        thing, and keeping the base free of environment-specific values so
+        it can be reused by any number of overlays. Render either
+        environment with `kubectl kustomize overlays/prod` to review the
+        result before applying it.
+
+        Production still lacks disruption budgets, spreading and a safe
+        rollout strategy: that is the **kubernetes-zero-downtime-prod**
+        challenge.
+      solutionFiles:
+        overlays/prod/kustomization.yaml: |
+          # Production: own namespace, 3 replicas, more memory.
+          apiVersion: kustomize.config.k8s.io/v1beta1
+          kind: Kustomization
+          namespace: storefront-prod
+          resources:
+            - ../../base
+            - namespace.yaml
+          replicas:
+            - name: storefront
+              count: 3
+          patches:
+            - path: memory.yaml
+        overlays/prod/namespace.yaml: |
+          apiVersion: v1
+          kind: Namespace
+          metadata:
+            name: storefront-prod
+        overlays/prod/memory.yaml: |
+          # Strategic-merge patch: only the fields that change in prod.
+          apiVersion: apps/v1
+          kind: Deployment
+          metadata:
+            name: storefront
+          spec:
+            template:
+              spec:
+                containers:
+                  - name: storefront
+                    resources:
+                      limits:
+                        memory: 256Mi
+      starter:
+        kind: kubernetes
+        files:
+          base/kustomization.yaml: |
+            # What every environment shares.
+            apiVersion: kustomize.config.k8s.io/v1beta1
+            kind: Kustomization
+            labels:
+              - pairs:
+                  app.kubernetes.io/name: storefront
+                includeSelectors: true
+            resources:
+              - deployment.yaml
+              - service.yaml
+          base/deployment.yaml: |
+            apiVersion: apps/v1
+            kind: Deployment
+            metadata:
+              name: storefront
+            spec:
+              replicas: 1
+              selector:
+                matchLabels:
+                  app: storefront
+              template:
+                metadata:
+                  labels:
+                    app: storefront
+                spec:
+                  containers:
+                    - name: storefront
+                      image: ghcr.io/stefanprodan/podinfo:6.15.0
+                      ports:
+                        - name: http
+                          containerPort: 9898
+                      readinessProbe:
+                        httpGet:
+                          path: /readyz
+                          port: http
+                      livenessProbe:
+                        httpGet:
+                          path: /healthz
+                          port: http
+                      resources:
+                        requests:
+                          cpu: 50m
+                          memory: 64Mi
+                        limits:
+                          memory: 128Mi
+          base/service.yaml: |
+            apiVersion: v1
+            kind: Service
+            metadata:
+              name: storefront
+            spec:
+              selector:
+                app: storefront
+              ports:
+                - name: http
+                  port: 80
+                  targetPort: http
+          overlays/dev/kustomization.yaml: |
+            # Development: own namespace, base sizes.
+            apiVersion: kustomize.config.k8s.io/v1beta1
+            kind: Kustomization
+            namespace: storefront-dev
+            resources:
+              - ../../base
+              - namespace.yaml
+          overlays/dev/namespace.yaml: |
+            apiVersion: v1
+            kind: Namespace
+            metadata:
+              name: storefront-dev
+          overlays/prod/kustomization.yaml: |
+            # Production: for now only the shared base.
+            apiVersion: kustomize.config.k8s.io/v1beta1
+            kind: Kustomization
+            resources:
+              - ../../base
+      checks:
+        - id: dev-renders
+          label: The dev environment renders
+          type: validate
+          environment: dev
+        - id: prod-renders
+          label: The prod environment renders
+          type: validate
+          environment: prod
+        - id: prod-namespace
+          label: Prod creates and uses namespace storefront-prod
+          type: has
+          environment: prod
+          has:
+            kubernetes:
+              kind: Namespace
+              name: storefront-prod
+        - id: prod-replicas
+          label: Prod runs 3 replicas in storefront-prod
+          type: has
+          environment: prod
+          has:
+            kubernetes:
+              kind: Deployment
+              name: storefront
+              namespace: storefront-prod
+              where:
+                spec.replicas: {min: 3}
+        - id: prod-memory
+          label: Prod raises the memory limit to 256Mi
+          type: has
+          environment: prod
+          has:
+            kubernetes:
+              kind: Deployment
+              name: storefront
+              where:
+                spec.template.spec.containers.storefront.resources.limits.memory: 256Mi
+        - id: dev-unchanged
+          label: Dev still runs 1 replica with 128Mi in storefront-dev
+          type: has
+          environment: dev
+          has:
+            kubernetes:
+              kind: Deployment
+              name: storefront
+              namespace: storefront-dev
+              where:
+                spec.replicas: {max: 1}
+                spec.template.spec.containers.storefront.resources.limits.memory: 128Mi
+      sources:
+        - title: Kubernetes docs — Declarative Management of Kubernetes Objects Using Kustomize
+          url: https://kubernetes.io/docs/tasks/manage-kubernetes-objects/kustomization/
+        - title: Kustomize reference (kubectl.docs.kubernetes.io)
+          url: https://kubectl.docs.kubernetes.io/references/kustomize/
+        - title: CNCF CKAD curriculum (Application Deployment — Kustomize)
+          url: https://github.com/cncf/curriculum/blob/master/CKAD_Curriculum_v1.37.pdf

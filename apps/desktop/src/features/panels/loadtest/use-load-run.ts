@@ -31,6 +31,8 @@ export function useLoadRun(runId: string | null): { run: LoadTestRun | undefined
       summary: listed.summary ?? fetched.summary,
       thresholds: listed.thresholds ?? fetched.thresholds,
       error: listed.error ?? fetched.error,
+      // Injection and revert times arrive with status events while the run is live.
+      scenario: listed.scenario ?? fetched.scenario,
     }
   }, [fetched, listed])
   const samples = useMemo(() => mergeSamples(fetched?.timeline ?? EMPTY, live), [fetched, live])

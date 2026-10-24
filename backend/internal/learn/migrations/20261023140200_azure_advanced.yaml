@@ -1,0 +1,798 @@
+description: Adds the Azure advanced challenges (Front Door with WAF, hub-spoke network with Azure Firewall)
+operations:
+  - op: upsert
+    kind: challenge
+    id: azure-front-door-waf
+    data:
+      provider: azure
+      level: advanced
+      title: Protect a Front Door edge with a Web Application Firewall
+      summary: Upgrade a Front Door reverse proxy to Premium and attach a WAF policy in Prevention mode with managed rules, bot protection and rate limiting.
+      minutes: 50
+      tags: [edge, front-door, waf, security, defense-in-depth]
+      prerequisites: [azure-app-service-key-vault]
+      runtime: design
+      problem: |
+        This starter is Nimbo's *Reverse proxy (Front Door)* template: Azure Front Door is the only public entry
+        point and the two App Service origins already refuse traffic that doesn't come from this Front Door profile
+        (`AzureFrontDoor.Backend` service tag plus the `X-Azure-FDID` header check).
+
+        But nothing inspects the requests themselves: SQL injection, cross-site scripting and bad bots go straight
+        to the apps. The security team asks for the Azure WAF on Front Door with Microsoft's managed rule sets,
+        enforced (not just logging), plus a rate limit to blunt abusive clients — all defined as code.
+      requirements:
+        - "The Front Door profile uses the Premium tier (`sku_name = \"Premium_AzureFrontDoor\"`), which managed rule sets require."
+        - "An `azurerm_cdn_frontdoor_firewall_policy` on the Premium SKU runs in `Prevention` mode."
+        - "The policy enables the managed `Microsoft_DefaultRuleSet` and the `Microsoft_BotManagerRuleSet`."
+        - "The policy has a `RateLimitRule` custom rule."
+        - "An `azurerm_cdn_frontdoor_security_policy` associates the WAF policy with the Front Door endpoint (`patterns_to_match = [\"/*\"]`)."
+        - "The origins still accept traffic only from this Front Door (`ip_restriction` with the `AzureFrontDoor.Backend` service tag)."
+        - The workflow validates.
+      hints:
+        - "Front Door Standard only supports custom WAF rules; managed rule sets (Default Rule Set 2.1, Bot Manager 1.1) need `Premium_AzureFrontDoor` on both the profile and the WAF policy."
+        - "In Detection mode the WAF only logs. Microsoft suggests tuning exclusions in Detection first, then switching to Prevention."
+        - "A rate limit rule needs `type = \"RateLimitRule\"`, `rate_limit_duration_in_minutes`, `rate_limit_threshold` and at least one `match_condition`."
+        - "The security policy's `association.domain.cdn_frontdoor_domain_id` can be the endpoint ID (`azurerm_cdn_frontdoor_endpoint.main.id`) when you have no custom domain."
+      solution: |
+        1. Switch `azurerm_cdn_frontdoor_profile.main` to `Premium_AzureFrontDoor`.
+        2. Add a WAF policy:
+
+        ```hcl
+        resource "azurerm_cdn_frontdoor_firewall_policy" "main" {
+          name                = "wafedgeproxydev"
+          resource_group_name = azurerm_resource_group.main.name
+          sku_name            = azurerm_cdn_frontdoor_profile.main.sku_name
+          mode                = "Prevention"
+
+          custom_rule {
+            name                           = "RateLimitPerClient"
+            type                           = "RateLimitRule"
+            action                         = "Block"
+            priority                       = 100
+            rate_limit_duration_in_minutes = 1
+            rate_limit_threshold           = 1000
+            match_condition {
+              match_variable = "RequestUri"
+              operator       = "BeginsWith"
+              match_values   = ["/"]
+            }
+          }
+
+          managed_rule {
+            type    = "Microsoft_DefaultRuleSet"
+            version = "2.1"
+            action  = "Block"
+          }
+
+          managed_rule {
+            type    = "Microsoft_BotManagerRuleSet"
+            version = "1.1"
+            action  = "Block"
+          }
+        }
+        ```
+
+        3. Attach it with `azurerm_cdn_frontdoor_security_policy` (firewall → association → domain = the endpoint,
+           `patterns_to_match = ["/*"]`).
+
+        **Why:** the Default Rule Set covers the common web attack classes (SQL injection, XSS, local/remote file
+        inclusion, remote code execution, protocol attacks) and the Bot Manager rule set blocks known bad bots;
+        Prevention mode actually takes the rule action. Custom rules run before managed rules, so the rate limit
+        throttles floods cheaply; Microsoft recommends a threshold well above normal per-client traffic. Together
+        with origin lock-down (service tag + `X-Azure-FDID`) this is defense in depth: the edge filters requests and
+        the origins only trust that edge. Keeping the policy in Terraform lets you review exclusions and upgrade
+        rule-set versions safely.
+      solutionFiles:
+        main.tf: |
+          resource "azurerm_resource_group" "main" {
+            name     = "${local.name_prefix}-rg"
+            location = var.location
+            tags     = local.common_tags
+          }
+
+          # App Service names are global: a short random suffix keeps them unique.
+          resource "random_string" "suffix" {
+            length  = 6
+            special = false
+            upper   = false
+          }
+
+          resource "azurerm_service_plan" "main" {
+            name                = "${local.name_prefix}-plan"
+            resource_group_name = azurerm_resource_group.main.name
+            location            = azurerm_resource_group.main.location
+            os_type             = "Linux"
+            sku_name            = var.app_service_sku
+            tags                = local.common_tags
+          }
+
+          # The internal servers: they refuse every request that does not come
+          # through this Front Door profile (service tag + X-Azure-FDID header).
+          resource "azurerm_linux_web_app" "app" {
+            for_each                      = local.apps
+            name                          = "${local.name_prefix}-${each.key}-${random_string.suffix.result}"
+            resource_group_name           = azurerm_resource_group.main.name
+            location                      = azurerm_resource_group.main.location
+            service_plan_id               = azurerm_service_plan.main.id
+            https_only                    = true
+            public_network_access_enabled = true
+            tags                          = local.common_tags
+
+            site_config {
+              always_on                         = true
+              ftps_state                        = "Disabled"
+              http2_enabled                     = true
+              minimum_tls_version               = "1.2"
+              health_check_path                 = "/"
+              health_check_eviction_time_in_min = 5
+              ip_restriction_default_action     = "Deny"
+
+              application_stack {
+                docker_image_name   = var.app_image
+                docker_registry_url = "https://index.docker.io"
+              }
+
+              ip_restriction {
+                name        = "front-door-only"
+                priority    = 100
+                action      = "Allow"
+                service_tag = "AzureFrontDoor.Backend"
+
+                headers {
+                  x_azure_fdid = [azurerm_cdn_frontdoor_profile.main.resource_guid]
+                }
+              }
+            }
+          }
+
+          # Front Door: the one public endpoint, terminating HTTPS at the edge.
+          # Premium is required for the WAF managed rule sets.
+          resource "azurerm_cdn_frontdoor_profile" "main" {
+            name                     = "${local.name_prefix}-fd"
+            resource_group_name      = azurerm_resource_group.main.name
+            sku_name                 = "Premium_AzureFrontDoor"
+            response_timeout_seconds = 60
+            tags                     = local.common_tags
+          }
+
+          resource "azurerm_cdn_frontdoor_endpoint" "main" {
+            name                     = "${local.name_prefix}-${random_string.suffix.result}"
+            cdn_frontdoor_profile_id = azurerm_cdn_frontdoor_profile.main.id
+            tags                     = local.common_tags
+          }
+
+          resource "azurerm_cdn_frontdoor_origin_group" "app" {
+            for_each                 = local.apps
+            name                     = each.key
+            cdn_frontdoor_profile_id = azurerm_cdn_frontdoor_profile.main.id
+
+            load_balancing {
+              sample_size                 = 4
+              successful_samples_required = 3
+            }
+
+            health_probe {
+              path                = "/"
+              protocol            = "Https"
+              request_type        = "HEAD"
+              interval_in_seconds = 100
+            }
+          }
+
+          resource "azurerm_cdn_frontdoor_origin" "app" {
+            for_each                       = local.apps
+            name                           = each.key
+            cdn_frontdoor_origin_group_id  = azurerm_cdn_frontdoor_origin_group.app[each.key].id
+            enabled                        = true
+            host_name                      = azurerm_linux_web_app.app[each.key].default_hostname
+            origin_host_header             = azurerm_linux_web_app.app[each.key].default_hostname
+            certificate_name_check_enabled = true
+            http_port                      = 80
+            https_port                     = 443
+            priority                       = 1
+            weight                         = 1000
+          }
+
+          # Path routing: /api/* to the API app, everything else to the web app.
+          resource "azurerm_cdn_frontdoor_route" "app" {
+            for_each                      = local.apps
+            name                          = each.key
+            cdn_frontdoor_endpoint_id     = azurerm_cdn_frontdoor_endpoint.main.id
+            cdn_frontdoor_origin_group_id = azurerm_cdn_frontdoor_origin_group.app[each.key].id
+            cdn_frontdoor_origin_ids      = [azurerm_cdn_frontdoor_origin.app[each.key].id]
+            patterns_to_match             = each.value
+            supported_protocols           = ["Http", "Https"]
+            https_redirect_enabled        = true
+            forwarding_protocol           = "HttpsOnly"
+            link_to_default_domain        = true
+          }
+        waf.tf: |
+          # WAF policy names allow letters and digits only.
+          resource "azurerm_cdn_frontdoor_firewall_policy" "main" {
+            name                = "waf${replace(local.name_prefix, "-", "")}"
+            resource_group_name = azurerm_resource_group.main.name
+            sku_name            = azurerm_cdn_frontdoor_profile.main.sku_name
+            enabled             = true
+            mode                = "Prevention"
+            tags                = local.common_tags
+
+            # Custom rules run before the managed rule sets.
+            custom_rule {
+              name                           = "RateLimitPerClient"
+              type                           = "RateLimitRule"
+              action                         = "Block"
+              enabled                        = true
+              priority                       = 100
+              rate_limit_duration_in_minutes = 1
+              rate_limit_threshold           = 1000
+
+              match_condition {
+                match_variable = "RequestUri"
+                operator       = "BeginsWith"
+                match_values   = ["/"]
+              }
+            }
+
+            managed_rule {
+              type    = "Microsoft_DefaultRuleSet"
+              version = "2.1"
+              action  = "Block"
+            }
+
+            managed_rule {
+              type    = "Microsoft_BotManagerRuleSet"
+              version = "1.1"
+              action  = "Block"
+            }
+          }
+
+          resource "azurerm_cdn_frontdoor_security_policy" "main" {
+            name                     = "${local.name_prefix}-waf"
+            cdn_frontdoor_profile_id = azurerm_cdn_frontdoor_profile.main.id
+
+            security_policies {
+              firewall {
+                cdn_frontdoor_firewall_policy_id = azurerm_cdn_frontdoor_firewall_policy.main.id
+
+                association {
+                  patterns_to_match = ["/*"]
+
+                  domain {
+                    cdn_frontdoor_domain_id = azurerm_cdn_frontdoor_endpoint.main.id
+                  }
+                }
+              }
+            }
+          }
+      starter:
+        templateId: azure-reverse-proxy
+      checks:
+        - id: validate
+          label: The workflow validates
+          type: validate
+        - id: premium-profile
+          label: The Front Door profile is Premium
+          type: has
+          has:
+            terraform:
+              type: azurerm_cdn_frontdoor_profile
+              where:
+                sku_name: Premium_AzureFrontDoor
+        - id: waf-prevention
+          label: A Front Door WAF policy runs in Prevention mode
+          type: has
+          has:
+            terraform:
+              type: azurerm_cdn_frontdoor_firewall_policy
+              where:
+                mode: Prevention
+        - id: managed-rules
+          label: The Microsoft Default Rule Set 2.1 is enabled
+          type: has
+          has:
+            terraform:
+              type: azurerm_cdn_frontdoor_firewall_policy
+              where:
+                managed_rule.type: Microsoft_DefaultRuleSet
+                managed_rule.version:
+                  in: ["2.1"]
+        - id: bot-rules
+          label: Bot protection is enabled (Microsoft_BotManagerRuleSet)
+          type: has
+          has:
+            terraform:
+              type: azurerm_cdn_frontdoor_firewall_policy
+              where:
+                managed_rule.type: Microsoft_BotManagerRuleSet
+        - id: rate-limit
+          label: A rate-limit custom rule throttles abusive clients
+          type: has
+          has:
+            terraform:
+              type: azurerm_cdn_frontdoor_firewall_policy
+              where:
+                custom_rule.type: RateLimitRule
+        - id: waf-attached
+          label: A security policy attaches the WAF policy to the endpoint
+          type: has
+          has:
+            terraform:
+              type: azurerm_cdn_frontdoor_security_policy
+              where:
+                security_policies.firewall.cdn_frontdoor_firewall_policy_id:
+                  ref: azurerm_cdn_frontdoor_firewall_policy
+                security_policies.firewall.association.domain.cdn_frontdoor_domain_id:
+                  ref: azurerm_cdn_frontdoor_endpoint
+        - id: origin-locked
+          label: Origins only accept traffic from Front Door
+          type: has
+          has:
+            terraform:
+              type: azurerm_linux_web_app
+              where:
+                site_config.ip_restriction.service_tag: AzureFrontDoor.Backend
+                site_config.ip_restriction_default_action: Deny
+      sources:
+        - title: Azure Web Application Firewall on Azure Front Door
+          url: https://learn.microsoft.com/en-us/azure/web-application-firewall/afds/afds-overview
+        - title: Best practices for Web Application Firewall on Azure Front Door
+          url: https://learn.microsoft.com/en-us/azure/web-application-firewall/afds/waf-front-door-best-practices
+        - title: Secure traffic to Azure Front Door origins
+          url: https://learn.microsoft.com/en-us/azure/frontdoor/origin-security
+        - title: App Service access restrictions (restrict access to a specific Azure Front Door instance)
+          url: https://learn.microsoft.com/en-us/azure/app-service/overview-access-restrictions
+        - title: azurerm_cdn_frontdoor_firewall_policy (azurerm 4.x)
+          url: https://registry.terraform.io/providers/hashicorp/azurerm/4.81.0/docs/resources/cdn_frontdoor_firewall_policy
+        - title: azurerm_cdn_frontdoor_security_policy (azurerm 4.x)
+          url: https://registry.terraform.io/providers/hashicorp/azurerm/4.81.0/docs/resources/cdn_frontdoor_security_policy
+        - title: azurerm_cdn_frontdoor_profile (azurerm 4.x)
+          url: https://registry.terraform.io/providers/hashicorp/azurerm/4.81.0/docs/resources/cdn_frontdoor_profile
+
+  - op: upsert
+    kind: challenge
+    id: azure-hub-spoke-firewall
+    data:
+      provider: azure
+      level: advanced
+      title: Build a hub-spoke network with Azure Firewall
+      summary: Turn three loosely peered VNets into a hub-spoke topology where all spoke egress and spoke-to-spoke traffic flows through Azure Firewall.
+      minutes: 60
+      tags: [networking, hub-spoke, firewall, segmentation, landing-zone]
+      prerequisites: [azure-vnet-nsg]
+      runtime: design
+      problem: |
+        The platform team has a `hub` virtual network and two workload spokes (`spoke-a`, `spoke-b`). Peerings
+        exist only from the hub to each spoke, nobody inspects traffic leaving the spokes, and someone opened RDP
+        to the internet on a spoke "just for a day".
+
+        The Azure Architecture Center hub-spoke reference architecture — the basis of Azure landing zones — puts
+        shared services such as Azure Firewall in the hub, peers each spoke to the hub in both directions and uses
+        user-defined routes so spoke traffic is forced through the firewall. Peering is not transitive, so
+        spoke-to-spoke traffic also has to be routed through the hub.
+      requirements:
+        - "Each spoke is peered with the hub in **both** directions, and the peerings allow forwarded traffic (`allow_forwarded_traffic = true`)."
+        - "The hub has a subnet named exactly `AzureFirewallSubnet` and an `azurerm_firewall` (`sku_name = \"AZFW_VNet\"`, Standard or Premium tier, spread across availability zones) placed in it, governed by an `azurerm_firewall_policy`."
+        - "An `azurerm_route_table` with an `azurerm_route` sends `0.0.0.0/0` to the firewall's private IP (`next_hop_type = \"VirtualAppliance\"`), and it is associated with the workload subnet of each spoke."
+        - No NSG rule exposes admin or database ports to the internet (`bp_open_ingress`).
+        - The workflow validates.
+      hints:
+        - "Peerings are one-way resources: you need `hub -> spoke` and `spoke -> hub` (four `azurerm_virtual_network_peering` resources for two spokes)."
+        - "The firewall subnet must be named `AzureFirewallSubnet` and be at least /26. The firewall needs a Standard, Static public IP."
+        - "The firewall's private address is `azurerm_firewall.hub.ip_configuration[0].private_ip_address`; use it as `next_hop_in_ip_address`."
+        - "Allow spoke-to-spoke flows explicitly with an `azurerm_firewall_policy_rule_collection_group` network rule; everything not allowed is denied by the firewall."
+        - Delete the public RDP rule. For admin access, put Azure Bastion in the hub — one Bastion can reach VMs in peered spokes.
+      solution: |
+        1. Add the missing `spoke -> hub` peerings and set `allow_forwarded_traffic = true` on all four peerings.
+        2. In the hub, add `AzureFirewallSubnet` (/26), a Standard Static public IP, an `azurerm_firewall_policy`, a rule
+           collection group that allows the spoke-to-spoke and outbound flows you need, and an `azurerm_firewall`
+           (`AZFW_VNet`, `Standard`, `zones = ["1", "2", "3"]`).
+        3. Create `rt-spokes` with a route `0.0.0.0/0 -> VirtualAppliance -> firewall private IP` and associate it with
+           both spoke workload subnets (`azurerm_subnet_route_table_association`).
+        4. Remove the inbound RDP rule from the internet.
+
+        **Why:** the hub concentrates shared, centrally managed controls; spokes isolate workloads and can be
+        delegated to teams or subscriptions. Because VNet peering is non-transitive, the UDRs make the firewall the
+        next hop for both internet egress and spoke-to-spoke traffic, and that only works when peerings accept
+        forwarded traffic. Zones make the hub service resilient to a datacenter failure; the firewall policy keeps
+        rules as reviewable code; removing public RDP closes the most scanned attack surface.
+      solutionFiles:
+        network.tf: |
+          resource "azurerm_virtual_network" "hub" {
+            name                = "vnet-${local.name_prefix}-hub"
+            resource_group_name = azurerm_resource_group.main.name
+            location            = azurerm_resource_group.main.location
+            address_space       = ["10.0.0.0/22"]
+            tags                = local.common_tags
+          }
+
+          resource "azurerm_subnet" "firewall" {
+            # Azure Firewall requires this exact name and at least a /26.
+            name                 = "AzureFirewallSubnet"
+            resource_group_name  = azurerm_resource_group.main.name
+            virtual_network_name = azurerm_virtual_network.hub.name
+            address_prefixes     = ["10.0.0.0/26"]
+          }
+
+          resource "azurerm_virtual_network" "spoke_a" {
+            name                = "vnet-${local.name_prefix}-spoke-a"
+            resource_group_name = azurerm_resource_group.main.name
+            location            = azurerm_resource_group.main.location
+            address_space       = ["10.1.0.0/16"]
+            tags                = local.common_tags
+          }
+
+          resource "azurerm_subnet" "spoke_a_app" {
+            name                 = "snet-app"
+            resource_group_name  = azurerm_resource_group.main.name
+            virtual_network_name = azurerm_virtual_network.spoke_a.name
+            address_prefixes     = ["10.1.1.0/24"]
+          }
+
+          resource "azurerm_virtual_network" "spoke_b" {
+            name                = "vnet-${local.name_prefix}-spoke-b"
+            resource_group_name = azurerm_resource_group.main.name
+            location            = azurerm_resource_group.main.location
+            address_space       = ["10.2.0.0/16"]
+            tags                = local.common_tags
+          }
+
+          resource "azurerm_subnet" "spoke_b_app" {
+            name                 = "snet-app"
+            resource_group_name  = azurerm_resource_group.main.name
+            virtual_network_name = azurerm_virtual_network.spoke_b.name
+            address_prefixes     = ["10.2.1.0/24"]
+          }
+
+          resource "azurerm_network_security_group" "spoke_b_app" {
+            name                = "nsg-${local.name_prefix}-spoke-b-app"
+            resource_group_name = azurerm_resource_group.main.name
+            location            = azurerm_resource_group.main.location
+            tags                = local.common_tags
+          }
+
+          resource "azurerm_subnet_network_security_group_association" "spoke_b_app" {
+            subnet_id                 = azurerm_subnet.spoke_b_app.id
+            network_security_group_id = azurerm_network_security_group.spoke_b_app.id
+          }
+
+          # Peerings are one-way: each spoke needs hub -> spoke and spoke -> hub.
+          resource "azurerm_virtual_network_peering" "hub_to_spoke_a" {
+            name                      = "peer-hub-to-spoke-a"
+            resource_group_name       = azurerm_resource_group.main.name
+            virtual_network_name      = azurerm_virtual_network.hub.name
+            remote_virtual_network_id = azurerm_virtual_network.spoke_a.id
+            allow_forwarded_traffic   = true
+          }
+
+          resource "azurerm_virtual_network_peering" "spoke_a_to_hub" {
+            name                      = "peer-spoke-a-to-hub"
+            resource_group_name       = azurerm_resource_group.main.name
+            virtual_network_name      = azurerm_virtual_network.spoke_a.name
+            remote_virtual_network_id = azurerm_virtual_network.hub.id
+            allow_forwarded_traffic   = true
+          }
+
+          resource "azurerm_virtual_network_peering" "hub_to_spoke_b" {
+            name                      = "peer-hub-to-spoke-b"
+            resource_group_name       = azurerm_resource_group.main.name
+            virtual_network_name      = azurerm_virtual_network.hub.name
+            remote_virtual_network_id = azurerm_virtual_network.spoke_b.id
+            allow_forwarded_traffic   = true
+          }
+
+          resource "azurerm_virtual_network_peering" "spoke_b_to_hub" {
+            name                      = "peer-spoke-b-to-hub"
+            resource_group_name       = azurerm_resource_group.main.name
+            virtual_network_name      = azurerm_virtual_network.spoke_b.name
+            remote_virtual_network_id = azurerm_virtual_network.hub.id
+            allow_forwarded_traffic   = true
+          }
+        firewall.tf: |
+          resource "azurerm_public_ip" "firewall" {
+            name                = "pip-${local.name_prefix}-afw"
+            resource_group_name = azurerm_resource_group.main.name
+            location            = azurerm_resource_group.main.location
+            allocation_method   = "Static"
+            sku                 = "Standard"
+            zones               = ["1", "2", "3"]
+            tags                = local.common_tags
+          }
+
+          resource "azurerm_firewall_policy" "hub" {
+            name                     = "afwp-${local.name_prefix}"
+            resource_group_name      = azurerm_resource_group.main.name
+            location                 = azurerm_resource_group.main.location
+            sku                      = "Standard"
+            threat_intelligence_mode = "Deny"
+            tags                     = local.common_tags
+          }
+
+          resource "azurerm_firewall_policy_rule_collection_group" "spokes" {
+            name               = "rcg-spokes"
+            firewall_policy_id = azurerm_firewall_policy.hub.id
+            priority           = 200
+
+            network_rule_collection {
+              name     = "allow-spoke-to-spoke"
+              priority = 100
+              action   = "Allow"
+
+              rule {
+                name                  = "spoke-a-to-spoke-b-https"
+                protocols             = ["TCP"]
+                source_addresses      = ["10.1.0.0/16"]
+                destination_addresses = ["10.2.0.0/16"]
+                destination_ports     = ["443"]
+              }
+            }
+          }
+
+          resource "azurerm_firewall" "hub" {
+            name                = "afw-${local.name_prefix}"
+            resource_group_name = azurerm_resource_group.main.name
+            location            = azurerm_resource_group.main.location
+            sku_name            = "AZFW_VNet"
+            sku_tier            = "Standard"
+            firewall_policy_id  = azurerm_firewall_policy.hub.id
+            zones               = ["1", "2", "3"]
+            tags                = local.common_tags
+
+            ip_configuration {
+              name                 = "configuration"
+              subnet_id            = azurerm_subnet.firewall.id
+              public_ip_address_id = azurerm_public_ip.firewall.id
+            }
+          }
+
+          # Force spoke egress and spoke-to-spoke traffic through the firewall.
+          resource "azurerm_route_table" "spokes" {
+            name                          = "rt-${local.name_prefix}-spokes"
+            resource_group_name           = azurerm_resource_group.main.name
+            location                      = azurerm_resource_group.main.location
+            bgp_route_propagation_enabled = false
+            tags                          = local.common_tags
+          }
+
+          resource "azurerm_route" "default_via_firewall" {
+            name                   = "udr-default-via-afw"
+            resource_group_name    = azurerm_resource_group.main.name
+            route_table_name       = azurerm_route_table.spokes.name
+            address_prefix         = "0.0.0.0/0"
+            next_hop_type          = "VirtualAppliance"
+            next_hop_in_ip_address = azurerm_firewall.hub.ip_configuration[0].private_ip_address
+          }
+
+          resource "azurerm_subnet_route_table_association" "spoke_a_app" {
+            subnet_id      = azurerm_subnet.spoke_a_app.id
+            route_table_id = azurerm_route_table.spokes.id
+          }
+
+          resource "azurerm_subnet_route_table_association" "spoke_b_app" {
+            subnet_id      = azurerm_subnet.spoke_b_app.id
+            route_table_id = azurerm_route_table.spokes.id
+          }
+      starter:
+        kind: terraform
+        cloud: azure
+        files:
+          versions.tf: |
+            terraform {
+              required_version = ">= 1.6"
+
+              required_providers {
+                azurerm = {
+                  source  = "hashicorp/azurerm"
+                  version = "~> 4.0"
+                }
+              }
+            }
+          providers.tf: |
+            provider "azurerm" {
+              features {}
+            }
+          variables.tf: |
+            variable "project" {
+              type        = string
+              default     = "corpnet"
+              description = "Project name: part of every resource name."
+            }
+
+            variable "environment" {
+              type        = string
+              default     = "prod"
+              description = "Deployment environment (dev, test, prod)."
+            }
+
+            variable "location" {
+              type        = string
+              default     = "westeurope"
+              description = "Azure region of the hub and its spokes (one hub per region)."
+            }
+          locals.tf: |
+            locals {
+              name_prefix = "${var.project}-${var.environment}"
+              common_tags = {
+                project     = var.project
+                environment = var.environment
+                managedby   = "terraform"
+              }
+            }
+          main.tf: |
+            resource "azurerm_resource_group" "main" {
+              name     = "rg-${local.name_prefix}-network"
+              location = var.location
+              tags     = local.common_tags
+            }
+          network.tf: |
+            resource "azurerm_virtual_network" "hub" {
+              name                = "vnet-${local.name_prefix}-hub"
+              resource_group_name = azurerm_resource_group.main.name
+              location            = azurerm_resource_group.main.location
+              address_space       = ["10.0.0.0/22"]
+              tags                = local.common_tags
+            }
+
+            resource "azurerm_virtual_network" "spoke_a" {
+              name                = "vnet-${local.name_prefix}-spoke-a"
+              resource_group_name = azurerm_resource_group.main.name
+              location            = azurerm_resource_group.main.location
+              address_space       = ["10.1.0.0/16"]
+              tags                = local.common_tags
+            }
+
+            resource "azurerm_subnet" "spoke_a_app" {
+              name                 = "snet-app"
+              resource_group_name  = azurerm_resource_group.main.name
+              virtual_network_name = azurerm_virtual_network.spoke_a.name
+              address_prefixes     = ["10.1.1.0/24"]
+            }
+
+            resource "azurerm_virtual_network" "spoke_b" {
+              name                = "vnet-${local.name_prefix}-spoke-b"
+              resource_group_name = azurerm_resource_group.main.name
+              location            = azurerm_resource_group.main.location
+              address_space       = ["10.2.0.0/16"]
+              tags                = local.common_tags
+            }
+
+            resource "azurerm_subnet" "spoke_b_app" {
+              name                 = "snet-app"
+              resource_group_name  = azurerm_resource_group.main.name
+              virtual_network_name = azurerm_virtual_network.spoke_b.name
+              address_prefixes     = ["10.2.1.0/24"]
+            }
+
+            resource "azurerm_network_security_group" "spoke_b_app" {
+              name                = "nsg-${local.name_prefix}-spoke-b-app"
+              resource_group_name = azurerm_resource_group.main.name
+              location            = azurerm_resource_group.main.location
+              tags                = local.common_tags
+
+              security_rule {
+                name                       = "temp-rdp"
+                priority                   = 100
+                direction                  = "Inbound"
+                access                     = "Allow"
+                protocol                   = "Tcp"
+                source_port_range          = "*"
+                destination_port_range     = "3389"
+                source_address_prefix      = "Internet"
+                destination_address_prefix = "*"
+              }
+            }
+
+            resource "azurerm_subnet_network_security_group_association" "spoke_b_app" {
+              subnet_id                 = azurerm_subnet.spoke_b_app.id
+              network_security_group_id = azurerm_network_security_group.spoke_b_app.id
+            }
+
+            resource "azurerm_virtual_network_peering" "hub_to_spoke_a" {
+              name                      = "peer-hub-to-spoke-a"
+              resource_group_name       = azurerm_resource_group.main.name
+              virtual_network_name      = azurerm_virtual_network.hub.name
+              remote_virtual_network_id = azurerm_virtual_network.spoke_a.id
+            }
+
+            resource "azurerm_virtual_network_peering" "hub_to_spoke_b" {
+              name                      = "peer-hub-to-spoke-b"
+              resource_group_name       = azurerm_resource_group.main.name
+              virtual_network_name      = azurerm_virtual_network.hub.name
+              remote_virtual_network_id = azurerm_virtual_network.spoke_b.id
+            }
+      checks:
+        - id: validate
+          label: The workflow validates
+          type: validate
+        - id: spoke-to-hub
+          label: Spokes peer back to the hub and accept forwarded traffic
+          type: has
+          has:
+            terraform:
+              type: azurerm_virtual_network_peering
+              where:
+                remote_virtual_network_id:
+                  ref: azurerm_virtual_network.hub
+                allow_forwarded_traffic: true
+              count:
+                min: 2
+        - id: hub-to-spoke
+          label: Hub peerings accept forwarded traffic
+          type: has
+          has:
+            terraform:
+              type: azurerm_virtual_network_peering
+              where:
+                virtual_network_name:
+                  ref: azurerm_virtual_network.hub
+                allow_forwarded_traffic: true
+              count:
+                min: 2
+        - id: firewall-subnet
+          label: The hub has an AzureFirewallSubnet
+          type: has
+          has:
+            terraform:
+              type: azurerm_subnet
+              where:
+                name: AzureFirewallSubnet
+                virtual_network_name:
+                  ref: azurerm_virtual_network.hub
+        - id: firewall
+          label: Azure Firewall (VNet SKU, Standard or Premium, zone-redundant) runs in the hub with a firewall policy
+          type: has
+          has:
+            terraform:
+              type: azurerm_firewall
+              where:
+                sku_name: AZFW_VNet
+                sku_tier:
+                  in: [Standard, Premium]
+                zones:
+                  exists: true
+                firewall_policy_id:
+                  ref: azurerm_firewall_policy
+                ip_configuration.subnet_id:
+                  ref: azurerm_subnet
+        - id: udr
+          label: A route sends 0.0.0.0/0 to the firewall
+          type: has
+          has:
+            terraform:
+              type: azurerm_route
+              where:
+                address_prefix: 0.0.0.0/0
+                next_hop_type: VirtualAppliance
+                next_hop_in_ip_address:
+                  ref: azurerm_firewall
+        - id: udr-associated
+          label: The route table is associated with both spoke workload subnets
+          type: has
+          has:
+            terraform:
+              type: azurerm_subnet_route_table_association
+              where:
+                route_table_id:
+                  ref: azurerm_route_table
+              count:
+                min: 2
+        - id: no-open-admin-ports
+          label: No admin or database port is open to the internet (bp_open_ingress)
+          type: rules_clean
+          rules_clean:
+            codes: [bp_open_ingress]
+            minSeverity: info
+      sources:
+        - title: Hub-spoke network topology in Azure (Azure Architecture Center)
+          url: https://learn.microsoft.com/en-us/azure/architecture/networking/architecture/hub-spoke
+        - title: Plan virtual networks
+          url: https://learn.microsoft.com/en-us/azure/virtual-network/virtual-network-vnet-plan-design-arm
+        - title: Study guide for Exam AZ-305 (design network solutions)
+          url: https://learn.microsoft.com/en-us/credentials/certifications/resources/study-guides/az-305
+        - title: azurerm_virtual_network_peering (azurerm 4.x)
+          url: https://registry.terraform.io/providers/hashicorp/azurerm/4.81.0/docs/resources/virtual_network_peering
+        - title: azurerm_firewall (azurerm 4.x)
+          url: https://registry.terraform.io/providers/hashicorp/azurerm/4.81.0/docs/resources/firewall
+        - title: azurerm_route (azurerm 4.x)
+          url: https://registry.terraform.io/providers/hashicorp/azurerm/4.81.0/docs/resources/route
+        - title: azurerm_subnet_route_table_association (azurerm 4.x)
+          url: https://registry.terraform.io/providers/hashicorp/azurerm/4.81.0/docs/resources/subnet_route_table_association

@@ -17,9 +17,13 @@ import { ResourceCard } from "./resource-card"
 import { SUPPORTING_SECTION_ID, SupportingSection } from "./supporting-section"
 import { cardDomId, tryTarget, useEndpoints, useEndpointsFocus } from "./use-endpoints"
 
-/** Scrolls the list box so the element with domId sits at its top. */
-function scrollWithin(box: HTMLElement | null, domId: string) {
+/**
+ * Scrolls the list box so the element with domId sits at its top. Stacked (narrow panel) the list doesn't scroll on
+ * its own: the whole tab, its parent, does.
+ */
+function scrollWithin(list: HTMLElement | null, domId: string) {
   const el = document.getElementById(domId)
+  const box = list && list.scrollHeight <= list.clientHeight ? list.parentElement : list
   if (!box || !el) return
   const top = box.scrollTop + el.getBoundingClientRect().top - box.getBoundingClientRect().top - 8
   box.scrollTo({ top, behavior: "smooth" })
@@ -103,12 +107,14 @@ export function EndpointsTab() {
   }
 
   return (
-    <div className="grid h-full min-h-0 grid-cols-[minmax(16rem,20rem)_minmax(0,1fr)]">
-      <aside className="flex min-h-0 flex-col gap-2 overflow-auto border-r p-2">
+    // Narrow bottom panels (< 48rem, the panel is the container) stack the connection cards above the resources and
+    // scroll as one page (the "On this page" index is left out); wide ones put them side by side.
+    <div className="grid h-full min-h-0 grid-rows-[auto_1fr] overflow-y-auto @3xl:grid-cols-[minmax(16rem,20rem)_minmax(0,1fr)] @3xl:grid-rows-1 @3xl:overflow-hidden">
+      <aside className="flex flex-col gap-2 border-b p-2 @3xl:min-h-0 @3xl:overflow-auto @3xl:border-r @3xl:border-b-0">
         {kube ? <KubeClusterCard /> : docker ? <ContainersCard /> : <ConnectCard sandbox={info?.sandbox ?? []} />}
         {resources.length > 0 && <PostmanCard />}
         {(groups.length > 0 || supporting.length > 0) && (
-          <nav aria-label="Deployed resources" className="flex flex-col gap-2 rounded-lg border p-2.5">
+          <nav aria-label="Deployed resources" className="hidden flex-col gap-2 rounded-lg border p-2.5 @3xl:flex">
             <h3 className="text-xs font-semibold">On this page</h3>
             {groups.map((g) => (
               <div key={g.id} className="flex flex-col gap-0.5">
@@ -137,7 +143,7 @@ export function EndpointsTab() {
         )}
       </aside>
 
-      <div ref={scroller} className="min-h-0 overflow-auto p-3">
+      <div ref={scroller} className="min-w-0 p-3 @3xl:min-h-0 @3xl:overflow-auto">
         {resources.length === 0 ? (
           kube ? <NothingForwarded /> : docker ? <NothingPublished /> : <NothingDeployed />
         ) : (

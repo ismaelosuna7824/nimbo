@@ -1,0 +1,1447 @@
+description: Adds the OCI intermediate challenges (network security groups and Bastion, load-balanced instance pool with autoscaling, customer-managed keys in Vault)
+operations:
+  - op: upsert
+    kind: challenge
+    id: oci-nsg-tiered-access
+    data:
+      provider: oci
+      level: intermediate
+      title: Tiered access with network security groups and Bastion
+      summary: Replace a wide-open security list with per-tier NSGs, and reach private hosts through the Bastion service instead of public SSH.
+      minutes: 40
+      tags: [networking, nsg, security-lists, bastion, segmentation]
+      runtime: design
+      prerequisites: [oci-vcn-public-private-subnets]
+      problem: |
+        A two-tier app runs a web server in a public subnet and an API server (port 8080) in a private subnet. Both
+        subnets share one security list that accepts SSH (22), HTTPS (443) and the API port (8080) from
+        0.0.0.0/0, so anything that can reach either subnet can reach every port, and SSH is exposed to the whole
+        internet.
+
+        OCI recommends network security groups (NSGs) over security lists: an NSG applies to the VNICs you put in
+        it, and a rule's source can be another NSG, so "the API accepts traffic only from the web tier" becomes a
+        single rule that survives IP changes. For administration, the OCI Bastion service gives time-limited,
+        audited SSH sessions to hosts without public IPs, limited to the client ranges you allow.
+      requirements:
+        - No security list has an ingress rule from 0.0.0.0/0 (internet-facing rules move to an NSG).
+        - A web NSG allows TCP 443 from 0.0.0.0/0.
+        - An app NSG allows TCP 8080 only from the web NSG (source_type = "NETWORK_SECURITY_GROUP").
+        - No NSG rule opens SSH (22) or the API port (8080) to 0.0.0.0/0.
+        - Both instances join their NSG through create_vnic_details.nsg_ids.
+        - An oci_bastion_bastion targets the private subnet and its client_cidr_block_allow_list does not contain 0.0.0.0/0.
+      hints:
+        - A VCN's default security list allows SSH from anywhere. Subnets that list their own security_list_ids don't use it, so give both subnets a security list that only has egress rules.
+        - Each rule is its own oci_core_network_security_group_security_rule with direction, protocol ("6" is TCP), source/source_type and tcp_options.destination_port_range.
+        - For NSG-to-NSG rules, set source to the other NSG's id and source_type = "NETWORK_SECURITY_GROUP"; the web NSG also needs an egress rule towards the app NSG on 8080.
+        - The Bastion service is created in the public-facing compartment but targets the private subnet; set client_cidr_block_allow_list to your office or VPN range (a variable), and allow SSH on the app NSG only from the private subnet's CIDR, where the bastion's endpoint lives.
+      solution: |
+        1. Replace the shared security list with one that has only egress rules, so the default list's SSH rule
+           and the old 0.0.0.0/0 rules are gone.
+        2. Create two NSGs and express the tiers as rules:
+
+        ```hcl
+        resource "oci_core_network_security_group_security_rule" "web_https_in" {
+          network_security_group_id = oci_core_network_security_group.web.id
+          direction                 = "INGRESS"
+          protocol                  = "6"
+          source                    = "0.0.0.0/0"
+          source_type               = "CIDR_BLOCK"
+          tcp_options {
+            destination_port_range {
+              min = 443
+              max = 443
+            }
+          }
+        }
+
+        resource "oci_core_network_security_group_security_rule" "app_from_web" {
+          network_security_group_id = oci_core_network_security_group.app.id
+          direction                 = "INGRESS"
+          protocol                  = "6"
+          source                    = oci_core_network_security_group.web.id
+          source_type               = "NETWORK_SECURITY_GROUP"
+          tcp_options {
+            destination_port_range {
+              min = 8080
+              max = 8080
+            }
+          }
+        }
+        ```
+
+        3. Put each instance in its NSG with `create_vnic_details { nsg_ids = [...] }`.
+        4. Add `oci_bastion_bastion` (bastion_type = "standard") targeting the private subnet, with
+           `client_cidr_block_allow_list = [var.admin_cidr]`.
+
+        **Why:** security lists apply to every VNIC in a subnet, so one permissive list exposes all hosts in it.
+        NSG rules follow the VNICs that belong to the group, and an NSG source keeps the web-to-API path correct
+        even when instances are replaced. Oracle's security guide recommends allowing SSH only from authorized
+        CIDR blocks rather than 0.0.0.0/0; the Bastion service goes further, giving identity-based, audited and
+        time-bound sessions without public IPs on the hosts. Traffic is allowed if any security list or NSG that
+        applies to the VNIC allows it, which is why the old open rules must be removed, not just complemented.
+      solutionFiles:
+        variables.tf: |
+          variable "project" {
+            type        = string
+            default     = "learn"
+            description = "Project name: the first part of every resource name and the Project tag."
+          }
+
+          variable "environment" {
+            type        = string
+            default     = "dev"
+            description = "Deployment environment (dev, staging, prod): part of every resource name and the Environment tag."
+          }
+
+          variable "oci_region" {
+            type        = string
+            default     = "us-ashburn-1"
+            description = "OCI region to deploy into."
+          }
+
+          variable "compartment_ocid" {
+            type        = string
+            default     = "ocid1.tenancy.oc1..flocilocaltenancy0000000000000000000000000000000000000000"
+            description = "Compartment OCID for every resource (defaults to the local Floci tenancy root compartment)."
+          }
+
+          variable "vcn_cidr" {
+            type        = string
+            default     = "10.30.0.0/16"
+            description = "Address range of the VCN: the web subnet is its first /24, the app subnet the second."
+          }
+
+          variable "instance_shape" {
+            type        = string
+            default     = "VM.Standard.E4.Flex"
+            description = "Compute shape of both instances (a flexible shape)."
+          }
+
+          variable "admin_cidr" {
+            type        = string
+            default     = "203.0.113.0/24"
+            description = "Office or VPN range allowed to open Bastion sessions."
+          }
+        network.tf: |
+          resource "oci_core_vcn" "main" {
+            compartment_id = var.compartment_ocid
+            display_name   = local.name_prefix
+            cidr_blocks    = [var.vcn_cidr]
+            dns_label      = "tiers"
+            freeform_tags  = local.common_tags
+          }
+
+          resource "oci_core_internet_gateway" "main" {
+            compartment_id = var.compartment_ocid
+            vcn_id         = oci_core_vcn.main.id
+            display_name   = "${local.name_prefix}-igw"
+            enabled        = true
+            freeform_tags  = local.common_tags
+          }
+
+          resource "oci_core_nat_gateway" "main" {
+            compartment_id = var.compartment_ocid
+            vcn_id         = oci_core_vcn.main.id
+            display_name   = "${local.name_prefix}-nat"
+            freeform_tags  = local.common_tags
+          }
+
+          resource "oci_core_route_table" "public" {
+            compartment_id = var.compartment_ocid
+            vcn_id         = oci_core_vcn.main.id
+            display_name   = "${local.name_prefix}-public"
+            freeform_tags  = local.common_tags
+
+            route_rules {
+              destination       = "0.0.0.0/0"
+              destination_type  = "CIDR_BLOCK"
+              network_entity_id = oci_core_internet_gateway.main.id
+            }
+          }
+
+          resource "oci_core_route_table" "private" {
+            compartment_id = var.compartment_ocid
+            vcn_id         = oci_core_vcn.main.id
+            display_name   = "${local.name_prefix}-private"
+            freeform_tags  = local.common_tags
+
+            route_rules {
+              destination       = "0.0.0.0/0"
+              destination_type  = "CIDR_BLOCK"
+              network_entity_id = oci_core_nat_gateway.main.id
+            }
+          }
+
+          # Egress only: every ingress rule lives in an NSG. Listing this
+          # security list on the subnets also replaces the VCN's default one,
+          # whose stock rules allow SSH from anywhere.
+          resource "oci_core_security_list" "egress_only" {
+            compartment_id = var.compartment_ocid
+            vcn_id         = oci_core_vcn.main.id
+            display_name   = "${local.name_prefix}-egress-only"
+            freeform_tags  = local.common_tags
+
+            egress_security_rules {
+              description = "All outbound traffic"
+              protocol    = "all"
+              destination = "0.0.0.0/0"
+            }
+          }
+
+          resource "oci_core_subnet" "web" {
+            compartment_id             = var.compartment_ocid
+            vcn_id                     = oci_core_vcn.main.id
+            display_name               = "${local.name_prefix}-web"
+            cidr_block                 = local.web_cidr
+            dns_label                  = "web"
+            prohibit_public_ip_on_vnic = false
+            route_table_id             = oci_core_route_table.public.id
+            security_list_ids          = [oci_core_security_list.egress_only.id]
+            freeform_tags              = local.common_tags
+          }
+
+          resource "oci_core_subnet" "app" {
+            compartment_id             = var.compartment_ocid
+            vcn_id                     = oci_core_vcn.main.id
+            display_name               = "${local.name_prefix}-app"
+            cidr_block                 = local.app_cidr
+            dns_label                  = "app"
+            prohibit_public_ip_on_vnic = true
+            route_table_id             = oci_core_route_table.private.id
+            security_list_ids          = [oci_core_security_list.egress_only.id]
+            freeform_tags              = local.common_tags
+          }
+        nsg.tf: |
+          resource "oci_core_network_security_group" "web" {
+            compartment_id = var.compartment_ocid
+            vcn_id         = oci_core_vcn.main.id
+            display_name   = "${local.name_prefix}-web"
+            freeform_tags  = local.common_tags
+          }
+
+          resource "oci_core_network_security_group" "app" {
+            compartment_id = var.compartment_ocid
+            vcn_id         = oci_core_vcn.main.id
+            display_name   = "${local.name_prefix}-app"
+            freeform_tags  = local.common_tags
+          }
+
+          resource "oci_core_network_security_group_security_rule" "web_https_in" {
+            network_security_group_id = oci_core_network_security_group.web.id
+            description               = "HTTPS from the internet"
+            direction                 = "INGRESS"
+            protocol                  = "6"
+            source                    = "0.0.0.0/0"
+            source_type               = "CIDR_BLOCK"
+
+            tcp_options {
+              destination_port_range {
+                min = 443
+                max = 443
+              }
+            }
+          }
+
+          resource "oci_core_network_security_group_security_rule" "web_to_app" {
+            network_security_group_id = oci_core_network_security_group.web.id
+            description               = "Calls to the API tier"
+            direction                 = "EGRESS"
+            protocol                  = "6"
+            destination               = oci_core_network_security_group.app.id
+            destination_type          = "NETWORK_SECURITY_GROUP"
+
+            tcp_options {
+              destination_port_range {
+                min = 8080
+                max = 8080
+              }
+            }
+          }
+
+          resource "oci_core_network_security_group_security_rule" "app_from_web" {
+            network_security_group_id = oci_core_network_security_group.app.id
+            description               = "API calls from the web tier only"
+            direction                 = "INGRESS"
+            protocol                  = "6"
+            source                    = oci_core_network_security_group.web.id
+            source_type               = "NETWORK_SECURITY_GROUP"
+
+            tcp_options {
+              destination_port_range {
+                min = 8080
+                max = 8080
+              }
+            }
+          }
+
+          # Bastion sessions start from the bastion's endpoint in the private
+          # subnet.
+          resource "oci_core_network_security_group_security_rule" "app_ssh_from_bastion" {
+            network_security_group_id = oci_core_network_security_group.app.id
+            description               = "SSH through the Bastion service"
+            direction                 = "INGRESS"
+            protocol                  = "6"
+            source                    = local.app_cidr
+            source_type               = "CIDR_BLOCK"
+
+            tcp_options {
+              destination_port_range {
+                min = 22
+                max = 22
+              }
+            }
+          }
+
+          resource "oci_bastion_bastion" "admin" {
+            bastion_type                 = "standard"
+            compartment_id               = var.compartment_ocid
+            target_subnet_id             = oci_core_subnet.app.id
+            name                         = replace("${local.name_prefix}-admin", "-", "")
+            client_cidr_block_allow_list = [var.admin_cidr]
+            max_session_ttl_in_seconds   = 3600
+            freeform_tags                = local.common_tags
+          }
+        compute.tf: |
+          data "oci_identity_availability_domains" "ads" {
+            compartment_id = var.compartment_ocid
+          }
+
+          data "oci_core_images" "ol9" {
+            compartment_id           = var.compartment_ocid
+            operating_system         = "Oracle Linux"
+            operating_system_version = "9"
+            shape                    = var.instance_shape
+            sort_by                  = "TIMECREATED"
+            sort_order               = "DESC"
+          }
+
+          resource "oci_core_instance" "web" {
+            compartment_id      = var.compartment_ocid
+            availability_domain = data.oci_identity_availability_domains.ads.availability_domains[0].name
+            display_name        = "${local.name_prefix}-web"
+            shape               = var.instance_shape
+            freeform_tags       = local.common_tags
+
+            shape_config {
+              ocpus         = 1
+              memory_in_gbs = 8
+            }
+
+            source_details {
+              source_type = "image"
+              source_id   = data.oci_core_images.ol9.images[0].id
+            }
+
+            create_vnic_details {
+              subnet_id        = oci_core_subnet.web.id
+              assign_public_ip = true
+              nsg_ids          = [oci_core_network_security_group.web.id]
+            }
+          }
+
+          resource "oci_core_instance" "app" {
+            compartment_id      = var.compartment_ocid
+            availability_domain = data.oci_identity_availability_domains.ads.availability_domains[0].name
+            display_name        = "${local.name_prefix}-app"
+            shape               = var.instance_shape
+            freeform_tags       = local.common_tags
+
+            shape_config {
+              ocpus         = 1
+              memory_in_gbs = 8
+            }
+
+            source_details {
+              source_type = "image"
+              source_id   = data.oci_core_images.ol9.images[0].id
+            }
+
+            create_vnic_details {
+              subnet_id        = oci_core_subnet.app.id
+              assign_public_ip = false
+              nsg_ids          = [oci_core_network_security_group.app.id]
+            }
+
+            agent_config {
+              plugins_config {
+                name          = "Bastion"
+                desired_state = "ENABLED"
+              }
+            }
+          }
+      starter:
+        kind: terraform
+        cloud: oci
+        files:
+          versions.tf: |
+            terraform {
+              required_version = ">= 1.6"
+
+              required_providers {
+                oci = {
+                  source  = "oracle/oci"
+                  version = "~> 9.0"
+                }
+              }
+            }
+          providers.tf: |
+            provider "oci" {
+              region = var.oci_region
+            }
+          variables.tf: |
+            variable "project" {
+              type        = string
+              default     = "learn"
+              description = "Project name: the first part of every resource name and the Project tag."
+            }
+
+            variable "environment" {
+              type        = string
+              default     = "dev"
+              description = "Deployment environment (dev, staging, prod): part of every resource name and the Environment tag."
+            }
+
+            variable "oci_region" {
+              type        = string
+              default     = "us-ashburn-1"
+              description = "OCI region to deploy into."
+            }
+
+            variable "compartment_ocid" {
+              type        = string
+              default     = "ocid1.tenancy.oc1..flocilocaltenancy0000000000000000000000000000000000000000"
+              description = "Compartment OCID for every resource (defaults to the local Floci tenancy root compartment)."
+            }
+
+            variable "vcn_cidr" {
+              type        = string
+              default     = "10.30.0.0/16"
+              description = "Address range of the VCN: the web subnet is its first /24, the app subnet the second."
+            }
+
+            variable "instance_shape" {
+              type        = string
+              default     = "VM.Standard.E4.Flex"
+              description = "Compute shape of both instances (a flexible shape)."
+            }
+          locals.tf: |
+            locals {
+              name_prefix = "${var.project}-${var.environment}"
+              common_tags = {
+                Project     = var.project
+                Environment = var.environment
+                ManagedBy   = "nimbo"
+              }
+
+              web_cidr = cidrsubnet(var.vcn_cidr, 8, 0)
+              app_cidr = cidrsubnet(var.vcn_cidr, 8, 1)
+            }
+          network.tf: |
+            resource "oci_core_vcn" "main" {
+              compartment_id = var.compartment_ocid
+              display_name   = local.name_prefix
+              cidr_blocks    = [var.vcn_cidr]
+              dns_label      = "tiers"
+              freeform_tags  = local.common_tags
+            }
+
+            resource "oci_core_internet_gateway" "main" {
+              compartment_id = var.compartment_ocid
+              vcn_id         = oci_core_vcn.main.id
+              display_name   = "${local.name_prefix}-igw"
+              enabled        = true
+              freeform_tags  = local.common_tags
+            }
+
+            resource "oci_core_nat_gateway" "main" {
+              compartment_id = var.compartment_ocid
+              vcn_id         = oci_core_vcn.main.id
+              display_name   = "${local.name_prefix}-nat"
+              freeform_tags  = local.common_tags
+            }
+
+            resource "oci_core_route_table" "public" {
+              compartment_id = var.compartment_ocid
+              vcn_id         = oci_core_vcn.main.id
+              display_name   = "${local.name_prefix}-public"
+              freeform_tags  = local.common_tags
+
+              route_rules {
+                destination       = "0.0.0.0/0"
+                destination_type  = "CIDR_BLOCK"
+                network_entity_id = oci_core_internet_gateway.main.id
+              }
+            }
+
+            resource "oci_core_route_table" "private" {
+              compartment_id = var.compartment_ocid
+              vcn_id         = oci_core_vcn.main.id
+              display_name   = "${local.name_prefix}-private"
+              freeform_tags  = local.common_tags
+
+              route_rules {
+                destination       = "0.0.0.0/0"
+                destination_type  = "CIDR_BLOCK"
+                network_entity_id = oci_core_nat_gateway.main.id
+              }
+            }
+
+            # One list for both tiers: SSH, HTTPS and the API port from anywhere.
+            resource "oci_core_security_list" "shared" {
+              compartment_id = var.compartment_ocid
+              vcn_id         = oci_core_vcn.main.id
+              display_name   = "${local.name_prefix}-shared"
+              freeform_tags  = local.common_tags
+
+              ingress_security_rules {
+                description = "SSH"
+                protocol    = "6"
+                source      = "0.0.0.0/0"
+
+                tcp_options {
+                  min = 22
+                  max = 22
+                }
+              }
+
+              ingress_security_rules {
+                description = "HTTPS"
+                protocol    = "6"
+                source      = "0.0.0.0/0"
+
+                tcp_options {
+                  min = 443
+                  max = 443
+                }
+              }
+
+              ingress_security_rules {
+                description = "API"
+                protocol    = "6"
+                source      = "0.0.0.0/0"
+
+                tcp_options {
+                  min = 8080
+                  max = 8080
+                }
+              }
+
+              egress_security_rules {
+                description = "All outbound traffic"
+                protocol    = "all"
+                destination = "0.0.0.0/0"
+              }
+            }
+
+            resource "oci_core_subnet" "web" {
+              compartment_id             = var.compartment_ocid
+              vcn_id                     = oci_core_vcn.main.id
+              display_name               = "${local.name_prefix}-web"
+              cidr_block                 = local.web_cidr
+              dns_label                  = "web"
+              prohibit_public_ip_on_vnic = false
+              route_table_id             = oci_core_route_table.public.id
+              security_list_ids          = [oci_core_security_list.shared.id]
+              freeform_tags              = local.common_tags
+            }
+
+            resource "oci_core_subnet" "app" {
+              compartment_id             = var.compartment_ocid
+              vcn_id                     = oci_core_vcn.main.id
+              display_name               = "${local.name_prefix}-app"
+              cidr_block                 = local.app_cidr
+              dns_label                  = "app"
+              prohibit_public_ip_on_vnic = true
+              route_table_id             = oci_core_route_table.private.id
+              security_list_ids          = [oci_core_security_list.shared.id]
+              freeform_tags              = local.common_tags
+            }
+          compute.tf: |
+            data "oci_identity_availability_domains" "ads" {
+              compartment_id = var.compartment_ocid
+            }
+
+            data "oci_core_images" "ol9" {
+              compartment_id           = var.compartment_ocid
+              operating_system         = "Oracle Linux"
+              operating_system_version = "9"
+              shape                    = var.instance_shape
+              sort_by                  = "TIMECREATED"
+              sort_order               = "DESC"
+            }
+
+            resource "oci_core_instance" "web" {
+              compartment_id      = var.compartment_ocid
+              availability_domain = data.oci_identity_availability_domains.ads.availability_domains[0].name
+              display_name        = "${local.name_prefix}-web"
+              shape               = var.instance_shape
+              freeform_tags       = local.common_tags
+
+              shape_config {
+                ocpus         = 1
+                memory_in_gbs = 8
+              }
+
+              source_details {
+                source_type = "image"
+                source_id   = data.oci_core_images.ol9.images[0].id
+              }
+
+              create_vnic_details {
+                subnet_id        = oci_core_subnet.web.id
+                assign_public_ip = true
+              }
+            }
+
+            resource "oci_core_instance" "app" {
+              compartment_id      = var.compartment_ocid
+              availability_domain = data.oci_identity_availability_domains.ads.availability_domains[0].name
+              display_name        = "${local.name_prefix}-app"
+              shape               = var.instance_shape
+              freeform_tags       = local.common_tags
+
+              shape_config {
+                ocpus         = 1
+                memory_in_gbs = 8
+              }
+
+              source_details {
+                source_type = "image"
+                source_id   = data.oci_core_images.ol9.images[0].id
+              }
+
+              create_vnic_details {
+                subnet_id        = oci_core_subnet.app.id
+                assign_public_ip = false
+              }
+            }
+          outputs.tf: |
+            output "web_public_ip" {
+              value       = oci_core_instance.web.public_ip
+              description = "Public IP of the web server."
+            }
+      checks:
+        - id: validate
+          label: The workflow validates
+          type: validate
+        - id: no-open-security-list
+          label: No security list accepts traffic from 0.0.0.0/0
+          type: has
+          has:
+            terraform:
+              type: oci_core_security_list
+              where:
+                ingress_security_rules.source: 0.0.0.0/0
+              count: { max: 0 }
+        - id: web-https
+          label: The web NSG accepts HTTPS from the internet
+          type: has
+          has:
+            terraform:
+              type: oci_core_network_security_group_security_rule
+              where:
+                direction: INGRESS
+                source: 0.0.0.0/0
+                tcp_options.destination_port_range.min: 443
+        - id: app-from-web-only
+          label: The app NSG accepts 8080 only from the web NSG
+          type: has
+          has:
+            terraform:
+              type: oci_core_network_security_group_security_rule
+              where:
+                direction: INGRESS
+                source_type: NETWORK_SECURITY_GROUP
+                source: { ref: oci_core_network_security_group }
+                tcp_options.destination_port_range.min: 8080
+        - id: no-public-ssh-or-api
+          label: No NSG rule opens SSH or 8080 to the internet
+          type: has
+          has:
+            terraform:
+              type: oci_core_network_security_group_security_rule
+              where:
+                source: 0.0.0.0/0
+                tcp_options.destination_port_range.min: { in: [22, 8080] }
+              count: { max: 0 }
+        - id: instances-in-nsgs
+          label: Both instances join an NSG
+          type: has
+          has:
+            terraform:
+              type: oci_core_instance
+              where:
+                create_vnic_details.nsg_ids: { exists: true }
+              count: { min: 2 }
+        - id: bastion
+          label: A Bastion targets the private subnet
+          type: has
+          has:
+            terraform:
+              type: oci_bastion_bastion
+              where:
+                target_subnet_id: { ref: oci_core_subnet }
+                client_cidr_block_allow_list: { exists: true }
+        - id: bastion-not-open
+          label: Bastion sessions are not open to 0.0.0.0/0
+          type: has
+          has:
+            terraform:
+              type: oci_bastion_bastion
+              where:
+                client_cidr_block_allow_list: { contains: 0.0.0.0/0 }
+              count: { max: 0 }
+      sources:
+        - title: Network Security Groups
+          url: https://docs.oracle.com/en-us/iaas/Content/Network/Concepts/networksecuritygroups.htm
+        - title: Security Lists
+          url: https://docs.oracle.com/en-us/iaas/Content/Network/Concepts/securitylists.htm
+        - title: Security Rules
+          url: https://docs.oracle.com/en-us/iaas/Content/Network/Concepts/securityrules.htm
+        - title: Securing Networking (OCI Security Guide)
+          url: https://docs.oracle.com/en-us/iaas/Content/Security/Reference/networking_security.htm
+        - title: Bastion Overview
+          url: https://docs.oracle.com/en-us/iaas/Content/Bastion/Concepts/bastionoverview.htm
+        - title: oci_core_network_security_group_security_rule (oracle/oci 9.x)
+          url: https://registry.terraform.io/providers/oracle/oci/9.11.0/docs/resources/core_network_security_group_security_rule
+        - title: oci_bastion_bastion (oracle/oci 9.x)
+          url: https://registry.terraform.io/providers/oracle/oci/9.11.0/docs/resources/bastion_bastion
+
+  - op: upsert
+    kind: challenge
+    id: oci-lb-instance-pool-autoscaling
+    data:
+      provider: oci
+      level: intermediate
+      title: Load-balanced instance pool with autoscaling
+      summary: Turn fixed, hand-registered servers behind a flexible load balancer into an instance pool across availability domains that scales on CPU.
+      minutes: 45
+      tags: [compute, instance-pool, autoscaling, load-balancer, high-availability]
+      runtime: design
+      prerequisites: [oci-vcn-public-private-subnets]
+      problem: |
+        The starter is Nimbo's OCI load balancer template: a flexible load balancer in a public subnet, a backend
+        set with an HTTP health check, and two app servers created one by one with `oci_core_instance` and added
+        to the backend set by hand with `oci_load_balancer_backend`.
+
+        It works until traffic doubles or a server dies: nobody replaces a failed instance, adding capacity means
+        editing Terraform, and every new server must be registered with the load balancer manually. OCI solves
+        this with an instance configuration (the template of an instance), an instance pool (a managed group
+        created from it, which registers its members with a load balancer backend set automatically) and an
+        autoscaling configuration that resizes the pool from Monitoring metrics.
+      requirements:
+        - An oci_core_instance_configuration describes the app server (no public IP) and replaces the hand-made instances, so the workflow has no oci_core_instance and no oci_load_balancer_backend.
+        - An oci_core_instance_pool is created from that configuration and attached to the load balancer's backend set (load_balancers block).
+        - The pool sets placement_configurations so instances can be spread across availability domains and fault domains, in the private subnet.
+        - An oci_autoscaling_auto_scaling_configuration targets the pool with a threshold policy on CPU_UTILIZATION, a minimum capacity of at least 2 and a maximum of at least 3.
+        - The backend set keeps its HTTP health check.
+      hints:
+        - Move the shape, image, metadata (user_data) and VNIC settings of oci_core_instance into instance_details.launch_details of an instance configuration (instance_type = "compute").
+        - The pool's load_balancers block needs load_balancer_id, backend_set_name, port (8080) and vnic_selection = "PrimaryVnic"; the pool then adds and removes backends by itself.
+        - A dynamic "placement_configurations" block over data.oci_identity_availability_domains gives one placement per availability domain; without fault_domains, OCI spreads instances across fault domains on a best-effort basis.
+        - 'A threshold policy has two rules: scale out (CHANGE_COUNT_BY 1 when CPU_UTILIZATION is GT a value) and scale in (CHANGE_COUNT_BY -1 when it is LT a value); auto_scaling_resources uses type = "instancePool".'
+      solution: |
+        Replace the instances and backends with a configuration, a pool and an autoscaling configuration:
+
+        ```hcl
+        resource "oci_core_instance_pool" "app" {
+          compartment_id            = var.compartment_ocid
+          instance_configuration_id = oci_core_instance_configuration.app.id
+          size                      = 2
+
+          dynamic "placement_configurations" {
+            for_each = data.oci_identity_availability_domains.ads.availability_domains
+            content {
+              availability_domain = placement_configurations.value.name
+              primary_vnic_subnets {
+                subnet_id = oci_core_subnet.tier["private"].id
+              }
+            }
+          }
+
+          load_balancers {
+            load_balancer_id = oci_load_balancer_load_balancer.main.id
+            backend_set_name = oci_load_balancer_backend_set.app.name
+            port             = 8080
+            vnic_selection   = "PrimaryVnic"
+          }
+        }
+        ```
+
+        The autoscaling configuration uses `policy_type = "threshold"`, a capacity of min 2 / initial 2 / max 6,
+        and two `CPU_UTILIZATION` rules (GT 70 → +1, LT 20 → -1) with a cooldown of 300 seconds.
+
+        **Why:** an instance pool creates its instances from one configuration and, when associated with a load
+        balancer, adds each new instance to the backend set; the backend set's health check keeps traffic away
+        from instances that are not ready. Placements in several availability domains (or, in single-AD regions,
+        the default spread across the three fault domains) remove single points of failure. Metric-based
+        autoscaling evaluates Monitoring metrics averaged across the pool and adjusts its size, with a cooldown so
+        the system stabilizes between actions; the minimum of two keeps redundancy at the lowest load.
+      solutionFiles:
+        variables.tf: |
+          variable "project" {
+            type        = string
+            default     = "edge-lb"
+            description = "Project name: the first part of every resource name and the Project tag."
+
+            validation {
+              condition     = can(regex("^[a-z][a-z0-9-]{1,19}$", var.project))
+              error_message = "project must be 2-20 lowercase letters, digits or hyphens, starting with a letter."
+            }
+          }
+
+          variable "environment" {
+            type        = string
+            default     = "dev"
+            description = "Deployment environment (dev, staging, prod, …): part of every resource name and the Environment tag."
+
+            validation {
+              condition     = can(regex("^[a-z][a-z0-9-]{0,11}$", var.environment))
+              error_message = "environment must be 1-12 lowercase letters, digits or hyphens, starting with a letter."
+            }
+          }
+
+          variable "oci_region" {
+            type        = string
+            default     = "us-ashburn-1"
+            description = "OCI region to deploy into."
+          }
+
+          variable "compartment_ocid" {
+            type        = string
+            default     = "ocid1.tenancy.oc1..flocilocaltenancy0000000000000000000000000000000000000000"
+            description = "Compartment OCID for every resource (defaults to the local Floci tenancy root compartment)."
+          }
+
+          variable "vcn_cidr" {
+            type        = string
+            default     = "10.50.0.0/16"
+            description = "Address range of the VCN: the public subnet is its first /24, the private subnet the second."
+          }
+
+          variable "instance_shape" {
+            type        = string
+            default     = "VM.Standard.E4.Flex"
+            description = "Compute shape of the pool's instances (a flexible shape)."
+          }
+
+          variable "instance_ocpus" {
+            type        = number
+            default     = 1
+            description = "OCPUs of each instance."
+          }
+
+          variable "instance_memory_gbs" {
+            type        = number
+            default     = 8
+            description = "Memory of each instance in GB."
+          }
+
+          variable "lb_bandwidth_mbps" {
+            type        = number
+            default     = 10
+            description = "Minimum and maximum bandwidth of the flexible load balancer in Mbps (10 is the always-free size)."
+          }
+        compute.tf: |
+          # Oracle Linux 9, the newest image for the shape.
+          data "oci_core_images" "ol9" {
+            compartment_id           = var.compartment_ocid
+            operating_system         = "Oracle Linux"
+            operating_system_version = "9"
+            shape                    = var.instance_shape
+            sort_by                  = "TIMECREATED"
+            sort_order               = "DESC"
+          }
+
+          # The template of every app server: a tiny Python HTTP service on
+          # port 8080 that answers with the instance's host name.
+          resource "oci_core_instance_configuration" "app" {
+            compartment_id = var.compartment_ocid
+            display_name   = "${local.name_prefix}-app"
+            freeform_tags  = local.common_tags
+
+            instance_details {
+              instance_type = "compute"
+
+              launch_details {
+                compartment_id = var.compartment_ocid
+                shape          = var.instance_shape
+                freeform_tags  = local.common_tags
+
+                shape_config {
+                  ocpus         = var.instance_ocpus
+                  memory_in_gbs = var.instance_memory_gbs
+                }
+
+                source_details {
+                  source_type = "image"
+                  image_id    = data.oci_core_images.ol9.images[0].id
+                }
+
+                create_vnic_details {
+                  assign_public_ip = false
+                }
+
+                metadata = {
+                  user_data = base64encode(<<-EOT
+                    #!/bin/bash
+                    cat > /opt/app.py <<'PY'
+                    import json, socket
+                    from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+                    class Handler(BaseHTTPRequestHandler):
+                        def do_GET(self):
+                            body = {"status": "ok"} if self.path == "/health" else {"host": socket.gethostname(), "path": self.path}
+                            payload = json.dumps(body).encode()
+                            self.send_response(200)
+                            self.send_header("content-type", "application/json")
+                            self.send_header("content-length", str(len(payload)))
+                            self.end_headers()
+                            self.wfile.write(payload)
+
+                    ThreadingHTTPServer(("0.0.0.0", 8080), Handler).serve_forever()
+                    PY
+                    cat > /etc/systemd/system/app.service <<'UNIT'
+                    [Unit]
+                    Description=App server
+                    After=network-online.target
+
+                    [Service]
+                    ExecStart=/usr/bin/python3 /opt/app.py
+                    Restart=always
+                    DynamicUser=yes
+
+                    [Install]
+                    WantedBy=multi-user.target
+                    UNIT
+                    firewall-cmd --permanent --add-port=8080/tcp
+                    firewall-cmd --reload
+                    systemctl enable --now app.service
+                  EOT
+                  )
+                }
+              }
+            }
+          }
+
+          # One placement per availability domain; without fault_domains OCI
+          # spreads the instances across fault domains (best effort). The pool
+          # registers every instance it creates in the backend set.
+          resource "oci_core_instance_pool" "app" {
+            compartment_id            = var.compartment_ocid
+            instance_configuration_id = oci_core_instance_configuration.app.id
+            display_name              = "${local.name_prefix}-app"
+            size                      = 2
+            freeform_tags             = local.common_tags
+
+            dynamic "placement_configurations" {
+              for_each = data.oci_identity_availability_domains.ads.availability_domains
+              content {
+                availability_domain = placement_configurations.value.name
+
+                primary_vnic_subnets {
+                  subnet_id = oci_core_subnet.tier["private"].id
+                }
+              }
+            }
+
+            load_balancers {
+              load_balancer_id = oci_load_balancer_load_balancer.main.id
+              backend_set_name = oci_load_balancer_backend_set.app.name
+              port             = 8080
+              vnic_selection   = "PrimaryVnic"
+            }
+
+            # Autoscaling owns the size after creation.
+            lifecycle {
+              ignore_changes = [size]
+            }
+          }
+
+          resource "oci_autoscaling_auto_scaling_configuration" "app" {
+            compartment_id       = var.compartment_ocid
+            display_name         = "${local.name_prefix}-app"
+            cool_down_in_seconds = 300
+            is_enabled           = true
+            freeform_tags        = local.common_tags
+
+            auto_scaling_resources {
+              id   = oci_core_instance_pool.app.id
+              type = "instancePool"
+            }
+
+            policies {
+              display_name = "cpu"
+              policy_type  = "threshold"
+
+              capacity {
+                initial = 2
+                min     = 2
+                max     = 6
+              }
+
+              rules {
+                display_name = "scale-out"
+
+                action {
+                  type  = "CHANGE_COUNT_BY"
+                  value = 1
+                }
+
+                metric {
+                  metric_type = "CPU_UTILIZATION"
+
+                  threshold {
+                    operator = "GT"
+                    value    = 70
+                  }
+                }
+              }
+
+              rules {
+                display_name = "scale-in"
+
+                action {
+                  type  = "CHANGE_COUNT_BY"
+                  value = -1
+                }
+
+                metric {
+                  metric_type = "CPU_UTILIZATION"
+
+                  threshold {
+                    operator = "LT"
+                    value    = 20
+                  }
+                }
+              }
+            }
+          }
+        main.tf: |
+          # The one public entry point (flexible shape).
+          resource "oci_load_balancer_load_balancer" "main" {
+            compartment_id = var.compartment_ocid
+            display_name   = local.name_prefix
+            shape          = "flexible"
+            subnet_ids     = [oci_core_subnet.tier["public"].id]
+            is_private     = false
+            freeform_tags  = local.common_tags
+
+            shape_details {
+              minimum_bandwidth_in_mbps = var.lb_bandwidth_mbps
+              maximum_bandwidth_in_mbps = var.lb_bandwidth_mbps
+            }
+          }
+
+          # Requests are spread round robin over the pool members that answer
+          # /health; the instance pool adds and removes the backends.
+          resource "oci_load_balancer_backend_set" "app" {
+            name             = "app"
+            load_balancer_id = oci_load_balancer_load_balancer.main.id
+            policy           = "ROUND_ROBIN"
+
+            health_checker {
+              protocol          = "HTTP"
+              port              = 8080
+              url_path          = "/health"
+              return_code       = 200
+              interval_ms       = 10000
+              timeout_in_millis = 3000
+              retries           = 3
+            }
+          }
+
+          resource "oci_load_balancer_listener" "http" {
+            name                     = "http"
+            load_balancer_id         = oci_load_balancer_load_balancer.main.id
+            port                     = 80
+            protocol                 = "HTTP"
+            default_backend_set_name = oci_load_balancer_backend_set.app.name
+          }
+        outputs.tf: |
+          output "public_ip" {
+            value       = oci_load_balancer_load_balancer.main.ip_address_details[0].ip_address
+            description = "Public IP of the load balancer: http://<ip>/ reaches a healthy pool member."
+          }
+
+          output "instance_pool_id" {
+            value       = oci_core_instance_pool.app.id
+            description = "OCID of the app instance pool."
+          }
+
+          output "backend_set" {
+            value       = oci_load_balancer_backend_set.app.name
+            description = "Backend set whose health checker decides which pool members get traffic."
+          }
+      starter:
+        templateId: oci-load-balancer
+      checks:
+        - id: validate
+          label: The workflow validates
+          type: validate
+        - id: instance-configuration
+          label: An instance configuration describes the app server without a public IP
+          type: has
+          has:
+            terraform:
+              type: oci_core_instance_configuration
+              where:
+                instance_details.launch_details.create_vnic_details.assign_public_ip: false
+        - id: no-hand-made-servers
+          label: No standalone instances or hand-registered backends remain
+          type: has
+          has:
+            terraform:
+              type: oci_core_instance
+              count: { max: 0 }
+        - id: no-manual-backends
+          label: Backends are registered by the pool, not by hand
+          type: has
+          has:
+            terraform:
+              type: oci_load_balancer_backend
+              count: { max: 0 }
+        - id: pool-behind-lb
+          label: An instance pool from the configuration is attached to the backend set
+          type: has
+          has:
+            terraform:
+              type: oci_core_instance_pool
+              where:
+                instance_configuration_id: { ref: oci_core_instance_configuration }
+                load_balancers.load_balancer_id: { ref: oci_load_balancer_load_balancer }
+                load_balancers.backend_set_name: { exists: true }
+        - id: pool-placement
+          label: The pool has placement configurations
+          type: has
+          has:
+            terraform:
+              type: oci_core_instance_pool
+              where:
+                placement_configurations: { exists: true }
+        - id: autoscaling
+          label: Autoscaling resizes the pool on CPU between at least 2 and 3+ instances
+          type: has
+          has:
+            terraform:
+              type: oci_autoscaling_auto_scaling_configuration
+              where:
+                auto_scaling_resources.id: { ref: oci_core_instance_pool }
+                policies.policy_type: threshold
+                policies.capacity.min: { min: 2 }
+                policies.capacity.max: { min: 3 }
+                policies.rules.metric.metric_type: CPU_UTILIZATION
+        - id: health-check
+          label: The backend set keeps its HTTP health check
+          type: has
+          has:
+            terraform:
+              type: oci_load_balancer_backend_set
+              where:
+                health_checker.protocol: HTTP
+                health_checker.url_path: { exists: true }
+      sources:
+        - title: Overview of Load Balancer
+          url: https://docs.oracle.com/en-us/iaas/Content/Balance/Concepts/balanceoverview.htm
+        - title: Managing Instance Configurations
+          url: https://docs.oracle.com/en-us/iaas/Content/Compute/Concepts/instancemanagement.htm
+        - title: Creating Instance Pools
+          url: https://docs.oracle.com/en-us/iaas/Content/Compute/Tasks/creatinginstancepool.htm
+        - title: Autoscaling
+          url: https://docs.oracle.com/en-us/iaas/Content/Compute/Tasks/autoscalinginstancepools.htm
+        - title: Regions and Availability Domains (fault domains)
+          url: https://docs.oracle.com/en-us/iaas/Content/General/Concepts/regions.htm
+        - title: oci_core_instance_pool (oracle/oci 9.x)
+          url: https://registry.terraform.io/providers/oracle/oci/9.11.0/docs/resources/core_instance_pool
+        - title: oci_autoscaling_auto_scaling_configuration (oracle/oci 9.x)
+          url: https://registry.terraform.io/providers/oracle/oci/9.11.0/docs/resources/autoscaling_auto_scaling_configuration
+
+  - op: upsert
+    kind: challenge
+    id: oci-vault-customer-managed-keys
+    data:
+      provider: oci
+      level: intermediate
+      title: Customer-managed encryption keys with OCI Vault
+      summary: Encrypt a bucket and a block volume with your own Vault master encryption key, and authorize only the storage services to use it.
+      minutes: 35
+      tags: [vault, kms, encryption, object-storage, block-volume]
+      runtime: design
+      prerequisites: [oci-private-bucket-lifecycle]
+      problem: |
+        A compliance review asks that customer data be encrypted with keys the company controls: it must be able
+        to rotate them on its own schedule and to revoke access by disabling a key. Today the reports bucket and
+        the database volume rely on the default encryption, whose master keys Oracle manages.
+
+        Object Storage and Block Volume always encrypt data; what you choose is who manages the master encryption
+        key. The OCI security guide recommends creating and managing your own keys in the Vault service and
+        limiting who can create, rotate and delete them. The storage services call Vault on your behalf, so an IAM
+        policy must let them use the key — and only that key.
+      requirements:
+        - A vault (oci_kms_vault) holds an AES-256 master encryption key (key_shape algorithm "AES", length 32) protected by an HSM (protection_mode = "HSM").
+        - The bucket and the block volume set kms_key_id to that key.
+        - An IAM policy lets the storage services (blockstorage and objectstorage-<region>) use keys, restricted to this key with a target.key.id condition.
+      hints:
+        - A key is created against the vault's management endpoint (management_endpoint = oci_kms_vault.main.management_endpoint); key_shape length is in bytes, so AES-256 is 32.
+        - Vault types are DEFAULT (shared partition) and VIRTUAL_PRIVATE (isolated partition); either works for this challenge.
+        - 'The policy statement follows the common-policies template: Allow service blockstorage, objectstorage-<region> to use keys in tenancy where target.key.id = ''<key OCID>''.'
+        - The services can only use the key once the policy exists, so make the bucket and the volume depend on the policy.
+      solution: |
+        Create the vault and a key, authorize the services, then point the storage at the key:
+
+        ```hcl
+        resource "oci_kms_key" "data" {
+          compartment_id      = var.compartment_ocid
+          display_name        = "${local.name_prefix}-data"
+          management_endpoint = oci_kms_vault.main.management_endpoint
+          protection_mode     = "HSM"
+          key_shape {
+            algorithm = "AES"
+            length    = 32
+          }
+        }
+
+        resource "oci_identity_policy" "storage_keys" {
+          # ...
+          statements = [
+            "Allow service blockstorage, objectstorage-${var.oci_region} to use keys in tenancy where target.key.id = '${oci_kms_key.data.id}'",
+          ]
+        }
+        ```
+
+        and set `kms_key_id = oci_kms_key.data.id` on `oci_objectstorage_bucket` and `oci_core_volume`.
+
+        **Why:** every object and volume is encrypted with a data key, and the data key is wrapped by the master
+        key assigned to the bucket or volume. With a Vault key you own that master key: you can rotate it (new key
+        versions protect new data), and disabling or deleting it makes the data unreadable. HSM protection keeps
+        the key material inside a hardware security module where it can't be exported. The `target.key.id`
+        condition gives the services access to this key only, which follows least privilege. Automatic key
+        rotation is available for keys in a virtual private vault.
+      solutionFiles:
+        main.tf: |
+          data "oci_objectstorage_namespace" "ns" {
+            compartment_id = var.compartment_ocid
+          }
+
+          data "oci_identity_availability_domains" "ads" {
+            compartment_id = var.compartment_ocid
+          }
+
+          resource "oci_kms_vault" "main" {
+            compartment_id = var.compartment_ocid
+            display_name   = "${local.name_prefix}-vault"
+            vault_type     = "DEFAULT"
+            freeform_tags  = local.common_tags
+          }
+
+          # AES-256 master encryption key kept inside an HSM.
+          resource "oci_kms_key" "data" {
+            compartment_id      = var.compartment_ocid
+            display_name        = "${local.name_prefix}-data"
+            management_endpoint = oci_kms_vault.main.management_endpoint
+            protection_mode     = "HSM"
+            freeform_tags       = local.common_tags
+
+            key_shape {
+              algorithm = "AES"
+              length    = 32
+            }
+          }
+
+          # The storage services wrap data keys with this key, and only this one.
+          resource "oci_identity_policy" "storage_keys" {
+            compartment_id = var.compartment_ocid
+            name           = "${local.name_prefix}-storage-keys"
+            description    = "Lets Block Volume and Object Storage use the data key"
+            freeform_tags  = local.common_tags
+            statements = [
+              "Allow service blockstorage, objectstorage-${var.oci_region} to use keys in tenancy where target.key.id = '${oci_kms_key.data.id}'",
+            ]
+          }
+
+          resource "oci_objectstorage_bucket" "reports" {
+            compartment_id = var.compartment_ocid
+            namespace      = data.oci_objectstorage_namespace.ns.namespace
+            name           = "${local.name_prefix}-reports"
+            access_type    = "NoPublicAccess"
+            versioning     = "Enabled"
+            kms_key_id     = oci_kms_key.data.id
+            freeform_tags  = local.common_tags
+
+            depends_on = [oci_identity_policy.storage_keys]
+          }
+
+          resource "oci_core_volume" "db" {
+            compartment_id      = var.compartment_ocid
+            availability_domain = data.oci_identity_availability_domains.ads.availability_domains[0].name
+            display_name        = "${local.name_prefix}-db"
+            size_in_gbs         = 100
+            kms_key_id          = oci_kms_key.data.id
+            freeform_tags       = local.common_tags
+
+            depends_on = [oci_identity_policy.storage_keys]
+          }
+      starter:
+        kind: terraform
+        cloud: oci
+        files:
+          versions.tf: |
+            terraform {
+              required_version = ">= 1.6"
+
+              required_providers {
+                oci = {
+                  source  = "oracle/oci"
+                  version = "~> 9.0"
+                }
+              }
+            }
+          providers.tf: |
+            provider "oci" {
+              region = var.oci_region
+            }
+          variables.tf: |
+            variable "project" {
+              type        = string
+              default     = "learn"
+              description = "Project name: the first part of every resource name and the Project tag."
+            }
+
+            variable "environment" {
+              type        = string
+              default     = "dev"
+              description = "Deployment environment (dev, staging, prod): part of every resource name and the Environment tag."
+            }
+
+            variable "oci_region" {
+              type        = string
+              default     = "us-ashburn-1"
+              description = "OCI region to deploy into."
+            }
+
+            variable "compartment_ocid" {
+              type        = string
+              default     = "ocid1.tenancy.oc1..flocilocaltenancy0000000000000000000000000000000000000000"
+              description = "Compartment OCID for every resource (defaults to the local Floci tenancy root compartment)."
+            }
+          locals.tf: |
+            locals {
+              name_prefix = "${var.project}-${var.environment}"
+              common_tags = {
+                Project     = var.project
+                Environment = var.environment
+                ManagedBy   = "nimbo"
+              }
+            }
+          main.tf: |
+            data "oci_objectstorage_namespace" "ns" {
+              compartment_id = var.compartment_ocid
+            }
+
+            data "oci_identity_availability_domains" "ads" {
+              compartment_id = var.compartment_ocid
+            }
+
+            # Encrypted at rest with Oracle-managed keys (the default).
+            resource "oci_objectstorage_bucket" "reports" {
+              compartment_id = var.compartment_ocid
+              namespace      = data.oci_objectstorage_namespace.ns.namespace
+              name           = "${local.name_prefix}-reports"
+              access_type    = "NoPublicAccess"
+              versioning     = "Enabled"
+              freeform_tags  = local.common_tags
+            }
+
+            resource "oci_core_volume" "db" {
+              compartment_id      = var.compartment_ocid
+              availability_domain = data.oci_identity_availability_domains.ads.availability_domains[0].name
+              display_name        = "${local.name_prefix}-db"
+              size_in_gbs         = 100
+              freeform_tags       = local.common_tags
+            }
+          outputs.tf: |
+            output "bucket_name" {
+              value       = oci_objectstorage_bucket.reports.name
+              description = "Name of the reports bucket."
+            }
+
+            output "volume_id" {
+              value       = oci_core_volume.db.id
+              description = "OCID of the database volume."
+            }
+      checks:
+        - id: validate
+          label: The workflow validates
+          type: validate
+        - id: vault
+          label: A vault exists
+          type: has
+          has:
+            terraform:
+              type: oci_kms_vault
+              where:
+                vault_type: { in: [DEFAULT, VIRTUAL_PRIVATE] }
+        - id: hsm-aes-key
+          label: The vault holds an HSM-protected AES-256 key
+          type: has
+          has:
+            terraform:
+              type: oci_kms_key
+              where:
+                management_endpoint: { ref: oci_kms_vault }
+                protection_mode: HSM
+                key_shape.algorithm: AES
+                key_shape.length: 32
+        - id: bucket-cmk
+          label: The bucket is encrypted with the Vault key
+          type: has
+          has:
+            terraform:
+              type: oci_objectstorage_bucket
+              where:
+                kms_key_id: { ref: oci_kms_key }
+        - id: volume-cmk
+          label: The block volume is encrypted with the Vault key
+          type: has
+          has:
+            terraform:
+              type: oci_core_volume
+              where:
+                kms_key_id: { ref: oci_kms_key }
+        - id: object-storage-can-use-key
+          label: Object Storage may use keys
+          type: has
+          has:
+            terraform:
+              type: oci_identity_policy
+              where:
+                statements: { contains: objectstorage- }
+        - id: block-storage-can-use-key
+          label: Block Volume may use keys
+          type: has
+          has:
+            terraform:
+              type: oci_identity_policy
+              where:
+                statements: { contains: blockstorage }
+        - id: key-scoped
+          label: The service grant is limited to this key
+          type: has
+          has:
+            terraform:
+              type: oci_identity_policy
+              where:
+                statements: { contains: target.key.id }
+      sources:
+        - title: Overview of Vaults and Key Management
+          url: https://docs.oracle.com/en-us/iaas/Content/KeyManagement/Concepts/keyoverview.htm
+        - title: Object Storage Data Encryption
+          url: https://docs.oracle.com/en-us/iaas/Content/Object/Tasks/encryption.htm
+        - title: Securing Object Storage (OCI Security Guide)
+          url: https://docs.oracle.com/en-us/iaas/Content/Security/Reference/objectstorage_security.htm
+        - title: Common Policies (let Block Volume, Object Storage and others use keys)
+          url: https://docs.oracle.com/en-us/iaas/Content/Identity/policiescommon/commonpolicies.htm
+        - title: oci_kms_key (oracle/oci 9.x)
+          url: https://registry.terraform.io/providers/oracle/oci/9.11.0/docs/resources/kms_key
+        - title: oci_kms_vault (oracle/oci 9.x)
+          url: https://registry.terraform.io/providers/oracle/oci/9.11.0/docs/resources/kms_vault

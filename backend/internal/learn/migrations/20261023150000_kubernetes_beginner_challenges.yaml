@@ -1,0 +1,711 @@
+description: Adds the Kubernetes beginner challenges (first Deployment and Service, ConfigMaps and Secrets, Ingress routing)
+operations:
+  - op: upsert
+    kind: challenge
+    id: kubernetes-first-deployment
+    data:
+      provider: kubernetes
+      level: beginner
+      title: Your first Deployment and Service
+      summary: Run two replicas of a web app with a Deployment and reach them through a Service that actually selects them.
+      minutes: 20
+      tags: [deployment, service, labels, images]
+      runtime: local
+      problem: |
+        A teammate wrote the first manifests for **hello**, a small web app
+        (podinfo) the team wants to run on Kubernetes. They applied them and
+        nothing answers: the Service has no endpoints, and the Deployment runs
+        a single pod from an image tagged `latest`.
+
+        In Kubernetes you rarely create Pods yourself. A **Deployment**
+        declares the desired state (which image, how many replicas) and its
+        controller keeps that many identical Pods running, replacing any that
+        die. A **Service** gives those Pods one stable name and address; it
+        finds them through a **label selector**, so the selector must match
+        the labels of the Pod template, and its `targetPort` must name a port
+        the containers declare.
+
+        Fix `k8s/hello.yaml` so the app runs redundantly and the Service
+        routes to it.
+      requirements:
+        - The `hello` Deployment in namespace `hello` runs at least **2 replicas**.
+        - The image is pinned to a version tag (`ghcr.io/stefanprodan/podinfo:6.15.0`), not `latest`.
+        - The `hello` Service selects the Deployment's pods (its `selector` matches `spec.template.metadata.labels`).
+        - The Service's `targetPort` is a port the container declares (the named port `http`, container port 9898), exposed as Service port 80.
+        - The workflow deploys to the local cluster and `GET /` through the Service answers 200.
+      hints:
+        - Compare the Service's `spec.selector` with the labels under the Deployment's `spec.template.metadata.labels`. They must be equal key by key.
+        - "`targetPort` can be a number or the **name** of a container port. The container declares a port named `http`; the Service refers to a name that does not exist."
+        - "`spec.replicas` on the Deployment sets how many pods its ReplicaSet keeps running. Pin the image with a tag such as `6.15.0` so every node runs the same build."
+      solution: |
+        Three things were wrong:
+
+        1. **Replicas.** A Deployment with `replicas: 1` means every rollout,
+           crash or node drain is downtime. Set `spec.replicas: 2`; the
+           Deployment's ReplicaSet keeps two identical pods running and
+           replaces any that fail.
+        2. **Selector.** A Service sends traffic to the pods whose labels
+           match its `selector`. The Service selected `app: hello-web` while
+           the pods are labelled `app: hello`, so it had no endpoints. Use
+           `app: hello` in both the Deployment's `selector`/template labels and
+           the Service.
+        3. **Ports and image.** `targetPort: web` named a port no container
+           declares; use the declared name `http`. The `latest` tag can
+           point at different builds over time and turns the pull policy to
+           `Always`; pin `6.15.0` (the Kubernetes docs recommend avoiding
+           `latest` in production).
+
+        ```yaml
+        spec:
+          replicas: 2
+          selector:
+            matchLabels: {app: hello}
+          template:
+            metadata:
+              labels: {app: hello}
+            spec:
+              containers:
+                - name: podinfo
+                  image: ghcr.io/stefanprodan/podinfo:6.15.0
+                  ports:
+                    - {name: http, containerPort: 9898}
+        ---
+        kind: Service
+        spec:
+          selector: {app: hello}
+          ports:
+            - {name: http, port: 80, targetPort: http}
+        ```
+
+        Next steps: add probes and resource requests (they are the next
+        challenges of the roadmap).
+      solutionFiles:
+        k8s/hello.yaml: |
+          apiVersion: v1
+          kind: Namespace
+          metadata:
+            name: hello
+          ---
+          apiVersion: apps/v1
+          kind: Deployment
+          metadata:
+            name: hello
+            namespace: hello
+            labels:
+              app.kubernetes.io/name: hello
+          spec:
+            # Two identical pods: one can restart or move while the other serves.
+            replicas: 2
+            selector:
+              matchLabels:
+                app: hello
+            template:
+              metadata:
+                labels:
+                  app: hello
+              spec:
+                containers:
+                  - name: podinfo
+                    # A pinned version: every node runs the same build.
+                    image: ghcr.io/stefanprodan/podinfo:6.15.0
+                    ports:
+                      - name: http
+                        containerPort: 9898
+          ---
+          apiVersion: v1
+          kind: Service
+          metadata:
+            name: hello
+            namespace: hello
+          spec:
+            # Must match the pod template labels above.
+            selector:
+              app: hello
+            ports:
+              - name: http
+                port: 80
+                targetPort: http
+      starter:
+        kind: kubernetes
+        kubernetes:
+          sources:
+            - {kind: manifests, path: k8s}
+        files:
+          k8s/hello.yaml: |
+            apiVersion: v1
+            kind: Namespace
+            metadata:
+              name: hello
+            ---
+            apiVersion: apps/v1
+            kind: Deployment
+            metadata:
+              name: hello
+              namespace: hello
+              labels:
+                app.kubernetes.io/name: hello
+            spec:
+              replicas: 1
+              selector:
+                matchLabels:
+                  app: hello
+              template:
+                metadata:
+                  labels:
+                    app: hello
+                spec:
+                  containers:
+                    - name: podinfo
+                      image: ghcr.io/stefanprodan/podinfo:latest
+                      ports:
+                        - name: http
+                          containerPort: 9898
+            ---
+            apiVersion: v1
+            kind: Service
+            metadata:
+              name: hello
+              namespace: hello
+            spec:
+              selector:
+                app: hello-web
+              ports:
+                - name: http
+                  port: 80
+                  targetPort: web
+      checks:
+        - id: renders
+          label: The manifests are valid Kubernetes objects
+          type: validate
+        - id: wiring
+          label: The Service selects the pods and targets a declared port; the image is pinned
+          type: rules_clean
+          rules_clean:
+            codes: [k8s_selector_mismatch, k8s_service_port, k8s_latest_tag]
+            minSeverity: warning
+        - id: replicas
+          label: The Deployment runs at least 2 replicas
+          type: has
+          has:
+            kubernetes:
+              kind: Deployment
+              name: hello
+              namespace: hello
+              where:
+                spec.replicas: {min: 2}
+        - id: deploys
+          label: The workflow deploys to the local cluster
+          type: deploy
+        - id: serves
+          label: GET / through the Service answers 200
+          type: http
+          http:
+            service: hello
+            port: 80
+            path: /
+            status: 200
+      sources:
+        - title: Kubernetes docs — Deployments
+          url: https://kubernetes.io/docs/concepts/workloads/controllers/deployment/
+        - title: Kubernetes docs — Service
+          url: https://kubernetes.io/docs/concepts/services-networking/service/
+        - title: Kubernetes docs — Labels and Selectors
+          url: https://kubernetes.io/docs/concepts/overview/working-with-objects/labels/
+        - title: Kubernetes docs — Images (image names and pull policy)
+          url: https://kubernetes.io/docs/concepts/containers/images/
+        - title: Kubernetes docs — Configuration Best Practices
+          url: https://kubernetes.io/docs/concepts/configuration/overview/
+        - title: CNCF CKAD curriculum (Application Deployment; Services and Networking)
+          url: https://github.com/cncf/curriculum/blob/master/CKAD_Curriculum_v1.37.pdf
+
+  - op: upsert
+    kind: challenge
+    id: kubernetes-config-and-secrets
+    data:
+      provider: kubernetes
+      level: beginner
+      title: Configuration in ConfigMaps, credentials in Secrets
+      summary: Move a database password and an API token out of plain manifests and ConfigMaps into a Secret the pod reads by reference.
+      minutes: 25
+      tags: [configmap, secret, configuration, security]
+      prerequisites: [kubernetes-first-deployment]
+      runtime: local
+      problem: |
+        The **orders** service reads its settings from environment
+        variables. Whoever wrote `k8s/orders.yaml` put everything where it
+        was quickest: the database password is a literal `value` in the
+        Deployment and the payments API token sits in the `orders-config`
+        ConfigMap next to the log level.
+
+        Kubernetes separates the two on purpose. A **ConfigMap** holds
+        non-confidential configuration. A **Secret** holds small amounts of
+        sensitive data and can be protected separately: its own RBAC rules,
+        encryption at rest in etcd, and it is only sent to nodes that run a
+        pod using it. Anyone who can read the Deployment or the ConfigMap can
+        currently read both credentials.
+
+        Keep the plain settings in the ConfigMap, move the credentials into
+        a Secret, and have the container read them by reference.
+      requirements:
+        - A Secret named `orders-credentials` in namespace `orders` holds `DB_PASSWORD` and `PAYMENTS_API_TOKEN`.
+        - The `orders-config` ConfigMap keeps only non-sensitive settings (`LOG_LEVEL`, `PAYMENTS_URL`); it no longer contains `PAYMENTS_API_TOKEN`.
+        - "The container reads `DB_PASSWORD` with `valueFrom.secretKeyRef` (Secret `orders-credentials`), and no env entry carries a literal credential."
+        - Every ConfigMap and Secret the pod references exists in the workflow.
+      hints:
+        - "A Secret can be written with `stringData` (plain text that the API server stores base64-encoded) instead of `data`."
+        - "`env: [{name: DB_PASSWORD, valueFrom: {secretKeyRef: {name: orders-credentials, key: DB_PASSWORD}}}]` reads one key. `envFrom: [{secretRef: {name: …}}]` imports every key of a Secret, `envFrom: [{configMapRef: {name: …}}]` every key of a ConfigMap."
+        - Remove `PAYMENTS_API_TOKEN` from the ConfigMap's `data` and add it to the Secret; keep `envFrom.configMapRef` for the remaining settings.
+      solution: |
+        **Why:** ConfigMaps are for configuration that is safe to read; the
+        Kubernetes docs state they provide no secrecy or encryption. Secrets
+        are a separate API kind so that access can be limited with RBAC,
+        encrypted at rest and only delivered to the nodes whose pods use them.
+        A literal `value` in the pod spec is visible to everyone who can read
+        the Deployment (and ends up in the repository history).
+
+        **Steps:**
+
+        1. Create the Secret with `stringData`:
+           ```yaml
+           apiVersion: v1
+           kind: Secret
+           metadata: {name: orders-credentials, namespace: orders}
+           type: Opaque
+           stringData:
+             DB_PASSWORD: change-me-locally
+             PAYMENTS_API_TOKEN: change-me-locally
+           ```
+        2. Keep only `LOG_LEVEL` and `PAYMENTS_URL` in `orders-config`.
+        3. In the container, read the password with `secretKeyRef`, import
+           the token with `envFrom.secretRef`, and keep
+           `envFrom.configMapRef` for the settings.
+
+        **Beyond this challenge:** Secret manifests are only base64-encoded,
+        so real credentials should not be committed. The Kubernetes "Good
+        practices for Kubernetes Secrets" page recommends enabling encryption
+        at rest, least-privilege RBAC on Secrets and, where possible, an
+        external secret store; locally a placeholder value is fine.
+      solutionFiles:
+        k8s/orders.yaml: |
+          apiVersion: v1
+          kind: Namespace
+          metadata:
+            name: orders
+          ---
+          # Non-confidential settings only.
+          apiVersion: v1
+          kind: ConfigMap
+          metadata:
+            name: orders-config
+            namespace: orders
+          data:
+            LOG_LEVEL: info
+            PAYMENTS_URL: http://payments.orders.svc.cluster.local:8080
+          ---
+          # Credentials live in a Secret: separate RBAC, encryption at rest,
+          # only sent to nodes running a pod that uses it. Placeholder values:
+          # never commit real credentials.
+          apiVersion: v1
+          kind: Secret
+          metadata:
+            name: orders-credentials
+            namespace: orders
+          type: Opaque
+          stringData:
+            DB_PASSWORD: change-me-locally
+            PAYMENTS_API_TOKEN: change-me-locally
+          ---
+          apiVersion: apps/v1
+          kind: Deployment
+          metadata:
+            name: orders
+            namespace: orders
+          spec:
+            replicas: 1
+            selector:
+              matchLabels:
+                app: orders
+            template:
+              metadata:
+                labels:
+                  app: orders
+              spec:
+                containers:
+                  - name: orders
+                    image: ghcr.io/stefanprodan/podinfo:6.15.0
+                    ports:
+                      - name: http
+                        containerPort: 9898
+                    env:
+                      - name: DB_HOST
+                        value: postgres.orders.svc.cluster.local
+                      - name: DB_PASSWORD
+                        valueFrom:
+                          secretKeyRef:
+                            name: orders-credentials
+                            key: DB_PASSWORD
+                    envFrom:
+                      - configMapRef:
+                          name: orders-config
+                      - secretRef:
+                          name: orders-credentials
+      starter:
+        kind: kubernetes
+        kubernetes:
+          sources:
+            - {kind: manifests, path: k8s}
+        files:
+          k8s/orders.yaml: |
+            apiVersion: v1
+            kind: Namespace
+            metadata:
+              name: orders
+            ---
+            apiVersion: v1
+            kind: ConfigMap
+            metadata:
+              name: orders-config
+              namespace: orders
+            data:
+              LOG_LEVEL: info
+              PAYMENTS_URL: http://payments.orders.svc.cluster.local:8080
+              PAYMENTS_API_TOKEN: tok_live_9f8a7c6b5e4d3c2b1a
+            ---
+            apiVersion: apps/v1
+            kind: Deployment
+            metadata:
+              name: orders
+              namespace: orders
+            spec:
+              replicas: 1
+              selector:
+                matchLabels:
+                  app: orders
+              template:
+                metadata:
+                  labels:
+                    app: orders
+                spec:
+                  containers:
+                    - name: orders
+                      image: ghcr.io/stefanprodan/podinfo:6.15.0
+                      ports:
+                        - name: http
+                          containerPort: 9898
+                      env:
+                        - name: DB_HOST
+                          value: postgres.orders.svc.cluster.local
+                        - name: DB_PASSWORD
+                          value: Sup3r-S3cret-2026
+                      envFrom:
+                        - configMapRef:
+                            name: orders-config
+      checks:
+        - id: renders
+          label: The manifests are valid Kubernetes objects
+          type: validate
+        - id: no-plain-credentials
+          label: No credential is written in env or in a ConfigMap, and every reference resolves
+          type: rules_clean
+          rules_clean:
+            codes: [k8s_secret_env, k8s_secret_in_configmap, k8s_unknown_ref]
+            minSeverity: warning
+        - id: secret
+          label: The orders-credentials Secret exists in namespace orders
+          type: has
+          has:
+            kubernetes:
+              kind: Secret
+              name: orders-credentials
+              namespace: orders
+        - id: configmap-clean
+          label: The ConfigMap keeps only non-sensitive settings
+          type: has
+          has:
+            kubernetes:
+              kind: ConfigMap
+              name: orders-config
+              namespace: orders
+              where:
+                data.LOG_LEVEL: {exists: true}
+                data.PAYMENTS_API_TOKEN: {exists: false}
+        - id: secret-ref
+          label: DB_PASSWORD is read from the Secret with secretKeyRef
+          type: has
+          has:
+            kubernetes:
+              kind: Deployment
+              name: orders
+              namespace: orders
+              where:
+                spec.template.spec.containers[*].env.DB_PASSWORD.valueFrom.secretKeyRef.name: orders-credentials
+      sources:
+        - title: Kubernetes docs — ConfigMaps
+          url: https://kubernetes.io/docs/concepts/configuration/configmap/
+        - title: Kubernetes docs — Secrets
+          url: https://kubernetes.io/docs/concepts/configuration/secret/
+        - title: Kubernetes docs — Good practices for Kubernetes Secrets
+          url: https://kubernetes.io/docs/concepts/security/secrets-good-practices/
+        - title: Kubernetes docs — Configure a Pod to Use a ConfigMap
+          url: https://kubernetes.io/docs/tasks/configure-pod-container/configure-pod-configmap/
+        - title: Kubernetes docs — Distribute Credentials Securely Using Secrets
+          url: https://kubernetes.io/docs/tasks/inject-data-application/distribute-credentials-secure/
+        - title: CNCF CKAD curriculum (Application Environment, Configuration and Security)
+          url: https://github.com/cncf/curriculum/blob/master/CKAD_Curriculum_v1.37.pdf
+
+  - op: upsert
+    kind: challenge
+    id: kubernetes-ingress-routing
+    data:
+      provider: kubernetes
+      level: beginner
+      title: Route a website and its API through one Ingress
+      summary: Expose a web frontend and an API on one host with path-based Ingress rules that point at the right Services.
+      minutes: 25
+      tags: [ingress, service, networking, http]
+      prerequisites: [kubernetes-first-deployment]
+      runtime: local
+      problem: |
+        The **shop** has two parts: a static website (NGINX) and a JSON API
+        (podinfo). Both run in the cluster behind ClusterIP Services, which
+        are only reachable from inside the cluster. The team wants them on a
+        single host, `shop.localhost`: the API under `/api`, everything else
+        on the website.
+
+        An **Ingress** describes HTTP routing rules (host and path → Service
+        and port) that an Ingress controller implements; the local k3s
+        cluster runs Traefik as its controller. The draft Ingress in
+        `k8s/ingress.yaml` does not render, and its API route points at a
+        Service that does not exist.
+      requirements:
+        - The `shop` Ingress (namespace `shop`) has a rule for host `shop.localhost`.
+        - "Requests under `/api` go to the `api` Service on its `http` port; everything else goes to the `web` Service on its `http` port."
+        - Every path declares a `pathType` (`Prefix` for both routes).
+        - "Through the Ingress, `GET /` answers 200 from NGINX and `GET /api/info` answers 200 from the API."
+      hints:
+        - "`pathType` is required in `networking.k8s.io/v1`: `Prefix` matches by path segments (`/api` matches `/api` and `/api/info`), `Exact` matches one path only."
+        - "A backend is `service: {name: <Service name>, port: {name: <port name>}}` (or `port: {number: …}`). Look at the Services in `k8s/apps.yaml` for the right names."
+        - The longest matching path wins, so `/api` and `/` can coexist in the same rule.
+      solution: |
+        The Ingress needed two fixes:
+
+        1. **`pathType` on every path.** In the `networking.k8s.io/v1` API
+           each path must say how it is matched. `Prefix` splits the path by
+           `/` and matches element by element, so `/api` also routes
+           `/api/info`.
+        2. **Backends that exist.** The API route pointed at `api-v1:8080`,
+           but the Service is called `api` and exposes port 80 named `http`.
+           An Ingress backend that names a missing Service answers errors
+           for every request on that route.
+
+        ```yaml
+        spec:
+          rules:
+            - host: shop.localhost
+              http:
+                paths:
+                  - path: /api
+                    pathType: Prefix
+                    backend:
+                      service: {name: api, port: {name: http}}
+                  - path: /
+                    pathType: Prefix
+                    backend:
+                      service: {name: web, port: {name: http}}
+        ```
+
+        When several paths match, the longest one takes precedence, so
+        `/api/info` goes to the API and `/` to the website. For new designs
+        the Kubernetes project also offers the Gateway API, which splits
+        the infrastructure (Gateway) from the routes (HTTPRoute).
+      solutionFiles:
+        k8s/ingress.yaml: |
+          apiVersion: networking.k8s.io/v1
+          kind: Ingress
+          metadata:
+            name: shop
+            namespace: shop
+          spec:
+            rules:
+              - host: shop.localhost
+                http:
+                  paths:
+                    # The longest matching path wins: /api/* goes to the API.
+                    - path: /api
+                      pathType: Prefix
+                      backend:
+                        service:
+                          name: api
+                          port:
+                            name: http
+                    - path: /
+                      pathType: Prefix
+                      backend:
+                        service:
+                          name: web
+                          port:
+                            name: http
+      starter:
+        kind: kubernetes
+        kubernetes:
+          sources:
+            - {kind: manifests, path: k8s}
+        files:
+          k8s/apps.yaml: |
+            apiVersion: v1
+            kind: Namespace
+            metadata:
+              name: shop
+            ---
+            # The website: NGINX (unprivileged image, listens on 8080).
+            apiVersion: apps/v1
+            kind: Deployment
+            metadata:
+              name: web
+              namespace: shop
+            spec:
+              replicas: 1
+              selector:
+                matchLabels:
+                  app: web
+              template:
+                metadata:
+                  labels:
+                    app: web
+                spec:
+                  containers:
+                    - name: nginx
+                      image: nginxinc/nginx-unprivileged:1.30-alpine
+                      ports:
+                        - name: http
+                          containerPort: 8080
+            ---
+            apiVersion: v1
+            kind: Service
+            metadata:
+              name: web
+              namespace: shop
+            spec:
+              selector:
+                app: web
+              ports:
+                - name: http
+                  port: 80
+                  targetPort: http
+            ---
+            # The API: podinfo answers JSON on /api/info.
+            apiVersion: apps/v1
+            kind: Deployment
+            metadata:
+              name: api
+              namespace: shop
+            spec:
+              replicas: 1
+              selector:
+                matchLabels:
+                  app: api
+              template:
+                metadata:
+                  labels:
+                    app: api
+                spec:
+                  containers:
+                    - name: podinfo
+                      image: ghcr.io/stefanprodan/podinfo:6.15.0
+                      ports:
+                        - name: http
+                          containerPort: 9898
+            ---
+            apiVersion: v1
+            kind: Service
+            metadata:
+              name: api
+              namespace: shop
+            spec:
+              selector:
+                app: api
+              ports:
+                - name: http
+                  port: 80
+                  targetPort: http
+          k8s/ingress.yaml: |
+            apiVersion: networking.k8s.io/v1
+            kind: Ingress
+            metadata:
+              name: shop
+              namespace: shop
+            spec:
+              rules:
+                - host: shop.localhost
+                  http:
+                    paths:
+                      - path: /api
+                        backend:
+                          service:
+                            name: api-v1
+                            port:
+                              number: 8080
+                      - path: /
+                        backend:
+                          service:
+                            name: web
+                            port:
+                              name: http
+      checks:
+        - id: renders
+          label: The manifests are valid Kubernetes objects (every path has a pathType)
+          type: validate
+        - id: backends
+          label: Every Ingress backend names an existing Service and port
+          type: rules_clean
+          rules_clean:
+            codes: [k8s_ingress_backend, k8s_service_port, k8s_selector_mismatch]
+            minSeverity: warning
+        - id: host
+          label: The shop Ingress serves shop.localhost
+          type: has
+          has:
+            kubernetes:
+              kind: Ingress
+              name: shop
+              namespace: shop
+              where:
+                spec.rules[*].host: shop.localhost
+        - id: api-route
+          label: /api is routed to the api Service
+          type: has
+          has:
+            kubernetes:
+              kind: Ingress
+              name: shop
+              namespace: shop
+              where:
+                spec.rules[*].http.paths[*].backend.service.name: api
+        - id: deploys
+          label: The workflow deploys to the local cluster
+          type: deploy
+        - id: web-served
+          label: GET / through the Ingress answers 200 (website)
+          type: http
+          http:
+            service: web
+            ingress: true
+            path: /
+            status: 200
+        - id: api-served
+          label: GET /api/info through the Ingress answers 200 (API)
+          type: http
+          http:
+            service: api
+            ingress: true
+            path: /api/info
+            status: 200
+      sources:
+        - title: Kubernetes docs — Ingress
+          url: https://kubernetes.io/docs/concepts/services-networking/ingress/
+        - title: Kubernetes docs — Service
+          url: https://kubernetes.io/docs/concepts/services-networking/service/
+        - title: Kubernetes docs — Gateway API
+          url: https://kubernetes.io/docs/concepts/services-networking/gateway/
+        - title: CNCF CKAD curriculum (Services and Networking — use Ingress rules to expose applications)
+          url: https://github.com/cncf/curriculum/blob/master/CKAD_Curriculum_v1.37.pdf

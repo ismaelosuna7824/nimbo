@@ -277,6 +277,8 @@ export interface Workflow {
   updatedAt: string
   /** Hidden from recents; runs and load tests are refused until restored. */
   archived?: boolean
+  /** The Learn challenge this workflow was started from (Challenge tab). */
+  challenge?: string
   /** Pixel-art icon, random on creation; glyph "nimbo" is the explicit mascot. Absent only on not-yet-migrated data. */
   icon?: WorkflowIcon
   nodes: WorkflowNode[]
@@ -986,6 +988,74 @@ export interface LoadTestSpec {
   timeoutMs: number
   maxWorkers?: number
   confirmExternal?: boolean
+  /** Docker/Kubernetes workflow runs: a real, reversible incident injected during the run. */
+  scenario?: ScenarioSpec
+}
+
+export type ScenarioId = "kill_replica" | "dependency_down" | "dependency_latency" | "cache_flush" | "traffic_spike"
+export type ScenarioVerdict = "survived" | "degraded" | "failed"
+
+/** target: graph node id ("service:db", "Deployment/ns/web"); unused by traffic_spike. atSec: seconds after load starts. */
+export interface ScenarioSpec {
+  id: ScenarioId
+  target: string
+  atSec: number
+  durationSec: number
+  /** dependency_latency: delayMs, jitterMs, lossPct; traffic_spike: factor (numbers as strings). */
+  params?: Record<string, string>
+}
+
+export interface ScenarioCheck {
+  name: string
+  passed: boolean
+  detail: string
+}
+
+/** Times share LoadSample.t's axis. verdict is "" while the run is in progress. */
+export interface ScenarioResult {
+  id: ScenarioId
+  target: string
+  targetName?: string
+  injectedAtSec: number
+  revertedAtSec?: number
+  recoveredAtSec?: number
+  verdict: ScenarioVerdict | ""
+  message: string
+  checks: ScenarioCheck[]
+  detail?: string
+}
+
+export interface ScenarioTarget {
+  id: string
+  name: string
+  detail: string
+}
+
+export interface ScenarioParam {
+  name: string
+  label: string
+  default: number
+  min: number
+  max: number
+  unit?: string
+}
+
+export interface ScenarioOption {
+  id: ScenarioId
+  title: string
+  description: string
+  needsTarget: boolean
+  targets: ScenarioTarget[]
+  params?: ScenarioParam[]
+  defaultDurationSec: number
+}
+
+/** GET /workflows/{id}/scenarios. kind "" for Terraform workflows. */
+export interface ScenarioCatalog {
+  kind: "docker" | "kubernetes" | ""
+  environment?: string
+  scenarios: ScenarioOption[]
+  unavailable: { id: ScenarioId; title: string; reason: string }[]
 }
 
 export interface LatencyStats {
@@ -1051,6 +1121,8 @@ export interface LoadTestRun {
   error?: string
   /** Runs against a docker or Kubernetes workflow's service: container usage during the run (set once it ends). */
   resources?: LoadResources
+  /** The injected incident: times, then (once the run ends) the verdict and its checks. */
+  scenario?: ScenarioResult
 }
 
 export type LoadVerdictKind = "cpu-bound" | "single-core" | "memory-bound" | "oom" | "restarted" | "ok"
@@ -1140,6 +1212,128 @@ export interface LoadScaling {
   /** Headline sentence. */
   verdict: string
   note?: string
+}
+
+// ---------------------------------------------------------------- capacity planning
+
+export interface CapacityRequest {
+  /** Peak requests per second to plan for. */
+  targetRps: number
+  /** Optional p95 objective (ms): caps each replica at the highest rate served within it. */
+  p95Ms?: number
+  /** "" / absent: the active environment. */
+  environment?: string
+  /** Absent: the newest finished run of the environment with container usage. */
+  runId?: string
+}
+
+export type CapacityConfidence = "high" | "medium" | "low"
+/** app scales out; dependency (database/cache/broker) is projected; idle did not follow the traffic. */
+export type CapacityRole = "app" | "dependency" | "idle"
+
+export interface CapacityApply {
+  target: string
+  values: Record<string, string>
+  /** "Replicas: 1 → 3". */
+  changes: string[]
+  skipped?: string[]
+}
+
+export interface CapacityService {
+  nodeId: string
+  service: string
+  role: CapacityRole
+  target?: boolean
+  measuredReplicas: number
+  measuredRps: number
+  /** Cores per replica at idle / over the busiest healthy seconds. */
+  idleCpu: number
+  peakCpu: number
+  cpuPerRps: number
+  peakMemBytes: number
+  currentCpuLimit?: number
+  currentMemLimit?: number
+  currentReplicas?: number
+  currentHpa?: HPAPolicy
+  cpuRequest: string
+  cpuLimit: string
+  memRequest: string
+  memLimit: string
+  cpuCeiling: number
+  perReplicaRps?: number
+  replicasRaw: number
+  replicas: number
+  /** Kubernetes apps only. */
+  hpa?: HPAPolicy
+  projectedCpu: number
+  totalCpu: number
+  totalMemGiB: number
+  /** What bounds a replica's rate. */
+  limit?: "cpu" | "latency" | "none"
+  note: string
+  caveat?: string
+  apply?: CapacityApply
+}
+
+export interface NodeOption {
+  shape: string
+  arch: "arm64" | "x86_64"
+  vcpu: number
+  memGiB: number
+  allocCpu: number
+  allocMemGiB: number
+  hourlyUsd: number
+  nodes: number
+  monthlyUsd: number
+  /** Fractions of the nodes' allocatable capacity requested. */
+  cpuUsed: number
+  memUsed: number
+}
+
+export interface CloudEstimate {
+  cloud: "aws" | "azure" | "gcp" | "oci"
+  region: string
+  recommended: NodeOption
+  /** Every shape that fits, cheapest first. */
+  options: NodeOption[]
+}
+
+export interface CapacityPlan {
+  workflowId: string
+  kind: "docker" | "kubernetes"
+  environment?: string
+  createdAt: string
+  run: {
+    id: string
+    name: string
+    startedAt: string
+    durationSec: number
+    healthySec: number
+    peakRps: number
+    breakingPoint?: number
+    stability: number
+    errorRate: number
+    p95Ms: number
+  }
+  targetRps: number
+  p95Ms?: number
+  /** Highest rate served before the breaking point. */
+  measuredRps: number
+  /** targetRps / measuredRps. */
+  extrapolation: number
+  confidence: CapacityConfidence
+  confidenceReasons: string[]
+  cpuCeiling: number
+  headroomRule: string
+  services: CapacityService[]
+  totalCpu: number
+  totalMemGiB: number
+  clouds: CloudEstimate[]
+  prices: { asOf: string; regions: Record<string, string>; note: string; sources: string[] }
+  assumptions: string[]
+  caveats: string[]
+  applicable: boolean
+  applyNote?: string
 }
 
 // ---------------------------------------------------------------- connections
@@ -1984,9 +2178,11 @@ export interface PortConflict {
   protocol: "tcp" | "udp"
   hostIp?: string
   hostPort: number
+  /** Size of a published range (hostPort is its first port); absent for one port. */
+  count?: number
   /** Process holding the port, when known. */
   holder?: string
-  /** Free port remapPorts would use. */
+  /** Free port (first of `count`) remapPorts would use. */
   suggestedPort: number
 }
 
@@ -1996,6 +2192,8 @@ export interface PortRemap {
   protocol: "tcp" | "udp"
   /** From the compose file. */
   hostPort: number
+  /** Size of a moved range (hostPort/port are its first ports); absent for one port. */
+  count?: number
   /** Actually published. */
   port: number
 }
@@ -2887,20 +3085,26 @@ export interface MonitoringResult {
 }
 
 // ---------------------------------------------------------------------------
-// Production readiness (GET /workflows/{id}/kubernetes/readiness)
+// Production readiness (GET /workflows/{id}/readiness, docker and Kubernetes)
 
 export type ReadinessStatus = "ready" | "needs_work" | "blocked"
 
-/** info passes with suggestions; todo is not verified yet (no load test); skip does not apply. */
+/**
+ * info passes with suggestions; todo is not verified yet (no load test, scenario run or capacity plan): it is left
+ * out of the score and lowers the confidence; skip does not apply.
+ */
 export type ReadinessItemStatus = "pass" | "info" | "warn" | "fail" | "todo" | "skip"
 
-export type ReadinessActionKind = "open_problem" | "run_load_test" | "open_load_test" | "add_monitoring"
+export type ReadinessActionKind = "open_problem" | "run_load_test" | "open_load_test" | "add_monitoring" | "run_scenario" | "plan_capacity"
 
 export interface ReadinessAction {
   kind: ReadinessActionKind
   label: string
   /** The load test run (open_load_test). */
   runId?: string
+  /** The incident to run and its target node (run_scenario). */
+  scenario?: string
+  target?: string
 }
 
 export interface ReadinessItem {
@@ -2908,31 +3112,272 @@ export interface ReadinessItem {
   title: string
   status: ReadinessItemStatus
   message: string
-  /** The k8s_* rules the item is made of. */
+  /** The rules (k8s_*, dk_*) the item is made of. */
   codes?: string[]
   diagnostics?: Diagnostic[]
   action?: ReadinessAction
 }
 
+export type ReadinessCategory = "reliability" | "performance" | "resilience" | "monitoring" | "security" | "hygiene"
+
 export interface ReadinessGroup {
-  id: "reliability" | "scaling" | "monitoring" | "security" | "hygiene"
+  id: ReadinessCategory
   title: string
+  /** Share of the environment score (all categories add up to 100). */
+  weight: number
+  /** Mean of the scored items (pass/info 100, warn 50, fail 0); null when nothing has evidence yet. */
+  score: number | null
+  /** Items not verified yet. */
+  untested: number
   items: ReadinessItem[]
 }
 
+export type ReadinessCellId = "rules" | "health" | "resources" | "monitoring" | "load" | "resilience" | "capacity"
+
+export interface ReadinessCell {
+  id: ReadinessCellId
+  status: ReadinessItemStatus
+  message: string
+  diagnostics?: Diagnostic[]
+  action?: ReadinessAction
+}
+
+/** One compose service or workload of an environment, a cell per column (always all of them, in order). */
+export interface ReadinessComponent {
+  nodeId: string
+  name: string
+  /** "service" (compose) or the workload kind. */
+  kind: string
+  role: "app" | "data"
+  /** Worst cell. */
+  status: ReadinessItemStatus
+  score: number | null
+  cells: ReadinessCell[]
+}
+
 export interface EnvironmentReadiness {
-  /** "" is the base of a workflow without environments (checked as production). */
+  /** "" is the base (checked as production when the workflow has no environments). */
   name: string
   productionLike: boolean
   status: ReadinessStatus
-  /** 0-100: passed items count fully, warnings and untested items half, failures nothing. */
+  /** 0-100: the weighted mean of the category scores that have evidence. */
   score: number
+  /** 0-100: the weighted share of checks verified (100 = nothing left untested). */
+  confidence: number
   summary: string
   groups: ReadinessGroup[]
+  components: ReadinessComponent[]
+  /** The latest load test the evidence comes from. */
+  loadTestRunId?: string
 }
 
-export interface KubeReadiness {
+export interface WorkflowReadiness {
   workflowId: string
+  kind: "docker" | "kubernetes"
   activeEnvironment: string
   environments: EnvironmentReadiness[]
+}
+
+// ---------------------------------------------------------------- learn (roadmaps + challenges)
+
+export type LearnProviderId = "aws" | "azure" | "gcp" | "oci" | "docker" | "kubernetes" | "global"
+export type LearnLevel = "beginner" | "intermediate" | "advanced" | "expert"
+export type LearnRuntime = "local" | "emulated" | "design"
+export type LearnStatus = "not_started" | "in_progress" | "completed"
+
+/** An official documentation page. */
+export interface LearnSource {
+  title: string
+  url: string
+}
+
+export type ChallengeCheckType = "validate" | "rules_clean" | "has" | "deploy" | "http" | "load" | "scenario" | "readiness"
+
+/** One graded goal; the parameter object named like `type` holds its settings. */
+export interface ChallengeCheck {
+  id: string
+  label: string
+  type: ChallengeCheckType
+  environment?: string
+  rules_clean?: Record<string, unknown>
+  has?: Record<string, unknown>
+  http?: Record<string, unknown>
+  load?: Record<string, unknown>
+  scenario?: Record<string, unknown>
+  readiness?: Record<string, unknown>
+}
+
+/** The workflow a challenge starts from: a template, or inline files of a kind. */
+export interface ChallengeStarter {
+  templateId?: string
+  kind?: "terraform" | "docker" | "kubernetes"
+  cloud?: Cloud
+  files?: Record<string, string>
+}
+
+export interface Challenge {
+  id: string
+  provider: LearnProviderId
+  level: LearnLevel
+  title: string
+  summary: string
+  minutes: number
+  tags: string[]
+  prerequisites?: string[]
+  runtime: LearnRuntime
+  /** Markdown. */
+  problem: string
+  requirements: string[]
+  /** Revealed one at a time; the last is closest to the answer. */
+  hints: string[]
+  /** Markdown. */
+  solution: string
+  solutionFiles?: Record<string, string>
+  starter: ChallengeStarter
+  checks: ChallengeCheck[]
+  /** Global challenges: how to solve it on each provider (markdown). */
+  adaptations?: Partial<Record<LearnProviderId, string>>
+  sources: LearnSource[]
+}
+
+export type ChallengeRunStatus = "pending" | "running" | "passed" | "failed" | "error" | "canceled"
+
+/** One measurement of a check: actual vs expected, e.g. "312 ms" vs "< 100 ms". */
+export interface ChallengeCheckResult {
+  label: string
+  passed: boolean
+  actual: string
+  expected: string
+}
+
+/** A check's outcome; runId is its load test (load, scenario) or deploy run. */
+export interface ChallengeGoalResult {
+  id: string
+  label: string
+  type: ChallengeCheckType
+  status: ChallengeRunStatus
+  passed: boolean
+  detail: string
+  runId?: string
+  checks: ChallengeCheckResult[]
+}
+
+/** One "Check my solution" (running or finished). */
+export interface ChallengeResult {
+  challenge: string
+  status: ChallengeRunStatus
+  environment?: string
+  /** What runs now ("Deploying your changes", a check label). */
+  phase?: string
+  startedAt: string
+  endedAt?: string
+  deployRunId?: string
+  goals: ChallengeGoalResult[]
+  passed: boolean
+  score: number
+  error?: string
+}
+
+/** GET /workflows/{id}/challenge. */
+export interface ChallengeView {
+  challenge: Challenge
+  last?: ChallengeResult
+}
+
+/** The user's progress on a challenge (kept across content updates). */
+export interface ChallengeProgress {
+  challengeId: string
+  status: LearnStatus
+  attempts: number
+  completedGoals: string[]
+  workflowId?: string
+  startedAt?: string
+  updatedAt?: string
+  completedAt?: string
+}
+
+export interface ChallengeSummary {
+  id: string
+  provider: LearnProviderId
+  level: LearnLevel
+  title: string
+  summary: string
+  minutes: number
+  tags: string[]
+  runtime: LearnRuntime
+  prerequisites: string[]
+  checks: number
+  progress: ChallengeProgress
+}
+
+export interface LearnPrerequisite {
+  id: string
+  title: string
+  completed: boolean
+  missing?: boolean
+}
+
+export interface ChallengeDetail {
+  challenge: Challenge
+  progress: ChallengeProgress
+  prerequisites: LearnPrerequisite[]
+  /** Roadmap steps linking to it ("<level>: <step title>"). */
+  steps: string[]
+}
+
+export interface RoadmapStep {
+  title: string
+  description: string
+  challenges?: string[]
+  docs: LearnSource[]
+}
+
+export interface RoadmapLevel {
+  level: LearnLevel
+  title: string
+  goals: string
+  steps: RoadmapStep[]
+}
+
+export interface Roadmap {
+  id: string
+  provider: LearnProviderId
+  title: string
+  summary: string
+  levels: RoadmapLevel[]
+  sources: LearnSource[]
+}
+
+export interface LearnLevelCount {
+  level: LearnLevel
+  challenges: number
+  completed: number
+}
+
+export interface LearnProvider {
+  id: LearnProviderId
+  title: string
+  hasRoadmap: boolean
+  challenges: number
+  completed: number
+  levels: LearnLevelCount[]
+}
+
+/** Content migrations: applied, not applied (after a failure) and load errors. */
+export interface LearnContentStatus {
+  applied: number
+  pending: number
+  errors: string[]
+}
+
+export interface LearnOverview {
+  providers: LearnProvider[]
+  status: LearnContentStatus
+}
+
+export interface ChallengeFilter {
+  provider?: LearnProviderId
+  level?: LearnLevel
+  tag?: string
+  q?: string
 }

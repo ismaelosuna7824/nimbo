@@ -182,7 +182,10 @@ type Workflow struct {
 	Description string `json:"description,omitempty"`
 	// Kind is "" (Terraform), WorkflowDocker or WorkflowKubernetes; it
 	// never changes.
-	Kind      string    `json:"kind,omitempty"`
+	Kind string `json:"kind,omitempty"`
+	// Challenge is the challenge template a challenge workflow was created
+	// from ("" otherwise); it never changes.
+	Challenge string    `json:"challenge,omitempty"`
 	CreatedAt time.Time `json:"createdAt"`
 	UpdatedAt time.Time `json:"updatedAt"`
 	// Archived hides the workflow from recents; its sandbox is stopped and
@@ -1194,6 +1197,9 @@ type LoadTestSpec struct {
 	TimeoutMs       int         `json:"timeoutMs"`
 	MaxWorkers      int         `json:"maxWorkers,omitempty"` // cap on in-flight requests in rps mode
 	ConfirmExternal bool        `json:"confirmExternal,omitempty"`
+	// Scenario injects a fault into the workflow's docker or Kubernetes
+	// runtime during the run (see ScenarioSpec).
+	Scenario *ScenarioSpec `json:"scenario,omitempty"`
 }
 
 // LatencyStats are in milliseconds.
@@ -1280,6 +1286,8 @@ type LoadTestRun struct {
 	// Resources: container usage and bottleneck verdicts of a run against
 	// a docker workflow's service.
 	Resources *LoadResources `json:"resources,omitempty"`
+	// Scenario is the outcome of Spec.Scenario.
+	Scenario *ScenarioResult `json:"scenario,omitempty"`
 }
 
 // ---------------------------------------------------------------------------

@@ -1,0 +1,392 @@
+description: Adds the Kubernetes runtime challenges graded under real load and incidents (readiness under pod loss, autoscaling signal)
+operations:
+- op: upsert
+  kind: challenge
+  id: kubernetes-readiness-probe
+  data:
+    provider: kubernetes
+    level: advanced
+    title: New pods get traffic before they're ready
+    summary: When a catalog pod dies, its replacement gets requests as soon as its container starts, while it still answers 503; tell Kubernetes when a pod is really ready.
+    minutes: 20
+    tags:
+    - probes
+    - ingress
+    - resilience
+    - deployments
+    runtime: local
+    problem: |
+      The catalog runs as two pods behind a Service and an Ingress. When a pod dies,
+      its Deployment replaces it within seconds. The new container starts quickly, but
+      the app needs 15 seconds of warm-up before it can serve, and until then it
+      answers 503. Without a readiness probe, Kubernetes treats a running container as
+      a ready pod, so the Ingress sends it half of the traffic straight away.
+
+      **Check my solution** deletes one pod in the middle of steady traffic (40
+      requests per second through the Ingress). Make sure a pod only receives requests
+      once it can answer them.
+    requirements:
+    - The catalog container has a readiness probe.
+    - Losing a pod under load causes fewer than 1% errors, and the catalog recovers on its own (verdict degraded or better).
+    hints:
+    - The app answers `GET /health` with 503 while it warms up and 200 once it can serve. Kubernetes can ask that question for you.
+    - A `readinessProbe` keeps a pod out of the Service endpoints (and so the Ingress) until it passes. Add one to the catalog container in the Inspector or in `k8s/catalog.yaml`.
+    - 'Use an `httpGet` probe on path `/health`, port `http`, with `periodSeconds: 1` and `failureThreshold: 2`.'
+    solution: |
+      **Why.** Readiness decides whether a pod is an endpoint of its Services. A
+      container that has started is not necessarily able to serve; a readiness probe
+      that checks the app's own health endpoint keeps a warming pod out of rotation,
+      and takes a failing one out, without restarting it (that is what liveness
+      probes do).
+
+      **Steps.** In `k8s/catalog.yaml`, add to the catalog container:
+      `readinessProbe: {httpGet: {path: /health, port: http}, periodSeconds: 1,
+      failureThreshold: 2}`.
+    solutionFiles:
+      k8s/catalog.yaml: |
+        # The catalog: two replicas built from catalog/ (Nimbo builds catalog:dev
+        # and loads it into the local cluster), a Service, and an Ingress that
+        # Traefik serves at http://catalog.localhost. Traefik sends each request
+        # to one of the Service's ready pods.
+        apiVersion: apps/v1
+        kind: Deployment
+        metadata:
+          name: catalog
+          namespace: catalog
+          labels:
+            app.kubernetes.io/name: catalog
+            app.kubernetes.io/part-of: catalog
+        spec:
+          replicas: 2
+          selector:
+            matchLabels:
+              app: catalog
+          template:
+            metadata:
+              labels:
+                app: catalog
+            spec:
+              securityContext:
+                runAsNonRoot: true
+                runAsUser: 1000
+                seccompProfile:
+                  type: RuntimeDefault
+              automountServiceAccountToken: false
+              terminationGracePeriodSeconds: 15
+              containers:
+                - name: catalog
+                  image: catalog:dev
+                  imagePullPolicy: IfNotPresent
+                  env:
+                    - name: WARMUP_SEC
+                      value: "15"
+                  ports:
+                    - name: http
+                      containerPort: 3000
+                  # Only Ready pods are Service (and Ingress) endpoints: a new pod
+                  # gets traffic once /health answers 200, after its warm-up.
+                  readinessProbe:
+                    httpGet:
+                      path: /health
+                      port: http
+                    periodSeconds: 1
+                    failureThreshold: 2
+                  resources:
+                    requests:
+                      cpu: 50m
+                      memory: 64Mi
+                    limits:
+                      memory: 128Mi
+                  securityContext:
+                    allowPrivilegeEscalation: false
+                    readOnlyRootFilesystem: true
+                    capabilities:
+                      drop: ["ALL"]
+        ---
+        apiVersion: v1
+        kind: Service
+        metadata:
+          name: catalog
+          namespace: catalog
+        spec:
+          selector:
+            app: catalog
+          ports:
+            - name: http
+              port: 80
+              targetPort: http
+        ---
+        apiVersion: networking.k8s.io/v1
+        kind: Ingress
+        metadata:
+          name: catalog
+          namespace: catalog
+        spec:
+          ingressClassName: traefik
+          rules:
+            - host: catalog.localhost
+              http:
+                paths:
+                  - path: /
+                    pathType: Prefix
+                    backend:
+                      service:
+                        name: catalog
+                        port:
+                          name: http
+    starter:
+      templateId: starter-kubernetes-readiness-probe
+    checks:
+    - id: has-readiness
+      label: The catalog container has a readiness probe
+      type: has
+      has:
+        kubernetes:
+          kind: Deployment
+          name: catalog
+          where:
+            spec.template.spec.containers.catalog.readinessProbe:
+              exists: true
+    - id: survive-pod-loss
+      label: Losing a pod causes no errors
+      type: scenario
+      scenario:
+        target:
+          service: catalog
+          ingress: true
+          path: /catalog/{{rand}}
+        spec:
+          stages:
+          - durationSec: 0
+            target: 40
+          - durationSec: 60
+            target: 40
+          timeoutMs: 2000
+        scenario:
+          id: kill_replica
+          target: catalog
+          atSec: 20
+          durationSec: 20
+        expect:
+          verdict: degraded
+          metrics:
+          - metric: error_rate
+            op: lt
+            value: 0.01
+    sources:
+    - title: Configure Liveness, Readiness and Startup Probes
+      url: https://kubernetes.io/docs/tasks/configure-pod-container/configure-liveness-readiness-startup-probes/
+    - title: 'Pod lifecycle: container probes'
+      url: https://kubernetes.io/docs/concepts/workloads/pods/pod-lifecycle/#container-probes
+- op: upsert
+  kind: challenge
+  id: kubernetes-autoscale-signal
+  data:
+    provider: kubernetes
+    level: expert
+    title: Scale on the right signal
+    summary: The recommendations API has an autoscaler, yet it never adds pods during a traffic spike because it watches memory; make it scale on the signal that actually grows.
+    minutes: 30
+    tags:
+    - hpa
+    - autoscaling
+    - resources
+    - performance
+    runtime: local
+    prerequisites:
+    - kubernetes-resources-and-hpa
+    problem: |
+      Recommendations are scored per request: a few milliseconds of CPU and almost no
+      memory. The API runs one pod capped at a quarter of a CPU, with a
+      HorizontalPodAutoscaler that adds pods when memory use passes 80% of the
+      request. Under a spike, the pod's CPU is pinned at its limit, latency explodes,
+      and memory never moves, so the autoscaler never reacts.
+
+      **Check my solution** sends 30 requests per second through the Ingress and,
+      after 90 seconds, triples it for a minute. Make the autoscaler add pods in
+      time.
+    requirements:
+    - The HorizontalPodAutoscaler scales on CPU utilization.
+    - The api container requests CPU, so utilization has a base.
+    - Under the spike, at least two pods are Ready, errors stay under 5%, and the API recovers (verdict degraded or better).
+    hints:
+    - 'Watch the Load test results: what grows with traffic, CPU or memory?'
+    - An HPA utilization target is a percentage of the containers' requests. Set `resources.requests.cpu` on the api container (for example `100m`).
+    - 'In `k8s/hpa.yaml`, change the metric to `resource.name: cpu` with `averageUtilization: 50`.'
+    solution: |
+      **Why.** The HPA computes utilization as a percentage of the pods' resource
+      requests and scales on the metrics you list. Scale on the resource the work
+      actually consumes: here CPU. With `requests.cpu: 100m` and a 50% target, the
+      baseline load already asks for more pods, and the spike adds more before the
+      pods saturate.
+
+      **Steps.**
+      1. `k8s/api.yaml`: add `cpu: 100m` under `resources.requests`.
+      2. `k8s/hpa.yaml`: metric `cpu`, `averageUtilization: 50`.
+    solutionFiles:
+      k8s/api.yaml: |
+        # The recommendations API, built from api/ (Nimbo builds api:dev and loads
+        # it into the local cluster), behind a Service and an Ingress that Traefik
+        # serves at http://recs.localhost.
+        apiVersion: apps/v1
+        kind: Deployment
+        metadata:
+          name: api
+          namespace: recs
+          labels:
+            app.kubernetes.io/name: api
+            app.kubernetes.io/part-of: recs
+        spec:
+          replicas: 1
+          selector:
+            matchLabels:
+              app: api
+          template:
+            metadata:
+              labels:
+                app: api
+            spec:
+              securityContext:
+                runAsNonRoot: true
+                runAsUser: 1000
+                seccompProfile:
+                  type: RuntimeDefault
+              automountServiceAccountToken: false
+              containers:
+                - name: api
+                  image: api:dev
+                  imagePullPolicy: IfNotPresent
+                  ports:
+                    - name: http
+                      containerPort: 3000
+                  readinessProbe:
+                    httpGet:
+                      path: /health
+                      port: http
+                    periodSeconds: 2
+                  resources:
+                    requests:
+                      # The HPA's CPU utilization is a percentage of this request.
+                      cpu: 100m
+                      memory: 128Mi
+                    limits:
+                      cpu: 250m
+                      memory: 192Mi
+                  securityContext:
+                    allowPrivilegeEscalation: false
+                    readOnlyRootFilesystem: true
+                    capabilities:
+                      drop: ["ALL"]
+        ---
+        apiVersion: v1
+        kind: Service
+        metadata:
+          name: api
+          namespace: recs
+        spec:
+          selector:
+            app: api
+          ports:
+            - name: http
+              port: 80
+              targetPort: http
+        ---
+        apiVersion: networking.k8s.io/v1
+        kind: Ingress
+        metadata:
+          name: api
+          namespace: recs
+        spec:
+          ingressClassName: traefik
+          rules:
+            - host: recs.localhost
+              http:
+                paths:
+                  - path: /
+                    pathType: Prefix
+                    backend:
+                      service:
+                        name: api
+                        port:
+                          name: http
+      k8s/hpa.yaml: |
+        # Adds pods when the api is busy: scoring is CPU work, so scale on CPU.
+        apiVersion: autoscaling/v2
+        kind: HorizontalPodAutoscaler
+        metadata:
+          name: api
+          namespace: recs
+        spec:
+          scaleTargetRef:
+            apiVersion: apps/v1
+            kind: Deployment
+            name: api
+          minReplicas: 1
+          maxReplicas: 5
+          metrics:
+            - type: Resource
+              resource:
+                name: cpu
+                target:
+                  type: Utilization
+                  averageUtilization: 50
+    starter:
+      templateId: starter-kubernetes-autoscale-signal
+    checks:
+    - id: hpa-on-cpu
+      label: The autoscaler watches CPU
+      type: has
+      has:
+        kubernetes:
+          kind: HorizontalPodAutoscaler
+          name: api
+          where:
+            spec.metrics.*.resource.name: cpu
+    - id: cpu-request
+      label: The api requests CPU
+      type: has
+      has:
+        kubernetes:
+          kind: Deployment
+          name: api
+          where:
+            spec.template.spec.containers.api.resources.requests.cpu:
+              exists: true
+    - id: scale-under-spike
+      label: Pods are added under a traffic spike
+      type: scenario
+      scenario:
+        target:
+          service: api
+          ingress: true
+          path: /recommendations/{{rand}}
+        spec:
+          stages:
+          - durationSec: 20
+            target: 30
+          - durationSec: 160
+            target: 30
+          timeoutMs: 2000
+        scenario:
+          id: traffic_spike
+          atSec: 90
+          durationSec: 60
+          params:
+            factor: '3'
+        expect:
+          verdict: degraded
+          metrics:
+          - metric: replicas_max
+            op: gte
+            value: 2
+            workload: api
+          - metric: error_rate
+            op: lt
+            value: 0.05
+    sources:
+    - title: Horizontal Pod Autoscaling
+      url: https://kubernetes.io/docs/tasks/run-application/horizontal-pod-autoscale/
+    - title: HorizontalPodAutoscaler Walkthrough
+      url: https://kubernetes.io/docs/tasks/run-application/horizontal-pod-autoscale-walkthrough/
+    - title: Resource Management for Pods and Containers
+      url: https://kubernetes.io/docs/concepts/configuration/manage-resources-containers/

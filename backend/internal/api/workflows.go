@@ -362,10 +362,11 @@ func (s *Server) putWorkflow(w http.ResponseWriter, r *http.Request) error {
 		if cur.IsKubernetes() {
 			return nil, putKube(cur, in)
 		}
-		createdAt, archived, icon, layout, service := cur.CreatedAt, cur.Archived, cur.Icon, cur.Layout, cur.Service
+		createdAt, archived, icon, layout, service, challenge := cur.CreatedAt, cur.Archived, cur.Icon, cur.Layout, cur.Service, cur.Challenge
 		*cur = in
-		// Archive state changes only through archive/unarchive.
-		cur.ID, cur.CreatedAt, cur.Archived = id, createdAt, archived
+		// Archive state changes only through archive/unarchive; the
+		// challenge link never changes.
+		cur.ID, cur.CreatedAt, cur.Archived, cur.Challenge = id, createdAt, archived, challenge
 		// A body without an icon (older clients, agents) keeps the current
 		// one; without a layout or service name, the current ones.
 		if cur.Icon == nil {

@@ -3,12 +3,13 @@ import { Gauge, ShieldAlert } from "lucide-react"
 import { Badge } from "@/components/ui/badge"
 import { Empty, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from "@/components/ui/empty"
 import { api } from "@/lib/api/client"
-import type { LoadTestSpec } from "@/lib/api/types"
+import type { LoadTestSpec, ScenarioId } from "@/lib/api/types"
 import { cn } from "@/lib/utils"
 import { useWorkflowStore } from "@/state/workflow-store"
 import { describeExternal } from "@/features/connections/safety"
 import { useConnections, useConnectionsStore } from "@/features/connections/store"
 import { StatusBadge } from "../components/status-badge"
+import { CapacityPlanner } from "./capacity"
 import { Configure } from "./configure"
 import { INITIAL_DRAFT, type LoadDraft } from "./draft"
 import { History } from "./history"
@@ -18,7 +19,7 @@ import { LoadRunsContext } from "./runs-context"
 import { useWorkflowTarget } from "./use-workflow-target"
 import { WorkflowTargetStep } from "./workflow-target"
 
-type View = "configure" | "results" | "history"
+type View = "configure" | "results" | "history" | "capacity"
 
 /** Header note: where the traffic of what is on screen goes. */
 export function TrafficScope({ external }: { external: string | null }) {
@@ -33,7 +34,7 @@ export function TrafficScope({ external }: { external: string | null }) {
       <ShieldAlert className="size-3" /> <span className="truncate">External target · {external}</span>
     </Badge>
   ) : (
-    <span className="ml-auto hidden text-[11px] text-muted-foreground md:inline">
+    <span className="ml-auto hidden text-[11px] whitespace-nowrap text-muted-foreground @3xl:inline">
       Traffic goes to your local {kind === "kubernetes" ? "cluster" : kind === "docker" ? "containers" : "sandbox"} only.
     </span>
   )
@@ -45,22 +46,34 @@ export function LoadTestTab() {
   const loadSamples = useWorkflowStore((s) => s.loadSamples)
   const pro = useWorkflowStore((s) => s.mode === "pro")
   const kube = useWorkflowStore((s) => s.workflow?.kind === "kubernetes")
+  const containers = useWorkflowStore((s) => s.workflow?.kind === "kubernetes" || s.workflow?.kind === "docker")
   const [view, setView] = useState<View>("configure")
   const [draft, setDraft] = useState<LoadDraft>(INITIAL_DRAFT)
   const [runId, setRunId] = useState<string | null>(null)
   const [compare, setCompare] = useState<string[]>([])
+  // The run the capacity planner sizes from (null: the newest usable one); its counter remounts the planner.
+  const [capacityRun, setCapacityRun] = useState<{ runId: string | null; n: number }>({ runId: null, n: 0 })
   const resolved = useWorkflowTarget(draft, setDraft)
   const connections = useConnections()
   const source = useMemo(() => ({ runs: loadTests, samples: loadSamples }), [loadTests, loadSamples])
-  // Another panel (Readiness) asked for a run's results or a new test.
+  // Another panel (Readiness, results) asked for a run's results, a new test or the capacity planner.
   const request = useLoadTestRequest((s) => (s.request?.workflowId === workflowId ? s.request : null))
   useEffect(() => {
     if (!request) return
     useLoadTestRequest.setState({ request: null })
-    if (request.runId) {
+    if (request.view === "capacity") {
+      setCapacityRun((c) => ({ runId: request.runId ?? null, n: c.n + 1 }))
+      setView("capacity")
+    } else if (request.runId) {
       setRunId(request.runId)
       setView("results")
-    } else setView("configure")
+    } else {
+      const scenario = request.scenario
+      // Untimed (atSec 0): the scenario picker fills in the timing and parameters once its options load.
+      if (scenario)
+        setDraft((d) => ({ ...d, scenario: { id: scenario.id as ScenarioId, target: scenario.target ?? "", atSec: 0, durationSec: 0 } }))
+      setView("configure")
+    }
   }, [request])
 
   if (!workflowId) return null
@@ -73,7 +86,9 @@ export function LoadTestTab() {
       ? shownRun?.external
         ? (describeExternal(shownRun.spec.target, shownConn, undefined, true)?.where ?? "an external service")
         : null
-      : (resolved.external?.where ?? null)
+      : view === "capacity"
+        ? null
+        : (resolved.external?.where ?? null)
 
   const start = async (spec: LoadTestSpec) => {
     const run = await api.startLoadTest(workflowId, spec)
@@ -90,12 +105,13 @@ export function LoadTestTab() {
       extra: shownRun?.status === "running" ? <StatusBadge status="running" label="Live" className="h-4" /> : undefined,
     },
     { id: "history", label: "History & compare", extra: <span className="text-[10px] opacity-70">{loadTests.length}</span> },
+    ...(containers ? [{ id: "capacity" as const, label: "Capacity" }] : []),
   ]
 
   return (
     <LoadRunsContext.Provider value={source}>
       <div className="flex h-full min-h-0 flex-col">
-        <div className="flex h-8 shrink-0 items-center gap-0.5 border-b px-1.5" role="tablist">
+        <div className="flex h-8 shrink-0 items-center gap-0.5 overflow-x-auto border-b px-1.5 [scrollbar-width:none]" role="tablist">
           {views.map((v) => (
             <button
               key={v.id}
@@ -104,7 +120,7 @@ export function LoadTestTab() {
               aria-selected={view === v.id}
               onClick={() => setView(v.id)}
               className={cn(
-                "flex h-6 items-center gap-1.5 rounded-md px-2 text-xs text-muted-foreground outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/50",
+                "flex h-6 shrink-0 items-center gap-1.5 rounded-md px-2 text-xs whitespace-nowrap text-muted-foreground outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/50",
                 view === v.id && "bg-muted font-medium text-foreground",
               )}
             >
@@ -131,6 +147,7 @@ export function LoadTestTab() {
                 setView("results")
               }}
               autoscaling={kube && !resolved.external}
+              scenarios={containers && !resolved.external && draft.source !== "connection"}
             />
           )}
           {view === "results" &&
@@ -160,6 +177,7 @@ export function LoadTestTab() {
               }}
             />
           )}
+          {view === "capacity" && containers && <CapacityPlanner key={capacityRun.n} initialRunId={capacityRun.runId} />}
         </div>
       </div>
     </LoadRunsContext.Provider>

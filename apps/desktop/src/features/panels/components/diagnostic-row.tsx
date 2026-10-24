@@ -17,7 +17,7 @@ export function DiagnosticRow({ diagnostic: d, nodeLabel, onSelect }: Diagnostic
   const content = (
     <>
       <Icon className={cn("mt-0.5 size-3.5 shrink-0", className)} />
-      <div className="min-w-0 flex-1">
+      <div className="min-w-0 flex-1 [overflow-wrap:anywhere]">
         <div className="flex flex-wrap items-baseline gap-x-2">
           <span className="font-medium">{d.message}</span>
           {nodeLabel && <span className="font-mono text-[11px] text-muted-foreground">{nodeLabel}</span>}

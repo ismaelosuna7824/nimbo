@@ -1,0 +1,243 @@
+description: Adds the Oracle Cloud Infrastructure roadmap (beginner to expert)
+operations:
+  - op: upsert
+    kind: roadmap
+    id: oci-roadmap
+    data:
+      provider: oci
+      title: Oracle Cloud Infrastructure roadmap
+      summary: From tenancy, identity and network fundamentals to CIS-aligned landing zones and hub-and-spoke networks, following Oracle University's OCI learning paths, the OCI documentation and the OCI Architecture Center.
+      levels:
+        - level: beginner
+          title: 'Foundations: tenancy, identity, networks and storage'
+          goals: Explain how OCI is organized (regions, availability and fault domains, tenancies and compartments), control access with groups and policy statements, build a VCN with public and private subnets and keep Object Storage private. Roughly the scope of the **OCI Foundations Associate** learning path, applied with Terraform.
+          steps:
+            - title: Cloud concepts and OCI's physical architecture
+              description: Learn what regions, availability domains and fault domains are, which failures each one isolates, and how the shared responsibility model splits security duties between Oracle and you.
+              docs:
+                - title: Become an OCI Foundations Associate (learning path)
+                  url: https://learn.oracle.com/ols/learning-path/become-an-oci-foundations-associate/146553/163541
+                - title: Regions and Availability Domains
+                  url: https://docs.oracle.com/en-us/iaas/Content/General/Concepts/regions.htm
+                - title: Security Overview (shared responsibility)
+                  url: https://docs.oracle.com/en-us/iaas/Content/Security/Concepts/security_overview.htm
+            - title: 'Identity: compartments, groups and policies'
+              description: Plan a compartment hierarchy together with the groups that need access, and write policy statements (Allow group … to verb resource-type in compartment …) using the smallest verb — inspect, read, use, manage — that does the job.
+              challenges:
+                - oci-compartment-least-privilege
+              docs:
+                - title: Overview of Identity and Access Management
+                  url: https://docs.oracle.com/en-us/iaas/Content/Identity/Concepts/overview.htm
+                - title: Learn Best Practices for Setting Up Your Tenancy
+                  url: https://docs.oracle.com/en-us/iaas/Content/GSG/Concepts/settinguptenancy.htm
+                - title: How Policies Work
+                  url: https://docs.oracle.com/en-us/iaas/Content/Identity/Concepts/policies.htm
+                - title: Policy Syntax
+                  url: https://docs.oracle.com/en-us/iaas/Content/Identity/Concepts/policysyntax.htm
+            - title: 'Networking basics: VCNs, subnets and gateways'
+              description: Design a VCN with non-overlapping CIDRs, separate public and private subnets, and choose the right gateway for each path — internet gateway for public subnets, NAT gateway for outbound-only access, service gateway for Oracle services such as Object Storage.
+              challenges:
+                - oci-vcn-public-private-subnets
+              docs:
+                - title: Networking Overview
+                  url: https://docs.oracle.com/en-us/iaas/Content/Network/Concepts/overview.htm
+                - title: NAT Gateway
+                  url: https://docs.oracle.com/en-us/iaas/Content/Network/Tasks/NATgateway.htm
+                - title: 'Access to Oracle Services: Service Gateway'
+                  url: https://docs.oracle.com/en-us/iaas/Content/Network/Tasks/servicegateway.htm
+                - title: Internet Gateway
+                  url: https://docs.oracle.com/en-us/iaas/Content/Network/Tasks/managingIGs.htm
+            - title: Object Storage done safely
+              description: Keep buckets private (NoPublicAccess) and share objects with pre-authenticated requests, protect data with versioning, and control cost with lifecycle rules that archive and delete old objects.
+              challenges:
+                - oci-private-bucket-lifecycle
+              docs:
+                - title: Overview of Object Storage
+                  url: https://docs.oracle.com/en-us/iaas/Content/Object/Concepts/objectstorageoverview.htm
+                - title: Object Storage Versioning
+                  url: https://docs.oracle.com/en-us/iaas/Content/Object/Tasks/usingversioning.htm
+                - title: Object Storage Object Lifecycle Management
+                  url: https://docs.oracle.com/en-us/iaas/Content/Object/Tasks/usinglifecyclepolicies.htm
+                - title: Object Storage Pre-Authenticated Requests
+                  url: https://docs.oracle.com/en-us/iaas/Content/Object/Tasks/usingpreauthenticatedrequests.htm
+            - title: Infrastructure as code with the OCI Terraform provider
+              description: Describe OCI resources with the oracle/oci Terraform provider, reference resources by OCID instead of hard-coding them, and know that Resource Manager runs the same Terraform as a managed service.
+              docs:
+                - title: Terraform Provider (OCI documentation)
+                  url: https://docs.oracle.com/en-us/iaas/Content/dev/terraform/home.htm
+                - title: Overview of Resource Manager
+                  url: https://docs.oracle.com/en-us/iaas/Content/ResourceManager/Concepts/resourcemanager.htm
+                - title: oracle/oci provider documentation
+                  url: https://registry.terraform.io/providers/oracle/oci/9.11.0/docs
+        - level: intermediate
+          title: 'Architect Associate: secure networks, resilient compute and encryption'
+          goals: Segment networks with network security groups, give administrators access without public SSH, run stateless compute as autoscaled instance pools behind a flexible load balancer, and encrypt data with keys you manage in Vault. Matches the IAM, networking, compute and storage focus of the **OCI Architect Associate** learning path.
+          steps:
+            - title: Network security groups, security lists and Bastion
+              description: Prefer NSGs over security lists so rules follow VNICs and can reference other NSGs, keep administrative ports closed to 0.0.0.0/0, and use the Bastion service for audited, time-limited SSH sessions to private hosts.
+              challenges:
+                - oci-nsg-tiered-access
+              docs:
+                - title: Become an OCI Architect Associate (learning path)
+                  url: https://learn.oracle.com/ols/learning-path/become-an-oci-architect-associate/146553/162234
+                - title: Network Security Groups
+                  url: https://docs.oracle.com/en-us/iaas/Content/Network/Concepts/networksecuritygroups.htm
+                - title: Security Rules
+                  url: https://docs.oracle.com/en-us/iaas/Content/Network/Concepts/securityrules.htm
+                - title: Bastion Overview
+                  url: https://docs.oracle.com/en-us/iaas/Content/Bastion/Concepts/bastionoverview.htm
+            - title: Instance pools, autoscaling and load balancing
+              description: Turn an instance configuration into an instance pool spread across availability and fault domains, attach it to a load balancer backend set with health checks, and let metric- or schedule-based autoscaling size it. Know when a flexible Network Load Balancer fits better than the Layer 7 Load Balancer.
+              challenges:
+                - oci-lb-instance-pool-autoscaling
+              docs:
+                - title: Overview of the Compute Service
+                  url: https://docs.oracle.com/en-us/iaas/Content/Compute/Concepts/computeoverview.htm
+                - title: Creating Instance Pools
+                  url: https://docs.oracle.com/en-us/iaas/Content/Compute/Tasks/creatinginstancepool.htm
+                - title: Autoscaling
+                  url: https://docs.oracle.com/en-us/iaas/Content/Compute/Tasks/autoscalinginstancepools.htm
+                - title: Overview of Load Balancer
+                  url: https://docs.oracle.com/en-us/iaas/Content/Balance/Concepts/balanceoverview.htm
+                - title: Overview of Flexible Network Load Balancer
+                  url: https://docs.oracle.com/en-us/iaas/Content/NetworkLoadBalancer/overview.htm
+            - title: Vault keys and encryption
+              description: Understand that OCI always encrypts storage and that the choice is who manages the master key; create HSM-protected keys in a vault, assign them to buckets and volumes, rotate them, and authorize services to use only the keys they need.
+              challenges:
+                - oci-vault-customer-managed-keys
+              docs:
+                - title: Overview of Vaults and Key Management
+                  url: https://docs.oracle.com/en-us/iaas/Content/KeyManagement/Concepts/keyoverview.htm
+                - title: Object Storage Data Encryption
+                  url: https://docs.oracle.com/en-us/iaas/Content/Object/Tasks/encryption.htm
+                - title: Common Policies (Policy Builder templates)
+                  url: https://docs.oracle.com/en-us/iaas/Content/Identity/policiescommon/commonpolicies.htm
+            - title: Block Volume and File Storage
+              description: Pick the right storage for each workload — block volumes for instance disks with backup policies, File Storage for shared NFS file systems, Object Storage for unstructured data — and plan backups for each.
+              docs:
+                - title: Overview of Block Volume
+                  url: https://docs.oracle.com/en-us/iaas/Content/Block/Concepts/overview.htm
+                - title: Overview of File Storage
+                  url: https://docs.oracle.com/en-us/iaas/Content/File/Concepts/filestorageoverview.htm
+            - title: Monitoring, logging and notifications
+              description: Read service metrics and create alarms in Monitoring, collect service and VCN flow logs in Logging, and deliver alerts through Notifications topics.
+              docs:
+                - title: Overview of Monitoring
+                  url: https://docs.oracle.com/en-us/iaas/Content/Monitoring/Concepts/monitoringoverview.htm
+                - title: Logging Overview
+                  url: https://docs.oracle.com/en-us/iaas/Content/Logging/Concepts/loggingoverview.htm
+                - title: VCN Flow Logs
+                  url: https://docs.oracle.com/en-us/iaas/Content/Network/Concepts/vcn-flow-logs.htm
+                - title: Overview of Notifications
+                  url: https://docs.oracle.com/en-us/iaas/Content/Notification/Concepts/notificationoverview.htm
+        - level: advanced
+          title: 'Architect Professional: databases, containers and security services'
+          goals: Run managed databases and Kubernetes privately inside your VCN, harden them with NSGs and customer-managed keys, and use OCI's security, audit and cost services to operate them. Follows the databases, cloud-native and security topics of the **OCI Architect Professional** learning path.
+          steps:
+            - title: Autonomous Database networking and resilience
+              description: Give Autonomous Database a private endpoint protected by an NSG instead of a public endpoint with an access list, keep credentials out of code, and choose between Autonomous Data Guard and backup-based disaster recovery for your recovery objectives.
+              challenges:
+                - oci-autonomous-db-private-endpoint
+              docs:
+                - title: Become an OCI Architect Professional (learning path)
+                  url: https://mylearn.oracle.com/ou/learning-path/become-an-oci-architect-professional/163270
+                - title: Configure Network Access with Private Endpoints
+                  url: https://docs.oracle.com/en-us/iaas/autonomous-database-serverless/doc/private-endpoints-autonomous.html
+                - title: Use Standby Databases with Autonomous Data Guard for Disaster Recovery
+                  url: https://docs.oracle.com/en-us/iaas/autonomous-database-serverless/doc/autonomous-data-guard.html
+            - title: Kubernetes Engine (OKE) clusters
+              description: Create VCN-native clusters with a private API endpoint, worker nodes and pods in private subnets, separate load balancer subnets, NSG-based security rules, regional subnets for high availability and Kubernetes secrets encrypted with your Vault key.
+              challenges:
+                - oci-oke-private-cluster
+              docs:
+                - title: Overview of Kubernetes Engine (OKE)
+                  url: https://docs.oracle.com/en-us/iaas/Content/ContEng/Concepts/contengoverview.htm
+                - title: Network Resource Configuration for Cluster Creation and Deployment
+                  url: https://docs.oracle.com/en-us/iaas/Content/ContEng/Concepts/contengnetworkconfig.htm
+                - title: Security Best Practices (Kubernetes Engine)
+                  url: https://docs.oracle.com/en-us/iaas/Content/ContEng/Tasks/contengbestpractices_topic-Security-best-practices.htm
+                - title: Networking Best Practices (Kubernetes Engine)
+                  url: https://docs.oracle.com/en-us/iaas/Content/ContEng/Tasks/contengbestpractices_topic-Networking-best-practices.htm
+            - title: Security services
+              description: Know what each service adds — Cloud Guard detects misconfigurations and risky activity, Security Zones deny operations that break a recipe, Vulnerability Scanning checks hosts, Web Application Firewall and Network Firewall inspect traffic.
+              docs:
+                - title: Security Services
+                  url: https://docs.oracle.com/en-us/iaas/Content/Security/Concepts/security_features.htm
+                - title: Cloud Guard
+                  url: https://docs.oracle.com/en-us/iaas/Content/cloud-guard/home.htm
+                - title: Security Zones
+                  url: https://docs.oracle.com/en-us/iaas/Content/security-zone/home.htm
+                - title: Vulnerability Scanning
+                  url: https://docs.oracle.com/en-us/iaas/Content/scanning/home.htm
+                - title: Overview of Web Application Firewall
+                  url: https://docs.oracle.com/en-us/iaas/Content/WAF/Concepts/overview.htm
+                - title: Overview of the Network Firewall Service
+                  url: https://docs.oracle.com/en-us/iaas/Content/network-firewall/overview.htm
+            - title: Audit, events and cost governance
+              description: Use the Audit log to see who changed what, react to changes with Events rules, and control spending with tags, budgets with alert rules and cost analysis.
+              docs:
+                - title: Overview of Audit
+                  url: https://docs.oracle.com/en-us/iaas/Content/Audit/Concepts/auditoverview.htm
+                - title: Overview of Events
+                  url: https://docs.oracle.com/en-us/iaas/Content/Events/Concepts/eventsoverview.htm
+                - title: Overview of Tagging
+                  url: https://docs.oracle.com/en-us/iaas/Content/Tagging/Concepts/taggingoverview.htm
+                - title: Budgets
+                  url: https://docs.oracle.com/en-us/iaas/Content/Billing/Concepts/budgetsoverview.htm
+                - title: Cost Analysis
+                  url: https://docs.oracle.com/en-us/iaas/Content/Billing/Concepts/costanalysisoverview.htm
+        - level: expert
+          title: 'Enterprise architecture: landing zones, hybrid networks and resilience'
+          goals: Design the tenancy-wide foundation other teams build on — a CIS-aligned landing zone with separation of duties, a hub-and-spoke network ready for on-premises connectivity, and multi-region disaster recovery — and evaluate designs against the OCI Well-Architected Framework.
+          steps:
+            - title: Secure landing zone
+              description: Build the compartment design (enclosing, network, security, app, database), one group per duty with scoped policies, Cloud Guard, Vault, change notifications through Events and Notifications, and budgets — the baseline of Oracle's CIS-aligned OCI Core Landing Zone.
+              challenges:
+                - oci-cis-landing-zone
+              docs:
+                - title: Deploy a Secure Landing Zone That Meets the CIS Foundations Benchmark for Oracle Cloud
+                  url: https://docs.oracle.com/en/solutions/cis-oci-benchmark/index.html
+                - title: Oracle Cloud Infrastructure Security Guide
+                  url: https://docs.oracle.com/en-us/iaas/Content/Security/Concepts/security_guide.htm
+                - title: Oracle Cloud Infrastructure Cloud Adoption Framework
+                  url: https://docs.oracle.com/en-us/iaas/Content/cloud-adoption-framework/home.htm
+            - title: Hub-and-spoke and hybrid connectivity
+              description: Connect many VCNs through a dynamic routing gateway, keep spokes private and administered through Bastion, and extend the same DRG to on-premises networks with FastConnect or Site-to-Site VPN.
+              challenges:
+                - oci-hub-spoke-drg
+              docs:
+                - title: Set Up a Hub-and-Spoke Network Topology Using a Dynamic Routing Gateway
+                  url: https://docs.oracle.com/en/solutions/hub-spoke-network-drg/index.html
+                - title: Dynamic Routing Gateways
+                  url: https://docs.oracle.com/en-us/iaas/Content/Network/Tasks/managingDRGs.htm
+                - title: FastConnect
+                  url: https://docs.oracle.com/en-us/iaas/Content/Network/Concepts/fastconnect.htm
+                - title: Site-to-Site VPN
+                  url: https://docs.oracle.com/en-us/iaas/Content/Network/Tasks/managingIPsec.htm
+            - title: High availability and disaster recovery
+              description: Combine availability and fault domains for in-region availability with cross-region standbys and orchestrated switchover — Full Stack Disaster Recovery for whole application stacks, Autonomous Data Guard for databases.
+              docs:
+                - title: Full Stack Disaster Recovery
+                  url: https://docs.oracle.com/en-us/iaas/disaster-recovery/index.html
+                - title: Use Standby Databases with Autonomous Data Guard for Disaster Recovery
+                  url: https://docs.oracle.com/en-us/iaas/autonomous-database-serverless/doc/autonomous-data-guard.html
+                - title: Regions and Availability Domains
+                  url: https://docs.oracle.com/en-us/iaas/Content/General/Concepts/regions.htm
+            - title: Review designs with the Well-Architected Framework
+              description: Check architectures against the five pillars — security and compliance, reliability and resilience, performance and cost optimization, operational efficiency, distributed cloud — before they reach production.
+              docs:
+                - title: Learn About the Well-Architected Framework for Oracle Cloud Infrastructure
+                  url: https://docs.oracle.com/en/solutions/oci-best-practices/index.html
+                - title: Become an OCI Architect Professional (learning path)
+                  url: https://mylearn.oracle.com/ou/learning-path/become-an-oci-architect-professional/163270
+      sources:
+        - title: Become an OCI Foundations Associate (Oracle University learning path)
+          url: https://learn.oracle.com/ols/learning-path/become-an-oci-foundations-associate/146553/163541
+        - title: Become an OCI Architect Associate (Oracle University learning path)
+          url: https://learn.oracle.com/ols/learning-path/become-an-oci-architect-associate/146553/162234
+        - title: Become an OCI Architect Professional (Oracle MyLearn learning path)
+          url: https://mylearn.oracle.com/ou/learning-path/become-an-oci-architect-professional/163270
+        - title: Learn About the Well-Architected Framework for Oracle Cloud Infrastructure
+          url: https://docs.oracle.com/en/solutions/oci-best-practices/index.html
+        - title: Oracle Cloud Infrastructure Cloud Adoption Framework
+          url: https://docs.oracle.com/en-us/iaas/Content/cloud-adoption-framework/home.htm

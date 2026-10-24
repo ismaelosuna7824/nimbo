@@ -7,6 +7,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import type { NamedBlock } from "@/lib/api/types"
 import { useShallow } from "zustand/react/shallow"
 import { useWorkflowStore } from "@/state/workflow-store"
+import { cn } from "@/lib/utils"
 import { editWorkflow as edit } from "../lib/edit"
 import { CommitInput } from "../components/commit-input"
 import { ValueEditor } from "../components/value-editor"
@@ -78,7 +79,8 @@ export function VariablesEditor() {
           <option key={t} value={t} />
         ))}
       </datalist>
-      <Table className={DENSE_TABLE}>
+      {/* Narrow panels scroll the table sideways instead of squeezing the inputs to a few characters. */}
+      <Table className={cn(DENSE_TABLE, "min-w-[46rem]")}>
         <TableHeader>
           <TableRow>
             <TableHead className="w-[18%]">Name</TableHead>
@@ -204,7 +206,7 @@ export function OutputsEditor() {
 
   return (
     <div className="flex flex-col">
-      <Table className={DENSE_TABLE}>
+      <Table className={cn(DENSE_TABLE, "min-w-[40rem]")}>
         <TableHeader>
           <TableRow>
             <TableHead className="w-[20%]">Name</TableHead>
@@ -300,7 +302,7 @@ export function LocalsEditor() {
 
   return (
     <div className="flex flex-col">
-      <Table className={DENSE_TABLE}>
+      <Table className={cn(DENSE_TABLE, "min-w-[28rem]")}>
         <TableHeader>
           <TableRow>
             <TableHead className="w-[24%]">Name</TableHead>

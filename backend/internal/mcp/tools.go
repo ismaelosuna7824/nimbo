@@ -91,8 +91,9 @@ func registerTools(r *registry, t *tools) {
 
 	r.group = groupLoadTests
 	addTool(r, "list_load_targets", "List load targets", "List load-test targets suggested from the deployed workflow (HTTP endpoints, SQS queues, S3 buckets, DynamoDB tables, Lambda functions, ...). Deploy first.", t.listLoadTargets)
-	addTool(r, "run_load_test", "Run load test", "Run a load test against a target (index from list_load_targets or a full target object) with a preset (smoke, load, stress, spike, soak, autoscale) or custom stages, and optional pass/fail thresholds. Waits for the result by default and returns throughput, latency percentiles, error rate, stability, breaking point and threshold results; docker and Kubernetes workflows add container usage and the bottleneck. Kubernetes runs also return the environment and autoscaling: per workload in scope (the target and every workload with a HorizontalPodAutoscaler) its replicas and a verdict (scaled, late, maxed, no_hpa, no_metrics, not_needed, too_short) with numbers; use preset autoscale (4.5 min ramp and hold) to judge an HPA, runs under 60 s are too short. A target object may use a saved connection (connectionId from list_connections; required for sql/redis/mongo targets) or a non-local URL: such targets are outside the sandbox and need confirm_external=true."+externalWarning, t.runLoadTest)
-	addTool(r, "get_load_test", "Get load test", "Get a load test run's status, summary and threshold results, plus container usage and (Kubernetes) the environment and autoscaling verdicts.", t.getLoadTest)
+	addTool(r, "run_load_test", "Run load test", "Run a load test against a target (index from list_load_targets or a full target object) with a preset (smoke, load, stress, spike, soak, autoscale) or custom stages, and optional pass/fail thresholds. Waits for the result by default and returns throughput, latency percentiles, error rate, stability, breaking point and threshold results; docker and Kubernetes workflows add container usage and the bottleneck. Kubernetes runs also return the environment and autoscaling: per workload in scope (the target and every workload with a HorizontalPodAutoscaler) its replicas and a verdict (scaled, late, maxed, no_hpa, no_metrics, not_needed, too_short) with numbers; use preset autoscale (4.5 min ramp and hold) to judge an HPA, runs under 60 s are too short. Docker and Kubernetes workflows can inject a real, reversible incident during the run with scenario {id, target, atSec, durationSec, params} (list_scenarios shows what applies): kill_replica, dependency_down, dependency_latency, cache_flush or traffic_spike; the result's scenario has a verdict (survived, degraded, failed), a one-line message with numbers and a fix, the checks, and the injection/revert/recovery seconds. Leave at least 10 s of baseline before atSec and 15 s after the fault ends. A target object may use a saved connection (connectionId from list_connections; required for sql/redis/mongo targets) or a non-local URL: such targets are outside the sandbox and need confirm_external=true."+externalWarning, t.runLoadTest)
+	addTool(r, "get_load_test", "Get load test", "Get a load test run's status, summary and threshold results, plus container usage, (Kubernetes) the environment and autoscaling verdicts, and the scenario verdict when one was injected.", t.getLoadTest)
+	addTool(r, "list_scenarios", "List scenarios", "List the incident scenarios a load test of this docker or Kubernetes workflow can inject in its active environment, each with a plain explanation, its targets (graph node ids: compose services \"service:<name>\", workloads \"Deployment/<ns>/<name>\") and why they qualify, its numeric params (dependency_latency: delayMs, jitterMs, lossPct; traffic_spike: factor) and a default duration; unavailable lists the others with the reason. Faults act only on the workflow's own containers or cluster and are always reverted (at the end of the window, on stop, and at daemon start after a crash).", t.listScenarios)
 
 	r.group = groupConnections
 	addTool(r, "list_connections", "List connections", "List saved connections (the global Connections library of already-deployed services: HTTP APIs, PostgreSQL, MySQL, Redis, MongoDB, AWS accounts via profile). Secrets are never returned; secretsSet names the stored ones.", t.listConnections)
@@ -106,6 +107,10 @@ func registerTools(r *registry, t *tools) {
 	registerKubeTools(r, t)
 	registerEnvironmentTools(r, t)
 	registerMonitoringTools(r, t)
+	registerReadinessTools(r, t)
+	registerCapacityTools(r, t)
+	registerLearnTools(r, t)
+	registerChallengeTools(r, t)
 	r.group = groupConnections
 	addTool(r, "run_connection_load_test", "Run connection load test", "Run a load test against a saved connection (no workflow needed): target is an index from list_connection_targets or a target object; preset (smoke, load, stress, spike, soak) or custom stages; optional thresholds. confirm_external must be true. Waits for the result by default."+externalWarning, t.runConnectionLoadTest)
 }
@@ -1359,14 +1364,30 @@ func (t *tools) listLoadTargets(ctx context.Context, in workflowArg) (any, error
 }
 
 type loadTestIn struct {
-	Workflow        string            `json:"workflow,omitempty" jsonschema:"workflow ID or name; omit or \"current\" for the workflow open in the Nimbo app"`
-	Target          any               `json:"target" jsonschema:"index from list_load_targets, or a target object {kind: http|aws|sql|redis|mongo, label, connectionId?, http: {method, url, headers?, body?} | aws: {operation, resource, payload?, key?} | sql: {query, args?, mode} | redis: {command} | mongo: {database, collection?, operation, document?, update?}}; connectionId (see list_connections) targets a saved external service and sql/redis/mongo require it"`
-	Preset          string            `json:"preset,omitempty" jsonschema:"smoke (default), load, stress, spike, soak or autoscale (Kubernetes: ramp to 200 req/s over 2 min and hold 2 min so an HPA can add pods)"`
-	Stages          []model.LoadStage `json:"stages,omitempty" jsonschema:"custom ramp stages overriding the preset; each ramps linearly to target over durationSec"`
-	Mode            string            `json:"mode,omitempty" jsonschema:"rps (target = requests/second) or concurrency (target = virtual users)"`
-	Thresholds      []model.Threshold `json:"thresholds,omitempty" jsonschema:"pass/fail criteria, e.g. {metric: p95_ms, op: <, value: 200}; metrics p50_ms p90_ms p95_ms p99_ms max_ms error_rate rps_min"`
-	ConfirmExternal bool              `json:"confirm_external,omitempty" jsonschema:"set true ONLY after the user explicitly approved sending this traffic to a service outside the local sandbox (a connection target or a non-local URL)"`
-	Wait            *bool             `json:"wait,omitempty" jsonschema:"wait for the result (default true)"`
+	Workflow        string              `json:"workflow,omitempty" jsonschema:"workflow ID or name; omit or \"current\" for the workflow open in the Nimbo app"`
+	Target          any                 `json:"target" jsonschema:"index from list_load_targets, or a target object {kind: http|aws|sql|redis|mongo, label, connectionId?, http: {method, url, headers?, body?} | aws: {operation, resource, payload?, key?} | sql: {query, args?, mode} | redis: {command} | mongo: {database, collection?, operation, document?, update?}}; connectionId (see list_connections) targets a saved external service and sql/redis/mongo require it"`
+	Preset          string              `json:"preset,omitempty" jsonschema:"smoke (default), load, stress, spike, soak or autoscale (Kubernetes: ramp to 200 req/s over 2 min and hold 2 min so an HPA can add pods)"`
+	Stages          []model.LoadStage   `json:"stages,omitempty" jsonschema:"custom ramp stages overriding the preset; each ramps linearly to target over durationSec"`
+	Mode            string              `json:"mode,omitempty" jsonschema:"rps (target = requests/second) or concurrency (target = virtual users)"`
+	Thresholds      []model.Threshold   `json:"thresholds,omitempty" jsonschema:"pass/fail criteria, e.g. {metric: p95_ms, op: <, value: 200}; metrics p50_ms p90_ms p95_ms p99_ms max_ms error_rate rps_min"`
+	ConfirmExternal bool                `json:"confirm_external,omitempty" jsonschema:"set true ONLY after the user explicitly approved sending this traffic to a service outside the local sandbox (a connection target or a non-local URL)"`
+	Wait            *bool               `json:"wait,omitempty" jsonschema:"wait for the result (default true)"`
+	Scenario        *model.ScenarioSpec `json:"scenario,omitempty" jsonschema:"docker/Kubernetes workflows: incident to inject during the run, {id: kill_replica|dependency_down|dependency_latency|cache_flush|traffic_spike, target: node id from list_scenarios (omit for traffic_spike), atSec: seconds after load starts (>= 5; leave ~10 s of baseline), durationSec: how long the fault lasts (0 = scenario default), params: string numbers e.g. {delayMs: \"300\"} or {factor: \"3\"}}; atSec + durationSec must fit in the profile"`
+}
+
+func (t *tools) listScenarios(ctx context.Context, in workflowArg) (any, error) {
+	wf, err := t.c.workflow(ctx, in.Workflow)
+	if err != nil {
+		return nil, err
+	}
+	var cat model.ScenarioCatalog
+	if err := t.c.get(ctx, "/workflows/"+pathEscape(wf.ID)+"/scenarios", &cat); err != nil {
+		return nil, err
+	}
+	if cat.Kind == "" {
+		return "Scenarios need a docker or Kubernetes workflow.", nil
+	}
+	return cat, nil
 }
 
 func (t *tools) runLoadTest(ctx context.Context, in loadTestIn) (any, error) {
@@ -1385,6 +1406,7 @@ func (t *tools) runLoadTest(ctx context.Context, in loadTestIn) (any, error) {
 		return nil, err
 	}
 	spec.ConfirmExternal = in.ConfirmExternal
+	spec.Scenario = in.Scenario
 	return t.startLoadRun(ctx, "/workflows/"+pathEscape(wf.ID)+"/loadtests", spec, in.Wait)
 }
 

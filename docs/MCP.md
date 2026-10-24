@@ -89,7 +89,7 @@ commands (e.g. `/mcp__nimbo__extend_workflow` in Claude Code).
 | `import_terraform_folder` | `dir` | `scan_terraform_folder` → `import_terraform` → summary of projects, diagnostics and Floci support |
 | `load_test` | `workflow?` (default `current`), `goal?` | Deploy if needed, choose targets, smoke test, then the profile that answers the goal; interpret the results |
 | `test_deployed_service` | `connection?` | Connections flow with explicit user confirmation before any traffic |
-| `create_docker_stack` | `request` | Template or `create_workflow kind "docker"` → data services from the palette → app services (starters or your Dockerfiles) → `connect_services` (service_healthy) → the Docker practices below → `review_docker` → `deploy` → endpoints + smoke load test + `get_docker_metrics` → summary |
+| `create_docker_stack` | `request` | Template or `create_workflow kind "docker"` → data services from the palette → app services (starters or your Dockerfiles) → `connect_services` (service_healthy) → the Docker practices below → `review_docker` → `deploy` → endpoints + smoke load test + `get_docker_metrics` → `production_readiness` (for production) → summary |
 | `create_kubernetes_app` | `request` | Template, `convert_to_kubernetes` or `create_workflow kind "kubernetes"` → palette objects (images, charts, starters) → `connect_kubernetes` → the Kubernetes practices → `review_kubernetes` per environment → `deploy` → endpoints + smoke load test → `production_readiness` → summary |
 
 ## Recommended loop
@@ -364,6 +364,22 @@ p95 above 4× its baseline for 25 s before 2 new pods of web were Ready at
 `autoscale` (2 min ramp to 200 req/s, 2 min hold): runs under a minute are
 too short for an HPA to react.
 
+**Incident scenarios.** `list_scenarios` shows what applies to the workflow;
+`run_load_test` with `scenario {id, target, atSec, durationSec, params}`
+injects it for real at `atSec` and reverts it at `atSec + durationSec` (or as
+soon as the run stops): `kill_replica` (crash one container — SIGKILL of its
+main process so the restart policy applies — or delete one pod),
+`dependency_down` (docker pause / scale the workload to 0),
+`dependency_latency` (tc netem `delayMs`, `jitterMs`, `lossPct` in the
+dependency's network namespace), `cache_flush` (Redis/Valkey `FLUSHALL`,
+Memcached `flush_all`) and `traffic_spike` (the load × `factor`). The result's
+`scenario` has `verdict` (`survived`, `degraded`, `failed`), a one-line
+`message` with numbers and a fix ("Degraded: killing one api replica caused 13%
+errors, p95 peak 48 ms, back to normal in 4.0 s. Fix: put a load balancer…"),
+`checks` (name, passed, detail), and `injectedAtSec` / `revertedAtSec` /
+`recoveredAtSec` on the timeline's axis. Leave ~10 s of traffic before
+`atSec` (the baseline) and ~15 s after the fault (the recovery).
+
 Every mutating docker tool (`create_workflow`, `add_service`,
 `update_service`, `remove_service`, `connect_services`, `apply_terraform_code`)
 returns `best_practices`: only the findings its change introduced
@@ -505,7 +521,6 @@ switches the rendered overlay/values file.
 | `get_kubernetes_fields` | `workflow`, `node` | Every field with its value, file:line, origin and whether it is editable |
 | `connect_kubernetes` | `workflow`, `from`, `to?`, `recipe_id?` \| `kind?`, `port?`, `path?`, `host?`, `key?` | List or apply wiring recipes: expose, selects, route, envFrom, volume, env, serviceaccount, scale |
 | `review_kubernetes` | `workflow` | `k8s_*` findings of the active environment grouped by severity, each with file:line, field, why, fix and docs; disabled and opt-in rules |
-| `production_readiness` | `workflow`, `environment?` | Production readiness checklist per environment (each rendered on its own; the active one is unchanged): status ready / needs_work / blocked, a 0-100 score, the open items of reliability (manifests, replicas + PDBs, probes, requests/limits, rollout, topology spread, wiring), scaling (HPAs, the latest load test of that environment and its autoscaling verdict), monitoring, security and hygiene, each with findings and the tool that resolves it. Call it before declaring a workflow production-ready |
 | `get_kubernetes_logs` | `workflow`, `workload?` \| `pod?`, `container?`, `tail?` | Recent log lines of a workload's pods |
 | `restart_workload` | `workflow`, `workload?` | Rollout restart (one workload or all) and wait |
 | `kubernetes_cluster` | `workflow`, `action` (stop, start, delete) | Manage the workflow's local cluster |
@@ -598,6 +613,67 @@ Example: "Duplicate prod as staging, give it 3 replicas and nginx 1.29, compare,
 
 Docker example: "Add dev and prod; prod runs 2 api replicas with 0.5 CPU and LOG_LEVEL=warn; deploy prod" → `create_environment {name: dev}`, `create_environment {name: prod}`, `set_environment_values {environment: prod, target: api, values: {replicas: "2", cpus: "0.5"}}`, `set_environment_variable {environment: prod, key: LOG_LEVEL, value: warn}` (the compose file reads `${LOG_LEVEL:-debug}`), `update_workflow {environment: prod}`, `deploy`. `convert_to_kubernetes` then writes `overlays/dev` and `overlays/prod` (prod with an HPA).
 
+## Production readiness (docker and Kubernetes)
+
+`production_readiness` checks every environment of a docker or Kubernetes
+workflow on its own (docker: the base and each environment; Kubernetes:
+each environment, or the base as production without any) and returns a
+status (ready / needs_work / blocked), a 0-100 **score**, a 0-100
+**confidence** and one score per category:
+
+| Category | Weight | What counts |
+|---|---|---|
+| reliability | 30 | Kubernetes: manifests apply, replicas + PDBs, probes, requests/limits, rollout, topology spread, wiring. Docker: project loads, configuration, healthchecks, restart and shutdown, resource limits, persistent data |
+| performance | 20 | Kubernetes HPAs; the latest load test of that environment (autoscaling verdict, or container verdicts on docker); the latest capacity plan (`plan_capacity`) |
+| resilience | 15 | The latest run of each applicable incident scenario (`list_scenarios`, `run_load_test scenario`): survived / degraded / failed |
+| monitoring | 10 | `add_monitoring` stack (or the user's own Prometheus / ServiceMonitors) |
+| security | 15 | Secrets, privileges, NetworkPolicies / published database ports |
+| hygiene | 10 | Labels, image pinning, namespaces/quotas, Dockerfile practices, log rotation |
+
+Scoring is deterministic: pass and info items earn 1, warnings ½,
+failures 0. Items with no evidence yet (no load test, scenario run or
+capacity plan of that environment) are **todo**: left out of the score,
+they lower the confidence instead, and keep production-like environments
+at needs_work. A rule error blocks, whatever the score; a failed scenario
+scores 0 in resilience and needs work (it does not block). Each
+environment is offered the scenarios of its own services or workloads.
+`components` has one row per compose service
+or workload with its open cells (rules, health, resources, monitoring,
+load headroom, resilience, capacity) and its own score. Every open item
+names the tool that resolves or verifies it.
+
+| Tool | Inputs | What it does |
+|---|---|---|
+| `production_readiness` | `workflow`, `environment?` | Per environment: status, score, confidence, category scores, open items (findings with file:line and fix, the resolving tool, run ids), passed and skipped items, component rows and the load test the evidence comes from. Call it before declaring a workflow production-ready |
+
+Example: "Is the docker stack ready for production?" → `production_readiness`
+→ `add_monitoring` + `deploy`, `run_load_test {preset: load}`,
+`run_load_test {scenario: {id: kill_replica, target: service:api, atSec: 15}}`,
+`plan_capacity {target_rps: 300}` → `production_readiness` again.
+
+## Learn
+
+Nimbo Learn has roadmaps (beginner → expert) and hands-on challenges for
+every provider (`aws`, `azure`, `gcp`, `oci`, `docker`, `kubernetes`, and
+`global` for provider-agnostic problems with per-provider adaptations).
+They are written from official documentation, and Nimbo grades them for
+real. Agents can read them to coach a learner. Hints come first; the
+solution is only returned on request.
+
+| Tool | Inputs | What it does |
+|---|---|---|
+| `list_learning_paths` | `provider?` | Without `provider`: every provider with challenge counts per level, the user's completions and content load errors. With `provider`: its roadmap. Each level has goals and steps, and each step has its linked challenges (id, title, level, the user's status) and official docs |
+| `list_challenges` | `provider?`, `level?`, `tag?`, `query?` | Challenges with summary, minutes, runtime (`local`, `emulated`, `design`), tags and the user's status (`not_started`, `in_progress`, `completed`) |
+| `get_challenge` | `id`, `include_solution?` | Problem, requirements, hints, graded checks, starter, adaptations (global), official sources, prerequisites (with completion) and progress (attempts, passed check ids, workflow id). The solution and its files are only included with `include_solution: true` |
+| `start_challenge` | `challenge`, `name?` | Creates a workflow from the challenge's starter (broken on purpose), linked to it, and marks the challenge in progress |
+| `check_challenge` | `workflow`, `wait?` | Grades the challenge workflow for real: validate / rules_clean / has on the files (every rule on), one deploy before the first runtime check, http calls, load tests, incident scenarios, readiness. Waits (up to 25 min) by default; returns per check status, measured vs expected values, detail and load test run id, plus passed and score. Progress is recorded in Learn |
+
+Example: "I want to learn Kubernetes" → `list_learning_paths {provider:
+kubernetes}` → pick the first step that isn't completed → `get_challenge
+{id}` → explain the problem and requirements, then give hints one at a
+time. The learner starts it from the Learn page (or `start_challenge`); its
+workflow shows the Challenge tab, and `check_challenge` grades it.
+
 ## Tools
 
 All `workflow` arguments are optional and default to `current` (see
@@ -644,8 +720,15 @@ Conventions).
 | `check_reachability` | `workflow`, `from`, `to` (`"internet"` or a node), `protocol?` (tcp/udp/icmp), `port`, `live?` | AWS only today. Can traffic get from A to B? `reachable`, `verdict`, the path hop by hop (allow/deny/unknown + reason), blockers, suggestions; `live` adds real probes for EC2 instances with per-hop `enforcement` |
 | `add_test_instance` | `workflow`, `subnet` | Add a labelled EC2 test web server (port 80 page) and its security group into a subnet, to test traffic for real after deploying |
 | `list_load_targets` | `workflow` | Suggested load-test targets (indexed) |
-| `run_load_test` | `workflow`, `target`, `preset?`, `stages?`, `mode?`, `thresholds?`, `confirm_external?`, `wait?` | Run a load test; returns summary and threshold results. Target objects may use `connectionId` (needs `confirm_external`) |
-| `get_load_test` | `run` | Status and results of a load test |
+| `run_load_test` | `workflow`, `target`, `preset?`, `stages?`, `mode?`, `thresholds?`, `confirm_external?`, `wait?`, `scenario?` | Run a load test; returns summary and threshold results. Target objects may use `connectionId` (needs `confirm_external`). Docker/Kubernetes: `scenario {id, target, atSec, durationSec, params?}` injects a real, reversible incident and returns its verdict |
+| `get_load_test` | `run` | Status and results of a load test (with the scenario verdict when one was injected) |
+| `list_scenarios` | `workflow` | Docker/Kubernetes: the incident scenarios that apply in the active environment, with targets (graph node ids), params, default duration and plain explanation; `unavailable` says why the others don't apply |
+| `plan_capacity` | `workflow`, `target_rps`, `p95_ms?`, `environment?`, `run_id?` | Docker/Kubernetes: size an environment for a target request rate from a finished load test (default: the environment's newest run with container usage). Per service: role (app scales out, dependency projected, idle), replicas with N+1 headroom at a 70% CPU ceiling (or the HPA target), requests/limits, HPA min/max (Kubernetes), projected CPU, caveats ("not measured beyond X req/s" for databases/caches); totals; cheapest node shape, count and monthly on-demand compute cost per cloud (AWS, Azure, GCP, OCI) from a pinned, dated price table; confidence (high/medium/low) with reasons; assumptions. The plan is kept as the environment's latest; the app applies it to the environment after a confirmation |
+| `list_learning_paths` | `provider?` | Learn providers with progress, or one provider's roadmap (levels, steps, linked challenges with status, official docs) |
+| `list_challenges` | `provider?`, `level?`, `tag?`, `query?` | Learn challenges with the user's status |
+| `get_challenge` | `id`, `include_solution?` | One challenge: problem, requirements, hints, checks, starter, adaptations, sources, prerequisites, progress (solution only on request) |
+| `start_challenge` | `challenge`, `name?` | New workflow from a challenge's starter, linked to it |
+| `check_challenge` | `workflow`, `wait?` | Grade a challenge workflow for real (static checks, deploy, http, load, scenarios, readiness); per-check measurements, passed, score |
 | `list_connections` | — | Saved connections (secrets never returned) |
 | `get_connection` | `connection` | One saved connection |
 | `create_connection` | `name`, `kind` (`http`/`postgres`/`mysql`/`redis`/`mongodb`/`aws`), `description?`, http: `base_url`, `headers?`, `auth?`, `insecure_skip_verify?`; databases: `uri?` \| `host`, `port?`, `username?`, `password?`, `database?`, `tls?`; aws: `profile?`, `region?` | Save a connection |

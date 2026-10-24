@@ -19,6 +19,7 @@ import type { ExternalTarget } from "@/features/connections/safety"
 import { formatDuration } from "../lib/format"
 import type { LoadDraft } from "./draft"
 import { DEFAULT_THRESHOLDS, METRIC_META, modeUnit, stagePoints, totalDuration } from "./metrics"
+import { scenarioProblem, ScenarioStep } from "./scenario-step"
 
 export function Sparkline({ profile, className }: { profile: LoadProfile; className?: string }) {
   const pts = stagePoints(profile.stages)
@@ -67,13 +68,26 @@ interface ConfigureProps {
   onStarted: (run: LoadTestRun) => void
   /** The target runs in a Kubernetes workflow's cluster: offer the autoscaling preset and warn about short runs. */
   autoscaling?: boolean
+  /** Offer an incident scenario (docker and Kubernetes workflow targets inside the sandbox). */
+  scenarios?: boolean
 }
 
 /** Runs shorter than this end before a HorizontalPodAutoscaler can add Ready pods (the daemon's minScalingRunSec). */
 const MIN_SCALING_RUN_SEC = 60
 
 /** The three-step load test wizard: target (pluggable), traffic shape, pass criteria. */
-export function Configure({ draft, setDraft, target, targetStep, external, describeForced, start, onStarted, autoscaling = false }: ConfigureProps) {
+export function Configure({
+  draft,
+  setDraft,
+  target,
+  targetStep,
+  external,
+  describeForced,
+  start,
+  onStarted,
+  autoscaling = false,
+  scenarios = false,
+}: ConfigureProps) {
   const pro = useWorkflowStore((s) => s.mode === "pro")
   const [step, setStep] = useState(1)
   const [starting, setStarting] = useState(false)
@@ -82,6 +96,8 @@ export function Configure({ draft, setDraft, target, targetStep, external, descr
 
   const presets = useQuery({ queryKey: ["load-presets"], queryFn: api.loadPresets, staleTime: Infinity })
   const profile = draft.profile ?? presets.data?.[0] ?? null
+  const scenario = scenarios ? draft.scenario : null
+  const scenarioIssue = scenarioProblem(scenario, profile) ?? (scenario && !scenario.target && scenario.id !== "traffic_spike" ? "Choose what the incident acts on." : null)
 
   const launch = async (spec: LoadTestSpec) => {
     setStarting(true)
@@ -107,26 +123,30 @@ export function Configure({ draft, setDraft, target, targetStep, external, descr
       thresholds: draft.thresholds,
       timeoutMs: draft.timeoutMs,
       maxWorkers: draft.maxWorkers,
+      ...(scenario && { scenario }),
     }
     if (external) setPending({ spec, info: external })
     else void launch(spec)
   }
 
   const startButton = (
-    <Button size="sm" onClick={onStart} disabled={!target || !profile || starting}>
+    <Button size="sm" onClick={onStart} disabled={!target || !profile || starting || !!scenarioIssue} title={scenarioIssue ?? undefined}>
       {starting ? <Spinner /> : <Play />} Start test
     </Button>
   )
 
   const trafficStep = (
-    <TrafficStep
-      draft={draft}
-      setDraft={setDraft}
-      presets={(presets.data ?? []).filter((p) => p.preset !== "autoscale" || autoscaling)}
-      profile={profile}
-      pro={pro}
-      autoscaling={autoscaling}
-    />
+    <>
+      <TrafficStep
+        draft={draft}
+        setDraft={setDraft}
+        presets={(presets.data ?? []).filter((p) => p.preset !== "autoscale" || autoscaling)}
+        profile={profile}
+        pro={pro}
+        autoscaling={autoscaling}
+      />
+      {scenarios && <ScenarioStep draft={draft} setDraft={setDraft} profile={profile} />}
+    </>
   )
   const thresholdStep = <ThresholdStep draft={draft} setDraft={setDraft} pro={pro} />
   const confirm = (
@@ -145,7 +165,8 @@ export function Configure({ draft, setDraft, target, targetStep, external, descr
   if (pro) {
     return (
       <div className="flex h-full min-h-0 flex-col">
-        <div className="grid min-h-0 flex-1 grid-cols-[repeat(auto-fit,minmax(19rem,1fr))] divide-x overflow-auto">
+        {/* Three columns from 64rem of panel up; narrower, the steps stack and scroll as one page. */}
+        <div className="grid min-h-0 flex-1 grid-cols-1 divide-y overflow-auto @5xl:grid-cols-3 @5xl:divide-x @5xl:divide-y-0">
           <div className="min-h-0 overflow-auto p-2.5">{targetStep}</div>
           <div className="min-h-0 overflow-auto p-2.5">{trafficStep}</div>
           <div className="min-h-0 overflow-auto p-2.5">{thresholdStep}</div>

@@ -1,0 +1,1074 @@
+description: Adds the OCI expert challenges (CIS-aligned landing zone, hub-and-spoke network with a dynamic routing gateway)
+operations:
+  - op: upsert
+    kind: challenge
+    id: oci-cis-landing-zone
+    data:
+      provider: oci
+      level: expert
+      title: A CIS-aligned landing zone
+      summary: Turn a flat tenancy with one all-powerful group into a landing zone with role compartments, scoped groups, Cloud Guard, change notifications and a budget.
+      minutes: 75
+      tags: [landing-zone, governance, iam, cloud-guard, events, budgets]
+      runtime: design
+      prerequisites: [oci-compartment-least-privilege, oci-vault-customer-managed-keys]
+      problem: |
+        Your company is moving its first production workloads to OCI. Today the tenancy has one compartment
+        (workloads) and one ops group allowed to manage all resources in the whole tenancy. Nobody is told when a
+        policy or a security list changes, there is no security posture monitoring, and spending is only seen on
+        the monthly invoice.
+
+        Oracle's reference architecture "Deploy a Secure Landing Zone That Meets the CIS Foundations Benchmark"
+        (OCI Core Landing Zone) starts from a compartment design inside an enclosing compartment — Network,
+        Security, App and Database — with one group per compartment and policies that separate duties. It enables
+        Cloud Guard to monitor configuration and activity, uses Events and Notifications topics to alert
+        administrators about changes, keeps keys in Vault, and the Foundations learning path adds budgets and
+        tagging for cost management. Build that baseline in Terraform.
+      requirements:
+        - An enclosing compartment under the tenancy contains at least four child compartments (network, security, app and database).
+        - There are at least four role groups (network, security, app and database administrators), and no policy statement grants manage all-resources in tenancy.
+        - Network administrators manage virtual-network-family only in the network compartment (in compartment <enclosing>:<network>).
+        - Cloud Guard is enabled (status = "ENABLED") with a reporting region.
+        - A Notifications topic has a subscription, and Events rules send IAM changes (com.oraclecloud.identityControlPlane.*) and network changes (com.oraclecloud.virtualnetwork.*) to it.
+        - A vault lives in a landing zone compartment (not in the root).
+        - A budget covers the landing zone and has an alert rule.
+      hints:
+        - Child compartments set compartment_id to the enclosing compartment's id; policies attached to the tenancy can name nested compartments with a colon path such as in compartment lz:network.
+        - Write one policy per role and start each from the matching Oracle common-policy template (network admins, security admins with vaults and keys, database admins with database-family).
+        - Cloud Guard is a tenancy-level setting — oci_cloud_guard_cloud_guard_configuration with compartment_id = the tenancy OCID, reporting_region and status.
+        - "Prefer condition_details { event_types = [...] } on oci_events_rule (for example com.oraclecloud.identityControlPlane.CreatePolicy) and an actions { action { action_type = \"ONS\", topic_id = ... } } block."
+        - A budget targets compartments with target_type = "COMPARTMENT" and targets = [<compartment OCID>]; oci_budget_alert_rule adds a FORECAST or ACTUAL threshold.
+      solution: |
+        The solution has four parts.
+
+        1. **Compartments and duties** — `oci_identity_compartment.lz` under the tenancy and network, security,
+           app and database compartments inside it; four groups; one policy per role, for example:
+
+           ```
+           Allow group lz-network-admins to manage virtual-network-family in compartment lz:network
+           Allow group lz-security-admins to manage vaults in compartment lz:security
+           Allow group lz-security-admins to manage keys in compartment lz:security
+           Allow group lz-app-admins to manage instance-family in compartment lz:app
+           Allow group lz-app-admins to use virtual-network-family in compartment lz:network
+           Allow group lz-database-admins to manage autonomous-database-family in compartment lz:database
+           ```
+
+        2. **Posture monitoring** — `oci_cloud_guard_cloud_guard_configuration` with `status = "ENABLED"`.
+        3. **Change alerts** — an `oci_ons_notification_topic` with an email subscription and two
+           `oci_events_rule` resources: one for IAM event types (CreatePolicy, UpdatePolicy, DeletePolicy,
+           CreateGroup, DeleteGroup, AddUserToGroup…) and one for network event types (security lists, NSGs,
+           route tables, gateways), both with an `ONS` action to the topic.
+        4. **Keys and cost** — an `oci_kms_vault` in the security compartment, and an `oci_budget_budget`
+           targeting the enclosing compartment with a forecast alert at 100%.
+
+        **Why:** the compartment design mirrors how responsibilities are split between networking, security,
+        application and database teams, and the policies give each group only its compartment, so a compromise or
+        mistake stays contained. Cloud Guard detects misconfigurations and risky activity and recommends fixes.
+        The landing zone architecture uses Events and Notifications topics to alert administrators about changes
+        in the deployed resources, which is what the two rules and the topic provide. Customer-managed keys in Vault and a
+        budget with alerts complete the security and cost baseline. Oracle publishes the full landing zone as
+        Terraform (OCI Core Landing Zone) that you can deploy with Resource Manager.
+      solutionFiles:
+        variables.tf: |
+          variable "project" {
+            type        = string
+            default     = "lz"
+            description = "Project name: the enclosing compartment's name and the first part of every resource name."
+          }
+
+          variable "environment" {
+            type        = string
+            default     = "prod"
+            description = "Deployment environment: part of every resource name and the Environment tag."
+          }
+
+          variable "oci_region" {
+            type        = string
+            default     = "us-ashburn-1"
+            description = "Home region of the tenancy (Cloud Guard reports here)."
+          }
+
+          variable "tenancy_ocid" {
+            type        = string
+            default     = "ocid1.tenancy.oc1..flocilocaltenancy0000000000000000000000000000000000000000"
+            description = "OCID of the tenancy (the root compartment); defaults to the local Floci tenancy."
+          }
+
+          variable "security_email" {
+            type        = string
+            default     = "security-alerts@example.com"
+            description = "Address subscribed to the security notifications topic."
+          }
+
+          variable "monthly_budget" {
+            type        = number
+            default     = 1000
+            description = "Monthly budget of the landing zone, in the tenancy's currency."
+          }
+        iam.tf: |
+          # Enclosing compartment: everything the landing zone creates lives here.
+          resource "oci_identity_compartment" "lz" {
+            compartment_id = var.tenancy_ocid
+            name           = var.project
+            description    = "Landing zone enclosing compartment"
+            freeform_tags  = local.common_tags
+          }
+
+          resource "oci_identity_compartment" "network" {
+            compartment_id = oci_identity_compartment.lz.id
+            name           = "network"
+            description    = "VCNs, gateways and network security"
+            freeform_tags  = local.common_tags
+          }
+
+          resource "oci_identity_compartment" "security" {
+            compartment_id = oci_identity_compartment.lz.id
+            name           = "security"
+            description    = "Vaults, keys, logging and notifications"
+            freeform_tags  = local.common_tags
+          }
+
+          resource "oci_identity_compartment" "app" {
+            compartment_id = oci_identity_compartment.lz.id
+            name           = "app"
+            description    = "Compute, storage and other application services"
+            freeform_tags  = local.common_tags
+          }
+
+          resource "oci_identity_compartment" "database" {
+            compartment_id = oci_identity_compartment.lz.id
+            name           = "database"
+            description    = "Database services"
+            freeform_tags  = local.common_tags
+          }
+
+          resource "oci_identity_group" "network_admins" {
+            compartment_id = var.tenancy_ocid
+            name           = "${var.project}-network-admins"
+            description    = "Manage the landing zone network"
+            freeform_tags  = local.common_tags
+          }
+
+          resource "oci_identity_group" "security_admins" {
+            compartment_id = var.tenancy_ocid
+            name           = "${var.project}-security-admins"
+            description    = "Manage keys, logging and notifications"
+            freeform_tags  = local.common_tags
+          }
+
+          resource "oci_identity_group" "app_admins" {
+            compartment_id = var.tenancy_ocid
+            name           = "${var.project}-app-admins"
+            description    = "Manage application resources"
+            freeform_tags  = local.common_tags
+          }
+
+          resource "oci_identity_group" "database_admins" {
+            compartment_id = var.tenancy_ocid
+            name           = "${var.project}-database-admins"
+            description    = "Manage databases"
+            freeform_tags  = local.common_tags
+          }
+
+          resource "oci_identity_policy" "network_admins" {
+            compartment_id = var.tenancy_ocid
+            name           = "${local.name_prefix}-network-admins"
+            description    = "Network administrators manage the network compartment only"
+            freeform_tags  = local.common_tags
+            statements = [
+              "Allow group ${oci_identity_group.network_admins.name} to manage virtual-network-family in compartment ${var.project}:network",
+            ]
+
+            depends_on = [oci_identity_compartment.network]
+          }
+
+          resource "oci_identity_policy" "security_admins" {
+            compartment_id = var.tenancy_ocid
+            name           = "${local.name_prefix}-security-admins"
+            description    = "Security administrators manage keys, logging and notifications"
+            freeform_tags  = local.common_tags
+            statements = [
+              "Allow group ${oci_identity_group.security_admins.name} to manage vaults in compartment ${var.project}:security",
+              "Allow group ${oci_identity_group.security_admins.name} to manage keys in compartment ${var.project}:security",
+              "Allow group ${oci_identity_group.security_admins.name} to manage logging-family in compartment ${var.project}:security",
+              "Allow group ${oci_identity_group.security_admins.name} to manage ons-topics in compartment ${var.project}:security",
+              "Allow group ${oci_identity_group.security_admins.name} to manage ons-subscriptions in compartment ${var.project}:security",
+            ]
+
+            depends_on = [oci_identity_compartment.security]
+          }
+
+          resource "oci_identity_policy" "app_admins" {
+            compartment_id = var.tenancy_ocid
+            name           = "${local.name_prefix}-app-admins"
+            description    = "Application administrators manage the app compartment and use the network"
+            freeform_tags  = local.common_tags
+            statements = [
+              "Allow group ${oci_identity_group.app_admins.name} to manage instance-family in compartment ${var.project}:app",
+              "Allow group ${oci_identity_group.app_admins.name} to manage object-family in compartment ${var.project}:app",
+              "Allow group ${oci_identity_group.app_admins.name} to use virtual-network-family in compartment ${var.project}:network",
+              "Allow group ${oci_identity_group.app_admins.name} to use keys in compartment ${var.project}:security",
+            ]
+
+            depends_on = [oci_identity_compartment.app, oci_identity_compartment.network]
+          }
+
+          resource "oci_identity_policy" "database_admins" {
+            compartment_id = var.tenancy_ocid
+            name           = "${local.name_prefix}-database-admins"
+            description    = "Database administrators manage the database compartment and use the network"
+            freeform_tags  = local.common_tags
+            statements = [
+              "Allow group ${oci_identity_group.database_admins.name} to manage database-family in compartment ${var.project}:database",
+              "Allow group ${oci_identity_group.database_admins.name} to manage autonomous-database-family in compartment ${var.project}:database",
+              "Allow group ${oci_identity_group.database_admins.name} to use virtual-network-family in compartment ${var.project}:network",
+              "Allow group ${oci_identity_group.database_admins.name} to use keys in compartment ${var.project}:security",
+            ]
+
+            depends_on = [oci_identity_compartment.database, oci_identity_compartment.network]
+          }
+        security.tf: |
+          resource "oci_cloud_guard_cloud_guard_configuration" "main" {
+            compartment_id   = var.tenancy_ocid
+            reporting_region = var.oci_region
+            status           = "ENABLED"
+          }
+
+          resource "oci_kms_vault" "main" {
+            compartment_id = oci_identity_compartment.security.id
+            display_name   = "${local.name_prefix}-vault"
+            vault_type     = "DEFAULT"
+            freeform_tags  = local.common_tags
+          }
+
+          resource "oci_ons_notification_topic" "security" {
+            compartment_id = oci_identity_compartment.security.id
+            name           = "${local.name_prefix}-security"
+            description    = "Identity and network change alerts"
+            freeform_tags  = local.common_tags
+          }
+
+          resource "oci_ons_subscription" "security_email" {
+            compartment_id = oci_identity_compartment.security.id
+            topic_id       = oci_ons_notification_topic.security.id
+            protocol       = "EMAIL"
+            endpoint       = var.security_email
+            freeform_tags  = local.common_tags
+          }
+
+          resource "oci_events_rule" "iam_changes" {
+            compartment_id = var.tenancy_ocid
+            display_name   = "${local.name_prefix}-iam-changes"
+            description    = "Notify on identity changes"
+            is_enabled     = true
+            freeform_tags  = local.common_tags
+
+            condition_details {
+              event_types = [
+                "com.oraclecloud.identityControlPlane.CreatePolicy",
+                "com.oraclecloud.identityControlPlane.UpdatePolicy",
+                "com.oraclecloud.identityControlPlane.DeletePolicy",
+                "com.oraclecloud.identityControlPlane.CreateGroup",
+                "com.oraclecloud.identityControlPlane.DeleteGroup",
+                "com.oraclecloud.identityControlPlane.AddUserToGroup",
+                "com.oraclecloud.identityControlPlane.RemoveUserFromGroup",
+              ]
+            }
+
+            actions {
+              action {
+                action_type = "ONS"
+                is_enabled  = true
+                topic_id    = oci_ons_notification_topic.security.id
+              }
+            }
+          }
+
+          resource "oci_events_rule" "network_changes" {
+            compartment_id = var.tenancy_ocid
+            display_name   = "${local.name_prefix}-network-changes"
+            description    = "Notify on network security and routing changes"
+            is_enabled     = true
+            freeform_tags  = local.common_tags
+
+            condition_details {
+              event_types = [
+                "com.oraclecloud.virtualnetwork.createsecuritylist",
+                "com.oraclecloud.virtualnetwork.updatesecuritylist",
+                "com.oraclecloud.virtualnetwork.deletesecuritylist",
+                "com.oraclecloud.virtualnetwork.createnetworksecuritygroup",
+                "com.oraclecloud.virtualnetwork.updatenetworksecuritygroup",
+                "com.oraclecloud.virtualnetwork.deletenetworksecuritygroup",
+                "com.oraclecloud.virtualnetwork.createroutetable",
+                "com.oraclecloud.virtualnetwork.updateroutetable",
+                "com.oraclecloud.virtualnetwork.deleteroutetable",
+                "com.oraclecloud.virtualnetwork.createinternetgateway",
+                "com.oraclecloud.virtualnetwork.deleteinternetgateway",
+              ]
+            }
+
+            actions {
+              action {
+                action_type = "ONS"
+                is_enabled  = true
+                topic_id    = oci_ons_notification_topic.security.id
+              }
+            }
+          }
+        budget.tf: |
+          resource "oci_budget_budget" "lz" {
+            compartment_id = var.tenancy_ocid
+            display_name   = "${local.name_prefix}-monthly"
+            description    = "Monthly spend of the landing zone"
+            amount         = var.monthly_budget
+            reset_period   = "MONTHLY"
+            target_type    = "COMPARTMENT"
+            targets        = [oci_identity_compartment.lz.id]
+            freeform_tags  = local.common_tags
+          }
+
+          resource "oci_budget_alert_rule" "forecast" {
+            budget_id      = oci_budget_budget.lz.id
+            display_name   = "forecast-100"
+            type           = "FORECAST"
+            threshold      = 100
+            threshold_type = "PERCENTAGE"
+            recipients     = var.security_email
+            message        = "The landing zone is forecast to exceed its monthly budget."
+          }
+      starter:
+        kind: terraform
+        cloud: oci
+        files:
+          versions.tf: |
+            terraform {
+              required_version = ">= 1.6"
+
+              required_providers {
+                oci = {
+                  source  = "oracle/oci"
+                  version = "~> 9.0"
+                }
+              }
+            }
+          providers.tf: |
+            provider "oci" {
+              region = var.oci_region
+            }
+          variables.tf: |
+            variable "project" {
+              type        = string
+              default     = "lz"
+              description = "Project name: the first part of every resource name."
+            }
+
+            variable "environment" {
+              type        = string
+              default     = "prod"
+              description = "Deployment environment: part of every resource name and the Environment tag."
+            }
+
+            variable "oci_region" {
+              type        = string
+              default     = "us-ashburn-1"
+              description = "Home region of the tenancy."
+            }
+
+            variable "tenancy_ocid" {
+              type        = string
+              default     = "ocid1.tenancy.oc1..flocilocaltenancy0000000000000000000000000000000000000000"
+              description = "OCID of the tenancy (the root compartment); defaults to the local Floci tenancy."
+            }
+          locals.tf: |
+            locals {
+              name_prefix = "${var.project}-${var.environment}"
+              common_tags = {
+                Project     = var.project
+                Environment = var.environment
+                ManagedBy   = "nimbo"
+              }
+            }
+          iam.tf: |
+            # One compartment for everything, one group that can do anything.
+            resource "oci_identity_compartment" "workloads" {
+              compartment_id = var.tenancy_ocid
+              name           = "workloads"
+              description    = "All workloads"
+              freeform_tags  = local.common_tags
+            }
+
+            resource "oci_identity_group" "ops" {
+              compartment_id = var.tenancy_ocid
+              name           = "ops"
+              description    = "Operations team"
+              freeform_tags  = local.common_tags
+            }
+
+            resource "oci_identity_policy" "ops" {
+              compartment_id = var.tenancy_ocid
+              name           = "${local.name_prefix}-ops"
+              description    = "Operations access"
+              freeform_tags  = local.common_tags
+              statements = [
+                "Allow group ops to manage all-resources in tenancy",
+              ]
+
+              depends_on = [oci_identity_group.ops]
+            }
+      checks:
+        - id: validate
+          label: The workflow validates
+          type: validate
+        - id: enclosing-compartment
+          label: An enclosing compartment sits directly under the tenancy
+          type: has
+          has:
+            terraform:
+              type: oci_identity_compartment
+              where:
+                compartment_id: { ref: var.tenancy_ocid }
+        - id: role-compartments
+          label: At least four compartments live inside the enclosing compartment
+          type: has
+          has:
+            terraform:
+              type: oci_identity_compartment
+              where:
+                compartment_id: { ref: oci_identity_compartment }
+              count: { min: 4 }
+        - id: role-groups
+          label: At least four role groups exist
+          type: has
+          has:
+            terraform:
+              type: oci_identity_group
+              count: { min: 4 }
+        - id: no-tenancy-admin
+          label: No statement grants manage all-resources in tenancy
+          type: has
+          has:
+            terraform:
+              type: oci_identity_policy
+              where:
+                statements: { contains: manage all-resources in tenancy }
+              count: { max: 0 }
+        - id: network-duty
+          label: Network administration is limited to a compartment
+          type: has
+          has:
+            terraform:
+              type: oci_identity_policy
+              where:
+                statements: { contains: to manage virtual-network-family in compartment }
+        - id: cloud-guard
+          label: Cloud Guard is enabled
+          type: has
+          has:
+            terraform:
+              type: oci_cloud_guard_cloud_guard_configuration
+              where:
+                status: ENABLED
+                reporting_region: { exists: true }
+        - id: topic-subscription
+          label: The notifications topic has a subscription
+          type: has
+          has:
+            terraform:
+              type: oci_ons_subscription
+              where:
+                topic_id: { ref: oci_ons_notification_topic }
+        - id: iam-change-alerts
+          label: IAM changes are sent to the topic
+          type: has
+          has:
+            terraform:
+              type: oci_events_rule
+              where:
+                is_enabled: true
+                condition_details.event_types: { contains: com.oraclecloud.identityControlPlane. }
+                actions.action.topic_id: { ref: oci_ons_notification_topic }
+        - id: network-change-alerts
+          label: Network changes are sent to the topic
+          type: has
+          has:
+            terraform:
+              type: oci_events_rule
+              where:
+                is_enabled: true
+                condition_details.event_types: { contains: com.oraclecloud.virtualnetwork. }
+                actions.action.topic_id: { ref: oci_ons_notification_topic }
+        - id: vault-in-landing-zone
+          label: A vault lives in a landing zone compartment
+          type: has
+          has:
+            terraform:
+              type: oci_kms_vault
+              where:
+                compartment_id: { ref: oci_identity_compartment }
+        - id: budget
+          label: A budget with an alert rule covers the landing zone
+          type: has
+          has:
+            terraform:
+              type: oci_budget_alert_rule
+              where:
+                budget_id: { ref: oci_budget_budget }
+      sources:
+        - title: Deploy a Secure Landing Zone That Meets the CIS Foundations Benchmark for Oracle Cloud
+          url: https://docs.oracle.com/en/solutions/cis-oci-benchmark/index.html
+        - title: Learn Best Practices for Setting Up Your Tenancy
+          url: https://docs.oracle.com/en-us/iaas/Content/GSG/Concepts/settinguptenancy.htm
+        - title: Policy Syntax (nested compartments)
+          url: https://docs.oracle.com/en-us/iaas/Content/Identity/Concepts/policysyntax.htm
+        - title: Common Policies (Policy Builder templates)
+          url: https://docs.oracle.com/en-us/iaas/Content/Identity/policiescommon/commonpolicies.htm
+        - title: Cloud Guard
+          url: https://docs.oracle.com/en-us/iaas/Content/cloud-guard/home.htm
+        - title: Overview of Events
+          url: https://docs.oracle.com/en-us/iaas/Content/Events/Concepts/eventsoverview.htm
+        - title: Services that Produce Events (IAM and Networking event types)
+          url: https://docs.oracle.com/en-us/iaas/Content/Events/Reference/eventsproducers.htm
+        - title: Overview of Notifications
+          url: https://docs.oracle.com/en-us/iaas/Content/Notification/Concepts/notificationoverview.htm
+        - title: Budgets
+          url: https://docs.oracle.com/en-us/iaas/Content/Billing/Concepts/budgetsoverview.htm
+        - title: Become an OCI Foundations Associate (learning path)
+          url: https://learn.oracle.com/ols/learning-path/become-an-oci-foundations-associate/146553/163541
+        - title: oci_events_rule (oracle/oci 9.x)
+          url: https://registry.terraform.io/providers/oracle/oci/9.11.0/docs/resources/events_rule
+        - title: oci_cloud_guard_cloud_guard_configuration (oracle/oci 9.x)
+          url: https://registry.terraform.io/providers/oracle/oci/9.11.0/docs/resources/cloud_guard_cloud_guard_configuration
+        - title: oci_budget_budget (oracle/oci 9.x)
+          url: https://registry.terraform.io/providers/oracle/oci/9.11.0/docs/resources/budget_budget
+
+  - op: upsert
+    kind: challenge
+    id: oci-hub-spoke-drg
+    data:
+      provider: oci
+      level: expert
+      title: Hub-and-spoke network with a dynamic routing gateway
+      summary: Replace two internet-facing VCNs with a hub and private spokes connected through a DRG, administered through the Bastion service.
+      minutes: 60
+      tags: [networking, drg, hub-and-spoke, bastion, segmentation]
+      runtime: design
+      prerequisites: [oci-vcn-public-private-subnets, oci-nsg-tiered-access]
+      problem: |
+        Production and development each got their own VCN, and each VCN got its own internet gateway and public
+        subnet so administrators could SSH in. The two environments can't reach shared services privately, every
+        new environment repeats the same internet exposure, and there is no central place to add on-premises
+        connectivity later.
+
+        Oracle's reference architecture "Set Up a Hub-and-Spoke Network Topology Using a Dynamic Routing Gateway"
+        connects many VCNs to one DRG — a virtual router that also terminates FastConnect and Site-to-Site VPN —
+        so spokes reach the hub and each other privately, and uses OCI Bastion for administrative access to
+        resources without public endpoints. Rebuild the network that way: a hub VCN for shared services and two
+        private spokes.
+      requirements:
+        - Three VCNs (a hub and two spokes), each defined as its own oci_core_vcn resource with a non-overlapping CIDR.
+        - A dynamic routing gateway (oci_core_drg) with one VCN attachment per VCN (at least three oci_core_drg_attachment with network_details type "VCN").
+        - The spokes' route tables send traffic for the other networks to the DRG (route_rules.network_entity_id = the DRG).
+        - No internet gateways remain and every subnet is private (prohibit_public_ip_on_vnic = true).
+        - An OCI Bastion in the hub targets a hub subnet, and its client_cidr_block_allow_list does not contain 0.0.0.0/0.
+      hints:
+        - An attachment is oci_core_drg_attachment with drg_id and a network_details block (id = the VCN's id, type = "VCN"). Write one per VCN rather than one for_each so each connection is explicit.
+        - A DRG creates auto-generated route tables and import route distributions that learn the CIDRs of attached VCNs, so spokes only need a route rule to the DRG for the hub and the other spoke's CIDR (or the whole 10.0.0.0/8 supernet).
+        - Spokes still need outbound internet for packages; a NAT gateway per spoke keeps that without inbound exposure.
+        - Bastion sessions start from the bastion's endpoint in its target subnet; the DRG routes them on to hosts in the spokes.
+      solution: |
+        Add a hub VCN, a DRG and three attachments, and remove all public exposure from the spokes:
+
+        ```hcl
+        resource "oci_core_drg" "hub" {
+          compartment_id = var.compartment_ocid
+          display_name   = "${local.name_prefix}-drg"
+        }
+
+        resource "oci_core_drg_attachment" "prod" {
+          drg_id = oci_core_drg.hub.id
+          network_details {
+            id   = oci_core_vcn.prod.id
+            type = "VCN"
+          }
+        }
+
+        resource "oci_core_route_table" "prod" {
+          compartment_id = var.compartment_ocid
+          vcn_id         = oci_core_vcn.prod.id
+          route_rules {
+            destination       = "10.0.0.0/8"
+            destination_type  = "CIDR_BLOCK"
+            network_entity_id = oci_core_drg.hub.id
+          }
+          route_rules {
+            destination       = "0.0.0.0/0"
+            destination_type  = "CIDR_BLOCK"
+            network_entity_id = oci_core_nat_gateway.prod.id
+          }
+        }
+        ```
+
+        Repeat the attachment and route table for the hub and the dev spoke, make every subnet private, delete
+        the internet gateways and public route tables, and add `oci_bastion_bastion` targeting the hub's shared
+        subnet with `client_cidr_block_allow_list = [var.admin_cidr]`.
+
+        **Why:** a DRG can attach many VCNs, which simplifies routing and security management compared with a
+        mesh of peerings, and the same DRG later carries FastConnect or Site-to-Site VPN traffic to every spoke.
+        Choosing CIDR blocks that don't overlap with each other (or with on-premises and other clouds) is what
+        makes that routing possible. The Bastion service replaces public SSH with identity-based, audited,
+        time-limited sessions, so no subnet needs a public IP and no VCN needs an internet gateway; NAT gateways
+        keep outbound updates working.
+      solutionFiles:
+        variables.tf: |
+          variable "project" {
+            type        = string
+            default     = "learn"
+            description = "Project name: the first part of every resource name and the Project tag."
+          }
+
+          variable "environment" {
+            type        = string
+            default     = "shared"
+            description = "Environment label: part of every resource name and the Environment tag."
+          }
+
+          variable "oci_region" {
+            type        = string
+            default     = "us-ashburn-1"
+            description = "OCI region to deploy into."
+          }
+
+          variable "compartment_ocid" {
+            type        = string
+            default     = "ocid1.tenancy.oc1..flocilocaltenancy0000000000000000000000000000000000000000"
+            description = "Compartment OCID for every resource (defaults to the local Floci tenancy root compartment)."
+          }
+
+          variable "admin_cidr" {
+            type        = string
+            default     = "203.0.113.0/24"
+            description = "Office or VPN range allowed to open Bastion sessions."
+          }
+        network.tf: |
+          # Non-overlapping ranges inside 10.0.0.0/8 so the DRG can route between them.
+          resource "oci_core_vcn" "hub" {
+            compartment_id = var.compartment_ocid
+            display_name   = "${local.name_prefix}-hub"
+            cidr_blocks    = ["10.0.0.0/16"]
+            dns_label      = "hub"
+            freeform_tags  = local.common_tags
+          }
+
+          resource "oci_core_vcn" "prod" {
+            compartment_id = var.compartment_ocid
+            display_name   = "${local.name_prefix}-prod"
+            cidr_blocks    = ["10.1.0.0/16"]
+            dns_label      = "prod"
+            freeform_tags  = local.common_tags
+          }
+
+          resource "oci_core_vcn" "dev" {
+            compartment_id = var.compartment_ocid
+            display_name   = "${local.name_prefix}-dev"
+            cidr_blocks    = ["10.2.0.0/16"]
+            dns_label      = "dev"
+            freeform_tags  = local.common_tags
+          }
+
+          resource "oci_core_drg" "hub" {
+            compartment_id = var.compartment_ocid
+            display_name   = "${local.name_prefix}-drg"
+            freeform_tags  = local.common_tags
+          }
+
+          resource "oci_core_drg_attachment" "hub" {
+            drg_id        = oci_core_drg.hub.id
+            display_name  = "${local.name_prefix}-hub"
+            freeform_tags = local.common_tags
+
+            network_details {
+              id   = oci_core_vcn.hub.id
+              type = "VCN"
+            }
+          }
+
+          resource "oci_core_drg_attachment" "prod" {
+            drg_id        = oci_core_drg.hub.id
+            display_name  = "${local.name_prefix}-prod"
+            freeform_tags = local.common_tags
+
+            network_details {
+              id   = oci_core_vcn.prod.id
+              type = "VCN"
+            }
+          }
+
+          resource "oci_core_drg_attachment" "dev" {
+            drg_id        = oci_core_drg.hub.id
+            display_name  = "${local.name_prefix}-dev"
+            freeform_tags = local.common_tags
+
+            network_details {
+              id   = oci_core_vcn.dev.id
+              type = "VCN"
+            }
+          }
+
+          # Spokes: outbound internet through NAT, everything private through the DRG.
+          resource "oci_core_nat_gateway" "prod" {
+            compartment_id = var.compartment_ocid
+            vcn_id         = oci_core_vcn.prod.id
+            display_name   = "${local.name_prefix}-prod-nat"
+            freeform_tags  = local.common_tags
+          }
+
+          resource "oci_core_nat_gateway" "dev" {
+            compartment_id = var.compartment_ocid
+            vcn_id         = oci_core_vcn.dev.id
+            display_name   = "${local.name_prefix}-dev-nat"
+            freeform_tags  = local.common_tags
+          }
+
+          resource "oci_core_route_table" "hub" {
+            compartment_id = var.compartment_ocid
+            vcn_id         = oci_core_vcn.hub.id
+            display_name   = "${local.name_prefix}-hub"
+            freeform_tags  = local.common_tags
+
+            route_rules {
+              destination       = "10.0.0.0/8"
+              destination_type  = "CIDR_BLOCK"
+              network_entity_id = oci_core_drg.hub.id
+            }
+          }
+
+          resource "oci_core_route_table" "prod" {
+            compartment_id = var.compartment_ocid
+            vcn_id         = oci_core_vcn.prod.id
+            display_name   = "${local.name_prefix}-prod"
+            freeform_tags  = local.common_tags
+
+            route_rules {
+              destination       = "10.0.0.0/8"
+              destination_type  = "CIDR_BLOCK"
+              network_entity_id = oci_core_drg.hub.id
+            }
+
+            route_rules {
+              destination       = "0.0.0.0/0"
+              destination_type  = "CIDR_BLOCK"
+              network_entity_id = oci_core_nat_gateway.prod.id
+            }
+          }
+
+          resource "oci_core_route_table" "dev" {
+            compartment_id = var.compartment_ocid
+            vcn_id         = oci_core_vcn.dev.id
+            display_name   = "${local.name_prefix}-dev"
+            freeform_tags  = local.common_tags
+
+            route_rules {
+              destination       = "10.0.0.0/8"
+              destination_type  = "CIDR_BLOCK"
+              network_entity_id = oci_core_drg.hub.id
+            }
+
+            route_rules {
+              destination       = "0.0.0.0/0"
+              destination_type  = "CIDR_BLOCK"
+              network_entity_id = oci_core_nat_gateway.dev.id
+            }
+          }
+
+          resource "oci_core_subnet" "hub_shared" {
+            compartment_id             = var.compartment_ocid
+            vcn_id                     = oci_core_vcn.hub.id
+            display_name               = "${local.name_prefix}-hub-shared"
+            cidr_block                 = "10.0.1.0/24"
+            dns_label                  = "shared"
+            prohibit_public_ip_on_vnic = true
+            route_table_id             = oci_core_route_table.hub.id
+            freeform_tags              = local.common_tags
+          }
+
+          resource "oci_core_subnet" "prod_app" {
+            compartment_id             = var.compartment_ocid
+            vcn_id                     = oci_core_vcn.prod.id
+            display_name               = "${local.name_prefix}-prod-app"
+            cidr_block                 = "10.1.1.0/24"
+            dns_label                  = "app"
+            prohibit_public_ip_on_vnic = true
+            route_table_id             = oci_core_route_table.prod.id
+            freeform_tags              = local.common_tags
+          }
+
+          resource "oci_core_subnet" "dev_app" {
+            compartment_id             = var.compartment_ocid
+            vcn_id                     = oci_core_vcn.dev.id
+            display_name               = "${local.name_prefix}-dev-app"
+            cidr_block                 = "10.2.1.0/24"
+            dns_label                  = "app"
+            prohibit_public_ip_on_vnic = true
+            route_table_id             = oci_core_route_table.dev.id
+            freeform_tags              = local.common_tags
+          }
+
+          # Administrative access without public IPs or internet gateways.
+          resource "oci_bastion_bastion" "hub" {
+            bastion_type                 = "standard"
+            compartment_id               = var.compartment_ocid
+            target_subnet_id             = oci_core_subnet.hub_shared.id
+            name                         = replace("${local.name_prefix}-hub", "-", "")
+            client_cidr_block_allow_list = [var.admin_cidr]
+            max_session_ttl_in_seconds   = 3600
+            freeform_tags                = local.common_tags
+          }
+        outputs.tf: |
+          output "drg_id" {
+            value       = oci_core_drg.hub.id
+            description = "OCID of the dynamic routing gateway that connects the hub and the spokes."
+          }
+
+          output "bastion_id" {
+            value       = oci_bastion_bastion.hub.id
+            description = "OCID of the Bastion used for administrative sessions."
+          }
+      starter:
+        kind: terraform
+        cloud: oci
+        files:
+          versions.tf: |
+            terraform {
+              required_version = ">= 1.6"
+
+              required_providers {
+                oci = {
+                  source  = "oracle/oci"
+                  version = "~> 9.0"
+                }
+              }
+            }
+          providers.tf: |
+            provider "oci" {
+              region = var.oci_region
+            }
+          variables.tf: |
+            variable "project" {
+              type        = string
+              default     = "learn"
+              description = "Project name: the first part of every resource name and the Project tag."
+            }
+
+            variable "environment" {
+              type        = string
+              default     = "shared"
+              description = "Environment label: part of every resource name and the Environment tag."
+            }
+
+            variable "oci_region" {
+              type        = string
+              default     = "us-ashburn-1"
+              description = "OCI region to deploy into."
+            }
+
+            variable "compartment_ocid" {
+              type        = string
+              default     = "ocid1.tenancy.oc1..flocilocaltenancy0000000000000000000000000000000000000000"
+              description = "Compartment OCID for every resource (defaults to the local Floci tenancy root compartment)."
+            }
+          locals.tf: |
+            locals {
+              name_prefix = "${var.project}-${var.environment}"
+              common_tags = {
+                Project     = var.project
+                Environment = var.environment
+                ManagedBy   = "nimbo"
+              }
+            }
+          network.tf: |
+            # Two isolated VCNs, each with its own internet gateway and a public
+            # subnet so administrators can SSH in.
+            resource "oci_core_vcn" "prod" {
+              compartment_id = var.compartment_ocid
+              display_name   = "${local.name_prefix}-prod"
+              cidr_blocks    = ["10.1.0.0/16"]
+              dns_label      = "prod"
+              freeform_tags  = local.common_tags
+            }
+
+            resource "oci_core_vcn" "dev" {
+              compartment_id = var.compartment_ocid
+              display_name   = "${local.name_prefix}-dev"
+              cidr_blocks    = ["10.2.0.0/16"]
+              dns_label      = "dev"
+              freeform_tags  = local.common_tags
+            }
+
+            resource "oci_core_internet_gateway" "prod" {
+              compartment_id = var.compartment_ocid
+              vcn_id         = oci_core_vcn.prod.id
+              display_name   = "${local.name_prefix}-prod-igw"
+              enabled        = true
+              freeform_tags  = local.common_tags
+            }
+
+            resource "oci_core_internet_gateway" "dev" {
+              compartment_id = var.compartment_ocid
+              vcn_id         = oci_core_vcn.dev.id
+              display_name   = "${local.name_prefix}-dev-igw"
+              enabled        = true
+              freeform_tags  = local.common_tags
+            }
+
+            resource "oci_core_route_table" "prod" {
+              compartment_id = var.compartment_ocid
+              vcn_id         = oci_core_vcn.prod.id
+              display_name   = "${local.name_prefix}-prod"
+              freeform_tags  = local.common_tags
+
+              route_rules {
+                destination       = "0.0.0.0/0"
+                destination_type  = "CIDR_BLOCK"
+                network_entity_id = oci_core_internet_gateway.prod.id
+              }
+            }
+
+            resource "oci_core_route_table" "dev" {
+              compartment_id = var.compartment_ocid
+              vcn_id         = oci_core_vcn.dev.id
+              display_name   = "${local.name_prefix}-dev"
+              freeform_tags  = local.common_tags
+
+              route_rules {
+                destination       = "0.0.0.0/0"
+                destination_type  = "CIDR_BLOCK"
+                network_entity_id = oci_core_internet_gateway.dev.id
+              }
+            }
+
+            resource "oci_core_subnet" "prod_app" {
+              compartment_id             = var.compartment_ocid
+              vcn_id                     = oci_core_vcn.prod.id
+              display_name               = "${local.name_prefix}-prod-app"
+              cidr_block                 = "10.1.1.0/24"
+              dns_label                  = "app"
+              prohibit_public_ip_on_vnic = false
+              route_table_id             = oci_core_route_table.prod.id
+              freeform_tags              = local.common_tags
+            }
+
+            resource "oci_core_subnet" "dev_app" {
+              compartment_id             = var.compartment_ocid
+              vcn_id                     = oci_core_vcn.dev.id
+              display_name               = "${local.name_prefix}-dev-app"
+              cidr_block                 = "10.2.1.0/24"
+              dns_label                  = "app"
+              prohibit_public_ip_on_vnic = false
+              route_table_id             = oci_core_route_table.dev.id
+              freeform_tags              = local.common_tags
+            }
+          outputs.tf: |
+            output "prod_vcn_id" {
+              value       = oci_core_vcn.prod.id
+              description = "OCID of the production VCN."
+            }
+
+            output "dev_vcn_id" {
+              value       = oci_core_vcn.dev.id
+              description = "OCID of the development VCN."
+            }
+      checks:
+        - id: validate
+          label: The workflow validates
+          type: validate
+        - id: three-vcns
+          label: A hub and two spoke VCNs exist
+          type: has
+          has:
+            terraform:
+              type: oci_core_vcn
+              count: { min: 3 }
+        - id: drg
+          label: A dynamic routing gateway exists
+          type: has
+          has:
+            terraform:
+              type: oci_core_drg
+        - id: drg-attachments
+          label: Every VCN is attached to the DRG
+          type: has
+          has:
+            terraform:
+              type: oci_core_drg_attachment
+              where:
+                drg_id: { ref: oci_core_drg }
+                network_details.type: VCN
+                network_details.id: { ref: oci_core_vcn }
+              count: { min: 3 }
+        - id: spoke-routes
+          label: Spoke route tables send private traffic to the DRG
+          type: has
+          has:
+            terraform:
+              type: oci_core_route_table
+              where:
+                route_rules.network_entity_id: { ref: oci_core_drg }
+              count: { min: 2 }
+        - id: no-internet-gateways
+          label: No internet gateways remain
+          type: has
+          has:
+            terraform:
+              type: oci_core_internet_gateway
+              count: { max: 0 }
+        - id: private-subnet-per-vcn
+          label: Hub and spokes each have a private subnet
+          type: has
+          has:
+            terraform:
+              type: oci_core_subnet
+              where:
+                prohibit_public_ip_on_vnic: true
+              count: { min: 3 }
+        - id: private-subnets
+          label: Every subnet is private
+          type: has
+          has:
+            terraform:
+              type: oci_core_subnet
+              where:
+                prohibit_public_ip_on_vnic: { notIn: [true] }
+              count: { max: 0 }
+        - id: bastion
+          label: An OCI Bastion targets a hub subnet
+          type: has
+          has:
+            terraform:
+              type: oci_bastion_bastion
+              where:
+                target_subnet_id: { ref: oci_core_subnet }
+                client_cidr_block_allow_list: { exists: true }
+        - id: bastion-not-open
+          label: Bastion sessions are not open to 0.0.0.0/0
+          type: has
+          has:
+            terraform:
+              type: oci_bastion_bastion
+              where:
+                client_cidr_block_allow_list: { contains: 0.0.0.0/0 }
+              count: { max: 0 }
+      sources:
+        - title: Set Up a Hub-and-Spoke Network Topology Using a Dynamic Routing Gateway
+          url: https://docs.oracle.com/en/solutions/hub-spoke-network-drg/index.html
+        - title: Dynamic Routing Gateways
+          url: https://docs.oracle.com/en-us/iaas/Content/Network/Tasks/managingDRGs.htm
+        - title: Bastion Overview
+          url: https://docs.oracle.com/en-us/iaas/Content/Bastion/Concepts/bastionoverview.htm
+        - title: NAT Gateway
+          url: https://docs.oracle.com/en-us/iaas/Content/Network/Tasks/NATgateway.htm
+        - title: Securing Networking (OCI Security Guide)
+          url: https://docs.oracle.com/en-us/iaas/Content/Security/Reference/networking_security.htm
+        - title: oci_core_drg_attachment (oracle/oci 9.x)
+          url: https://registry.terraform.io/providers/oracle/oci/9.11.0/docs/resources/core_drg_attachment
+        - title: oci_core_drg (oracle/oci 9.x)
+          url: https://registry.terraform.io/providers/oracle/oci/9.11.0/docs/resources/core_drg

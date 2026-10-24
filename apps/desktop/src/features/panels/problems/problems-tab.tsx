@@ -112,7 +112,8 @@ export function ProblemsTab() {
   }
 
   return (
-    <ScrollArea className="h-full">
+    // Block, not Radix's table wrapper: rows keep the panel's width, so long hints truncate instead of being cut off.
+    <ScrollArea className="h-full [&_[data-slot=scroll-area-viewport]>div]:block!">
       {groups.map((g) =>
         g.items.length === 0 && !g.always ? null : (
           <Collapsible key={g.id} defaultOpen asChild>
@@ -120,31 +121,40 @@ export function ProblemsTab() {
               <div className="sticky top-0 z-10 flex items-center border-b bg-background/95 pr-2 backdrop-blur">
                 <CollapsibleTrigger
                   className={cn(
-                    "group flex flex-1 items-center gap-1.5 px-3 py-1 text-left text-[11px] font-semibold tracking-wide uppercase outline-none focus-visible:bg-muted",
+                    "group flex min-w-0 flex-1 items-center gap-1.5 px-3 py-1 text-left text-[11px] font-semibold tracking-wide whitespace-nowrap uppercase outline-none focus-visible:bg-muted",
                     g.className,
                   )}
                 >
-                  <ChevronRight className="size-3.5 text-muted-foreground transition-transform group-data-[state=open]:rotate-90" />
-                  <g.icon className="size-3.5" />
+                  <ChevronRight className="size-3.5 shrink-0 text-muted-foreground transition-transform group-data-[state=open]:rotate-90" />
+                  <g.icon className="size-3.5 shrink-0" />
                   {g.label}
                   <span className="text-muted-foreground tabular-nums">{g.items.length}</span>
-                  {g.hint && <span className="ml-2 truncate font-normal tracking-normal text-muted-foreground normal-case">{g.hint}</span>}
+                  {g.hint && <span className="ml-2 min-w-0 truncate font-normal tracking-normal text-muted-foreground normal-case">{g.hint}</span>}
                 </CollapsibleTrigger>
                 {g.help && <TermHint text={g.help} label={`About ${g.label.toLowerCase()} checks`} />}
                 {g.id === "practices" && (
                   <Button
                     size="xs"
                     variant="ghost"
-                    className="text-muted-foreground"
+                    className="shrink-0 text-muted-foreground"
+                    title={kubernetes ? "Configure Kubernetes checks" : "Configure"}
                     data-testid="problems-configure-practices"
                     onClick={() => openSettings("practices")}
                   >
-                    <Settings2 /> {kubernetes ? "Configure Kubernetes checks" : "Configure"}
+                    <Settings2 />
+                    <span className="sr-only @2xl:not-sr-only">{kubernetes ? "Configure Kubernetes checks" : "Configure"}</span>
                   </Button>
                 )}
                 {g.id === "network" && (
-                  <Button size="xs" variant="ghost" className="ml-1 text-muted-foreground" onClick={() => void openReachability()}>
-                    <Route /> Check reachability…
+                  <Button
+                    size="xs"
+                    variant="ghost"
+                    className="ml-1 shrink-0 text-muted-foreground"
+                    title="Check reachability…"
+                    onClick={() => void openReachability()}
+                  >
+                    <Route />
+                    <span className="sr-only @2xl:not-sr-only">Check reachability…</span>
                   </Button>
                 )}
               </div>

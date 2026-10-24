@@ -1,0 +1,760 @@
+description: Adds the Docker runtime challenges graded under real load and incidents (caching, health checks, timeouts, stampedes, noisy jobs)
+operations:
+- op: upsert
+  kind: challenge
+  id: docker-cache-aside
+  data:
+    provider: docker
+    level: advanced
+    title: Reads are crushing the database
+    summary: Every product page hits PostgreSQL and the database can only run four queries at a time; add a cache so pages stay fast at 150 requests per second.
+    minutes: 20
+    tags:
+    - redis
+    - postgres
+    - caching
+    - performance
+    runtime: local
+    problem: |
+      The shop's product API renders each page straight from PostgreSQL. A page
+      needs an expensive query (about 40 ms of database time), and the API holds
+      only four database connections, so the database tops out near 100 pages per
+      second whatever machine it runs on. A promotion is about to send 150 requests
+      per second, and the same 200 products are read over and over.
+
+      Put a cache in front of the database so repeated reads never reach it. The
+      API already supports Redis (read the top of `api/server.js`): it caches pages
+      with the cache-aside pattern as soon as it gets a `REDIS_URL`.
+
+      Nimbo grades this for real: **Check my solution** deploys your stack and sends
+      150 requests per second for 40 seconds.
+    requirements:
+    - A Redis cache runs in the stack.
+    - The `api` service has `REDIS_URL` pointing at it.
+    - 'Keep the database as it is: the api keeps `DB_POOL_SIZE: "4"` and the same query.'
+    - At 150 requests per second, p95 latency stays under 100 ms with fewer than 1% errors.
+    hints:
+    - The database is the bottleneck, not the API. How many times is the same product read during the test?
+    - 'Add Redis from the palette (Caches) and connect the api service to it on the canvas: connecting sets `REDIS_URL` on the api.'
+    - 'Without the palette: add a `cache` service with image `redis:7.4.6-alpine3.21` and set `REDIS_URL: redis://cache:6379` in the api environment.'
+    solution: |
+      **Why.** Cache-aside (lazy loading) keeps the database the source of truth
+      and reads it only on a cache miss: the app first asks the cache, and on a miss
+      loads from the database and stores the result with a time to live. With 200 hot
+      products, after the first 200 misses almost every request is served from Redis
+      in about a millisecond, so the four database connections are no longer the
+      limit.
+
+      **Steps.**
+      1. Add a `cache` service running Redis (pinned image, healthcheck).
+      2. Set `REDIS_URL: redis://cache:6379` on the `api` service.
+      3. Run **Check my solution**: p95 drops from seconds (requests queue for the
+         database) to a few milliseconds.
+    solutionFiles:
+      compose.yaml: |
+        # Challenge: reads are crushing the database.
+        # The product API renders every page straight from PostgreSQL, and the
+        # database can only run a few of those queries at a time. Only the API is
+        # published; the database is reached by service name inside the project.
+
+        x-defaults: &defaults
+          restart: unless-stopped
+          logging:
+            driver: json-file
+            options:
+              max-size: "10m"
+              max-file: "3"
+
+        services:
+          api:
+            <<: *defaults
+            build: ./api
+            init: true
+            ports:
+              - "3401:3000"
+            environment:
+              DATABASE_URL: postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB}
+              DB_POOL_SIZE: "4"
+              REDIS_URL: redis://cache:6379
+            depends_on:
+              db:
+                condition: service_healthy
+            healthcheck:
+              test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:3000/health || exit 1"]
+              interval: 5s
+              timeout: 3s
+              retries: 5
+            deploy:
+              resources:
+                limits:
+                  cpus: "1"
+                  memory: 256M
+
+          db:
+            <<: *defaults
+            image: postgres:16.14-alpine
+            environment:
+              POSTGRES_USER: ${POSTGRES_USER}
+              POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+              POSTGRES_DB: ${POSTGRES_DB}
+            volumes:
+              - pgdata:/var/lib/postgresql/data
+              - ./db/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+            healthcheck:
+              test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+              interval: 5s
+              timeout: 5s
+              retries: 10
+            deploy:
+              resources:
+                limits:
+                  cpus: "1"
+                  memory: 512M
+
+          cache:
+            <<: *defaults
+            image: redis:7.4.6-alpine3.21
+            healthcheck:
+              test: ["CMD-SHELL", "redis-cli ping | grep PONG"]
+              interval: 5s
+              timeout: 3s
+              retries: 10
+            deploy:
+              resources:
+                limits:
+                  cpus: "0.5"
+                  memory: 128M
+
+        volumes:
+          pgdata:
+    starter:
+      templateId: starter-docker-cache-aside
+    checks:
+    - id: has-cache
+      label: A Redis cache runs in the stack
+      type: has
+      has:
+        compose:
+          category: cache
+    - id: api-uses-cache
+      label: The api is configured to use it
+      type: has
+      has:
+        compose:
+          service: api
+          where:
+            environment.REDIS_URL:
+              contains: redis://
+    - id: same-database
+      label: The database pool is unchanged
+      type: has
+      has:
+        compose:
+          service: api
+          where:
+            environment.DB_POOL_SIZE: '4'
+    - id: fast-pages
+      label: Pages stay fast at 150 req/s
+      type: load
+      load:
+        target:
+          service: api
+          port: 3000
+          path: /products/{{rand}}
+        spec:
+          stages:
+          - durationSec: 10
+            target: 150
+          - durationSec: 30
+            target: 150
+          timeoutMs: 2000
+        expect:
+        - metric: p95_ms
+          op: lt
+          value: 100
+        - metric: error_rate
+          op: lt
+          value: 0.01
+    sources:
+    - title: 'Database Caching Strategies Using Redis: caching patterns (cache-aside)'
+      url: https://docs.aws.amazon.com/whitepapers/latest/database-caching-strategies-using-redis/caching-patterns.html
+    - title: 'Amazon Builders'' Library: Caching challenges and strategies'
+      url: https://aws.amazon.com/builders-library/caching-challenges-and-strategies/
+    - title: 'Docker Compose: services (healthcheck, deploy)'
+      url: https://docs.docker.com/reference/compose-file/services/
+- op: upsert
+  kind: challenge
+  id: docker-lb-health-checks
+  data:
+    provider: docker
+    level: advanced
+    title: A dead instance still gets traffic
+    summary: HAProxy keeps sending requests to a replica that crashed and is still warming up; make the load balancer use only replicas that are ready.
+    minutes: 20
+    tags:
+    - haproxy
+    - health-checks
+    - load-balancer
+    - resilience
+    runtime: local
+    problem: |
+      The catalog runs as two replicas behind HAProxy. When one crashes, Docker
+      restarts it within a second, which looks fine on the Deploy tab. But a fresh
+      replica needs 15 seconds of warm-up before it can serve, and until then it
+      answers 503 to everything. HAProxy doesn't know: it keeps sending every other
+      request to it, so customers see errors after every crash.
+
+      **Check my solution** crashes one replica in the middle of steady traffic
+      (60 requests per second). Make the load balancer route around a replica that
+      isn't ready, so customers never notice.
+    requirements:
+    - Keep two `api` replicas behind the `lb` service.
+    - 'A replica crash under load is survived: errors and latency stay at their normal level.'
+    - Fewer than 2% of requests fail during the whole run.
+    hints:
+    - The replica answers `GET /health` with 503 while it warms up and 200 once it can serve. Who should be asking that question?
+    - HAProxy only stops using a server it health-checks. In `lb/haproxy.cfg`, add `option httpchk GET /health` to the api backend and the `check` keyword to the `server-template` line, with a short `inter`.
+    - Checks need a second or two to notice. Close the gap with `retry-on conn-failure empty-response 503`, `retries 2` and `option redispatch 1`, so a request that hits a bad replica is retried on the other one.
+    solution: |
+      **Why.** A load balancer can only avoid a backend it knows is unhealthy. HAProxy
+      learns that from active health checks (`option httpchk` plus `check` on the
+      servers); a restarted replica stays out of rotation until it passes `rise`
+      checks. Retries with redispatch cover the moment before the first failed check.
+
+      **Steps** (in `lb/haproxy.cfg`, backend `api`):
+      1. `option httpchk GET /health` and `http-check expect status 200`.
+      2. `default-server inter 1s fall 1 rise 2`.
+      3. `retry-on conn-failure empty-response 503`, `retries 2`, `option redispatch 1`.
+      4. Add `check` to `server-template api- 2 api:3000 ...`.
+    solutionFiles:
+      lb/haproxy.cfg: |
+        # HAProxy in front of the api replicas.
+        global
+          log stdout format raw local0 notice
+
+        defaults
+          mode http
+          log global
+          timeout connect 2s
+          timeout client 30s
+          timeout server 10s
+
+        # Docker's embedded DNS: "api" resolves to every running api replica.
+        resolvers docker
+          nameserver dns 127.0.0.11:53
+          hold valid 1s
+
+        frontend web
+          bind :8080
+          default_backend api
+
+        backend api
+          balance roundrobin
+          # Only replicas whose /health answers 200 get traffic.
+          option httpchk GET /health
+          http-check expect status 200
+          default-server inter 1s fall 1 rise 2
+          # A request that still hits a bad replica is retried on another one.
+          retry-on conn-failure empty-response 503
+          retries 2
+          option redispatch 1
+          # One slot per replica, filled from DNS.
+          server-template api- 2 api:3000 check resolvers docker init-addr none
+    starter:
+      templateId: starter-docker-lb-health-checks
+    checks:
+    - id: two-replicas
+      label: Two api replicas
+      type: has
+      has:
+        compose:
+          service: api
+          where:
+            deploy.replicas:
+              min: 2
+    - id: survive-crash
+      label: A replica crash goes unnoticed
+      type: scenario
+      scenario:
+        target:
+          service: lb
+          port: 8080
+          path: /catalog/{{rand}}
+        spec:
+          stages:
+          - durationSec: 0
+            target: 60
+          - durationSec: 60
+            target: 60
+          timeoutMs: 2000
+        scenario:
+          id: kill_replica
+          target: api
+          atSec: 20
+          durationSec: 20
+        expect:
+          verdict: survived
+          metrics:
+          - metric: error_rate
+            op: lt
+            value: 0.02
+    sources:
+    - title: HAProxy 3.0 configuration manual (option httpchk, check, retry-on, option redispatch)
+      url: https://docs.haproxy.org/3.0/configuration.html
+    - title: 'Docker Compose: services (healthcheck, restart)'
+      url: https://docs.docker.com/reference/compose-file/services/
+- op: upsert
+  kind: challenge
+  id: docker-slow-dependency
+  data:
+    provider: docker
+    level: expert
+    title: A slow dependency takes everyone down
+    summary: When the pricing service slows to a crawl, every quote request piles up behind it; make the quote API degrade gracefully instead of failing.
+    minutes: 25
+    tags:
+    - timeouts
+    - circuit-breaker
+    - resilience
+    - node
+    runtime: local
+    problem: |
+      Every quote the API returns needs a price from the pricing service. Pricing
+      normally answers in a few milliseconds, but today its network adds a full
+      second to every answer. The quote API waits patiently, its pool of 20
+      connections to pricing fills up, and requests queue until customers give up:
+      one slow dependency has taken the whole API down.
+
+      A quote with the catalog list price is far better than no quote. **Check my
+      solution** adds one second of latency to pricing for 25 seconds while 80
+      requests per second hit the quote API. Pricing stays slow: change how the API
+      copes (its knobs are documented at the top of `api/server.js`).
+    requirements:
+    - The api stops waiting for pricing after a bounded time.
+    - 'While pricing is slow, quotes keep flowing: fewer than 1% errors and p99 under 1 s.'
+    - The API recovers on its own when pricing does (verdict degraded or better).
+    hints:
+    - 'Read the top of `api/server.js`: which knobs decide how long the API waits for pricing and what it does when pricing does not answer?'
+    - Waiting forever is the problem. Set `PRICING_TIMEOUT_MS` on the api (a few hundred milliseconds is plenty for a call that normally takes 3 ms).
+    - A timeout alone turns slow answers into errors. Also set `PRICE_FALLBACK=list-price`, and `CIRCUIT_BREAKER=on` so the API stops calling pricing for a moment once it keeps failing.
+    solution: |
+      **Why.** A client that waits without a timeout lets a slow dependency hold its
+      resources (connections, memory) until it runs out of them. Set client timeouts
+      from the dependency's real latency, turn the hard dependency into a soft one with
+      a fallback answer, and use a circuit breaker so that while the dependency keeps
+      failing, calls are skipped instead of each paying the timeout.
+
+      **Steps** (api environment):
+      1. `PRICING_TIMEOUT_MS: "250"`
+      2. `PRICE_FALLBACK: list-price`
+      3. `CIRCUIT_BREAKER: "on"`
+    solutionFiles:
+      compose.yaml: |
+        # Challenge: a slow dependency takes everyone down.
+        # The quote api asks the pricing service for a price on every request.
+        # Only the quote api is published.
+
+        x-defaults: &defaults
+          restart: unless-stopped
+          logging:
+            driver: json-file
+            options:
+              max-size: "10m"
+              max-file: "3"
+
+        services:
+          api:
+            <<: *defaults
+            build: ./api
+            init: true
+            ports:
+              - "3403:3000"
+            environment:
+              PRICING_URL: http://pricing:4000
+              PRICING_TIMEOUT_MS: "250"
+              PRICE_FALLBACK: list-price
+              CIRCUIT_BREAKER: "on"
+            depends_on:
+              - pricing
+            deploy:
+              resources:
+                limits:
+                  cpus: "1"
+                  memory: 128M
+
+          pricing:
+            <<: *defaults
+            build: ./pricing
+            init: true
+            deploy:
+              resources:
+                limits:
+                  cpus: "0.5"
+                  memory: 128M
+    starter:
+      templateId: starter-docker-slow-dependency
+    checks:
+    - id: has-timeout
+      label: The api has a timeout for pricing
+      type: has
+      has:
+        compose:
+          service: api
+          where:
+            environment.PRICING_TIMEOUT_MS:
+              min: 1
+    - id: degrade-gracefully
+      label: Quotes keep flowing while pricing is slow
+      type: scenario
+      scenario:
+        target:
+          service: api
+          port: 3000
+          path: /quote/{{rand}}
+        spec:
+          stages:
+          - durationSec: 0
+            target: 80
+          - durationSec: 65
+            target: 80
+          timeoutMs: 2000
+        scenario:
+          id: dependency_latency
+          target: pricing
+          atSec: 20
+          durationSec: 25
+          params:
+            delayMs: '1000'
+        expect:
+          verdict: degraded
+          metrics:
+          - metric: error_rate
+            op: lt
+            value: 0.01
+          - metric: p99_ms
+            op: lt
+            value: 1000
+    sources:
+    - title: 'AWS Well-Architected REL05-BP05: Set client timeouts'
+      url: https://docs.aws.amazon.com/wellarchitected/latest/reliability-pillar/rel_mitigate_interaction_failure_client_timeouts.html
+    - title: 'AWS Well-Architected REL05-BP01: Implement graceful degradation (circuit breaker)'
+      url: https://docs.aws.amazon.com/wellarchitected/latest/reliability-pillar/rel_mitigate_interaction_failure_graceful_degradation.html
+- op: upsert
+  kind: challenge
+  id: docker-cache-stampede
+  data:
+    provider: docker
+    level: expert
+    title: Cache stampede after a flush
+    summary: The cache shields a slow database until it is emptied; then every request rushes to the database at once. Refill a cold cache without a stampede.
+    minutes: 25
+    tags:
+    - redis
+    - postgres
+    - caching
+    - resilience
+    runtime: local
+    prerequisites:
+    - docker-cache-aside
+    problem: |
+      The home page shows 20 featured products. Their pages are cached in Redis for
+      five minutes, so the database (about 100 ms per page, two connections for the API)
+      normally sees almost nothing. Then the cache is flushed during peak traffic. In the
+      next second, 150 requests miss together, and every one of them asks the database
+      for a page that dozens of others are already loading. The queue explodes and
+      customers get timeouts until the cache is warm again.
+
+      **Check my solution** empties Redis in the middle of 150 requests per second.
+      Keep the database, the pool size and the cache lifetime as they are.
+    requirements:
+    - A cache flush under 150 requests per second causes fewer than 0.5% errors (requests time out after 1.5 s).
+    - The API recovers on its own (verdict degraded or better).
+    - 'The api keeps `DB_POOL_SIZE: "2"` and `CACHE_TTL_SEC: "300"`.'
+    hints:
+    - After the flush, how many database loads does the API start for the same product while the first one is still running?
+    - Only one request per product needs to go to the database; the others can wait for its answer. That is request coalescing.
+    - 'The API supports it: set `COALESCE_MISSES=true` on the api service.'
+    solution: |
+      **Why.** When a hot key is missing, every concurrent request for it becomes a
+      database query: a thundering herd that multiplies the load exactly when the cache
+      can't help. Request coalescing lets the first miss load the value while the
+      others wait for that same result, so a cold cache costs one query per key.
+
+      **Steps.** Set `COALESCE_MISSES: "true"` on the api service and run the check:
+      the flush now costs 20 queries instead of hundreds, and no request times out.
+    solutionFiles:
+      compose.yaml: |
+        # Challenge: cache stampede.
+        # The product API caches pages in Redis; the database behind it is slow
+        # and holds two connections for the API. Only the API is published.
+
+        x-defaults: &defaults
+          restart: unless-stopped
+          logging:
+            driver: json-file
+            options:
+              max-size: "10m"
+              max-file: "3"
+
+        services:
+          api:
+            <<: *defaults
+            build: ./api
+            init: true
+            ports:
+              - "3404:3000"
+            environment:
+              DATABASE_URL: postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB}
+              DB_POOL_SIZE: "2"
+              REDIS_URL: redis://cache:6379
+              CACHE_TTL_SEC: "300"
+              COALESCE_MISSES: "true"
+            depends_on:
+              db:
+                condition: service_healthy
+              cache:
+                condition: service_healthy
+            healthcheck:
+              test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:3000/health || exit 1"]
+              interval: 5s
+              timeout: 3s
+              retries: 5
+            deploy:
+              resources:
+                limits:
+                  cpus: "1"
+                  memory: 256M
+
+          db:
+            <<: *defaults
+            image: postgres:16.14-alpine
+            environment:
+              POSTGRES_USER: ${POSTGRES_USER}
+              POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+              POSTGRES_DB: ${POSTGRES_DB}
+            volumes:
+              - pgdata:/var/lib/postgresql/data
+              - ./db/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+            healthcheck:
+              test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+              interval: 5s
+              timeout: 5s
+              retries: 10
+            deploy:
+              resources:
+                limits:
+                  cpus: "1"
+                  memory: 512M
+
+          cache:
+            <<: *defaults
+            image: redis:7.4.6-alpine3.21
+            healthcheck:
+              test: ["CMD-SHELL", "redis-cli ping | grep PONG"]
+              interval: 5s
+              timeout: 3s
+              retries: 10
+            deploy:
+              resources:
+                limits:
+                  cpus: "0.5"
+                  memory: 128M
+
+        volumes:
+          pgdata:
+    starter:
+      templateId: starter-docker-cache-stampede
+    checks:
+    - id: same-limits
+      label: Pool size and cache lifetime unchanged
+      type: has
+      has:
+        compose:
+          service: api
+          where:
+            environment.DB_POOL_SIZE: '2'
+            environment.CACHE_TTL_SEC: '300'
+    - id: survive-flush
+      label: A cache flush causes no timeouts
+      type: scenario
+      scenario:
+        target:
+          service: api
+          port: 3000
+          path: /featured/{{rand}}
+        spec:
+          stages:
+          - durationSec: 10
+            target: 150
+          - durationSec: 35
+            target: 150
+          timeoutMs: 1500
+        scenario:
+          id: cache_flush
+          target: cache
+          atSec: 15
+          durationSec: 15
+        expect:
+          verdict: degraded
+          metrics:
+          - metric: error_rate
+            op: lt
+            value: 0.005
+    sources:
+    - title: 'Amazon Builders'' Library: Caching challenges and strategies (request coalescing, thundering herd)'
+      url: https://aws.amazon.com/builders-library/caching-challenges-and-strategies/
+    - title: 'Database Caching Strategies Using Redis: caching patterns'
+      url: https://docs.aws.amazon.com/whitepapers/latest/database-caching-strategies-using-redis/caching-patterns.html
+- op: upsert
+  kind: challenge
+  id: docker-noisy-neighbor
+  data:
+    provider: docker
+    level: advanced
+    title: A background job is starving the API
+    summary: A CPU-heavy report job runs inside the API process and freezes it for 400 ms every second; move it out without losing the reports.
+    minutes: 20
+    tags:
+    - node
+    - workers
+    - latency
+    - redis
+    runtime: local
+    problem: |
+      The orders API answers in about a millisecond, yet customers see slow pages. The
+      culprit shares its process: every second, a sales report job computes for 400 ms,
+      and a Node.js process runs JavaScript on one thread, so requests that arrive
+      during the job wait.
+
+      Give the job its own home so it can never freeze the API again. The reports still
+      matter: `GET /reports/latest` must keep answering 200 (it checks that a report
+      was produced in the last 10 seconds). The image already has two roles; read the
+      top of `app/server.js`.
+    requirements:
+    - At 50 requests per second, `GET /orders/:id` has p95 under 50 ms and fewer than 1% errors.
+    - '`GET /reports/latest` keeps answering 200.'
+    hints:
+    - Node runs your JavaScript on one thread. While the report job computes, which requests can the API answer?
+    - Turn the job off in the API with `RUN_JOBS=false`...
+    - '...and add a `worker` service built from `./app` with `ROLE=worker` and `REDIS_URL=redis://cache:6379` (no ports). Give it its own CPU limit so it cannot starve its neighbours either.'
+    solution: |
+      **Why.** CPU-bound work on the event loop blocks every other request in that
+      process. Run it elsewhere: a separate worker process (here a separate service
+      from the same image) with its own CPU limit, sharing results through Redis.
+
+      **Steps.**
+      1. On `api`, set `RUN_JOBS: "false"`.
+      2. Add a `worker` service: `build: ./app`, `environment: {ROLE: worker,
+         REDIS_URL: redis://cache:6379}`, `deploy.resources.limits.cpus: "0.5"`.
+    solutionFiles:
+      compose.yaml: |
+        # Challenge: a background job is starving the API.
+        # The orders api serves customers and also runs the sales report job in
+        # the same process. Redis holds the time of the last report.
+
+        x-defaults: &defaults
+          restart: unless-stopped
+          logging:
+            driver: json-file
+            options:
+              max-size: "10m"
+              max-file: "3"
+
+        services:
+          api:
+            <<: *defaults
+            build: ./app
+            init: true
+            ports:
+              - "3405:3000"
+            environment:
+              ROLE: api
+              RUN_JOBS: "false"
+              REDIS_URL: redis://cache:6379
+            depends_on:
+              cache:
+                condition: service_healthy
+            deploy:
+              resources:
+                limits:
+                  cpus: "1"
+                  memory: 128M
+
+          worker:
+            <<: *defaults
+            build: ./app
+            init: true
+            environment:
+              ROLE: worker
+              REDIS_URL: redis://cache:6379
+            depends_on:
+              cache:
+                condition: service_healthy
+            deploy:
+              resources:
+                limits:
+                  cpus: "0.5"
+                  memory: 128M
+
+          cache:
+            <<: *defaults
+            image: redis:7.4.6-alpine3.21
+            healthcheck:
+              test: ["CMD-SHELL", "redis-cli ping | grep PONG"]
+              interval: 5s
+              timeout: 3s
+              retries: 10
+            deploy:
+              resources:
+                limits:
+                  cpus: "0.5"
+                  memory: 128M
+    starter:
+      templateId: starter-docker-noisy-neighbor
+    checks:
+    - id: fast-orders
+      label: Orders answer quickly at 50 req/s
+      type: load
+      load:
+        target:
+          service: api
+          port: 3000
+          path: /orders/{{rand}}
+        spec:
+          stages:
+          - durationSec: 0
+            target: 50
+          - durationSec: 30
+            target: 50
+          timeoutMs: 2000
+        expect:
+        - metric: p95_ms
+          op: lt
+          value: 50
+        - metric: error_rate
+          op: lt
+          value: 0.01
+    - id: reports-fresh
+      label: Reports keep being produced
+      type: load
+      load:
+        target:
+          service: api
+          port: 3000
+          path: /reports/latest
+        spec:
+          stages:
+          - durationSec: 0
+            target: 5
+          - durationSec: 15
+            target: 5
+          timeoutMs: 2000
+        expect:
+        - metric: error_rate
+          op: lt
+          value: 0.01
+    sources:
+    - title: 'Node.js: Don''t block the event loop (or the worker pool)'
+      url: https://nodejs.org/en/learn/asynchronous-work/dont-block-the-event-loop
+    - title: Docker Compose deploy specification (resources)
+      url: https://docs.docker.com/reference/compose-file/deploy/

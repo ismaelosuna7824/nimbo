@@ -94,10 +94,11 @@ export function serviceRestarts(s: ComposeServiceStatus): number {
   return s.containers.reduce((n, c) => n + c.restarts, 0)
 }
 
-/** "db: 5432 was busy → published on 55432". */
+/** "db: 5432 was busy → published on 55432"; ranges as "3100-3101 … 49154-49155". */
 export function remapNote(r: PortRemap): string {
   const proto = r.protocol === "udp" ? "/udp" : ""
-  return `${r.service}: ${r.hostPort}${proto} was busy → published on ${r.port}${proto}`
+  const span = (first: number) => (r.count && r.count > 1 ? `${first}-${first + r.count - 1}` : `${first}`)
+  return `${r.service}: ${span(r.hostPort)}${proto} was busy → published on ${span(r.port)}${proto}`
 }
 
 // ---------------------------------------------------------------------------

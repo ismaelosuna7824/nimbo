@@ -158,6 +158,11 @@ func TestBreakingPoint(t *testing.T) {
 		{"errors", []secStat{steady(10, 20), {target: 20, resolved: 100, executed: 100, errors: 6, ok: 94, p95: 20}}, 20},
 		{"saturation counts", []secStat{steady(10, 20), {target: 20, resolved: 50, executed: 40, errors: 10, ok: 40, p95: 20}}, 20},
 		{"idle seconds and sub-floor jitter ignored", []secStat{{target: 0}, steady(5, 2), steady(10, 2), steady(15, 2), steady(20, 9)}, -1},
+		// A fast endpoint queueing a little at high load is healthy: 1 ms
+		// baseline, 12 ms p95 at 1466 req/s and no errors.
+		{"fast endpoint stays healthy", []secStat{steady(50, 1), steady(100, 1), steady(150, 1), steady(500, 11), steady(1000, 12), steady(1466, 12)}, -1},
+		{"fast endpoint saturating", []secStat{steady(50, 1), steady(100, 1), steady(150, 1), steady(1000, 12), steady(1200, 60), steady(1400, 300)}, 1200},
+		{"one slow second", []secStat{steady(10, 20), steady(20, 22), steady(30, 21), steady(40, 400), steady(50, 25)}, -1},
 	}
 	for _, c := range cases {
 		got := breakingPoint(c.secs)

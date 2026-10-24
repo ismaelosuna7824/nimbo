@@ -1,0 +1,839 @@
+description: Adds the AWS advanced challenges (RDS Multi-AZ with backups, CloudFront with an S3 origin access control)
+operations:
+  - op: upsert
+    kind: challenge
+    id: aws-rds-multi-az
+    data:
+      provider: aws
+      level: advanced
+      title: A resilient, private RDS database
+      summary: Move a public, single-AZ, unencrypted PostgreSQL instance to private subnets with Multi-AZ, backups, encryption and a managed password.
+      minutes: 50
+      tags: [rds, postgresql, multi-az, backups, encryption, secrets-manager]
+      prerequisites: [aws-vpc-multi-az-subnets, aws-alb-auto-scaling]
+      runtime: emulated
+      problem: |
+        The orders database was created in a hurry: an RDS for PostgreSQL
+        instance in the **public** subnets, `publicly_accessible`, with port
+        5432 open to the internet, one Availability Zone, no automated
+        backups, unencrypted storage and a master password passed in as a
+        plain Terraform variable (so it ends up in the state and in every
+        plan).
+
+        Amazon RDS has a managed answer for each of these. A **Multi-AZ DB
+        instance deployment** keeps a synchronous standby in another
+        Availability Zone and fails over to it automatically. **Automated
+        backups** (a retention period of 1–35 days) give point-in-time
+        restore. **Encryption at rest** must be chosen when the instance is
+        created. With `manage_master_user_password`, RDS generates the
+        master password, stores it in **AWS Secrets Manager** and rotates it,
+        so it never appears in your code. A **DB subnet group** places the
+        instance in private subnets of at least two zones, and a security
+        group lets only the application tier in.
+
+        Fix `main.tf` and `variables.tf`. The database deploys to the local
+        AWS emulator when you check.
+      requirements:
+        - "Two private subnets named `aws_subnet.private` (one per Availability Zone, no route to the internet gateway) hold the database: the `aws_db_subnet_group` uses them."
+        - "`aws_db_instance.main` sets `multi_az = true`, `backup_retention_period` of at least 7 days and `storage_encrypted = true`."
+        - "The instance is not publicly accessible (`publicly_accessible = false`)."
+        - "RDS manages the master password in Secrets Manager (`manage_master_user_password = true`); no `password` argument and no password variable remain."
+        - "Deleting the instance takes a final snapshot (`skip_final_snapshot = false` with a `final_snapshot_identifier`)."
+        - "`aws_security_group.db` allows 5432 only from `aws_security_group.app`; no `bp_open_ingress`, `bp_unencrypted_storage`, `bp_sensitive_not_marked` or `net_single_az` findings; the workflow deploys."
+      hints:
+        - "Add `aws_subnet.private` with `count = 2`, in `local.azs[count.index]`, with `map_public_ip_on_launch = false` and its own route table without an internet route; point `aws_db_subnet_group.db.subnet_ids` at `aws_subnet.private[*].id`."
+        - "In the database security group, replace `cidr_blocks = [\"0.0.0.0/0\"]` with `security_groups = [aws_security_group.app.id]`."
+        - "On the instance: `multi_az = true`, `backup_retention_period = 7`, `storage_encrypted = true`, `publicly_accessible = false`, `manage_master_user_password = true` (delete `password` and `var.db_password`), `skip_final_snapshot = false`, `final_snapshot_identifier = \"${local.name_prefix}-db-final\"`."
+      solution: |
+        Each finding maps to one RDS feature:
+
+        | Problem | Fix |
+        |---|---|
+        | Public subnets, public endpoint, 5432 open | private subnet group in two zones, `publicly_accessible = false`, SG from the app tier only |
+        | One Availability Zone | `multi_az = true` (synchronous standby, automatic failover) |
+        | No backups | `backup_retention_period = 7` + a backup window outside peak hours |
+        | Unencrypted storage | `storage_encrypted = true` (only possible at creation: an existing instance is migrated by restoring an encrypted snapshot copy) |
+        | Password in a variable | `manage_master_user_password = true`: RDS stores it in Secrets Manager and rotates it every 7 days by default |
+        | Data lost on delete | `skip_final_snapshot = false` + `final_snapshot_identifier`, and `deletion_protection` for production |
+
+        ```hcl
+        resource "aws_db_instance" "main" {
+          identifier                  = "${local.name_prefix}-db"
+          engine                      = "postgres"
+          engine_version              = "16"
+          instance_class              = var.instance_class
+          allocated_storage           = 20
+          db_subnet_group_name        = aws_db_subnet_group.db.name
+          vpc_security_group_ids      = [aws_security_group.db.id]
+          publicly_accessible         = false
+          multi_az                    = true
+          storage_encrypted           = true
+          backup_retention_period     = 7
+          manage_master_user_password = true
+          skip_final_snapshot         = false
+          final_snapshot_identifier   = "${local.name_prefix}-db-final"
+        }
+        ```
+
+        Note: the Multi-AZ standby can't serve reads. If you need read
+        scaling, add read replicas or use a Multi-AZ DB cluster. Multi-AZ
+        roughly doubles the instance cost: a reasonable trade-off for
+        production, often skipped for development environments.
+      solutionFiles:
+        main.tf: |
+          data "aws_availability_zones" "available" {
+            state = "available"
+          }
+
+          locals {
+            azs = slice(data.aws_availability_zones.available.names, 0, 2)
+          }
+
+          resource "aws_vpc" "main" {
+            cidr_block           = var.vpc_cidr
+            enable_dns_support   = true
+            enable_dns_hostnames = true
+            tags                 = { Name = local.name_prefix }
+          }
+
+          resource "aws_internet_gateway" "main" {
+            vpc_id = aws_vpc.main.id
+            tags   = { Name = local.name_prefix }
+          }
+
+          resource "aws_subnet" "public" {
+            count                   = length(local.azs)
+            vpc_id                  = aws_vpc.main.id
+            cidr_block              = cidrsubnet(var.vpc_cidr, 8, count.index)
+            availability_zone       = local.azs[count.index]
+            map_public_ip_on_launch = true
+            tags                    = { Name = "${local.name_prefix}-public-${local.azs[count.index]}" }
+          }
+
+          resource "aws_route_table" "public" {
+            vpc_id = aws_vpc.main.id
+            tags   = { Name = "${local.name_prefix}-public" }
+          }
+
+          resource "aws_route" "internet" {
+            route_table_id         = aws_route_table.public.id
+            destination_cidr_block = "0.0.0.0/0"
+            gateway_id             = aws_internet_gateway.main.id
+          }
+
+          resource "aws_route_table_association" "public" {
+            count          = length(local.azs)
+            subnet_id      = aws_subnet.public[count.index].id
+            route_table_id = aws_route_table.public.id
+          }
+
+          # Database tier: private subnets in two zones, no internet route.
+          resource "aws_subnet" "private" {
+            count                   = length(local.azs)
+            vpc_id                  = aws_vpc.main.id
+            cidr_block              = cidrsubnet(var.vpc_cidr, 8, count.index + 20)
+            availability_zone       = local.azs[count.index]
+            map_public_ip_on_launch = false
+            tags                    = { Name = "${local.name_prefix}-private-${local.azs[count.index]}" }
+          }
+
+          resource "aws_route_table" "private" {
+            vpc_id = aws_vpc.main.id
+            tags   = { Name = "${local.name_prefix}-private" }
+          }
+
+          resource "aws_route_table_association" "private" {
+            count          = length(local.azs)
+            subnet_id      = aws_subnet.private[count.index].id
+            route_table_id = aws_route_table.private.id
+          }
+
+          # The application tier (its instances or tasks join this group).
+          resource "aws_security_group" "app" {
+            name        = "${local.name_prefix}-app"
+            description = "Application tier"
+            vpc_id      = aws_vpc.main.id
+          }
+
+          resource "aws_security_group" "db" {
+            name        = "${local.name_prefix}-db"
+            description = "PostgreSQL from the application tier only"
+            vpc_id      = aws_vpc.main.id
+
+            ingress {
+              description     = "PostgreSQL from the app tier"
+              from_port       = 5432
+              to_port         = 5432
+              protocol        = "tcp"
+              security_groups = [aws_security_group.app.id]
+            }
+          }
+
+          resource "aws_db_subnet_group" "db" {
+            name       = "${local.name_prefix}-db"
+            subnet_ids = aws_subnet.private[*].id
+          }
+
+          resource "aws_db_instance" "main" {
+            identifier             = "${local.name_prefix}-db"
+            engine                 = "postgres"
+            engine_version         = "16"
+            instance_class         = var.instance_class
+            allocated_storage      = 20
+            storage_type           = "gp3"
+            db_name                = "orders"
+            username               = "orders_admin"
+            db_subnet_group_name   = aws_db_subnet_group.db.name
+            vpc_security_group_ids = [aws_security_group.db.id]
+            publicly_accessible    = false
+
+            # Synchronous standby in a second Availability Zone.
+            multi_az = true
+
+            # Encrypted at rest (AWS managed KMS key unless kms_key_id is set).
+            storage_encrypted = true
+
+            # Daily automated backups kept 7 days: point-in-time restore.
+            backup_retention_period = 7
+            backup_window           = "03:00-04:00"
+            maintenance_window      = "sun:04:30-sun:05:30"
+            copy_tags_to_snapshot   = true
+
+            # RDS generates the password, keeps it in Secrets Manager and
+            # rotates it.
+            manage_master_user_password = true
+
+            deletion_protection       = var.deletion_protection
+            skip_final_snapshot       = false
+            final_snapshot_identifier = "${local.name_prefix}-db-final"
+          }
+        variables.tf: |
+          variable "project" {
+            type        = string
+            default     = "learn"
+            description = "Project name: the first part of every resource name and the Project tag."
+
+            validation {
+              condition     = can(regex("^[a-z][a-z0-9-]{1,19}$", var.project))
+              error_message = "project must be 2-20 lowercase letters, digits or hyphens, starting with a letter."
+            }
+          }
+
+          variable "environment" {
+            type        = string
+            default     = "dev"
+            description = "Deployment environment (dev, staging, prod, …): part of every resource name and the Environment tag."
+
+            validation {
+              condition     = can(regex("^[a-z][a-z0-9-]{0,11}$", var.environment))
+              error_message = "environment must be 1-12 lowercase letters, digits or hyphens, starting with a letter."
+            }
+          }
+
+          variable "aws_region" {
+            type        = string
+            default     = "us-east-1"
+            description = "AWS region to deploy into."
+          }
+
+          variable "vpc_cidr" {
+            type        = string
+            default     = "10.0.0.0/16"
+            description = "CIDR block of the VPC; subnets are /24 slices of it."
+          }
+
+          variable "instance_class" {
+            type        = string
+            default     = "db.t4g.micro"
+            description = "RDS instance class of the database."
+          }
+
+          variable "deletion_protection" {
+            type        = bool
+            default     = false
+            description = "Refuse to delete the database (turn on for production)."
+          }
+        outputs.tf: |
+          output "db_endpoint" {
+            value       = aws_db_instance.main.address
+            description = "Host name of the database (reachable from the app tier only)."
+          }
+
+          output "db_master_secret_arn" {
+            value       = aws_db_instance.main.master_user_secret[0].secret_arn
+            description = "ARN of the Secrets Manager secret that holds the master password."
+          }
+      starter:
+        kind: terraform
+        cloud: aws
+        files:
+          versions.tf: &aws_versions |
+            terraform {
+              required_version = ">= 1.6"
+
+              required_providers {
+                aws = {
+                  source  = "hashicorp/aws"
+                  version = "~> 6.0"
+                }
+              }
+            }
+          providers.tf: &aws_providers |
+            provider "aws" {
+              region = var.aws_region
+
+              default_tags {
+                tags = local.common_tags
+              }
+            }
+          locals.tf: &aws_locals |
+            locals {
+              name_prefix = "${var.project}-${var.environment}"
+              common_tags = {
+                Project     = var.project
+                Environment = var.environment
+                ManagedBy   = "nimbo"
+              }
+            }
+          variables.tf: |
+            variable "project" {
+              type        = string
+              default     = "learn"
+              description = "Project name: the first part of every resource name and the Project tag."
+
+              validation {
+                condition     = can(regex("^[a-z][a-z0-9-]{1,19}$", var.project))
+                error_message = "project must be 2-20 lowercase letters, digits or hyphens, starting with a letter."
+              }
+            }
+
+            variable "environment" {
+              type        = string
+              default     = "dev"
+              description = "Deployment environment (dev, staging, prod, …): part of every resource name and the Environment tag."
+
+              validation {
+                condition     = can(regex("^[a-z][a-z0-9-]{0,11}$", var.environment))
+                error_message = "environment must be 1-12 lowercase letters, digits or hyphens, starting with a letter."
+              }
+            }
+
+            variable "aws_region" {
+              type        = string
+              default     = "us-east-1"
+              description = "AWS region to deploy into."
+            }
+
+            variable "vpc_cidr" {
+              type        = string
+              default     = "10.0.0.0/16"
+              description = "CIDR block of the VPC; subnets are /24 slices of it."
+            }
+
+            variable "instance_class" {
+              type        = string
+              default     = "db.t4g.micro"
+              description = "RDS instance class of the database."
+            }
+
+            variable "db_password" {
+              type        = string
+              default     = "change-me-please"
+              description = "Master password of the database."
+            }
+          main.tf: |
+            data "aws_availability_zones" "available" {
+              state = "available"
+            }
+
+            locals {
+              azs = slice(data.aws_availability_zones.available.names, 0, 2)
+            }
+
+            resource "aws_vpc" "main" {
+              cidr_block           = var.vpc_cidr
+              enable_dns_support   = true
+              enable_dns_hostnames = true
+              tags                 = { Name = local.name_prefix }
+            }
+
+            resource "aws_internet_gateway" "main" {
+              vpc_id = aws_vpc.main.id
+              tags   = { Name = local.name_prefix }
+            }
+
+            resource "aws_subnet" "public" {
+              count                   = length(local.azs)
+              vpc_id                  = aws_vpc.main.id
+              cidr_block              = cidrsubnet(var.vpc_cidr, 8, count.index)
+              availability_zone       = local.azs[count.index]
+              map_public_ip_on_launch = true
+              tags                    = { Name = "${local.name_prefix}-public-${local.azs[count.index]}" }
+            }
+
+            resource "aws_route_table" "public" {
+              vpc_id = aws_vpc.main.id
+              tags   = { Name = "${local.name_prefix}-public" }
+            }
+
+            resource "aws_route" "internet" {
+              route_table_id         = aws_route_table.public.id
+              destination_cidr_block = "0.0.0.0/0"
+              gateway_id             = aws_internet_gateway.main.id
+            }
+
+            resource "aws_route_table_association" "public" {
+              count          = length(local.azs)
+              subnet_id      = aws_subnet.public[count.index].id
+              route_table_id = aws_route_table.public.id
+            }
+
+            # The application tier (its instances or tasks join this group).
+            resource "aws_security_group" "app" {
+              name        = "${local.name_prefix}-app"
+              description = "Application tier"
+              vpc_id      = aws_vpc.main.id
+            }
+
+            # PostgreSQL open to the whole internet.
+            resource "aws_security_group" "db" {
+              name        = "${local.name_prefix}-db"
+              description = "PostgreSQL"
+              vpc_id      = aws_vpc.main.id
+
+              ingress {
+                description = "PostgreSQL"
+                from_port   = 5432
+                to_port     = 5432
+                protocol    = "tcp"
+                cidr_blocks = ["0.0.0.0/0"]
+              }
+            }
+
+            # The database sits in the public subnets.
+            resource "aws_db_subnet_group" "db" {
+              name       = "${local.name_prefix}-db"
+              subnet_ids = aws_subnet.public[*].id
+            }
+
+            resource "aws_db_instance" "main" {
+              identifier              = "${local.name_prefix}-db"
+              engine                  = "postgres"
+              engine_version          = "16"
+              instance_class          = var.instance_class
+              allocated_storage       = 20
+              storage_type            = "gp3"
+              db_name                 = "orders"
+              username                = "orders_admin"
+              password                = var.db_password
+              db_subnet_group_name    = aws_db_subnet_group.db.name
+              vpc_security_group_ids  = [aws_security_group.db.id]
+              publicly_accessible     = true
+              multi_az                = false
+              storage_encrypted       = false
+              backup_retention_period = 0
+              skip_final_snapshot     = true
+            }
+          outputs.tf: |
+            output "db_endpoint" {
+              value       = aws_db_instance.main.address
+              description = "Host name of the database."
+            }
+      checks:
+        - id: valid
+          label: The configuration is valid
+          type: validate
+        - id: private-subnet-group
+          label: "The DB subnet group uses the private subnets (aws_subnet.private)"
+          type: has
+          has:
+            terraform:
+              type: aws_db_subnet_group
+              where:
+                subnet_ids: {ref: aws_subnet.private}
+        - id: multi-az
+          label: Multi-AZ deployment with a standby in another zone
+          type: has
+          has:
+            terraform:
+              type: aws_db_instance
+              where:
+                multi_az: true
+        - id: backups
+          label: Automated backups are kept at least 7 days
+          type: has
+          has:
+            terraform:
+              type: aws_db_instance
+              where:
+                backup_retention_period: {min: 7}
+        - id: encrypted
+          label: Storage is encrypted at rest
+          type: has
+          has:
+            terraform:
+              type: aws_db_instance
+              where:
+                storage_encrypted: true
+        - id: not-public
+          label: The instance is not publicly accessible
+          type: has
+          has:
+            terraform:
+              type: aws_db_instance
+              where:
+                publicly_accessible: false
+        - id: managed-password
+          label: RDS manages the master password in Secrets Manager
+          type: has
+          has:
+            terraform:
+              type: aws_db_instance
+              where:
+                manage_master_user_password: true
+        - id: no-password-argument
+          label: No password in the Terraform code
+          type: has
+          has:
+            terraform:
+              type: aws_db_instance
+              where:
+                password: {exists: true}
+              count: {max: 0}
+        - id: final-snapshot
+          label: Deleting the database keeps a final snapshot
+          type: has
+          has:
+            terraform:
+              type: aws_db_instance
+              where:
+                skip_final_snapshot: false
+                final_snapshot_identifier: {exists: true}
+        - id: db-from-app-only
+          label: PostgreSQL is reachable from the app tier's security group only
+          type: has
+          has:
+            terraform:
+              type: aws_security_group
+              name: db
+              where:
+                ingress.security_groups: {ref: aws_security_group.app}
+        - id: findings
+          label: No open database port, unencrypted storage, unmarked secret or single-zone finding
+          type: rules_clean
+          rules_clean:
+            codes: [bp_open_ingress, bp_unencrypted_storage, bp_sensitive_not_marked, net_single_az]
+            minSeverity: warning
+        - id: deploy
+          label: The database deploys to the local AWS emulator
+          type: deploy
+      sources:
+        - title: Multi-AZ DB instance deployments for Amazon RDS
+          url: https://docs.aws.amazon.com/AmazonRDS/latest/UserGuide/Concepts.MultiAZSingleStandby.html
+        - title: Introduction to backups (Amazon RDS)
+          url: https://docs.aws.amazon.com/AmazonRDS/latest/UserGuide/USER_WorkingWithAutomatedBackups.html
+        - title: Encrypting Amazon RDS resources
+          url: https://docs.aws.amazon.com/AmazonRDS/latest/UserGuide/Overview.Encryption.html
+        - title: Password management with Amazon RDS and AWS Secrets Manager
+          url: https://docs.aws.amazon.com/AmazonRDS/latest/UserGuide/rds-secrets-manager.html
+        - title: Working with a DB instance in a VPC
+          url: https://docs.aws.amazon.com/AmazonRDS/latest/UserGuide/USER_VPC.WorkingWithRDSInstanceinaVPC.html
+        - title: Controlling access with security groups (Amazon RDS)
+          url: https://docs.aws.amazon.com/AmazonRDS/latest/UserGuide/Overview.RDSSecurityGroups.html
+        - title: "Terraform AWS provider: aws_db_instance"
+          url: https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/db_instance
+
+  - op: upsert
+    kind: challenge
+    id: aws-cloudfront-s3-oac
+    data:
+      provider: aws
+      level: advanced
+      title: Serve a private S3 site through CloudFront
+      summary: Turn a public S3 website into a private bucket served only by CloudFront over HTTPS with origin access control.
+      minutes: 45
+      tags: [cloudfront, s3, origin-access-control, https, edge]
+      prerequisites: [aws-private-s3-bucket]
+      runtime: emulated
+      starter:
+        templateId: aws-static-site
+      problem: |
+        The marketing site is the **Static website** template: an S3 bucket
+        with website hosting turned on, Block Public Access switched off and a
+        policy that lets anyone on the internet read every object. It works,
+        but the bucket is public, the website endpoint speaks HTTP only, and
+        every visitor in the world fetches from one Region.
+
+        **Amazon CloudFront** fixes all three. The distribution caches the
+        site at edge locations and serves it over HTTPS. With **origin access
+        control (OAC)** CloudFront signs its requests to the S3 REST endpoint
+        (SigV4), and the bucket policy allows `s3:GetObject` only to the
+        `cloudfront.amazonaws.com` service principal **for this
+        distribution** (condition on `AWS:SourceArn`). The bucket can then
+        block all public access. OAC is the recommended replacement for the
+        legacy origin access identity (OAI), and it works with the bucket's
+        *REST* endpoint, not its website endpoint.
+
+        Rework `main.tf` and `outputs.tf`. When you check, Nimbo deploys the
+        distribution, the bucket and its policy to the local AWS emulator.
+      requirements:
+        - "The bucket is private: no `aws_s3_bucket_website_configuration`, and an `aws_s3_bucket_public_access_block` with all four settings on."
+        - "An `aws_cloudfront_origin_access_control` for S3 that always signs requests with SigV4 (`origin_access_control_origin_type = \"s3\"`, `signing_behavior = \"always\"`, `signing_protocol = \"sigv4\"`)."
+        - "An `aws_cloudfront_distribution` named `site` whose origin is the bucket's REST endpoint (`bucket_regional_domain_name`) with that origin access control, `default_root_object = \"index.html\"`, and viewers redirected to HTTPS (`redirect-to-https` or `https-only`)."
+        - "The bucket policy (inline `jsonencode`) allows `s3:GetObject` only to the `cloudfront.amazonaws.com` service principal, with an `AWS:SourceArn` condition referencing the distribution."
+        - "No `bp_public_bucket` or `bp_unencrypted_storage` findings, and the workflow deploys."
+      hints:
+        - "Delete the website configuration and the public-read statement first, set all four Block Public Access settings to `true`, and drop the `Public = \"true\"` tag: the bucket is no longer public on purpose."
+        - "The distribution's `origin` block takes `domain_name = aws_s3_bucket.site.bucket_regional_domain_name`, an `origin_id` of your choice and `origin_access_control_id = aws_cloudfront_origin_access_control.site.id`. `default_cache_behavior` needs `target_origin_id` (the same id), `allowed_methods`/`cached_methods` (`GET`, `HEAD`), `viewer_protocol_policy` and a cache policy."
+        - "Bucket policy statement: `Principal = { Service = \"cloudfront.amazonaws.com\" }`, `Action = \"s3:GetObject\"`, `Resource = \"${aws_s3_bucket.site.arn}/*\"`, `Condition = { StringEquals = { \"AWS:SourceArn\" = aws_cloudfront_distribution.site.arn } }`. A distribution also needs `restrictions` and `viewer_certificate { cloudfront_default_certificate = true }` blocks."
+      solution: |
+        The bucket stops being a website and becomes a private origin:
+
+        1. Remove `aws_s3_bucket_website_configuration` and the public-read
+           policy; Block Public Access all `true`; ACLs disabled with
+           `BucketOwnerEnforced`.
+        2. `aws_cloudfront_origin_access_control.site` – S3, `always`,
+           `sigv4`.
+        3. `aws_cloudfront_distribution.site` – origin =
+           `bucket_regional_domain_name` + OAC; `default_root_object =
+           "index.html"`; `viewer_protocol_policy = "redirect-to-https"`;
+           the AWS managed `CachingOptimized` cache policy; S3's 403 for a
+           missing key is mapped to a 404 with `/error.html`.
+        4. Bucket policy: `s3:GetObject` for `cloudfront.amazonaws.com`
+           when `AWS:SourceArn` equals the distribution's ARN, so another
+           distribution (even in another account) can't read the bucket.
+
+        ```hcl
+        resource "aws_cloudfront_origin_access_control" "site" {
+          name                              = local.name_prefix
+          origin_access_control_origin_type = "s3"
+          signing_behavior                  = "always"
+          signing_protocol                  = "sigv4"
+        }
+        ```
+
+        Why: the S3 security best practices say a bucket should not be
+        public unless it must be; CloudFront adds TLS, caching close to
+        users and a single place to attach AWS WAF. For a custom domain, add
+        an ACM certificate (in `us-east-1`) and `aliases`.
+      solutionFiles:
+        main.tf: |
+          locals {
+            s3_origin_id = "${local.name_prefix}-s3"
+            # ID of the AWS managed cache policy "CachingOptimized".
+            caching_optimized_policy_id = "658327ea-f89d-4fab-a63d-7e88639e58f6"
+          }
+
+          resource "aws_s3_bucket" "site" {
+            bucket_prefix = "${local.name_prefix}-"
+            force_destroy = true
+          }
+
+          resource "aws_s3_bucket_server_side_encryption_configuration" "site" {
+            bucket = aws_s3_bucket.site.id
+
+            rule {
+              apply_server_side_encryption_by_default {
+                sse_algorithm = "AES256"
+              }
+            }
+          }
+
+          # Private: only CloudFront reads the objects (bucket policy below).
+          resource "aws_s3_bucket_public_access_block" "site" {
+            bucket                  = aws_s3_bucket.site.id
+            block_public_acls       = true
+            block_public_policy     = true
+            ignore_public_acls      = true
+            restrict_public_buckets = true
+          }
+
+          resource "aws_s3_bucket_ownership_controls" "site" {
+            bucket = aws_s3_bucket.site.id
+
+            rule {
+              object_ownership = "BucketOwnerEnforced"
+            }
+          }
+
+          resource "aws_s3_object" "index" {
+            bucket       = aws_s3_bucket.site.id
+            key          = "index.html"
+            content      = var.index_html
+            content_type = "text/html"
+          }
+
+          resource "aws_s3_object" "error" {
+            bucket       = aws_s3_bucket.site.id
+            key          = "error.html"
+            content      = "<!doctype html><html><body><h1>Page not found</h1></body></html>"
+            content_type = "text/html"
+          }
+
+          # CloudFront signs every request to the bucket's REST endpoint.
+          resource "aws_cloudfront_origin_access_control" "site" {
+            name                              = local.name_prefix
+            description                       = "Signed requests from the site distribution to its bucket"
+            origin_access_control_origin_type = "s3"
+            signing_behavior                  = "always"
+            signing_protocol                  = "sigv4"
+          }
+
+          resource "aws_cloudfront_distribution" "site" {
+            enabled             = true
+            comment             = "${local.name_prefix} static site"
+            default_root_object = "index.html"
+            price_class         = "PriceClass_100"
+
+            origin {
+              domain_name              = aws_s3_bucket.site.bucket_regional_domain_name
+              origin_id                = local.s3_origin_id
+              origin_access_control_id = aws_cloudfront_origin_access_control.site.id
+            }
+
+            default_cache_behavior {
+              target_origin_id       = local.s3_origin_id
+              viewer_protocol_policy = "redirect-to-https"
+              allowed_methods        = ["GET", "HEAD"]
+              cached_methods         = ["GET", "HEAD"]
+              compress               = true
+              cache_policy_id        = local.caching_optimized_policy_id
+            }
+
+            # S3 answers 403 for a missing key when the caller can't list the
+            # bucket: show the error page with a 404.
+            custom_error_response {
+              error_code         = 403
+              response_code      = 404
+              response_page_path = "/error.html"
+            }
+
+            restrictions {
+              geo_restriction {
+                restriction_type = "none"
+              }
+            }
+
+            viewer_certificate {
+              cloudfront_default_certificate = true
+            }
+          }
+
+          # Only this distribution may read the objects.
+          resource "aws_s3_bucket_policy" "cloudfront" {
+            bucket = aws_s3_bucket.site.id
+            policy = jsonencode({
+              Version = "2012-10-17"
+              Statement = [{
+                Sid       = "AllowCloudFrontServicePrincipalReadOnly"
+                Effect    = "Allow"
+                Principal = { Service = "cloudfront.amazonaws.com" }
+                Action    = "s3:GetObject"
+                Resource  = "${aws_s3_bucket.site.arn}/*"
+                Condition = {
+                  StringEquals = { "AWS:SourceArn" = aws_cloudfront_distribution.site.arn }
+                }
+              }]
+            })
+            depends_on = [aws_s3_bucket_public_access_block.site]
+          }
+        outputs.tf: |
+          output "bucket" {
+            value       = aws_s3_bucket.site.bucket
+            description = "Name of the private bucket that holds the site."
+          }
+
+          output "site_url" {
+            value       = "https://${aws_cloudfront_distribution.site.domain_name}"
+            description = "HTTPS URL of the site (served by CloudFront)."
+          }
+      checks:
+        - id: valid
+          label: The configuration is valid
+          type: validate
+        - id: no-website-endpoint
+          label: The bucket is no longer an S3 website
+          type: has
+          has:
+            terraform:
+              type: aws_s3_bucket_website_configuration
+              count: {max: 0}
+        - id: block-public-access
+          label: All four Block Public Access settings are on
+          type: has
+          has:
+            terraform:
+              type: aws_s3_bucket_public_access_block
+              where:
+                block_public_acls: true
+                block_public_policy: true
+                ignore_public_acls: true
+                restrict_public_buckets: true
+        - id: origin-access-control
+          label: An origin access control signs every S3 request (SigV4)
+          type: has
+          has:
+            terraform:
+              type: aws_cloudfront_origin_access_control
+              where:
+                origin_access_control_origin_type: s3
+                signing_behavior: always
+                signing_protocol: sigv4
+        - id: origin-uses-oac
+          label: The distribution's S3 origin uses the origin access control
+          type: has
+          has:
+            terraform:
+              type: aws_cloudfront_distribution
+              name: site
+              where:
+                origin.domain_name: {ref: aws_s3_bucket}
+                origin.origin_access_control_id: {ref: aws_cloudfront_origin_access_control}
+        - id: https-viewers
+          label: Viewers are redirected to HTTPS
+          type: has
+          has:
+            terraform:
+              type: aws_cloudfront_distribution
+              where:
+                default_cache_behavior.viewer_protocol_policy: {in: [redirect-to-https, https-only]}
+        - id: root-object
+          label: "/ serves index.html"
+          type: has
+          has:
+            terraform:
+              type: aws_cloudfront_distribution
+              where:
+                default_root_object: index.html
+        - id: policy-for-distribution
+          label: The bucket policy lets only this distribution read objects
+          type: has
+          has:
+            terraform:
+              type: aws_s3_bucket_policy
+              where:
+                policy: {contains: "cloudfront.amazonaws.com", ref: aws_cloudfront_distribution.site}
+        - id: storage-rules
+          label: No public-bucket or unencrypted-storage findings
+          type: rules_clean
+          rules_clean:
+            codes: [bp_public_bucket, bp_unencrypted_storage]
+            minSeverity: info
+        - id: deploy
+          label: The site deploys to the local AWS emulator
+          type: deploy
+      sources:
+        - title: Restrict access to an Amazon S3 origin
+          url: https://docs.aws.amazon.com/AmazonCloudFront/latest/DeveloperGuide/private-content-restricting-access-to-s3.html
+        - title: Use managed cache policies
+          url: https://docs.aws.amazon.com/AmazonCloudFront/latest/DeveloperGuide/using-managed-cache-policies.html
+        - title: Require HTTPS for communication between viewers and CloudFront
+          url: https://docs.aws.amazon.com/AmazonCloudFront/latest/DeveloperGuide/using-https-viewers-to-cloudfront.html
+        - title: Security best practices for Amazon S3
+          url: https://docs.aws.amazon.com/AmazonS3/latest/userguide/security-best-practices.html
+        - title: Blocking public access to your Amazon S3 storage
+          url: https://docs.aws.amazon.com/AmazonS3/latest/userguide/access-control-block-public-access.html
+        - title: "Terraform AWS provider: aws_cloudfront_origin_access_control"
+          url: https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/cloudfront_origin_access_control
+        - title: "Terraform AWS provider: aws_cloudfront_distribution"
+          url: https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/cloudfront_distribution

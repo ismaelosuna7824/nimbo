@@ -1,5 +1,9 @@
 import type {
   AddServiceRequest,
+  CapacityPlan,
+  CapacityRequest,
+  ChallengeResult,
+  ChallengeView,
   ComposeConnectRecipe,
   ComposeConnectRequest,
   ComposeLogLine,
@@ -26,7 +30,6 @@ import type {
   KubeConnectRecipe,
   KubeConnectRequest,
   KubeFields,
-  KubeReadiness,
   KubeObjectPatch,
   KubeRendered,
   KubeSchema,
@@ -34,6 +37,7 @@ import type {
   KubeRunRequest,
   KubeStatus,
   WorkflowKind,
+  WorkflowReadiness,
   CodeProblem,
   CodeWorkspace,
   FunctionSignature,
@@ -61,6 +65,7 @@ import type {
   LoadTarget,
   LoadTestRun,
   LoadTestSpec,
+  ScenarioCatalog,
   McpCatalog,
   McpCommand,
   NetworkSummary,
@@ -85,6 +90,13 @@ import type {
   WorkflowFile,
   WorkflowFileContent,
   WorkflowSummary,
+  ChallengeDetail,
+  ChallengeFilter,
+  ChallengeProgress,
+  ChallengeSummary,
+  LearnOverview,
+  LearnProviderId,
+  Roadmap,
 } from "./types"
 
 export class ApiError extends Error {
@@ -268,6 +280,17 @@ export const api = {
   loadTests: (id: string) => request<LoadTestRun[]>("GET", `/workflows/${id}/loadtests`),
   loadTest: (runId: string) => request<LoadTestRun>("GET", `/loadtests/${runId}`),
   stopLoadTest: (runId: string) => request<void>("POST", `/loadtests/${runId}/stop`),
+  /** Incident scenarios a load test of the workflow can inject (active environment). */
+  scenarios: (id: string) => request<ScenarioCatalog>("GET", `/workflows/${id}/scenarios`),
+
+  // capacity plans sized from load tests (latest plan kept per environment)
+  planCapacity: (id: string, req: CapacityRequest) => request<CapacityPlan>("POST", `/workflows/${id}/capacity-plan`, req),
+  /** The environment's latest plan ("" / absent: the active one); null when none. */
+  capacityPlan: (id: string, environment?: string) =>
+    request<CapacityPlan | null>("GET", `/workflows/${id}/capacity-plan${qs({ environment })}`),
+  /** Writes the environment's latest plan (replicas, HPA, requests/limits) into its own files. */
+  applyCapacityPlan: (id: string, body: { environment?: string; services?: string[] }) =>
+    request<{ workflow: Workflow; applied: string[] }>("POST", `/workflows/${id}/capacity-plan/apply`, body),
 
   // connections library (secrets are never returned; see Connection.secretsSet)
   listConnections: () => request<Connection[]>("GET", "/connections"),
@@ -361,8 +384,6 @@ export const api = {
     request<{ workflow: Workflow; nodeIds: string[] }>("POST", `/workflows/${id}/kubernetes/catalog`, body),
   kubernetesRender: (id: string, environment?: string) =>
     request<KubeRendered>("GET", `/workflows/${id}/kubernetes/render${qs({ environment })}`),
-  /** Production readiness checklist of every environment (each rendered on its own). */
-  kubernetesReadiness: (id: string) => request<KubeReadiness>("GET", `/workflows/${id}/kubernetes/readiness`),
   /** Where each field of an object is written (manifest, Kustomize patch, Helm values key) or why it is read-only. */
   kubernetesFields: (id: string, node: string) => request<KubeFields>("GET", `/workflows/${id}/kubernetes/fields${qs({ node })}`),
   patchKubernetesObject: (id: string, patch: KubeObjectPatch) =>
@@ -395,6 +416,8 @@ export const api = {
   monitoring: (id: string) => request<MonitoringSummary>("GET", `/workflows/${id}/monitoring`),
   /** Adds Prometheus, Grafana and alerting (again: regenerates the generated files, never duplicates; thresholds are kept). */
   addMonitoring: (id: string, body?: MonitoringRequest) => request<MonitoringResult>("POST", `/workflows/${id}/monitoring`, body),
+  /** Production readiness of every environment of a docker or Kubernetes workflow (each opened on its own). */
+  readiness: (id: string) => request<WorkflowReadiness>("GET", `/workflows/${id}/readiness`),
 
   // environments of docker and Kubernetes workflows (files: overlays, values files, compose overrides, .env.<env>)
   listEnvironments: (id: string) => request<EnvironmentsView>("GET", `/workflows/${id}/environments`),
@@ -418,6 +441,26 @@ export const api = {
     request<Workflow>("PUT", `/workflows/${id}/environments/${encodeURIComponent(env)}/variables/${encodeURIComponent(key)}`, body),
   deleteEnvironmentVariable: (id: string, env: string, key: string) =>
     request<Workflow>("DELETE", `/workflows/${id}/environments/${encodeURIComponent(env)}/variables/${encodeURIComponent(key)}`),
+
+  // learn: roadmaps, challenge catalog and progress (content from the learn database)
+  /** Providers with challenge counts and the content migrations' status (load errors included). */
+  learnOverview: () => request<LearnOverview>("GET", "/learn"),
+  learnRoadmap: (provider: LearnProviderId) => request<Roadmap>("GET", `/learn/providers/${provider}/roadmap`),
+  learnChallenges: (filter: ChallengeFilter = {}) => request<ChallengeSummary[]>("GET", `/learn/challenges${qs({ ...filter })}`),
+  learnChallenge: (id: string) => request<ChallengeDetail>("GET", `/learn/challenges/${encodeURIComponent(id)}`),
+  learnProgress: () => request<ChallengeProgress[]>("GET", "/learn/progress"),
+  /** "not_started" resets a challenge's progress; completion only comes from a passing check. */
+  setLearnProgress: (id: string, status: "not_started" | "in_progress") =>
+    request<ChallengeProgress>("PUT", `/learn/progress/${encodeURIComponent(id)}`, { status }),
+
+  // challenge workspaces: start from a starter, check (async: poll workflowChallenge), solution copy
+  startChallenge: (id: string, name?: string) =>
+    request<Workflow>("POST", `/learn/challenges/${encodeURIComponent(id)}/start`, { name: name ?? "" }),
+  workflowChallenge: (workflowId: string) => request<ChallengeView>("GET", `/workflows/${workflowId}/challenge`),
+  checkChallenge: (workflowId: string) => request<ChallengeResult>("POST", `/workflows/${workflowId}/challenge/check`),
+  cancelChallengeCheck: (workflowId: string) => request<void>("DELETE", `/workflows/${workflowId}/challenge/check`),
+  /** A new workflow: the starter with the reference solution files written over it. */
+  challengeSolution: (workflowId: string) => request<Workflow>("POST", `/workflows/${workflowId}/challenge/solution`),
 }
 
 /** Subscribes to server events; returns an unsubscribe function. */

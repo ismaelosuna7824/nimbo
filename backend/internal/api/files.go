@@ -348,11 +348,16 @@ func copyFile(src, dst string) error {
 	return out.Close()
 }
 
-// copyTree copies every regular file under src into dst.
+// copyTree copies every regular file under src into dst, except Nimbo's
+// own .nimbo folders (saved port remaps, generated overrides): they belong
+// to the original's runs, and a copy must plan its host ports afresh.
 func copyTree(src, dst string) error {
 	return filepath.WalkDir(src, func(p string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return err
+		}
+		if d.IsDir() && d.Name() == ".nimbo" {
+			return filepath.SkipDir
 		}
 		if !d.Type().IsRegular() {
 			return nil

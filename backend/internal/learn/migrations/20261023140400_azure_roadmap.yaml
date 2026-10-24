@@ -1,0 +1,238 @@
+description: Adds the Azure roadmap (beginner to expert) linking the Azure challenges
+operations:
+  - op: upsert
+    kind: roadmap
+    id: azure-roadmap
+    data:
+      provider: azure
+      title: Azure infrastructure roadmap
+      summary: From Azure fundamentals (AZ-900) through administration (AZ-104) and solution architecture (AZ-305) to landing-zone platform engineering, practiced as Terraform azurerm designs Nimbo validates.
+      levels:
+        - level: beginner
+          title: Azure fundamentals
+          goals: |
+            You can explain how Azure organizes resources (regions, availability zones, management groups,
+            subscriptions, resource groups), name and tag resources consistently, and write Terraform for a
+            private, TLS-only storage account and a segmented virtual network — the core of the AZ-900 skills.
+          steps:
+            - title: Cloud concepts and Azure's building blocks
+              description: |
+                Learn the shared responsibility model, IaaS/PaaS/SaaS, regions and region pairs, availability zones,
+                and the hierarchy management group → subscription → resource group → resource. Azure Resource
+                Manager is the single deployment and management layer behind the portal, CLI and Terraform.
+              docs:
+                - title: Study guide for Exam AZ-900 — Microsoft Azure Fundamentals
+                  url: https://learn.microsoft.com/en-us/credentials/certifications/resources/study-guides/az-900
+                - title: What is Azure Resource Manager?
+                  url: https://learn.microsoft.com/en-us/azure/azure-resource-manager/management/overview
+                - title: What are availability zones?
+                  url: https://learn.microsoft.com/en-us/azure/reliability/availability-zones-overview
+            - title: Infrastructure as code, naming and tagging
+              description: |
+                Describe resources with the Terraform azurerm provider, keep the region in a variable, and adopt the
+                Cloud Adoption Framework naming convention (type abbreviation, workload, environment, region,
+                instance) plus a tagging strategy for ownership and cost.
+              challenges: [azure-naming-tagging]
+              docs:
+                - title: CAF — Define your naming convention
+                  url: https://learn.microsoft.com/en-us/azure/cloud-adoption-framework/ready/azure-best-practices/resource-naming
+                - title: CAF — Abbreviation recommendations for Azure resources
+                  url: https://learn.microsoft.com/en-us/azure/cloud-adoption-framework/ready/azure-best-practices/resource-abbreviations
+                - title: CAF — Define your tagging strategy
+                  url: https://learn.microsoft.com/en-us/azure/cloud-adoption-framework/ready/azure-best-practices/resource-tagging
+                - title: Terraform azurerm provider documentation (4.x)
+                  url: https://registry.terraform.io/providers/hashicorp/azurerm/4.81.0/docs
+            - title: Storage accounts and secure defaults
+              description: |
+                Compare the Azure Storage services and redundancy options, then apply the baseline controls every
+                account needs: secure transfer (HTTPS only), minimum TLS 1.2 and no anonymous blob access.
+              challenges: [azure-storage-secure-defaults]
+              docs:
+                - title: Security recommendations for Blob Storage
+                  url: https://learn.microsoft.com/en-us/azure/storage/blobs/security-recommendations
+                - title: Azure Storage redundancy
+                  url: https://learn.microsoft.com/en-us/azure/storage/common/storage-redundancy
+            - title: Virtual networks and network security groups
+              description: |
+                Plan non-overlapping address spaces and subnets, filter traffic with NSGs associated to subnets
+                (priorities, default rules, service tags) and reach VMs through Azure Bastion instead of public SSH/RDP.
+              challenges: [azure-vnet-nsg]
+              docs:
+                - title: Plan virtual networks
+                  url: https://learn.microsoft.com/en-us/azure/virtual-network/virtual-network-vnet-plan-design-arm
+                - title: Network security groups overview
+                  url: https://learn.microsoft.com/en-us/azure/virtual-network/network-security-groups-overview
+                - title: What is Azure Bastion?
+                  url: https://learn.microsoft.com/en-us/azure/bastion/bastion-overview
+        - level: intermediate
+          title: Azure administration
+          goals: |
+            You can run workloads the way an Azure administrator (AZ-104) would: identities and least-privilege
+            RBAC instead of secrets, App Service hardening, storage data protection and redundancy, private
+            connectivity to PaaS data services, and the monitoring foundations.
+          steps:
+            - title: Identity, RBAC and managed identities
+              description: |
+                Microsoft Entra ID authenticates people and workloads; Azure RBAC authorizes them at a scope. Give
+                apps a managed identity and grant the narrowest built-in role on the narrowest scope.
+              challenges: [azure-app-service-key-vault]
+              docs:
+                - title: Study guide for Exam AZ-104 — Microsoft Azure Administrator
+                  url: https://learn.microsoft.com/en-us/credentials/certifications/resources/study-guides/az-104
+                - title: What is Azure role-based access control (Azure RBAC)?
+                  url: https://learn.microsoft.com/en-us/azure/role-based-access-control/overview
+                - title: What are managed identities for Azure resources?
+                  url: https://learn.microsoft.com/en-us/entra/identity/managed-identities-azure-resources/overview
+            - title: App Service and secrets in Key Vault
+              description: |
+                Host web apps on App Service with HTTPS only, TLS 1.2+ and FTP disabled, and keep secrets in Key Vault
+                (RBAC permission model, soft delete and purge protection) consumed through Key Vault references.
+              challenges: [azure-app-service-key-vault]
+              docs:
+                - title: App Service overview
+                  url: https://learn.microsoft.com/en-us/azure/app-service/overview
+                - title: Well-Architected Framework service guide — App Service (web apps)
+                  url: https://learn.microsoft.com/en-us/azure/well-architected/service-guides/app-service-web-apps
+                - title: Best practices for using Azure Key Vault
+                  url: https://learn.microsoft.com/en-us/azure/key-vault/general/best-practices
+            - title: Data protection and redundancy
+              description: |
+                Choose LRS, ZRS, GRS or GZRS from your availability and disaster-recovery needs; protect blobs with
+                soft delete and versioning, restrict networks with a default-deny firewall and lock critical resources.
+              challenges: [azure-storage-data-protection]
+              docs:
+                - title: Azure Storage redundancy
+                  url: https://learn.microsoft.com/en-us/azure/storage/common/storage-redundancy
+                - title: Well-Architected Framework service guide — Azure Blob Storage
+                  url: https://learn.microsoft.com/en-us/azure/well-architected/service-guides/azure-blob-storage
+                - title: Lock your Azure resources to protect your infrastructure
+                  url: https://learn.microsoft.com/en-us/azure/azure-resource-manager/management/lock-resources
+            - title: Private endpoints for PaaS services
+              description: |
+                Reach Azure SQL, Storage or Key Vault through Azure Private Link with private DNS zones, deny public
+                network access and authenticate with Microsoft Entra ID instead of passwords.
+              challenges: [azure-sql-private-endpoint]
+              docs:
+                - title: Azure Private Link for Azure SQL Database
+                  url: https://learn.microsoft.com/en-us/azure/azure-sql/database/private-endpoint-overview
+                - title: Azure private endpoint DNS configuration
+                  url: https://learn.microsoft.com/en-us/azure/private-link/private-endpoint-dns
+                - title: Azure SQL Database security best practices
+                  url: https://learn.microsoft.com/en-us/azure/azure-sql/database/security-best-practice
+            - title: Monitoring foundations
+              description: |
+                Azure Monitor collects metrics and logs (Log Analytics workspaces, KQL queries), raises alerts through
+                action groups and powers insights for VMs, storage, networks and containers.
+              docs:
+                - title: Azure Monitor overview
+                  url: https://learn.microsoft.com/en-us/azure/azure-monitor/overview
+                - title: Study guide for Exam AZ-104 (monitor and maintain Azure resources)
+                  url: https://learn.microsoft.com/en-us/credentials/certifications/resources/study-guides/az-104
+        - level: advanced
+          title: Solution architecture on Azure
+          goals: |
+            You design solutions against the Well-Architected Framework pillars and the AZ-305 skills: a secure
+            internet edge with a WAF, hub-spoke networking with centralized egress inspection, and business
+            continuity choices driven by RPO/RTO.
+          steps:
+            - title: The Well-Architected Framework
+              description: |
+                Review designs against the five pillars — reliability, security, cost optimization, operational
+                excellence and performance efficiency — and use the per-service guides as checklists.
+              docs:
+                - title: Azure Well-Architected Framework
+                  url: https://learn.microsoft.com/en-us/azure/well-architected/
+                - title: Well-Architected Framework pillars
+                  url: https://learn.microsoft.com/en-us/azure/well-architected/pillars
+                - title: Study guide for Exam AZ-305 — Designing Microsoft Azure Infrastructure Solutions
+                  url: https://learn.microsoft.com/en-us/credentials/certifications/resources/study-guides/az-305
+            - title: Edge security with Front Door and WAF
+              description: |
+                Put Azure Front Door (Premium) in front of public apps, enforce managed WAF rule sets and bot protection
+                in Prevention mode, add rate limits, and lock origins so they only accept traffic from your Front Door.
+              challenges: [azure-front-door-waf]
+              docs:
+                - title: Azure Web Application Firewall on Azure Front Door
+                  url: https://learn.microsoft.com/en-us/azure/web-application-firewall/afds/afds-overview
+                - title: Best practices for Web Application Firewall on Azure Front Door
+                  url: https://learn.microsoft.com/en-us/azure/web-application-firewall/afds/waf-front-door-best-practices
+                - title: Secure traffic to Azure Front Door origins
+                  url: https://learn.microsoft.com/en-us/azure/frontdoor/origin-security
+            - title: Hub-spoke networking
+              description: |
+                Centralize shared services (Azure Firewall, gateways, Bastion, DNS) in a regional hub, peer spokes both
+                ways and force spoke egress and spoke-to-spoke traffic through the firewall with user-defined routes.
+              challenges: [azure-hub-spoke-firewall]
+              docs:
+                - title: Hub-spoke network topology in Azure
+                  url: https://learn.microsoft.com/en-us/azure/architecture/networking/architecture/hub-spoke
+                - title: Plan virtual networks
+                  url: https://learn.microsoft.com/en-us/azure/virtual-network/virtual-network-vnet-plan-design-arm
+            - title: Business continuity and high availability
+              description: |
+                Map recovery objectives (RPO/RTO) to zone- and region-redundant options and data-protection features;
+                prefer zone redundancy for availability and geo-redundancy for disaster recovery.
+              challenges: [azure-storage-data-protection]
+              docs:
+                - title: What are availability zones?
+                  url: https://learn.microsoft.com/en-us/azure/reliability/availability-zones-overview
+                - title: Azure Storage redundancy
+                  url: https://learn.microsoft.com/en-us/azure/storage/common/storage-redundancy
+                - title: Study guide for Exam AZ-305 (design business continuity solutions)
+                  url: https://learn.microsoft.com/en-us/credentials/certifications/resources/study-guides/az-305
+        - level: expert
+          title: Platform engineering and landing zones
+          goals: |
+            You build the platform other teams land on: a Cloud Adoption Framework management group hierarchy with
+            policy-driven guardrails, and production-grade shared platforms such as an AKS cluster that follows the
+            baseline architecture.
+          steps:
+            - title: Azure landing zones and governance
+              description: |
+                Organize subscriptions under a flat management group hierarchy (platform, landing zones, sandbox),
+                assign Azure Policy at management group scope (allowed regions, required tags), and protect critical
+                resources with locks.
+              challenges: [azure-landing-zone-governance]
+              docs:
+                - title: What is an Azure landing zone?
+                  url: https://learn.microsoft.com/en-us/azure/cloud-adoption-framework/ready/landing-zone/
+                - title: Azure landing zone design areas
+                  url: https://learn.microsoft.com/en-us/azure/cloud-adoption-framework/ready/landing-zone/design-areas
+                - title: Management groups — resource organization design area
+                  url: https://learn.microsoft.com/en-us/azure/cloud-adoption-framework/ready/landing-zone/design-area/resource-org-management-groups
+                - title: What is Azure Policy?
+                  url: https://learn.microsoft.com/en-us/azure/governance/policy/overview
+            - title: Policy as code
+              description: |
+                Keep policy definitions and assignments in source control, roll them out in audit mode first, review
+                them like code and remediate non-compliant resources before enforcing.
+              challenges: [azure-landing-zone-governance]
+              docs:
+                - title: Design Azure Policy as Code workflows
+                  url: https://learn.microsoft.com/en-us/azure/governance/policy/concepts/policy-as-code
+                - title: Understand scope in Azure Policy
+                  url: https://learn.microsoft.com/en-us/azure/governance/policy/concepts/scope
+            - title: Production Kubernetes with the AKS baseline
+              description: |
+                Run AKS in a hub-spoke network with zone-redundant system and user node pools, Microsoft Entra ID and
+                Azure RBAC, workload identity, Azure CNI Overlay with network policy, a private API server, the Azure
+                Policy add-on, Container Insights and automatic upgrades.
+              challenges: [azure-aks-baseline]
+              docs:
+                - title: Baseline architecture for an AKS cluster
+                  url: https://learn.microsoft.com/en-us/azure/architecture/reference-architectures/containers/aks/baseline-aks
+                - title: Well-Architected Framework service guide — Azure Kubernetes Service
+                  url: https://learn.microsoft.com/en-us/azure/well-architected/service-guides/azure-kubernetes-service
+      sources:
+        - title: Study guide for Exam AZ-900 — Microsoft Azure Fundamentals
+          url: https://learn.microsoft.com/en-us/credentials/certifications/resources/study-guides/az-900
+        - title: Study guide for Exam AZ-104 — Microsoft Azure Administrator
+          url: https://learn.microsoft.com/en-us/credentials/certifications/resources/study-guides/az-104
+        - title: Study guide for Exam AZ-305 — Designing Microsoft Azure Infrastructure Solutions
+          url: https://learn.microsoft.com/en-us/credentials/certifications/resources/study-guides/az-305
+        - title: Azure Well-Architected Framework
+          url: https://learn.microsoft.com/en-us/azure/well-architected/
+        - title: What is an Azure landing zone? (Cloud Adoption Framework)
+          url: https://learn.microsoft.com/en-us/azure/cloud-adoption-framework/ready/landing-zone/
+        - title: Terraform azurerm provider documentation (4.x)
+          url: https://registry.terraform.io/providers/hashicorp/azurerm/4.81.0/docs

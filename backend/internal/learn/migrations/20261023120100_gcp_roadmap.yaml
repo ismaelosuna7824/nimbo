@@ -1,0 +1,231 @@
+description: Adds the Google Cloud roadmap (beginner to expert)
+operations:
+- op: upsert
+  kind: roadmap
+  id: gcp-roadmap
+  data:
+    provider: gcp
+    title: Google Cloud roadmap
+    summary: From cloud fundamentals to organization-wide guardrails, following the Google Cloud certification guides and the Well-Architected Framework.
+    levels:
+    - level: beginner
+      title: 'Foundations: resources, identity, storage and networks'
+      goals: Explain how Google Cloud organizes resources and access, and build private-by-default storage and a planned VPC with Terraform. Roughly the scope of the **Cloud Digital Leader** exam plus the first sections of the **Associate Cloud Engineer** guide.
+      steps:
+      - title: Cloud concepts and the resource hierarchy
+        description: Learn the shared responsibility model, IaaS/PaaS/SaaS trade-offs, regions and zones, and how organizations, folders and projects form the hierarchy that IAM and policies inherit through.
+        docs:
+        - title: Cloud Digital Leader certification exam guide
+          url: https://cloud.google.com/learn/certification/guides/cloud-digital-leader
+        - title: Resource hierarchy
+          url: https://docs.cloud.google.com/resource-manager/docs/cloud-platform-resource-hierarchy
+        - title: Geography and regions
+          url: https://docs.cloud.google.com/docs/geography-and-regions
+      - title: 'IAM basics: principals, roles and service accounts'
+        description: Understand allow policies, predefined vs basic roles, and why workloads should use dedicated service accounts with the fewest permissions instead of the default ones.
+        docs:
+        - title: IAM overview
+          url: https://docs.cloud.google.com/iam/docs/overview
+        - title: Service accounts overview
+          url: https://docs.cloud.google.com/iam/docs/service-account-overview
+        - title: Best practices for using service accounts securely
+          url: https://docs.cloud.google.com/iam/docs/best-practices-service-accounts
+      - title: Private Cloud Storage by design
+        description: Use uniform bucket-level access and public access prevention so buckets can't be exposed by ACLs or public grants; grant access to groups through IAM.
+        challenges:
+        - gcp-storage-private-bucket
+        docs:
+        - title: Uniform bucket-level access
+          url: https://docs.cloud.google.com/storage/docs/uniform-bucket-level-access
+        - title: Public access prevention
+          url: https://docs.cloud.google.com/storage/docs/public-access-prevention
+      - title: Storage classes, retention and lifecycle
+        description: Choose Standard, Nearline, Coldline or Archive by access frequency, protect compliance data with retention policies (Bucket Lock), and automate class transitions with lifecycle rules.
+        challenges:
+        - gcp-storage-retention-lifecycle
+        docs:
+        - title: Storage classes
+          url: https://docs.cloud.google.com/storage/docs/storage-classes
+        - title: Bucket Lock
+          url: https://docs.cloud.google.com/storage/docs/bucket-lock
+        - title: Object Lifecycle Management
+          url: https://docs.cloud.google.com/storage/docs/lifecycle
+      - title: Custom-mode VPCs and firewall rules
+        description: Plan subnets and ranges in a custom-mode VPC, enable Private Google Access, and replace internet-wide SSH with IAP TCP forwarding.
+        challenges:
+        - gcp-custom-vpc-firewall
+        docs:
+        - title: VPC networks
+          url: https://docs.cloud.google.com/vpc/docs/vpc
+        - title: VPC firewall rules
+          url: https://docs.cloud.google.com/firewall/docs/firewalls
+        - title: Using IAP for TCP forwarding
+          url: https://docs.cloud.google.com/iap/docs/using-tcp-forwarding
+        - title: Private Google Access
+          url: https://docs.cloud.google.com/vpc/docs/private-google-access
+      - title: Terraform on Google Cloud
+        description: 'Manage everything above as code with the google provider: pinned versions, variables with descriptions, labels on every resource, and the recommended module structure.'
+        docs:
+        - title: Overview of Terraform on Google Cloud
+          url: https://docs.cloud.google.com/docs/terraform/terraform-overview
+        - title: Best practices for general style and structure (Terraform on Google Cloud)
+          url: https://docs.cloud.google.com/docs/terraform/best-practices/general-style-structure
+    - level: intermediate
+      title: Deploy and operate workloads
+      goals: Run compute, serverless and messaging workloads securely and observe them — the core of the **Associate Cloud Engineer** exam (deploying, operating, and configuring access and security).
+      steps:
+      - title: Private compute with controlled egress
+        description: Run VMs without external IPs, give them outbound access with Cloud Router + Cloud NAT, and attach dedicated service accounts.
+        challenges:
+        - gcp-private-vm-cloud-nat
+        docs:
+        - title: Cloud NAT overview
+          url: https://docs.cloud.google.com/nat/docs/overview
+        - title: Private Google Access
+          url: https://docs.cloud.google.com/vpc/docs/private-google-access
+        - title: Best practices for using service accounts securely
+          url: https://docs.cloud.google.com/iam/docs/best-practices-service-accounts
+      - title: Cloud Run with least privilege
+        description: Give each service its own identity, scope IAM to individual resources such as secrets, keep secrets in Secret Manager, and restrict ingress.
+        challenges:
+        - gcp-cloud-run-least-privilege
+        docs:
+        - title: What is Cloud Run
+          url: https://docs.cloud.google.com/run/docs/overview/what-is-cloud-run
+        - title: Cloud Run service identity
+          url: https://docs.cloud.google.com/run/docs/securing/service-identity
+        - title: Restrict network ingress for Cloud Run
+          url: https://docs.cloud.google.com/run/docs/securing/ingress
+        - title: Secret Manager overview
+          url: https://docs.cloud.google.com/secret-manager/docs/overview
+      - title: Reliable messaging with Pub/Sub
+        description: Design subscriptions with acknowledgement deadlines, exponential backoff retries and dead-letter topics, and grant the Pub/Sub service agent what it needs.
+        challenges:
+        - gcp-pubsub-dead-letter
+        docs:
+        - title: What is Pub/Sub?
+          url: https://docs.cloud.google.com/pubsub/docs/overview
+        - title: Subscription retry policy
+          url: https://docs.cloud.google.com/pubsub/docs/subscription-retry-policy
+        - title: Dead-letter topics
+          url: https://docs.cloud.google.com/pubsub/docs/dead-letter-topics
+      - title: Observe and control cost
+        description: Collect logs and metrics, alert on symptoms with Cloud Monitoring, and set billing budgets with alerts per project.
+        docs:
+        - title: Cloud Logging overview
+          url: https://docs.cloud.google.com/logging/docs/overview
+        - title: Alerting overview (Cloud Monitoring)
+          url: https://docs.cloud.google.com/monitoring/alerts
+        - title: Create, edit, or delete budgets and budget alerts
+          url: https://docs.cloud.google.com/billing/docs/how-to/budgets
+    - level: advanced
+      title: Production architecture
+      goals: Design highly available, secure-by-default architectures across zones and at the edge, applying the **Well-Architected Framework** pillars as tested in the **Professional Cloud Architect** exam.
+      steps:
+      - title: Apply the Well-Architected Framework
+        description: Review designs against the security, reliability, cost optimization and operational excellence pillars before building.
+        docs:
+        - title: Google Cloud Well-Architected Framework
+          url: https://docs.cloud.google.com/architecture/framework
+        - title: 'Well-Architected Framework: Security, privacy, and compliance pillar'
+          url: https://docs.cloud.google.com/architecture/framework/security
+        - title: 'Well-Architected Framework: Reliability pillar'
+          url: https://docs.cloud.google.com/architecture/framework/reliability
+        - title: 'Well-Architected Framework: Cost optimization pillar'
+          url: https://docs.cloud.google.com/architecture/framework/cost-optimization
+        - title: 'Well-Architected Framework: Operational excellence pillar'
+          url: https://docs.cloud.google.com/architecture/framework/operational-excellence
+        - title: Professional Cloud Architect certification
+          url: https://cloud.google.com/learn/certification/cloud-architect
+      - title: Managed databases on private networking
+        description: Connect Cloud SQL through private services access, run regional HA instances, and plan recovery with automated backups and point-in-time recovery.
+        challenges:
+        - gcp-cloud-sql-private-ip
+        docs:
+        - title: Configure private services access (Cloud SQL for PostgreSQL)
+          url: https://docs.cloud.google.com/sql/docs/postgres/configure-private-services-access
+        - title: Private IP configuration options (Cloud SQL for PostgreSQL)
+          url: https://docs.cloud.google.com/sql/docs/postgres/private-ip
+        - title: About high availability (Cloud SQL for PostgreSQL)
+          url: https://docs.cloud.google.com/sql/docs/postgres/high-availability
+        - title: About Cloud SQL backups
+          url: https://docs.cloud.google.com/sql/docs/postgres/backup-recovery/backups
+      - title: 'Global edge: load balancing and Cloud Armor'
+        description: Put services behind the global external Application Load Balancer with managed certificates, serverless NEGs, WAF rules and rate limiting.
+        challenges:
+        - gcp-https-lb-cloud-armor
+        docs:
+        - title: External Application Load Balancer overview
+          url: https://docs.cloud.google.com/load-balancing/docs/https
+        - title: Serverless network endpoint groups overview
+          url: https://docs.cloud.google.com/load-balancing/docs/negs/serverless-neg-concepts
+        - title: Use Google-managed SSL certificates
+          url: https://docs.cloud.google.com/load-balancing/docs/ssl-certificates/google-managed-certs
+        - title: Google Cloud Armor overview
+          url: https://docs.cloud.google.com/armor/docs/cloud-armor-overview
+        - title: Google Cloud Armor preconfigured WAF rules
+          url: https://docs.cloud.google.com/armor/docs/waf-rules
+        - title: Google Cloud Armor rate limiting overview
+          url: https://docs.cloud.google.com/armor/docs/rate-limiting-overview
+      - title: Encryption and data protection
+        description: Decide when Google default encryption is enough and when customer-managed keys (CMEK) in Cloud KMS are required.
+        docs:
+        - title: Customer-managed encryption keys (CMEK)
+          url: https://docs.cloud.google.com/kms/docs/cmek
+    - level: expert
+      title: Platform and governance at scale
+      goals: 'Build a hardened Kubernetes platform and organization-wide guardrails: Shared VPC, service perimeters and preventive policies, as in the **enterprise foundations blueprint**.'
+      steps:
+      - title: Hardened GKE platform
+        description: Choose Autopilot or Standard, then apply private nodes, authorized networks, Workload Identity Federation, release channels, Shielded nodes and minimal node service accounts.
+        challenges:
+        - gcp-gke-hardened-cluster
+        docs:
+        - title: Autopilot overview (GKE)
+          url: https://docs.cloud.google.com/kubernetes-engine/docs/concepts/autopilot-overview
+        - title: Harden your cluster's security (GKE)
+          url: https://docs.cloud.google.com/kubernetes-engine/docs/how-to/hardening-your-cluster
+        - title: About network isolation in GKE
+          url: https://docs.cloud.google.com/kubernetes-engine/docs/concepts/network-isolation
+        - title: About Workload Identity Federation for GKE
+          url: https://docs.cloud.google.com/kubernetes-engine/docs/concepts/workload-identity
+        - title: About release channels (GKE)
+          url: https://docs.cloud.google.com/kubernetes-engine/docs/concepts/release-channels
+        - title: About service accounts in GKE
+          url: https://docs.cloud.google.com/kubernetes-engine/docs/how-to/service-accounts
+      - title: Preventive guardrails with organization policies
+        description: 'Enforce constraints at folder or organization level so every project inherits them: no service account keys, no public buckets, no external IPs, allowed locations.'
+        challenges:
+        - gcp-org-policy-guardrails
+        docs:
+        - title: Introduction to the Organization Policy Service
+          url: https://docs.cloud.google.com/organization-policy/overview
+        - title: Organization policy constraints reference
+          url: https://docs.cloud.google.com/organization-policy/reference/org-policy-constraints
+        - title: Restrict resource locations
+          url: https://docs.cloud.google.com/organization-policy/restrict-locations
+      - title: Network and data perimeters at scale
+        description: Centralize networking with Shared VPC and reduce data exfiltration risk with VPC Service Controls perimeters.
+        docs:
+        - title: Shared VPC
+          url: https://docs.cloud.google.com/vpc/docs/shared-vpc
+        - title: Overview of VPC Service Controls
+          url: https://docs.cloud.google.com/vpc-service-controls/docs/overview
+      - title: Landing zone foundations
+        description: Assemble hierarchy, identity, networking, detective and preventive controls into a repeatable foundation following Google's enterprise foundations blueprint.
+        docs:
+        - title: Enterprise foundations blueprint
+          url: https://docs.cloud.google.com/architecture/blueprints/security-foundations
+        - title: Resource hierarchy
+          url: https://docs.cloud.google.com/resource-manager/docs/cloud-platform-resource-hierarchy
+    sources:
+    - title: Cloud Digital Leader certification exam guide
+      url: https://cloud.google.com/learn/certification/guides/cloud-digital-leader
+    - title: Associate Cloud Engineer certification exam guide
+      url: https://cloud.google.com/learn/certification/guides/cloud-engineer
+    - title: Professional Cloud Architect certification
+      url: https://cloud.google.com/learn/certification/cloud-architect
+    - title: Google Cloud Well-Architected Framework
+      url: https://docs.cloud.google.com/architecture/framework
+    - title: Enterprise foundations blueprint
+      url: https://docs.cloud.google.com/architecture/blueprints/security-foundations

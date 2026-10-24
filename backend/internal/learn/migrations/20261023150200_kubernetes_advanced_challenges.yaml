@@ -1,0 +1,1053 @@
+description: Adds the Kubernetes advanced challenges (zero-downtime production with PDB, topology spread and rolling updates; default-deny NetworkPolicies; Helm values per environment)
+operations:
+  - op: upsert
+    kind: challenge
+    id: kubernetes-zero-downtime-prod
+    data:
+      provider: kubernetes
+      level: advanced
+      title: Survive rollouts and node drains in production
+      summary: Roll out without dropping capacity, spread replicas over nodes and set a PodDisruptionBudget that protects the app without blocking drains.
+      minutes: 40
+      tags: [pdb, topology-spread, rolling-update, availability, kustomize]
+      prerequisites: [kubernetes-kustomize-overlays, kubernetes-health-probes]
+      runtime: local
+      problem: |
+        **checkout** runs three replicas in production, yet every deploy
+        causes a short outage, and the last cluster upgrade stalled for an
+        hour because `kubectl drain` could not evict a single checkout pod.
+
+        Three settings decide how a replicated app behaves when pods are
+        replaced on purpose:
+
+        - the Deployment **strategy**: `Recreate` stops every old pod before
+          starting new ones; `RollingUpdate` replaces them gradually, bounded
+          by `maxUnavailable` and `maxSurge`;
+        - a **PodDisruptionBudget** (PDB) limits how many pods voluntary
+          disruptions (drains, upgrades, autoscaler scale-downs) may evict at
+          once; a budget that allows zero evictions makes drains hang;
+        - **topology spread constraints** ask the scheduler to spread
+          replicas over nodes or zones so one node failure does not take
+          them all.
+
+        The project uses Kustomize: `base/` plus `overlays/dev` and
+        `overlays/prod`. Fix the **prod** environment (switch the workflow
+        to it to see the findings) without breaking dev.
+      requirements:
+        - "In prod the `checkout` Deployment uses `RollingUpdate` with `maxUnavailable: 0` and `maxSurge: 1` (new pods start before old ones stop)."
+        - "Prod has a PodDisruptionBudget selecting the checkout pods that still allows one voluntary eviction at a time (for example `maxUnavailable: 1`)."
+        - "In prod the pods spread over nodes: a `topologySpreadConstraints` entry on `kubernetes.io/hostname` (or `topology.kubernetes.io/zone`) with `maxSkew: 1` and a `labelSelector` matching the pods."
+        - The dev environment still renders.
+      hints:
+        - "`spec.strategy: {type: RollingUpdate, rollingUpdate: {maxUnavailable: 0, maxSurge: 1}}` keeps all three pods serving while each new one becomes ready (readiness probes matter here)."
+        - "The existing PDB uses `minAvailable: 3` with 3 replicas: zero evictions allowed. The PDB docs recommend `maxUnavailable` because it follows the replica count when it changes."
+        - "On a one-node local cluster prefer `whenUnsatisfiable: ScheduleAnyway`: the scheduler still prefers spreading but never leaves a pod Pending because of it."
+        - You can change the base strategy (dev benefits too) or patch it only in prod; put the PDB and the spread patch in `overlays/prod`.
+      solution: |
+        **Rollout strategy.** `Recreate` is meant for apps that cannot run
+        two versions side by side; for a stateless service it means an outage
+        per deploy. With `RollingUpdate`, `maxUnavailable: 0` and
+        `maxSurge: 1`, the Deployment creates one extra pod, waits for it to
+        be ready, then removes an old one, so capacity never drops.
+
+        **Disruption budget.** A PDB only governs *voluntary* disruptions
+        that use the eviction API (drain, upgrades). With
+        `minAvailable: 3` and 3 replicas nothing can ever be evicted, which
+        the Kubernetes docs call out as a configuration that blocks node
+        drains. Allow one pod at a time:
+
+        ```yaml
+        apiVersion: policy/v1
+        kind: PodDisruptionBudget
+        metadata: {name: checkout}
+        spec:
+          maxUnavailable: 1
+          selector:
+            matchLabels: {app: checkout}
+        ```
+
+        **Spreading.** Without a constraint the scheduler may place all
+        replicas on one node. Add to the pod template (in a prod patch):
+
+        ```yaml
+        topologySpreadConstraints:
+          - maxSkew: 1
+            topologyKey: kubernetes.io/hostname
+            whenUnsatisfiable: ScheduleAnyway
+            labelSelector:
+              matchLabels: {app: checkout}
+        ```
+
+        Use `topology.kubernetes.io/zone` when nodes span zones, and
+        `DoNotSchedule` when spreading is a hard requirement. Together with
+        readiness probes, these three settings let rollouts, drains and
+        upgrades proceed while the service keeps answering.
+      solutionFiles:
+        base/deployment.yaml: |
+          apiVersion: apps/v1
+          kind: Deployment
+          metadata:
+            name: checkout
+          spec:
+            replicas: 1
+            # Replace pods gradually: start one new pod, wait for it to be
+            # ready, then stop an old one. Capacity never drops.
+            strategy:
+              type: RollingUpdate
+              rollingUpdate:
+                maxUnavailable: 0
+                maxSurge: 1
+            selector:
+              matchLabels:
+                app: checkout
+            template:
+              metadata:
+                labels:
+                  app: checkout
+              spec:
+                containers:
+                  - name: checkout
+                    image: ghcr.io/stefanprodan/podinfo:6.15.0
+                    ports:
+                      - name: http
+                        containerPort: 9898
+                    readinessProbe:
+                      httpGet:
+                        path: /readyz
+                        port: http
+                    livenessProbe:
+                      httpGet:
+                        path: /healthz
+                        port: http
+                    resources:
+                      requests:
+                        cpu: 50m
+                        memory: 64Mi
+                      limits:
+                        memory: 128Mi
+        overlays/prod/kustomization.yaml: |
+          apiVersion: kustomize.config.k8s.io/v1beta1
+          kind: Kustomization
+          namespace: checkout-prod
+          resources:
+            - ../../base
+            - namespace.yaml
+            - pdb.yaml
+          replicas:
+            - name: checkout
+              count: 3
+          patches:
+            - path: spread.yaml
+        overlays/prod/pdb.yaml: |
+          # Voluntary disruptions (drains, upgrades) may evict one pod at a
+          # time; maxUnavailable follows the replica count when it changes.
+          apiVersion: policy/v1
+          kind: PodDisruptionBudget
+          metadata:
+            name: checkout
+          spec:
+            maxUnavailable: 1
+            selector:
+              matchLabels:
+                app: checkout
+        overlays/prod/spread.yaml: |
+          # Prefer one replica per node; ScheduleAnyway never leaves a pod
+          # Pending on a small cluster.
+          apiVersion: apps/v1
+          kind: Deployment
+          metadata:
+            name: checkout
+          spec:
+            template:
+              spec:
+                topologySpreadConstraints:
+                  - maxSkew: 1
+                    topologyKey: kubernetes.io/hostname
+                    whenUnsatisfiable: ScheduleAnyway
+                    labelSelector:
+                      matchLabels:
+                        app: checkout
+      starter:
+        kind: kubernetes
+        files:
+          base/kustomization.yaml: |
+            apiVersion: kustomize.config.k8s.io/v1beta1
+            kind: Kustomization
+            resources:
+              - deployment.yaml
+              - service.yaml
+          base/deployment.yaml: |
+            apiVersion: apps/v1
+            kind: Deployment
+            metadata:
+              name: checkout
+            spec:
+              replicas: 1
+              strategy:
+                type: Recreate
+              selector:
+                matchLabels:
+                  app: checkout
+              template:
+                metadata:
+                  labels:
+                    app: checkout
+                spec:
+                  containers:
+                    - name: checkout
+                      image: ghcr.io/stefanprodan/podinfo:6.15.0
+                      ports:
+                        - name: http
+                          containerPort: 9898
+                      readinessProbe:
+                        httpGet:
+                          path: /readyz
+                          port: http
+                      livenessProbe:
+                        httpGet:
+                          path: /healthz
+                          port: http
+                      resources:
+                        requests:
+                          cpu: 50m
+                          memory: 64Mi
+                        limits:
+                          memory: 128Mi
+          base/service.yaml: |
+            apiVersion: v1
+            kind: Service
+            metadata:
+              name: checkout
+            spec:
+              selector:
+                app: checkout
+              ports:
+                - name: http
+                  port: 80
+                  targetPort: http
+          overlays/dev/kustomization.yaml: |
+            apiVersion: kustomize.config.k8s.io/v1beta1
+            kind: Kustomization
+            namespace: checkout-dev
+            resources:
+              - ../../base
+              - namespace.yaml
+          overlays/dev/namespace.yaml: |
+            apiVersion: v1
+            kind: Namespace
+            metadata:
+              name: checkout-dev
+          overlays/prod/kustomization.yaml: |
+            apiVersion: kustomize.config.k8s.io/v1beta1
+            kind: Kustomization
+            namespace: checkout-prod
+            resources:
+              - ../../base
+              - namespace.yaml
+              - pdb.yaml
+            replicas:
+              - name: checkout
+                count: 3
+          overlays/prod/namespace.yaml: |
+            apiVersion: v1
+            kind: Namespace
+            metadata:
+              name: checkout-prod
+          overlays/prod/pdb.yaml: |
+            apiVersion: policy/v1
+            kind: PodDisruptionBudget
+            metadata:
+              name: checkout
+            spec:
+              minAvailable: 3
+              selector:
+                matchLabels:
+                  app: checkout
+      checks:
+        - id: prod-renders
+          label: The prod environment renders
+          type: validate
+          environment: prod
+        - id: dev-renders
+          label: The dev environment renders
+          type: validate
+          environment: dev
+        - id: prod-availability-rules
+          label: "Prod: rolling updates keep serving, the PDB allows evictions, replicas spread over nodes"
+          type: rules_clean
+          environment: prod
+          rules_clean:
+            codes: [k8s_rollout_strategy, k8s_pdb, k8s_single_replica, k8s_topology_spread, k8s_selector_mismatch]
+            minSeverity: warning
+        - id: surge-first
+          label: "Prod rolls out with maxUnavailable: 0 and maxSurge: 1"
+          type: has
+          environment: prod
+          has:
+            kubernetes:
+              kind: Deployment
+              name: checkout
+              namespace: checkout-prod
+              where:
+                spec.strategy.type: RollingUpdate
+                spec.strategy.rollingUpdate.maxUnavailable: 0
+                spec.strategy.rollingUpdate.maxSurge: 1
+        - id: pdb
+          label: Prod has a PodDisruptionBudget for checkout
+          type: has
+          environment: prod
+          has:
+            kubernetes:
+              kind: PodDisruptionBudget
+              namespace: checkout-prod
+              where:
+                spec.selector.matchLabels.app: checkout
+        - id: spread
+          label: Prod spreads replicas over nodes or zones with maxSkew 1
+          type: has
+          environment: prod
+          has:
+            kubernetes:
+              kind: Deployment
+              name: checkout
+              namespace: checkout-prod
+              where:
+                spec.template.spec.topologySpreadConstraints[*].topologyKey: {in: [kubernetes.io/hostname, topology.kubernetes.io/zone]}
+                spec.template.spec.topologySpreadConstraints[*].maxSkew: 1
+      sources:
+        - title: Kubernetes docs — Deployments (strategy, rolling update)
+          url: https://kubernetes.io/docs/concepts/workloads/controllers/deployment/
+        - title: Kubernetes docs — Disruptions
+          url: https://kubernetes.io/docs/concepts/workloads/pods/disruptions/
+        - title: Kubernetes docs — Specifying a Disruption Budget for your Application
+          url: https://kubernetes.io/docs/tasks/run-application/configure-pdb/
+        - title: Kubernetes docs — Pod Topology Spread Constraints
+          url: https://kubernetes.io/docs/concepts/scheduling-eviction/topology-spread-constraints/
+        - title: Kubernetes docs — Safely Drain a Node
+          url: https://kubernetes.io/docs/tasks/administer-cluster/safely-drain-node/
+        - title: CNCF CKA curriculum (Workloads and Scheduling — robust, self-healing deployments)
+          url: https://github.com/cncf/curriculum/blob/master/CKA_Curriculum_v1.37.pdf
+
+  - op: upsert
+    kind: challenge
+    id: kubernetes-network-policy-default-deny
+    data:
+      provider: kubernetes
+      level: advanced
+      title: Default-deny NetworkPolicies with explicit allows
+      summary: Isolate every pod of a namespace, then allow only DNS and the web → api → cache paths the app needs.
+      minutes: 45
+      tags: [networkpolicy, network-segmentation, security, zero-trust]
+      prerequisites: [kubernetes-ingress-routing]
+      runtime: local
+      problem: |
+        The **bank** namespace runs three tiers: `web` (the public
+        frontend), `api` and `cache` (Redis). By default Kubernetes pods are
+        **non-isolated**: any pod in the cluster can open a connection to
+        the cache, and the cache can reach anything on the internet.
+
+        A **NetworkPolicy** selects pods and lists the traffic allowed to
+        them (ingress) and from them (egress). Once any policy selects a pod
+        for a direction, only what some policy allows in that direction is
+        permitted, and policies add up. The recommended pattern is a
+        namespace-wide **default deny** followed by narrow allow rules. The
+        cluster's network plugin enforces them (k3s ships a NetworkPolicy
+        controller).
+
+        Write the policies in `k8s/network-policies.yaml`.
+      requirements:
+        - "A default-deny policy selects every pod of `bank` (`podSelector: {}`) with `policyTypes` Ingress **and** Egress and no allow rules."
+        - "Every pod may resolve DNS: egress to the cluster DNS (namespace `kube-system`, pods `k8s-app: kube-dns`) on port 53, UDP and TCP."
+        - "`web` accepts connections on 8080 from anywhere and may connect only to `api` on 9898."
+        - "`api` accepts connections only from `web` (port 9898) and may connect only to `cache` on 6379."
+        - "`cache` accepts connections only from `api` on 6379."
+      hints:
+        - "Default deny for both directions is just `spec: {podSelector: {}, policyTypes: [Ingress, Egress]}`."
+        - "A default deny on egress also blocks DNS lookups; the Network Policies page tells you to add a separate policy allowing egress to your cluster DNS. Select the DNS pods with both a `namespaceSelector` (`kubernetes.io/metadata.name: kube-system`) and a `podSelector` in the **same** `to` element."
+        - "Write one policy per tier: `podSelector: {matchLabels: {app: api}}`, then `ingress: [{from: [{podSelector: {matchLabels: {app: web}}}], ports: [{port: 9898}]}]` and the matching `egress`. Reply traffic is allowed implicitly."
+      solution: |
+        Start from zero trust, then open exactly the paths the app uses.
+
+        1. **Default deny** both directions:
+           ```yaml
+           spec:
+             podSelector: {}
+             policyTypes: [Ingress, Egress]
+           ```
+        2. **DNS.** Egress isolation blocks name resolution too, so allow
+           UDP and TCP 53 to the DNS pods in `kube-system`. Putting
+           `namespaceSelector` and `podSelector` in the same `to` entry means
+           "pods with this label **in** namespaces with that label"; as two
+           entries they would mean "or".
+        3. **Tier rules.** For each tier, allow ingress only from its
+           client and egress only to its dependency:
+           - `web`: ingress on 8080 from anywhere (an empty `from`),
+             egress to `api:9898`;
+           - `api`: ingress from `web` on 9898, egress to `cache:6379`;
+           - `cache`: ingress from `api` on 6379, no egress beyond DNS.
+
+        Policies are additive and only allow traffic, so ordering doesn't
+        matter. Allowed connections get their reply traffic automatically.
+        Labels become security boundaries here: restrict who can change pod
+        and namespace labels with RBAC.
+      solutionFiles:
+        k8s/network-policies.yaml: |
+          # 1. Isolate every pod of the namespace in both directions.
+          apiVersion: networking.k8s.io/v1
+          kind: NetworkPolicy
+          metadata:
+            name: default-deny
+            namespace: bank
+          spec:
+            podSelector: {}
+            policyTypes:
+              - Ingress
+              - Egress
+          ---
+          # 2. Every pod may resolve names through the cluster DNS.
+          apiVersion: networking.k8s.io/v1
+          kind: NetworkPolicy
+          metadata:
+            name: allow-dns
+            namespace: bank
+          spec:
+            podSelector: {}
+            policyTypes:
+              - Egress
+            egress:
+              - to:
+                  - namespaceSelector:
+                      matchLabels:
+                        kubernetes.io/metadata.name: kube-system
+                    podSelector:
+                      matchLabels:
+                        k8s-app: kube-dns
+                ports:
+                  - protocol: UDP
+                    port: 53
+                  - protocol: TCP
+                    port: 53
+          ---
+          # 3. web: public on 8080, talks only to api.
+          apiVersion: networking.k8s.io/v1
+          kind: NetworkPolicy
+          metadata:
+            name: web
+            namespace: bank
+          spec:
+            podSelector:
+              matchLabels:
+                app: web
+            policyTypes:
+              - Ingress
+              - Egress
+            ingress:
+              - ports:
+                  - protocol: TCP
+                    port: 8080
+            egress:
+              - to:
+                  - podSelector:
+                      matchLabels:
+                        app: api
+                ports:
+                  - protocol: TCP
+                    port: 9898
+          ---
+          # 4. api: only from web, only to cache.
+          apiVersion: networking.k8s.io/v1
+          kind: NetworkPolicy
+          metadata:
+            name: api
+            namespace: bank
+          spec:
+            podSelector:
+              matchLabels:
+                app: api
+            policyTypes:
+              - Ingress
+              - Egress
+            ingress:
+              - from:
+                  - podSelector:
+                      matchLabels:
+                        app: web
+                ports:
+                  - protocol: TCP
+                    port: 9898
+            egress:
+              - to:
+                  - podSelector:
+                      matchLabels:
+                        app: cache
+                ports:
+                  - protocol: TCP
+                    port: 6379
+          ---
+          # 5. cache: only from api.
+          apiVersion: networking.k8s.io/v1
+          kind: NetworkPolicy
+          metadata:
+            name: cache
+            namespace: bank
+          spec:
+            podSelector:
+              matchLabels:
+                app: cache
+            policyTypes:
+              - Ingress
+            ingress:
+              - from:
+                  - podSelector:
+                      matchLabels:
+                        app: api
+                ports:
+                  - protocol: TCP
+                    port: 6379
+      starter:
+        kind: kubernetes
+        kubernetes:
+          sources:
+            - {kind: manifests, path: k8s}
+        files:
+          k8s/apps.yaml: |
+            apiVersion: v1
+            kind: Namespace
+            metadata:
+              name: bank
+            ---
+            apiVersion: apps/v1
+            kind: Deployment
+            metadata:
+              name: web
+              namespace: bank
+            spec:
+              replicas: 1
+              selector:
+                matchLabels:
+                  app: web
+              template:
+                metadata:
+                  labels:
+                    app: web
+                spec:
+                  containers:
+                    - name: nginx
+                      image: nginxinc/nginx-unprivileged:1.30-alpine
+                      ports:
+                        - name: http
+                          containerPort: 8080
+            ---
+            apiVersion: v1
+            kind: Service
+            metadata:
+              name: web
+              namespace: bank
+            spec:
+              selector:
+                app: web
+              ports:
+                - name: http
+                  port: 80
+                  targetPort: http
+            ---
+            apiVersion: apps/v1
+            kind: Deployment
+            metadata:
+              name: api
+              namespace: bank
+            spec:
+              replicas: 1
+              selector:
+                matchLabels:
+                  app: api
+              template:
+                metadata:
+                  labels:
+                    app: api
+                spec:
+                  containers:
+                    - name: podinfo
+                      image: ghcr.io/stefanprodan/podinfo:6.15.0
+                      args: ["./podinfo", "--port=9898", "--cache-server=tcp://cache:6379"]
+                      ports:
+                        - name: http
+                          containerPort: 9898
+            ---
+            apiVersion: v1
+            kind: Service
+            metadata:
+              name: api
+              namespace: bank
+            spec:
+              selector:
+                app: api
+              ports:
+                - name: http
+                  port: 9898
+                  targetPort: http
+            ---
+            apiVersion: apps/v1
+            kind: Deployment
+            metadata:
+              name: cache
+              namespace: bank
+            spec:
+              replicas: 1
+              selector:
+                matchLabels:
+                  app: cache
+              template:
+                metadata:
+                  labels:
+                    app: cache
+                spec:
+                  containers:
+                    - name: redis
+                      image: redis:7.4-alpine
+                      ports:
+                        - name: redis
+                          containerPort: 6379
+            ---
+            apiVersion: v1
+            kind: Service
+            metadata:
+              name: cache
+              namespace: bank
+            spec:
+              selector:
+                app: cache
+              ports:
+                - name: redis
+                  port: 6379
+                  targetPort: redis
+          k8s/network-policies.yaml: |
+            # No NetworkPolicy yet: every pod accepts traffic from every pod
+            # of the cluster and may connect anywhere.
+            apiVersion: v1
+            kind: ConfigMap
+            metadata:
+              name: network-notes
+              namespace: bank
+            data:
+              tiers: web -> api:9898 -> cache:6379
+      checks:
+        - id: renders
+          label: The manifests are valid Kubernetes objects
+          type: validate
+        - id: every-pod-selected
+          label: Every workload is selected by a NetworkPolicy
+          type: rules_clean
+          rules_clean:
+            codes: [k8s_network_policy]
+            minSeverity: info
+        - id: deny-ingress
+          label: A default-deny policy isolates all pods for ingress
+          type: has
+          has:
+            kubernetes:
+              kind: NetworkPolicy
+              namespace: bank
+              where:
+                spec.podSelector.matchLabels: {exists: false}
+                spec.podSelector.matchExpressions: {exists: false}
+                spec.policyTypes[*]: Ingress
+                spec.ingress: {exists: false}
+        - id: deny-egress
+          label: A default-deny policy isolates all pods for egress
+          type: has
+          has:
+            kubernetes:
+              kind: NetworkPolicy
+              namespace: bank
+              where:
+                spec.podSelector.matchLabels: {exists: false}
+                spec.podSelector.matchExpressions: {exists: false}
+                spec.policyTypes[*]: Egress
+                spec.egress: {exists: false}
+        - id: dns
+          label: DNS egress (port 53) to kube-dns is allowed
+          type: has
+          has:
+            kubernetes:
+              kind: NetworkPolicy
+              namespace: bank
+              where:
+                spec.egress[*].ports[*].port: 53
+                spec.egress[*].to[*].podSelector.matchLabels.k8s-app: kube-dns
+        - id: web-to-api
+          label: web may only connect to api
+          type: has
+          has:
+            kubernetes:
+              kind: NetworkPolicy
+              namespace: bank
+              where:
+                spec.podSelector.matchLabels.app: web
+                spec.egress[*].to[*].podSelector.matchLabels.app: api
+        - id: api-from-web
+          label: api accepts traffic only from web and connects to cache
+          type: has
+          has:
+            kubernetes:
+              kind: NetworkPolicy
+              namespace: bank
+              where:
+                spec.podSelector.matchLabels.app: api
+                spec.ingress[*].from[*].podSelector.matchLabels.app: web
+                spec.egress[*].to[*].podSelector.matchLabels.app: cache
+        - id: cache-from-api
+          label: cache accepts traffic only from api
+          type: has
+          has:
+            kubernetes:
+              kind: NetworkPolicy
+              namespace: bank
+              where:
+                spec.podSelector.matchLabels.app: cache
+                spec.ingress[*].from[*].podSelector.matchLabels.app: api
+      sources:
+        - title: Kubernetes docs — Network Policies
+          url: https://kubernetes.io/docs/concepts/services-networking/network-policies/
+        - title: Kubernetes docs — Declare Network Policy
+          url: https://kubernetes.io/docs/tasks/administer-cluster/declare-network-policy/
+        - title: Kubernetes docs — DNS for Services and Pods
+          url: https://kubernetes.io/docs/concepts/services-networking/dns-pod-service/
+        - title: Kubernetes docs — Security Checklist (network security)
+          url: https://kubernetes.io/docs/concepts/security/security-checklist/
+        - title: CNCF CKA curriculum (Services and Networking — define and enforce Network Policies)
+          url: https://github.com/cncf/curriculum/blob/master/CKA_Curriculum_v1.37.pdf
+        - title: CNCF CKS curriculum (Cluster Setup — network security policies)
+          url: https://github.com/cncf/curriculum/blob/master/CKS_Curriculum%20v1.34.pdf
+
+  - op: upsert
+    kind: challenge
+    id: kubernetes-helm-values-per-environment
+    data:
+      provider: kubernetes
+      level: advanced
+      title: One Helm chart, values per environment
+      summary: Make a chart's templates read its values, then size production with values-prod.yaml while dev stays small.
+      minutes: 40
+      tags: [helm, environments, values, templates, pdb]
+      prerequisites: [kubernetes-kustomize-overlays]
+      runtime: local
+      problem: |
+        **ledger** is packaged as a Helm chart in `chart/`. Each environment
+        installs it with its own values file (`helm install -f
+        values-prod.yaml …`): Helm merges the chart's `values.yaml` defaults
+        with the file passed on the command line, and the templates read the
+        result through `.Values`.
+
+        Production was configured for three replicas, yet it runs one: the
+        Deployment template hard-codes `replicas` and the image, so the
+        values files have no effect. Production also has no
+        PodDisruptionBudget, although the chart already contains an optional
+        one, and still uses development memory.
+
+        Switch the workflow between the **dev** and **prod** environments in
+        Nimbo to render the chart with each values file.
+      requirements:
+        - "`templates/deployment.yaml` reads the replica count from `.Values.replicaCount` and the image from `.Values.image.repository` and `.Values.image.tag`."
+        - "`values-prod.yaml` sets 3 replicas, enables the PodDisruptionBudget (`podDisruptionBudget.enabled: true`) and raises `resources.limits.memory` to `256Mi`."
+        - The **dev** environment still renders 1 replica and no PodDisruptionBudget.
+        - In prod, the production availability rules (replicas protected by a budget that allows evictions) pass.
+      hints:
+        - "Template a field with `{{ .Values.replicaCount }}`; quote strings that could look like numbers or booleans: `image: \"{{ .Values.image.repository }}:{{ .Values.image.tag }}\"`."
+        - "Values files override the defaults key by key: `values-prod.yaml` only needs the keys that differ from `values.yaml`. Nested maps merge, so setting `resources.limits.memory` keeps the requests from the defaults."
+        - "`templates/pdb.yaml` renders only when `.Values.podDisruptionBudget.enabled` is true; check its default `maxUnavailable` in `values.yaml`."
+      solution: |
+        **Templates read values.** The Helm docs describe values precedence
+        as: the chart's `values.yaml`, then a parent chart's values, then
+        files passed with `-f`, then `--set`. None of it matters if a
+        template hard-codes the field:
+
+        ```yaml
+        spec:
+          replicas: {{ .Values.replicaCount }}
+          ...
+              image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+        ```
+
+        **Per-environment values.** Keep defaults (development-sized) in
+        `values.yaml` and only overrides in `values-prod.yaml`:
+
+        ```yaml
+        replicaCount: 3
+        resources:
+          limits:
+            memory: 256Mi
+        podDisruptionBudget:
+          enabled: true
+        ```
+
+        Nested maps are merged, so `resources.requests` from the defaults
+        stays. The Helm best-practices guide recommends this flat, documented
+        layout and camelCase names. Render both with
+        `helm template ledger chart -f chart/values-prod.yaml` before
+        installing.
+      solutionFiles:
+        chart/templates/deployment.yaml: |
+          apiVersion: apps/v1
+          kind: Deployment
+          metadata:
+            name: {{ include "ledger.fullname" . }}
+            labels:
+              {{- include "ledger.labels" . | nindent 4 }}
+          spec:
+            replicas: {{ .Values.replicaCount }}
+            strategy:
+              type: RollingUpdate
+              rollingUpdate:
+                maxUnavailable: 0
+                maxSurge: 1
+            selector:
+              matchLabels:
+                {{- include "ledger.selectorLabels" . | nindent 6 }}
+            template:
+              metadata:
+                labels:
+                  {{- include "ledger.selectorLabels" . | nindent 8 }}
+              spec:
+                topologySpreadConstraints:
+                  - maxSkew: 1
+                    topologyKey: kubernetes.io/hostname
+                    whenUnsatisfiable: ScheduleAnyway
+                    labelSelector:
+                      matchLabels:
+                        {{- include "ledger.selectorLabels" . | nindent 14 }}
+                containers:
+                  - name: ledger
+                    image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+                    imagePullPolicy: {{ .Values.image.pullPolicy }}
+                    ports:
+                      - name: http
+                        containerPort: 9898
+                    readinessProbe:
+                      httpGet:
+                        path: /readyz
+                        port: http
+                    livenessProbe:
+                      httpGet:
+                        path: /healthz
+                        port: http
+                    resources:
+                      {{- toYaml .Values.resources | nindent 12 }}
+        chart/values-prod.yaml: |
+          # Production: only what differs from values.yaml.
+          replicaCount: 3
+          resources:
+            limits:
+              memory: 256Mi
+          podDisruptionBudget:
+            enabled: true
+      starter:
+        kind: kubernetes
+        kubernetes:
+          sources:
+            - kind: helm
+              path: chart
+              release: ledger
+              namespace: ledger
+              environments:
+                dev: chart/values-dev.yaml
+                prod: chart/values-prod.yaml
+        files:
+          chart/Chart.yaml: |
+            apiVersion: v2
+            name: ledger
+            description: The ledger service (podinfo) with dev and prod values
+            type: application
+            version: 0.1.0
+            appVersion: "6.15.0"
+          chart/values.yaml: |
+            # Defaults (development-sized). values-dev.yaml and
+            # values-prod.yaml override them per environment.
+            replicaCount: 1
+
+            image:
+              repository: ghcr.io/stefanprodan/podinfo
+              tag: "6.15.0"
+              pullPolicy: IfNotPresent
+
+            resources:
+              requests:
+                cpu: 50m
+                memory: 64Mi
+              limits:
+                memory: 128Mi
+
+            podDisruptionBudget:
+              enabled: false
+              maxUnavailable: 1
+          chart/values-dev.yaml: |
+            # Development: the defaults.
+            replicaCount: 1
+          chart/values-prod.yaml: |
+            # Production.
+            replicaCount: 3
+          chart/templates/_helpers.tpl: |
+            {{/* Name of the chart's objects: the release name. */}}
+            {{- define "ledger.fullname" -}}
+            {{- .Release.Name | trunc 63 | trimSuffix "-" -}}
+            {{- end -}}
+
+            {{/* Labels selecting the pods. */}}
+            {{- define "ledger.selectorLabels" -}}
+            app.kubernetes.io/name: {{ .Chart.Name }}
+            app.kubernetes.io/instance: {{ .Release.Name }}
+            {{- end -}}
+
+            {{/* Labels of every object. */}}
+            {{- define "ledger.labels" -}}
+            {{ include "ledger.selectorLabels" . }}
+            app.kubernetes.io/version: {{ .Chart.AppVersion | quote }}
+            app.kubernetes.io/managed-by: {{ .Release.Service }}
+            helm.sh/chart: {{ .Chart.Name }}-{{ .Chart.Version }}
+            {{- end -}}
+          chart/templates/deployment.yaml: |
+            apiVersion: apps/v1
+            kind: Deployment
+            metadata:
+              name: {{ include "ledger.fullname" . }}
+              labels:
+                {{- include "ledger.labels" . | nindent 4 }}
+            spec:
+              replicas: 1
+              strategy:
+                type: RollingUpdate
+                rollingUpdate:
+                  maxUnavailable: 0
+                  maxSurge: 1
+              selector:
+                matchLabels:
+                  {{- include "ledger.selectorLabels" . | nindent 6 }}
+              template:
+                metadata:
+                  labels:
+                    {{- include "ledger.selectorLabels" . | nindent 8 }}
+                spec:
+                  topologySpreadConstraints:
+                    - maxSkew: 1
+                      topologyKey: kubernetes.io/hostname
+                      whenUnsatisfiable: ScheduleAnyway
+                      labelSelector:
+                        matchLabels:
+                          {{- include "ledger.selectorLabels" . | nindent 14 }}
+                  containers:
+                    - name: ledger
+                      image: ghcr.io/stefanprodan/podinfo:6.15.0
+                      imagePullPolicy: {{ .Values.image.pullPolicy }}
+                      ports:
+                        - name: http
+                          containerPort: 9898
+                      readinessProbe:
+                        httpGet:
+                          path: /readyz
+                          port: http
+                      livenessProbe:
+                        httpGet:
+                          path: /healthz
+                          port: http
+                      resources:
+                        {{- toYaml .Values.resources | nindent 12 }}
+          chart/templates/service.yaml: |
+            apiVersion: v1
+            kind: Service
+            metadata:
+              name: {{ include "ledger.fullname" . }}
+              labels:
+                {{- include "ledger.labels" . | nindent 4 }}
+            spec:
+              selector:
+                {{- include "ledger.selectorLabels" . | nindent 4 }}
+              ports:
+                - name: http
+                  port: 80
+                  targetPort: http
+          chart/templates/pdb.yaml: |
+            {{- if .Values.podDisruptionBudget.enabled }}
+            apiVersion: policy/v1
+            kind: PodDisruptionBudget
+            metadata:
+              name: {{ include "ledger.fullname" . }}
+              labels:
+                {{- include "ledger.labels" . | nindent 4 }}
+            spec:
+              maxUnavailable: {{ .Values.podDisruptionBudget.maxUnavailable }}
+              selector:
+                matchLabels:
+                  {{- include "ledger.selectorLabels" . | nindent 6 }}
+            {{- end }}
+      checks:
+        - id: prod-renders
+          label: The chart renders with values-prod.yaml
+          type: validate
+          environment: prod
+        - id: dev-renders
+          label: The chart renders with values-dev.yaml
+          type: validate
+          environment: dev
+        - id: prod-replicas
+          label: Prod runs 3 replicas
+          type: has
+          environment: prod
+          has:
+            kubernetes:
+              kind: Deployment
+              where:
+                spec.replicas: {min: 3}
+        - id: image-from-values
+          label: The image comes from .Values.image
+          type: has
+          environment: prod
+          has:
+            kubernetes:
+              kind: Deployment
+              where:
+                spec.template.spec.containers.ledger.image: ghcr.io/stefanprodan/podinfo:6.15.0
+                spec.template.spec.containers.ledger.resources.limits.memory: 256Mi
+        - id: prod-pdb
+          label: Prod renders the PodDisruptionBudget
+          type: has
+          environment: prod
+          has:
+            kubernetes:
+              kind: PodDisruptionBudget
+        - id: prod-availability-rules
+          label: "Prod: replicas are protected by a budget that still allows evictions"
+          type: rules_clean
+          environment: prod
+          rules_clean:
+            codes: [k8s_single_replica, k8s_pdb, k8s_rollout_strategy, k8s_topology_spread]
+            minSeverity: warning
+        - id: dev-small
+          label: Dev keeps 1 replica and no PodDisruptionBudget
+          type: has
+          environment: dev
+          has:
+            kubernetes:
+              kind: Deployment
+              where:
+                spec.replicas: {max: 1}
+        - id: dev-no-pdb
+          label: Dev renders no PodDisruptionBudget
+          type: has
+          environment: dev
+          has:
+            kubernetes:
+              kind: PodDisruptionBudget
+              count: {max: 0}
+      sources:
+        - title: Helm docs — Values Files
+          url: https://helm.sh/docs/chart_template_guide/values_files/
+        - title: Helm docs — Best Practices — Values
+          url: https://helm.sh/docs/chart_best_practices/values/
+        - title: Helm docs — Charts
+          url: https://helm.sh/docs/topics/charts/
+        - title: Helm docs — helm install
+          url: https://helm.sh/docs/helm/helm_install/
+        - title: Kubernetes docs — Specifying a Disruption Budget for your Application
+          url: https://kubernetes.io/docs/tasks/run-application/configure-pdb/
+        - title: CNCF CKAD curriculum (Application Deployment — use the Helm package manager)
+          url: https://github.com/cncf/curriculum/blob/master/CKAD_Curriculum_v1.37.pdf

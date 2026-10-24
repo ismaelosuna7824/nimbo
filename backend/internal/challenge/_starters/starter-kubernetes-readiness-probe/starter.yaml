@@ -1,0 +1,7 @@
+# Starter of the Learn challenge kubernetes-readiness-probe (see internal/learn/migrations).
+kind: kubernetes
+kubernetes:
+  sources:
+    - { kind: manifests, path: k8s }
+  builds:
+    - { image: "catalog:dev", context: catalog }

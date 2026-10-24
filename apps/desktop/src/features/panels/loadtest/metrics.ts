@@ -24,7 +24,7 @@ export const EXPLAIN = {
   stability:
     "Stability: how much the p95 latency varies from second to second (coefficient of variation). Lower means steadier performance.",
   capacity:
-    "Capacity: the traffic level where the system started breaking — error rate above 5% or p95 more than 4× its initial value.",
+    "Capacity: the traffic level where the system started breaking — error rate above 5%, or p95 above 4× its initial value (and at least 50 ms more) for 2 seconds in a row.",
   requests: "Total requests sent so far.",
 }
 

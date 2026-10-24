@@ -37,7 +37,8 @@ Steps:
 5. Fix every error diagnostic and every best_practices finding your edits return, then call review_docker and fix its warnings and info (or tell the user why one stays). Mention the opt-in rules it lists (hardening, limits, cache mounts) if they matter for the request.
 6. deploy (docker compose up, waits for healthy; remap_ports=true if host ports are taken). On failure read the log tail and get_deployed_state, fix and deploy again.
 7. get_endpoints and try_endpoint on the published services, then list_load_targets + run_load_test with preset smoke; get_docker_metrics for image sizes, build times, memory vs limits and startup times (resize limits from it). For anything headed to production, add_monitoring (Prometheus, Grafana, cAdvisor and container alerts) and deploy again.
-8. Summarize for the user: services and how they connect, what is published where, image sizes, health and smoke-test results, findings left open and why, and how to stop it (destroy).`, req), nil
+8. For anything headed to production, production_readiness: resolve its open items (a load test, run_load_test with a scenario from list_scenarios for the app and each data service, plan_capacity for the target traffic) or tell the user which stay open.
+9. Summarize for the user: services and how they connect, what is published where, image sizes, health and smoke-test results, the readiness score, findings left open and why, and how to stop it (destroy).`, req), nil
 	})
 
 	r.addPrompt(&sdk.Prompt{
@@ -98,7 +99,7 @@ Steps:
 5. Fix every error diagnostic and best_practices finding the edits return, then review_kubernetes for each environment (update_workflow environment switches it) and fix warnings and info (or tell the user why one stays).
 6. deploy (local k3s cluster; waits for rollouts). On failure read get_deployed_state problems/events and get_kubernetes_logs, fix and deploy again.
 7. get_endpoints and try_endpoint on the Services and Ingress URLs, then list_load_targets + run_load_test with preset smoke. With an HPA in the deployed environment, run_load_test with preset autoscale and read its autoscaling verdict (late: lower the CPU target or raise minReplicas; maxed: raise maxReplicas; no_metrics: set cpu requests).
-8. production_readiness: resolve its open items per environment (add_monitoring for monitoring, a load test in each production-like environment for scaling) or tell the user which stay open.
+8. production_readiness: resolve its open items per environment (add_monitoring for monitoring, a load test in each production-like environment for scaling, run_load_test with a scenario for resilience, plan_capacity) or tell the user which stay open.
 9. Summarize: objects and how they connect, URLs, health and smoke-test results, the readiness status per environment, findings left open and why, and how to stop it (destroy, kubernetes_cluster stop).`, req), nil
 	})
 

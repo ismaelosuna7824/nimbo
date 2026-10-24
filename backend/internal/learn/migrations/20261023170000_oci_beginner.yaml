@@ -1,0 +1,806 @@
+description: Adds the OCI beginner challenges (compartments and least-privilege policies, private versioned bucket with lifecycle rules, VCN with public and private subnets)
+operations:
+  - op: upsert
+    kind: challenge
+    id: oci-compartment-least-privilege
+    data:
+      provider: oci
+      level: beginner
+      title: Compartments and least-privilege IAM policies
+      summary: Move a team out of the root compartment and replace a tenancy-wide admin grant with scoped policy statements.
+      minutes: 25
+      tags: [iam, compartments, policies, least-privilege]
+      runtime: design
+      problem: |
+        A small team started on Oracle Cloud Infrastructure by putting everything in the tenancy (the root
+        compartment) and writing one policy so nobody would get blocked:
+
+        ```
+        Allow group app-developers to manage all-resources in tenancy
+        ```
+
+        That statement lets every developer delete any network, read any bucket and rewrite IAM policies for the
+        whole company. Oracle's tenancy setup guidance says to plan a compartment hierarchy together with groups,
+        and the OCI security guide recommends least-privilege access: grant each group only the verbs and resource
+        types it needs, in the compartment where its resources live.
+
+        Rework the Terraform so the application has its own compartment and the developers' access stops at that
+        compartment's boundary. The network team keeps ownership of the network, so developers may use it but
+        not change it.
+      requirements:
+        - An oci_identity_compartment named app-dev is created directly under the tenancy (its compartment_id is the tenancy OCID).
+        - No policy statement grants all-resources in the tenancy.
+        - The app-developers group gets statements scoped with in compartment app-dev, for example to manage instance-family, volume-family and object-family.
+        - Developers can use the network but not manage it (use virtual-network-family, never manage virtual-network-family).
+      hints:
+        - Policy statements read like sentences — Allow group <group> to <verb> <resource-type> in <location> — and the location can be the tenancy or one compartment.
+        - The four verbs, from least to most access, are inspect, read, use and manage. Pick the smallest one that still lets the team work.
+        - Resource families (instance-family, volume-family, object-family, virtual-network-family) are easier to grant than individual resource types; keep one statement per family.
+        - Create oci_identity_compartment.app with compartment_id = var.tenancy_ocid and name = "app-dev", then write the statements with in compartment app-dev.
+      solution: |
+        Create the compartment under the tenancy, keep the group, and replace the tenancy-wide statement with one
+        statement per resource family, each scoped to the new compartment:
+
+        ```hcl
+        resource "oci_identity_compartment" "app" {
+          compartment_id = var.tenancy_ocid
+          name           = "app-dev"
+          description    = "Application resources of the app team"
+        }
+
+        resource "oci_identity_policy" "app_developers" {
+          compartment_id = var.tenancy_ocid
+          name           = "${local.name_prefix}-app-developers"
+          description    = "Least-privilege access for app developers to the app-dev compartment"
+          statements = [
+            "Allow group app-developers to manage instance-family in compartment app-dev",
+            "Allow group app-developers to manage volume-family in compartment app-dev",
+            "Allow group app-developers to manage object-family in compartment app-dev",
+            "Allow group app-developers to use virtual-network-family in compartment app-dev",
+          ]
+        }
+        ```
+
+        **Why:** compartments are the unit OCI uses to organize and isolate resources, and every policy statement
+        names the compartment it applies to. Policies inherit downward, so a grant in the tenancy reaches every
+        compartment; a grant in compartment app-dev reaches only app-dev and its children. The verbs are ordered
+        inspect < read < use < manage: use lets developers attach instances to existing subnets without being able
+        to create or delete network resources, which stay with the network administrators. These statements are
+        based on the "Let users launch compute instances" template from Oracle's common policies.
+      solutionFiles:
+        main.tf: |
+          resource "oci_identity_compartment" "app" {
+            compartment_id = var.tenancy_ocid
+            name           = "app-dev"
+            description    = "Application resources of the app team"
+            freeform_tags  = local.common_tags
+          }
+
+          resource "oci_identity_group" "app_developers" {
+            compartment_id = var.tenancy_ocid
+            name           = "app-developers"
+            description    = "Developers of the application"
+            freeform_tags  = local.common_tags
+          }
+
+          # Policies inherit downward: these statements reach app-dev and its
+          # children only.
+          resource "oci_identity_policy" "app_developers" {
+            compartment_id = var.tenancy_ocid
+            name           = "${local.name_prefix}-app-developers"
+            description    = "Least-privilege access for app developers to the app-dev compartment"
+            freeform_tags  = local.common_tags
+            statements = [
+              "Allow group app-developers to manage instance-family in compartment app-dev",
+              "Allow group app-developers to manage volume-family in compartment app-dev",
+              "Allow group app-developers to manage object-family in compartment app-dev",
+              "Allow group app-developers to use virtual-network-family in compartment app-dev",
+            ]
+
+            depends_on = [oci_identity_compartment.app, oci_identity_group.app_developers]
+          }
+      starter:
+        kind: terraform
+        cloud: oci
+        files:
+          versions.tf: |
+            terraform {
+              required_version = ">= 1.6"
+
+              required_providers {
+                oci = {
+                  source  = "oracle/oci"
+                  version = "~> 9.0"
+                }
+              }
+            }
+          providers.tf: |
+            provider "oci" {
+              region = var.oci_region
+            }
+          variables.tf: |
+            variable "project" {
+              type        = string
+              default     = "learn"
+              description = "Project name: the first part of every resource name and the Project tag."
+            }
+
+            variable "environment" {
+              type        = string
+              default     = "dev"
+              description = "Deployment environment (dev, staging, prod): part of every resource name and the Environment tag."
+            }
+
+            variable "oci_region" {
+              type        = string
+              default     = "us-ashburn-1"
+              description = "OCI region to deploy into."
+            }
+
+            variable "tenancy_ocid" {
+              type        = string
+              default     = "ocid1.tenancy.oc1..flocilocaltenancy0000000000000000000000000000000000000000"
+              description = "OCID of the tenancy (the root compartment); defaults to the local Floci tenancy."
+            }
+          locals.tf: |
+            locals {
+              name_prefix = "${var.project}-${var.environment}"
+              common_tags = {
+                Project     = var.project
+                Environment = var.environment
+                ManagedBy   = "nimbo"
+              }
+            }
+          main.tf: |
+            resource "oci_identity_group" "app_developers" {
+              compartment_id = var.tenancy_ocid
+              name           = "app-developers"
+              description    = "Developers of the application"
+              freeform_tags  = local.common_tags
+            }
+
+            # Quick start: give the team everything so nobody gets blocked.
+            resource "oci_identity_policy" "app_developers" {
+              compartment_id = var.tenancy_ocid
+              name           = "${local.name_prefix}-app-developers"
+              description    = "Access for app developers"
+              freeform_tags  = local.common_tags
+              statements = [
+                "Allow group app-developers to manage all-resources in tenancy",
+              ]
+
+              depends_on = [oci_identity_group.app_developers]
+            }
+          outputs.tf: |
+            output "policy_id" {
+              value       = oci_identity_policy.app_developers.id
+              description = "OCID of the app developers' policy."
+            }
+      checks:
+        - id: validate
+          label: The workflow validates
+          type: validate
+        - id: app-compartment
+          label: An app-dev compartment exists directly under the tenancy
+          type: has
+          has:
+            terraform:
+              type: oci_identity_compartment
+              where:
+                name: app-dev
+                compartment_id: { ref: var.tenancy_ocid }
+        - id: no-tenancy-admin
+          label: No statement grants all-resources in the tenancy
+          type: has
+          has:
+            terraform:
+              type: oci_identity_policy
+              where:
+                statements: { contains: all-resources in tenancy }
+              count: { max: 0 }
+        - id: scoped-to-compartment
+          label: Developer statements are scoped to compartment app-dev
+          type: has
+          has:
+            terraform:
+              type: oci_identity_policy
+              where:
+                statements: { contains: app-developers to manage instance-family in compartment app-dev }
+        - id: network-use-only
+          label: Developers use the network but cannot manage it
+          type: has
+          has:
+            terraform:
+              type: oci_identity_policy
+              where:
+                statements: { contains: app-developers to use virtual-network-family in compartment app-dev }
+        - id: no-network-manage
+          label: No statement lets developers manage the network
+          type: has
+          has:
+            terraform:
+              type: oci_identity_policy
+              where:
+                statements: { contains: app-developers to manage virtual-network-family }
+              count: { max: 0 }
+      sources:
+        - title: Learn Best Practices for Setting Up Your Tenancy
+          url: https://docs.oracle.com/en-us/iaas/Content/GSG/Concepts/settinguptenancy.htm
+        - title: How Policies Work
+          url: https://docs.oracle.com/en-us/iaas/Content/Identity/Concepts/policies.htm
+        - title: Policy Syntax
+          url: https://docs.oracle.com/en-us/iaas/Content/Identity/Concepts/policysyntax.htm
+        - title: IAM Security Policies (OCI Security Guide)
+          url: https://docs.oracle.com/en-us/iaas/Content/Security/Reference/iam_security_topic-IAM_Security_Policies.htm
+        - title: Common Policies (Policy Builder templates)
+          url: https://docs.oracle.com/en-us/iaas/Content/Identity/policiescommon/commonpolicies.htm
+        - title: oci_identity_compartment (oracle/oci 9.x)
+          url: https://registry.terraform.io/providers/oracle/oci/9.11.0/docs/resources/identity_compartment
+        - title: oci_identity_policy (oracle/oci 9.x)
+          url: https://registry.terraform.io/providers/oracle/oci/9.11.0/docs/resources/identity_policy
+
+  - op: upsert
+    kind: challenge
+    id: oci-private-bucket-lifecycle
+    data:
+      provider: oci
+      level: beginner
+      title: Private, versioned Object Storage with lifecycle rules
+      summary: Protect a bucket against overwrites and deletes with versioning, and let lifecycle rules archive and expire old data.
+      minutes: 25
+      tags: [object-storage, versioning, lifecycle, cost]
+      runtime: design
+      prerequisites: [oci-compartment-least-privilege]
+      problem: |
+        The finance team stores exported invoices in an Object Storage bucket. The bucket is already private
+        (NoPublicAccess), but two incidents worried them: a script overwrote a month of invoices with empty files,
+        and the bucket keeps growing because nobody deletes anything.
+
+        The OCI security guide for Object Storage recommends object versioning to recover from accidental or
+        malicious overwrites and deletes, and Object Lifecycle Management can move old objects to cheaper tiers and
+        delete what is no longer needed. Lifecycle rules run as the Object Storage service, which needs a policy
+        that authorizes it in your tenancy.
+      requirements:
+        - The bucket stays private (access_type = "NoPublicAccess").
+        - Versioning is enabled on the bucket.
+        - An oci_objectstorage_object_lifecycle_policy is attached to the bucket.
+        - A lifecycle rule moves current objects to the Archive tier (target "objects", action "ARCHIVE").
+        - A lifecycle rule deletes previous object versions (target "previous-object-versions", action "DELETE").
+        - An IAM policy authorizes the Object Storage service of the region (objectstorage-<region>) to manage object-family, so lifecycle rules can run.
+      hints:
+        - Versioning is one argument of oci_objectstorage_bucket; its values are Enabled and Disabled.
+        - A bucket has a single lifecycle policy resource holding all its rules; each rules block has name, action, target, is_enabled and a time_amount/time_unit age.
+        - The lifecycle policy references the bucket by name and namespace, for example bucket = oci_objectstorage_bucket.assets.name.
+        - 'The service policy statement has the form: Allow service objectstorage-<region> to manage object-family in compartment <name> (or in tenancy).'
+      solution: |
+        Enable versioning on the bucket, attach one lifecycle policy with two rules, and authorize Object Storage
+        to act on your objects:
+
+        ```hcl
+        resource "oci_objectstorage_bucket" "assets" {
+          # ...
+          access_type = "NoPublicAccess"
+          versioning  = "Enabled"
+        }
+
+        resource "oci_objectstorage_object_lifecycle_policy" "assets" {
+          namespace = data.oci_objectstorage_namespace.ns.namespace
+          bucket    = oci_objectstorage_bucket.assets.name
+
+          rules {
+            name        = "archive-after-90-days"
+            action      = "ARCHIVE"
+            target      = "objects"
+            is_enabled  = true
+            time_amount = 90
+            time_unit   = "DAYS"
+          }
+
+          rules {
+            name        = "delete-old-versions"
+            action      = "DELETE"
+            target      = "previous-object-versions"
+            is_enabled  = true
+            time_amount = 120
+            time_unit   = "DAYS"
+          }
+        }
+        ```
+
+        **Why:** with versioning on, an overwrite or delete creates a new version and keeps the previous one, so
+        the empty-file incident becomes a restore instead of a loss. Versioning alone makes storage grow faster,
+        which is why the lifecycle policy also deletes previous versions after a retention window and archives
+        current objects that are rarely read. Object Storage is a regional service and runs lifecycle actions on
+        your behalf, so Oracle requires a policy such as
+        `Allow service objectstorage-us-ashburn-1 to manage object-family in tenancy` in every region where you use
+        lifecycle rules.
+      solutionFiles:
+        main.tf: |
+          data "oci_objectstorage_namespace" "ns" {
+            compartment_id = var.compartment_ocid
+          }
+
+          resource "oci_objectstorage_bucket" "assets" {
+            compartment_id = var.compartment_ocid
+            namespace      = data.oci_objectstorage_namespace.ns.namespace
+            name           = "${local.name_prefix}-assets"
+            access_type    = "NoPublicAccess"
+            storage_tier   = "Standard"
+            versioning     = "Enabled"
+            freeform_tags  = local.common_tags
+          }
+
+          # Lifecycle actions run as the Object Storage service of the region.
+          resource "oci_identity_policy" "object_lifecycle" {
+            compartment_id = var.compartment_ocid
+            name           = "${local.name_prefix}-object-lifecycle"
+            description    = "Lets Object Storage archive and delete objects for lifecycle rules"
+            freeform_tags  = local.common_tags
+            statements = [
+              "Allow service objectstorage-${var.oci_region} to manage object-family in tenancy",
+            ]
+          }
+
+          resource "oci_objectstorage_object_lifecycle_policy" "assets" {
+            namespace = data.oci_objectstorage_namespace.ns.namespace
+            bucket    = oci_objectstorage_bucket.assets.name
+
+            rules {
+              name        = "archive-after-90-days"
+              action      = "ARCHIVE"
+              target      = "objects"
+              is_enabled  = true
+              time_amount = 90
+              time_unit   = "DAYS"
+            }
+
+            rules {
+              name        = "delete-old-versions"
+              action      = "DELETE"
+              target      = "previous-object-versions"
+              is_enabled  = true
+              time_amount = 120
+              time_unit   = "DAYS"
+            }
+
+            depends_on = [oci_identity_policy.object_lifecycle]
+          }
+      starter:
+        templateId: oci-object-storage
+      checks:
+        - id: validate
+          label: The workflow validates
+          type: validate
+        - id: private
+          label: The bucket is private (NoPublicAccess)
+          type: has
+          has:
+            terraform:
+              type: oci_objectstorage_bucket
+              where:
+                access_type: NoPublicAccess
+        - id: versioning
+          label: Versioning is enabled
+          type: has
+          has:
+            terraform:
+              type: oci_objectstorage_bucket
+              where:
+                versioning: Enabled
+        - id: lifecycle-policy
+          label: A lifecycle policy is attached to the bucket
+          type: has
+          has:
+            terraform:
+              type: oci_objectstorage_object_lifecycle_policy
+              where:
+                bucket: { ref: oci_objectstorage_bucket }
+        - id: archive-rule
+          label: Current objects move to the Archive tier
+          type: has
+          has:
+            terraform:
+              type: oci_objectstorage_object_lifecycle_policy
+              where:
+                rules.target: objects
+                rules.action: ARCHIVE
+        - id: expire-versions
+          label: Previous object versions are deleted after a retention window
+          type: has
+          has:
+            terraform:
+              type: oci_objectstorage_object_lifecycle_policy
+              where:
+                rules.target: previous-object-versions
+                rules.action: DELETE
+        - id: service-policy
+          label: Object Storage is authorized to run lifecycle actions
+          type: has
+          has:
+            terraform:
+              type: oci_identity_policy
+              where:
+                statements: { contains: Allow service objectstorage- }
+      sources:
+        - title: Securing Object Storage (OCI Security Guide)
+          url: https://docs.oracle.com/en-us/iaas/Content/Security/Reference/objectstorage_security.htm
+        - title: Object Storage Versioning
+          url: https://docs.oracle.com/en-us/iaas/Content/Object/Tasks/usingversioning.htm
+        - title: Object Storage Object Lifecycle Management
+          url: https://docs.oracle.com/en-us/iaas/Content/Object/Tasks/usinglifecyclepolicies.htm
+        - title: Object Storage Buckets
+          url: https://docs.oracle.com/en-us/iaas/Content/Object/Tasks/managingbuckets.htm
+        - title: oci_objectstorage_bucket (oracle/oci 9.x)
+          url: https://registry.terraform.io/providers/oracle/oci/9.11.0/docs/resources/objectstorage_bucket
+        - title: oci_objectstorage_object_lifecycle_policy (oracle/oci 9.x)
+          url: https://registry.terraform.io/providers/oracle/oci/9.11.0/docs/resources/objectstorage_object_lifecycle_policy
+
+  - op: upsert
+    kind: challenge
+    id: oci-vcn-public-private-subnets
+    data:
+      provider: oci
+      level: beginner
+      title: VCN with public and private subnets
+      summary: Split a flat network into a public subnet behind an internet gateway and a private subnet that reaches out through NAT and service gateways.
+      minutes: 30
+      tags: [networking, vcn, subnets, gateways]
+      runtime: design
+      problem: |
+        The first VCN of the project has two subnets, web and app, and both are public: every VNIC may get a
+        public IP and both route tables send all traffic to the internet gateway. The app servers only need to
+        download packages and write to Object Storage; nothing on the internet should be able to reach them.
+
+        OCI's networking guidance is to put internal hosts in a private subnet. A private subnet's instances can't
+        have public IPs; a NAT gateway lets them start connections to the internet without accepting inbound
+        ones, and a service gateway sends traffic to Oracle services such as Object Storage over the Oracle network
+        instead of the internet. Keep the web subnet public and make the app subnet private.
+      requirements:
+        - The app subnet is private (prohibit_public_ip_on_vnic = true).
+        - The VCN has a NAT gateway and a service gateway that covers the Oracle Services Network.
+        - A route table for the private subnet sends 0.0.0.0/0 to the NAT gateway.
+        - The same route table sends the Oracle Services Network CIDR label to the service gateway (destination_type = "SERVICE_CIDR_BLOCK").
+        - The private subnet uses that route table, while the public subnet keeps its route to the internet gateway.
+      hints:
+        - Subnets are public by default; one boolean on oci_core_subnet makes them private.
+        - The data source oci_core_services lists the Oracle services; filter it to the "All <region> Services in Oracle Services Network" entry and use its id in the service gateway and its cidr_block in the route rule.
+        - A route rule to a service gateway uses destination_type = "SERVICE_CIDR_BLOCK"; a rule to a NAT gateway uses the default CIDR_BLOCK.
+        - Create a second oci_core_route_table (private) and point the app subnet's route_table_id at it.
+      solution: |
+        Make the app subnet private and give it its own route table with two egress paths:
+
+        ```hcl
+        data "oci_core_services" "all" {
+          filter {
+            name   = "name"
+            values = ["All .* Services In Oracle Services Network"]
+            regex  = true
+          }
+        }
+
+        resource "oci_core_nat_gateway" "main" {
+          compartment_id = var.compartment_ocid
+          vcn_id         = oci_core_vcn.main.id
+        }
+
+        resource "oci_core_service_gateway" "main" {
+          compartment_id = var.compartment_ocid
+          vcn_id         = oci_core_vcn.main.id
+          services {
+            service_id = data.oci_core_services.all.services[0].id
+          }
+        }
+
+        resource "oci_core_route_table" "private" {
+          compartment_id = var.compartment_ocid
+          vcn_id         = oci_core_vcn.main.id
+
+          route_rules {
+            destination       = "0.0.0.0/0"
+            destination_type  = "CIDR_BLOCK"
+            network_entity_id = oci_core_nat_gateway.main.id
+          }
+
+          route_rules {
+            destination       = data.oci_core_services.all.services[0].cidr_block
+            destination_type  = "SERVICE_CIDR_BLOCK"
+            network_entity_id = oci_core_service_gateway.main.id
+          }
+        }
+        ```
+
+        Then set `prohibit_public_ip_on_vnic = true` and `route_table_id = oci_core_route_table.private.id` on the
+        app subnet.
+
+        **Why:** routing in a VCN is chosen per subnet, so each subnet's route table decides which gateway it
+        uses. The NAT gateway allows outbound connections and their responses but never inbound connections from
+        the internet. The service gateway keeps Object Storage traffic on the Oracle network and needs no public
+        IPs at all. A route table can hold only one rule per service CIDR label, and the label must match what the
+        service gateway is configured for, which is why both use the same "All services" entry.
+      solutionFiles:
+        network.tf: |
+          resource "oci_core_vcn" "main" {
+            compartment_id = var.compartment_ocid
+            display_name   = local.name_prefix
+            cidr_blocks    = [var.vcn_cidr]
+            dns_label      = "main"
+            freeform_tags  = local.common_tags
+          }
+
+          resource "oci_core_internet_gateway" "main" {
+            compartment_id = var.compartment_ocid
+            vcn_id         = oci_core_vcn.main.id
+            display_name   = "${local.name_prefix}-igw"
+            enabled        = true
+            freeform_tags  = local.common_tags
+          }
+
+          # Private subnets reach the internet (outbound only) through NAT and
+          # Oracle services through the service gateway.
+          data "oci_core_services" "all" {
+            filter {
+              name   = "name"
+              values = ["All .* Services In Oracle Services Network"]
+              regex  = true
+            }
+          }
+
+          resource "oci_core_nat_gateway" "main" {
+            compartment_id = var.compartment_ocid
+            vcn_id         = oci_core_vcn.main.id
+            display_name   = "${local.name_prefix}-nat"
+            freeform_tags  = local.common_tags
+          }
+
+          resource "oci_core_service_gateway" "main" {
+            compartment_id = var.compartment_ocid
+            vcn_id         = oci_core_vcn.main.id
+            display_name   = "${local.name_prefix}-sgw"
+            freeform_tags  = local.common_tags
+
+            services {
+              service_id = data.oci_core_services.all.services[0].id
+            }
+          }
+
+          resource "oci_core_route_table" "public" {
+            compartment_id = var.compartment_ocid
+            vcn_id         = oci_core_vcn.main.id
+            display_name   = "${local.name_prefix}-public"
+            freeform_tags  = local.common_tags
+
+            route_rules {
+              destination       = "0.0.0.0/0"
+              destination_type  = "CIDR_BLOCK"
+              network_entity_id = oci_core_internet_gateway.main.id
+            }
+          }
+
+          resource "oci_core_route_table" "private" {
+            compartment_id = var.compartment_ocid
+            vcn_id         = oci_core_vcn.main.id
+            display_name   = "${local.name_prefix}-private"
+            freeform_tags  = local.common_tags
+
+            route_rules {
+              destination       = "0.0.0.0/0"
+              destination_type  = "CIDR_BLOCK"
+              network_entity_id = oci_core_nat_gateway.main.id
+            }
+
+            route_rules {
+              destination       = data.oci_core_services.all.services[0].cidr_block
+              destination_type  = "SERVICE_CIDR_BLOCK"
+              network_entity_id = oci_core_service_gateway.main.id
+            }
+          }
+
+          resource "oci_core_subnet" "web" {
+            compartment_id             = var.compartment_ocid
+            vcn_id                     = oci_core_vcn.main.id
+            display_name               = "${local.name_prefix}-web"
+            cidr_block                 = cidrsubnet(var.vcn_cidr, 8, 0)
+            dns_label                  = "web"
+            prohibit_public_ip_on_vnic = false
+            route_table_id             = oci_core_route_table.public.id
+            freeform_tags              = local.common_tags
+          }
+
+          resource "oci_core_subnet" "app" {
+            compartment_id             = var.compartment_ocid
+            vcn_id                     = oci_core_vcn.main.id
+            display_name               = "${local.name_prefix}-app"
+            cidr_block                 = cidrsubnet(var.vcn_cidr, 8, 1)
+            dns_label                  = "app"
+            prohibit_public_ip_on_vnic = true
+            route_table_id             = oci_core_route_table.private.id
+            freeform_tags              = local.common_tags
+          }
+      starter:
+        kind: terraform
+        cloud: oci
+        files:
+          versions.tf: |
+            terraform {
+              required_version = ">= 1.6"
+
+              required_providers {
+                oci = {
+                  source  = "oracle/oci"
+                  version = "~> 9.0"
+                }
+              }
+            }
+          providers.tf: |
+            provider "oci" {
+              region = var.oci_region
+            }
+          variables.tf: |
+            variable "project" {
+              type        = string
+              default     = "learn"
+              description = "Project name: the first part of every resource name and the Project tag."
+            }
+
+            variable "environment" {
+              type        = string
+              default     = "dev"
+              description = "Deployment environment (dev, staging, prod): part of every resource name and the Environment tag."
+            }
+
+            variable "oci_region" {
+              type        = string
+              default     = "us-ashburn-1"
+              description = "OCI region to deploy into."
+            }
+
+            variable "compartment_ocid" {
+              type        = string
+              default     = "ocid1.tenancy.oc1..flocilocaltenancy0000000000000000000000000000000000000000"
+              description = "Compartment OCID for every resource (defaults to the local Floci tenancy root compartment)."
+            }
+
+            variable "vcn_cidr" {
+              type        = string
+              default     = "10.20.0.0/16"
+              description = "Address range of the VCN: the web subnet is its first /24, the app subnet the second."
+            }
+          locals.tf: |
+            locals {
+              name_prefix = "${var.project}-${var.environment}"
+              common_tags = {
+                Project     = var.project
+                Environment = var.environment
+                ManagedBy   = "nimbo"
+              }
+            }
+          network.tf: |
+            resource "oci_core_vcn" "main" {
+              compartment_id = var.compartment_ocid
+              display_name   = local.name_prefix
+              cidr_blocks    = [var.vcn_cidr]
+              dns_label      = "main"
+              freeform_tags  = local.common_tags
+            }
+
+            resource "oci_core_internet_gateway" "main" {
+              compartment_id = var.compartment_ocid
+              vcn_id         = oci_core_vcn.main.id
+              display_name   = "${local.name_prefix}-igw"
+              enabled        = true
+              freeform_tags  = local.common_tags
+            }
+
+            resource "oci_core_route_table" "public" {
+              compartment_id = var.compartment_ocid
+              vcn_id         = oci_core_vcn.main.id
+              display_name   = "${local.name_prefix}-public"
+              freeform_tags  = local.common_tags
+
+              route_rules {
+                destination       = "0.0.0.0/0"
+                destination_type  = "CIDR_BLOCK"
+                network_entity_id = oci_core_internet_gateway.main.id
+              }
+            }
+
+            resource "oci_core_subnet" "web" {
+              compartment_id             = var.compartment_ocid
+              vcn_id                     = oci_core_vcn.main.id
+              display_name               = "${local.name_prefix}-web"
+              cidr_block                 = cidrsubnet(var.vcn_cidr, 8, 0)
+              dns_label                  = "web"
+              prohibit_public_ip_on_vnic = false
+              route_table_id             = oci_core_route_table.public.id
+              freeform_tags              = local.common_tags
+            }
+
+            # The app servers only call out (packages, Object Storage) but sit in
+            # a public subnet that routes everything through the internet gateway.
+            resource "oci_core_subnet" "app" {
+              compartment_id             = var.compartment_ocid
+              vcn_id                     = oci_core_vcn.main.id
+              display_name               = "${local.name_prefix}-app"
+              cidr_block                 = cidrsubnet(var.vcn_cidr, 8, 1)
+              dns_label                  = "app"
+              prohibit_public_ip_on_vnic = false
+              route_table_id             = oci_core_route_table.public.id
+              freeform_tags              = local.common_tags
+            }
+          outputs.tf: |
+            output "vcn_id" {
+              value       = oci_core_vcn.main.id
+              description = "OCID of the VCN."
+            }
+
+            output "app_subnet_id" {
+              value       = oci_core_subnet.app.id
+              description = "OCID of the app subnet."
+            }
+      checks:
+        - id: validate
+          label: The workflow validates
+          type: validate
+        - id: private-subnet
+          label: The app subnet forbids public IPs
+          type: has
+          has:
+            terraform:
+              type: oci_core_subnet
+              where:
+                prohibit_public_ip_on_vnic: true
+        - id: nat-gateway
+          label: The VCN has a NAT gateway
+          type: has
+          has:
+            terraform:
+              type: oci_core_nat_gateway
+              where:
+                vcn_id: { ref: oci_core_vcn }
+        - id: service-gateway
+          label: The VCN has a service gateway for Oracle services
+          type: has
+          has:
+            terraform:
+              type: oci_core_service_gateway
+              where:
+                services.service_id: { exists: true }
+        - id: route-to-nat
+          label: A route table sends internet-bound traffic to the NAT gateway
+          type: has
+          has:
+            terraform:
+              type: oci_core_route_table
+              where:
+                route_rules.network_entity_id: { ref: oci_core_nat_gateway }
+        - id: route-to-service-gateway
+          label: The same route table sends Oracle services traffic to the service gateway
+          type: has
+          has:
+            terraform:
+              type: oci_core_route_table
+              where:
+                route_rules.network_entity_id: { ref: oci_core_service_gateway }
+                route_rules.destination_type: SERVICE_CIDR_BLOCK
+        - id: two-route-tables
+          label: Public and private subnets use separate route tables
+          type: has
+          has:
+            terraform:
+              type: oci_core_route_table
+              count: { min: 2 }
+      sources:
+        - title: Networking Overview
+          url: https://docs.oracle.com/en-us/iaas/Content/Network/Concepts/overview.htm
+        - title: NAT Gateway
+          url: https://docs.oracle.com/en-us/iaas/Content/Network/Tasks/NATgateway.htm
+        - title: 'Access to Oracle Services: Service Gateway'
+          url: https://docs.oracle.com/en-us/iaas/Content/Network/Tasks/servicegateway.htm
+        - title: Internet Gateway
+          url: https://docs.oracle.com/en-us/iaas/Content/Network/Tasks/managingIGs.htm
+        - title: Securing Networking (OCI Security Guide)
+          url: https://docs.oracle.com/en-us/iaas/Content/Security/Reference/networking_security.htm
+        - title: oci_core_service_gateway (oracle/oci 9.x)
+          url: https://registry.terraform.io/providers/oracle/oci/9.11.0/docs/resources/core_service_gateway
+        - title: oci_core_route_table (oracle/oci 9.x)
+          url: https://registry.terraform.io/providers/oracle/oci/9.11.0/docs/resources/core_route_table

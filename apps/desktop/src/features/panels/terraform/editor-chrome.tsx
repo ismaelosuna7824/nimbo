@@ -186,12 +186,13 @@ export function PathBar({
         ))}
       </nav>
 
+      {/* Narrow editors keep just the badge icon so the file name keeps its room. */}
       {readOnly ? (
         <Tooltip>
           <TooltipTrigger asChild>
             <span className="flex shrink-0 items-center gap-1 rounded-sm border px-1.5 py-px text-[10px] font-medium text-muted-foreground">
               <Lock className="size-2.5" />
-              Read-only
+              <span className="sr-only @[24rem]:not-sr-only">Read-only</span>
             </span>
           </TooltipTrigger>
           <TooltipContent className="max-w-64">
@@ -207,7 +208,7 @@ export function PathBar({
           <TooltipTrigger asChild>
             <span className="flex shrink-0 items-center gap-1 rounded-sm border border-primary/40 bg-primary/10 px-1.5 py-px text-[10px] font-medium text-primary">
               <Pencil className="size-2.5" />
-              Editable
+              <span className="sr-only @[24rem]:not-sr-only">Editable</span>
             </span>
           </TooltipTrigger>
           <TooltipContent className="max-w-64">

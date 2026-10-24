@@ -7,11 +7,16 @@ import {
   CloudUploadIcon,
   DownloadIcon,
   FileCheck2Icon,
+  GraduationCapIcon,
   ListChecksIcon,
   PanelRightIcon,
   SearchIcon,
   Trash2Icon,
   UploadIcon,
+  EllipsisIcon,
+  MoonIcon,
+  SettingsIcon,
+  SunIcon,
 } from "lucide-react"
 import { useEffect, useState } from "react"
 import { Checkbox } from "@/components/ui/checkbox"
@@ -19,6 +24,16 @@ import { TechIcon } from "@/components/tech-icons/tech-icon"
 import { ThemedIcon } from "@/components/arcade/themed-icon"
 import { ThemeToggle } from "@/components/theme-toggle"
 import { SettingsButton } from "@/features/settings/settings-button"
+import { useSettingsView } from "@/features/settings/store"
+import { useTheme } from "next-themes"
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuShortcut,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu"
 import { useSyncedState } from "@/components/use-synced-state"
 import {
   AlertDialog,
@@ -42,12 +57,58 @@ import { useWorkflowStore } from "@/state/workflow-store"
 import { cn } from "@/lib/utils"
 import { ConvertKubernetesDialog } from "@/features/docker/convert-kubernetes-dialog"
 import { MonitoringAction } from "@/features/monitoring/monitoring-action"
+import { useLearnStore } from "@/features/learn/store"
 import { formatRelative } from "../panels/lib/format"
 import { closeFocusedFileTab } from "../panels/terraform/close-file-tab"
 import { MOD_KEY, runAction, useRunBusy } from "./actions"
 import { SandboxChip } from "./sandbox-chip"
 import { useUiStore } from "./ui-store"
 import { closeWorkflow } from "./workflow-actions"
+
+/** The header's secondary actions (import, export, Learn, theme, settings) as one menu when the header is narrow. */
+function MoreActions({ exportLabel, onImport, onExport }: { exportLabel: string; onImport: () => void; onExport: () => void }) {
+  const { resolvedTheme, setTheme } = useTheme()
+  const openSettings = useSettingsView((s) => s.openView)
+  const dark = resolvedTheme !== "light"
+  return (
+    <DropdownMenu>
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <DropdownMenuTrigger asChild>
+            <Button variant="ghost" size="icon-sm" className="@5xl:hidden" aria-label="More actions" data-testid="topbar-more">
+              <EllipsisIcon />
+            </Button>
+          </DropdownMenuTrigger>
+        </TooltipTrigger>
+        <TooltipContent>More: import, export, Learn, theme, settings</TooltipContent>
+      </Tooltip>
+      <DropdownMenuContent align="end" className="w-60">
+        <DropdownMenuItem onSelect={onImport}>
+          <UploadIcon />
+          Import a project
+        </DropdownMenuItem>
+        <DropdownMenuItem onSelect={onExport}>
+          <DownloadIcon />
+          {exportLabel}
+        </DropdownMenuItem>
+        <DropdownMenuSeparator />
+        <DropdownMenuItem onSelect={() => useLearnStore.getState().openView({ challengeId: null })}>
+          <GraduationCapIcon />
+          Learn: roadmaps and challenges
+        </DropdownMenuItem>
+        <DropdownMenuItem onSelect={() => setTheme(dark ? "light" : "dark")}>
+          {dark ? <SunIcon /> : <MoonIcon />}
+          {dark ? "Light theme" : "Dark theme"}
+        </DropdownMenuItem>
+        <DropdownMenuItem onSelect={() => openSettings()}>
+          <SettingsIcon />
+          Settings
+          <DropdownMenuShortcut>{MOD_KEY} ,</DropdownMenuShortcut>
+        </DropdownMenuItem>
+      </DropdownMenuContent>
+    </DropdownMenu>
+  )
+}
 
 function WorkflowName() {
   const name = useWorkflowStore((s) => s.workflow?.name ?? "")
@@ -232,8 +293,8 @@ export function TopBar() {
   }, [])
 
   return (
-    <header className="flex h-12 shrink-0 items-center gap-2 border-b px-2">
-      <div className="flex min-w-0 flex-1 items-center gap-1">
+    <header className="@container flex h-12 shrink-0 items-center gap-2 border-b px-2">
+      <div className="flex min-w-0 flex-1 items-center gap-1 overflow-hidden">
         <SidebarTrigger />
         <Separator orientation="vertical" className="mx-1 h-5" />
         <WorkflowName />
@@ -345,14 +406,22 @@ export function TopBar() {
         </Tooltip>
         <Separator orientation="vertical" className="mx-1 h-5" />
         <ProblemsBadge />
-        <IconAction label="Import a project (Terraform, Docker Compose or Kubernetes)" onClick={() => openDialog("import")}>
-          <ThemedIcon icon={UploadIcon} pixel="upload" />
-        </IconAction>
-        <IconAction label={docker || kube ? "Export the project files" : "Export Terraform"} onClick={() => openDialog("export")}>
-          <ThemedIcon icon={DownloadIcon} pixel="download" />
-        </IconAction>
-        <ThemeToggle />
-        <SettingsButton />
+        {/* Wide headers show these as icons; narrow ones (small windows, open sidebar/inspector) fold them into More so
+            the workflow name and the run actions keep their room. */}
+        <div className="hidden items-center gap-1 @5xl:flex">
+          <IconAction label="Import a project (Terraform, Docker Compose or Kubernetes)" onClick={() => openDialog("import")}>
+            <ThemedIcon icon={UploadIcon} pixel="upload" />
+          </IconAction>
+          <IconAction label={docker || kube ? "Export the project files" : "Export Terraform"} onClick={() => openDialog("export")}>
+            <ThemedIcon icon={DownloadIcon} pixel="download" />
+          </IconAction>
+          <IconAction label="Learn: roadmaps and challenges" onClick={() => useLearnStore.getState().openView({ challengeId: null })}>
+            <ThemedIcon icon={GraduationCapIcon} pixel="star" />
+          </IconAction>
+          <ThemeToggle />
+          <SettingsButton />
+        </div>
+        <MoreActions exportLabel={docker || kube ? "Export the project files" : "Export Terraform"} onImport={() => openDialog("import")} onExport={() => openDialog("export")} />
         <IconAction label={inspectorOpen ? "Hide inspector" : "Show inspector"} onClick={() => setInspectorOpen(!inspectorOpen)} kbd={`${MOD_KEY} I`}>
           <ThemedIcon icon={PanelRightIcon} pixel="panel" />
         </IconAction>

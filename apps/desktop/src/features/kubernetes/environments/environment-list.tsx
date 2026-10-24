@@ -126,14 +126,9 @@ function EnvRow({
           <DropdownMenuItem disabled={active} onSelect={() => switchEnvironment(name)} data-testid={`env-switch-${id}`}>
             <Repeat /> {active ? "Active" : "Switch to"}
           </DropdownMenuItem>
-          {useWorkflowStore.getState().workflow?.kind === "kubernetes" && (
-            <DropdownMenuItem
-              onSelect={() => useWorkflowStore.getState().showReadiness(name)}
-              data-testid={`env-readiness-${id}`}
-            >
-              <ClipboardCheck /> Readiness
-            </DropdownMenuItem>
-          )}
+          <DropdownMenuItem onSelect={() => useWorkflowStore.getState().showReadiness(name)} data-testid={`env-readiness-${id}`}>
+            <ClipboardCheck /> Readiness
+          </DropdownMenuItem>
           <DropdownMenuSeparator />
           <DropdownMenuItem onSelect={() => onDialog({ kind: "new", from: name })} data-testid={`env-duplicate-${id}`}>
             <Copy /> Duplicate…

@@ -136,6 +136,9 @@ describe("remapNote", () => {
     expect(remapNote({ service: "dns", containerPort: 53, protocol: "udp", hostPort: 53, port: 1053 })).toBe(
       "dns: 53/udp was busy → published on 1053/udp",
     )
+    expect(remapNote({ service: "api", containerPort: 3000, protocol: "tcp", hostPort: 3100, count: 2, port: 49154 })).toBe(
+      "api: 3100-3101 was busy → published on 49154-49155",
+    )
   })
 })
 

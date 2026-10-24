@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"runtime"
 	"slices"
 	"strconv"
@@ -56,7 +57,7 @@ func (p portPlan) remaps(remap bool) []model.PortRemap {
 	if remap {
 		for _, c := range p.conflicts {
 			if c.SuggestedPort != 0 {
-				out = append(out, model.PortRemap{Service: c.Service, ContainerPort: c.ContainerPort, Protocol: c.Protocol, HostPort: c.HostPort, Port: c.SuggestedPort})
+				out = append(out, model.PortRemap{Service: c.Service, ContainerPort: c.ContainerPort, Protocol: c.Protocol, HostPort: c.HostPort, Count: c.Count, Port: c.SuggestedPort})
 			}
 		}
 	}
@@ -69,43 +70,83 @@ func (p portPlan) remaps(remap bool) []model.PortRemap {
 	return out
 }
 
-// planPorts checks every fixed published port of cfg. A port is fine when
-// it is free or held by the project itself; otherwise a saved remap for it
-// is kept when its port is usable, else the port is a conflict. A remap is
-// dropped as soon as its original port is free again.
+// planPorts checks every fixed published port (or range) of cfg. A port is
+// fine when it is free or held by the project itself; otherwise a saved
+// remap for it is kept when its port is usable, else the port is a
+// conflict. A range is planned as a whole: one busy port moves all of it to
+// as many consecutive free ports. A remap is dropped as soon as its
+// original ports are free again.
 func planPorts(cfg *composeConfig, own map[string]bool, saved []model.PortRemap, pr prober) portPlan {
 	var plan portPlan
 	used := map[string]bool{}
-	usable := func(hostIP string, port int, proto string) bool {
-		return !used[portKey(proto, port)] && (own[portKey(proto, port)] || pr.free(hostIP, port, proto))
+	usable := func(hostIP string, start, count int, proto string) bool {
+		for port := start; port < start+count; port++ {
+			if used[portKey(proto, port)] || !own[portKey(proto, port)] && !pr.free(hostIP, port, proto) {
+				return false
+			}
+		}
+		return true
+	}
+	take := func(start, count int, proto string) {
+		for port := start; port < start+count; port++ {
+			used[portKey(proto, port)] = true
+		}
 	}
 	for _, name := range slices.Sorted(maps.Keys(cfg.Services)) {
 		for _, p := range cfg.Services[name].Ports {
-			hp, proto := p.fixedPort(), p.proto()
-			if hp == 0 {
+			hp, count := p.fixedRange()
+			proto := p.proto()
+			if count == 0 {
 				continue
 			}
-			if usable(p.HostIP, hp, proto) {
-				used[portKey(proto, hp)] = true
+			if usable(p.HostIP, hp, count, proto) {
+				take(hp, count, proto)
 				continue
 			}
 			i := slices.IndexFunc(saved, func(r model.PortRemap) bool {
-				return r.Service == name && r.ContainerPort == p.Target && r.Protocol == proto && r.HostPort == hp
+				return r.Service == name && r.ContainerPort == p.Target && r.Protocol == proto && r.HostPort == hp && max(r.Count, 1) == count
 			})
-			if i >= 0 && usable(p.HostIP, saved[i].Port, proto) {
-				used[portKey(proto, saved[i].Port)] = true
+			if i >= 0 && usable(p.HostIP, saved[i].Port, count, proto) {
+				take(saved[i].Port, count, proto)
 				plan.kept = append(plan.kept, saved[i])
 				continue
 			}
 			c := model.PortConflict{Service: name, ContainerPort: p.Target, Protocol: proto, HostIP: p.HostIP, HostPort: hp, Holder: pr.holder(hp, proto)}
-			if port, err := pr.pick(p.HostIP, proto, used); err == nil {
+			if count > 1 {
+				c.Count = count
+				for port := hp; port < hp+count && c.Holder == ""; port++ {
+					c.Holder = pr.holder(port, proto)
+				}
+			}
+			if port, ok := pickRange(pr, p.HostIP, proto, used, count); ok {
 				c.SuggestedPort = port
-				used[portKey(proto, port)] = true
+				take(port, count, proto)
 			}
 			plan.conflicts = append(plan.conflicts, c)
 		}
 	}
 	return plan
+}
+
+// pickRange finds count consecutive free ports not in used: candidates come
+// from pr.pick, and a candidate whose followers are taken is skipped.
+func pickRange(pr prober, hostIP, proto string, used map[string]bool, count int) (int, bool) {
+	skip := maps.Clone(used)
+	for range 1000 {
+		start, err := pr.pick(hostIP, proto, skip)
+		if err != nil || start+count-1 > 65535 {
+			return 0, false
+		}
+		ok := true
+		for port := start + 1; port < start+count && ok; port++ {
+			ok = !used[portKey(proto, port)] && pr.free(hostIP, port, proto)
+		}
+		if ok {
+			return start, true
+		}
+		skip[portKey(proto, start)] = true
+	}
+	return 0, false
 }
 
 // ComposePorts is the host port pre-check of an up, on the workflow's files
@@ -130,7 +171,7 @@ func (m *Manager) ComposePorts(ctx context.Context, wfID, sourceDir string, file
 	if err != nil {
 		return model.ComposePorts{}, err
 	}
-	plan := planPorts(cfg, ownPorts(cs), loadRemaps(m.composeDir(wfID)), portProber{})
+	plan := planPorts(cfg, ownPorts(cs), loadRemaps(m.composeDir(wfID)), m.hostProber(ctx))
 	out := model.ComposePorts{Conflicts: plan.conflicts, Remaps: plan.remaps(false)}
 	if out.Conflicts == nil {
 		out.Conflicts = []model.PortConflict{}
@@ -161,8 +202,43 @@ func saveRemaps(work string, remaps []model.PortRemap) error {
 	return writeFile(filepath.Join(work, filepath.FromSlash(composeRemapsFile)), data)
 }
 
-// portProber probes the real host.
-type portProber struct{}
+// portProber probes the real host. published are the host ports Docker
+// containers publish (portKey): the engine refuses them with "port is
+// already allocated" even when a host-side probe cannot see the holder (a
+// container publishing on another address, or one starting while the up
+// is planned).
+type portProber struct{ published map[string]bool }
+
+// hostProber probes the host and the ports running containers publish. The
+// project's own ports are told apart by planPorts (ownPorts).
+func (m *Manager) hostProber(ctx context.Context) portProber {
+	out, err := m.docker(ctx, "ps", "--format", "{{.Ports}}")
+	if err != nil {
+		return portProber{}
+	}
+	return portProber{published: publishedPorts(out)}
+}
+
+// publishedRe matches one host binding of `docker ps` Ports, e.g.
+// "0.0.0.0:8000-8002->80-82/tcp" or "[::]:5432->5432/tcp".
+var publishedRe = regexp.MustCompile(`(?:[0-9.]+|\[[0-9a-fA-F:.]*\]):(\d+)(?:-(\d+))?->[0-9-]+/(tcp|udp|sctp)`)
+
+// publishedPorts parses `docker ps --format {{.Ports}}` output into port
+// keys; unpublished container ports ("6379/tcp") are skipped.
+func publishedPorts(out string) map[string]bool {
+	ports := map[string]bool{}
+	for _, m := range publishedRe.FindAllStringSubmatch(out, -1) {
+		lo, _ := strconv.Atoi(m[1])
+		hi := lo
+		if m[2] != "" {
+			hi, _ = strconv.Atoi(m[2])
+		}
+		for p := lo; p <= hi && p-lo < 65536; p++ {
+			ports[portKey(m[3], p)] = true
+		}
+	}
+	return ports
+}
 
 func bindHost(hostIP string) string {
 	if hostIP == "0.0.0.0" {
@@ -171,7 +247,10 @@ func bindHost(hostIP string) string {
 	return hostIP
 }
 
-func (portProber) free(hostIP string, port int, proto string) bool {
+func (pp portProber) free(hostIP string, port int, proto string) bool {
+	if pp.published[portKey(proto, port)] {
+		return false
+	}
 	addr := net.JoinHostPort(bindHost(hostIP), strconv.Itoa(port))
 	if proto == "udp" {
 		pc, err := net.ListenPacket("udp", addr)
