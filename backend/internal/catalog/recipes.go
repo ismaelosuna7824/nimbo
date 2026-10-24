@@ -331,6 +331,32 @@ func buildRecipes() []recipe {
 			},
 		},
 		{
+			id: "lambda-log-group", label: "Send the function's logs to this log group",
+			desc:  "Names the log group /aws/lambda/<function name>, where Lambda writes the function's logs, and keeps them 14 days unless a retention is already set.",
+			match: pair(isLambda, isType("aws_cloudwatch_log_group")), bidi: true,
+			sets: []string{"dst.name"},
+			apply: func(x *conn) error {
+				fn, g := x.src, x.dst
+				for _, n := range x.b.all() {
+					if n == g || n.Kind != model.KindResource || n.Type != "aws_cloudwatch_log_group" {
+						continue
+					}
+					if a := getAttr(&n.Body, "name"); a != nil && referencesNode(valueSource(a.Value), address(fn)) {
+						return fmt.Errorf("catalog: %s already receives the logs of %s", address(n), address(fn))
+					}
+				}
+				setAttr(&g.Body, "name", expr(fmt.Sprintf(`"/aws/lambda/${%s}"`, ref(fn, "function_name"))))
+				if a := getAttr(&g.Body, "retention_in_days"); a == nil || strings.TrimSpace(valueSource(a.Value)) == "0" {
+					setAttr(&g.Body, "retention_in_days", lit(14))
+				}
+				// logging_config { log_group = <group>.name } is not written: the group's name
+				// reads the function's name, so the function pointing back at the group would be a
+				// dependency cycle. /aws/lambda/<function name> is Lambda's default log group, so
+				// the logs land here without it.
+				return nil
+			},
+		},
+		{
 			id: "lb-target-group-instance", label: "Register the instance in the target group",
 			desc:  "Adds a target group attachment for the instance.",
 			match: pair(isType("aws_lb_target_group"), isType("aws_instance")), bidi: true,
@@ -442,6 +468,7 @@ func buildRecipes() []recipe {
 			},
 		},
 	)
+	rs = append(rs, s3PolicyRecipes()...)
 	return rs
 }
 

@@ -19,6 +19,7 @@ import { deleteComposeNode } from "../actions"
 import { stateText } from "../canvas/nodes"
 import { CommitInput, Field, Section } from "./fields"
 import { ServiceForm } from "./service-form"
+import { StageBaseField } from "./stage-base-field"
 
 const NAME_RE = /^[a-zA-Z0-9][a-zA-Z0-9_.-]*$/
 
@@ -212,7 +213,7 @@ function ReadOnlyFacts({ node }: { node: ComposeNode }) {
   const facts: [string, string | undefined][] =
     node.kind === "build-stage"
       ? [
-          ["From", node.stage?.from],
+          ["From", node.stage?.fromStage],
           ["Dockerfile", node.stage && `${node.stage.dockerfile}:${node.stage.line}`],
           ["Exposes", node.stage?.expose?.join(", ")],
           ["User", node.stage?.user],
@@ -227,6 +228,7 @@ function ReadOnlyFacts({ node }: { node: ComposeNode }) {
         ]
   return (
     <Section title="Details">
+      {node.kind === "build-stage" && node.stage && !node.stage.fromStage && <StageBaseField nodeId={node.id} from={node.stage.from} />}
       <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 text-xs">
         {facts
           .filter(([, v]) => v)

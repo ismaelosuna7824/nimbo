@@ -3,6 +3,8 @@ import { ResourceIcon } from "@/components/resource-icon"
 import { Badge } from "@/components/ui/badge"
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 import type { ConnectionRecipe } from "@/lib/api/types"
+import { AccessLevelPicker } from "../access/access-level-picker"
+import { accessOptions } from "../access/support"
 
 export interface PendingConnection {
   source: { id: string; label: string; icon?: string }
@@ -19,8 +21,10 @@ export function ConnectDialog({
   onPick: (recipe: ConnectionRecipe) => void
   onClose: () => void
 }) {
-  const curated = pending?.recipes.filter((r) => r.curated) ?? []
-  const generic = pending?.recipes.filter((r) => !r.curated) ?? []
+  const all = pending?.recipes ?? []
+  const grants = accessOptions(all, (r) => r.group === "access")
+  const curated = all.filter((r) => r.curated && r.group !== "access")
+  const generic = all.filter((r) => !r.curated)
   return (
     <Dialog open={!!pending} onOpenChange={(o) => !o && onClose()}>
       <DialogContent className="sm:max-w-lg">
@@ -41,12 +45,13 @@ export function ConnectDialog({
           </DialogDescription>
         </DialogHeader>
         <div className="flex max-h-[60vh] flex-col gap-4 overflow-y-auto">
+          <AccessLevelPicker options={grants} onPick={onPick} />
           {curated.length > 0 && (
-            <RecipeGroup title="Recommended" recipes={curated} onPick={onPick} />
+            <RecipeGroup title={grants.length > 0 ? "Or connect them" : "Recommended"} recipes={curated} onPick={onPick} />
           )}
           {generic.length > 0 && (
             <RecipeGroup
-              title={curated.length > 0 ? "Other ways" : "Pick the attribute to link"}
+              title={curated.length > 0 || grants.length > 0 ? "Other ways" : "Pick the attribute to link"}
               recipes={generic}
               onPick={onPick}
             />

@@ -1,0 +1,18 @@
+# Hardening section toggles (Not privileged, Remove the mount, Run as
+# non-root = user: node, the unprivileged user the node image documents;
+# Read-only filesystem adds tmpfs /tmp; Drop all capabilities; No new
+# privileges; Init process), the Processes limit next to CPUs and Memory,
+# and Logging's "Rotate logs". Non-root comes from compose user: rather than
+# a Dockerfile USER (dk_root_user accepts both).
+steps:
+  - composePatch: {service: renderer, patch: {privileged: false}}
+  - composePatch: {service: renderer, patch: {volumes: []}}
+  - composePatch: {service: renderer, patch: {user: node}}
+  - composePatch: {service: renderer, patch: {readOnly: true, tmpfs: [/tmp]}}
+  - composePatch: {service: renderer, patch: {capDrop: [ALL]}}
+  - composePatch: {service: renderer, patch: {securityOpt: ["no-new-privileges:true"]}}
+  - composePatch: {service: renderer, patch: {init: true}}
+  - composePatch: {service: renderer, patch: {resources: {cpus: "0.5"}}}
+  - composePatch: {service: renderer, patch: {resources: {cpus: "0.5", memory: 128M}}}
+  - composePatch: {service: renderer, patch: {resources: {cpus: "0.5", memory: 128M, pids: 100}}}
+  - composePatch: {service: renderer, patch: {logging: {driver: json-file, maxSize: 10m, maxFile: "3"}}}

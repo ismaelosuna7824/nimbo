@@ -50,6 +50,10 @@ func TestLintErrors(t *testing.T) {
 		{"delete with data", fstest.MapFS{file1: migration("x", "  - { op: delete, kind: challenge, id: docker-first, data: { title: x } }\n")}, "delete takes no data"},
 		{"bad tag", fstest.MapFS{file1: migration("x", challengeYAML("docker-first", "docker", "beginner", "First", "Big Tag", ""))}, `tag "Big Tag"`},
 		{"duplicate YAML key", fstest.MapFS{file1: {Data: []byte("description: x\ndescription: y\noperations:\n" + valid)}}, "YAML"},
+		{"solvableWithoutCode not a boolean", fstest.MapFS{file1: migration("x", strings.Replace(valid, "solvableWithoutCode: false", "solvableWithoutCode: yes", 1))}, "solvableWithoutCode"},
+		{"solvableWithoutCode not declared", fstest.MapFS{file1: migration("x", strings.Replace(valid, "      solvableWithoutCode: false\n", "", 1),
+			challengeYAML("docker-second", "docker", "beginner", "Second", "", ""))},
+			"challenge docker-first: solvableWithoutCode must be declared"},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -73,6 +77,35 @@ func TestLintValid(t *testing.T) {
 func TestLintCallsExtraValidation(t *testing.T) {
 	errs := Lint(baseFS(), func(c model.Challenge) error { return errors.New("engine says no to " + c.ID) })
 	if joined := errors.Join(errs...); joined == nil || !strings.Contains(joined.Error(), "engine says no to docker-first") {
+		t.Fatalf("got %v", joined)
+	}
+}
+
+func TestLintSolvableWithoutCode(t *testing.T) {
+	declare := func(yaml string, v string) string {
+		return strings.Replace(yaml, "solvableWithoutCode: false", "solvableWithoutCode: "+v, 1)
+	}
+	// Declared everywhere, including by a later migration that re-upserts
+	// a challenge: the final content is what counts.
+	fsys := fstest.MapFS{
+		file1: migration("x", challengeYAML("docker-first", "docker", "beginner", "First", "", ""),
+			challengeYAML("docker-second", "docker", "beginner", "Second", "", "")),
+		file2: migration("y", declare(challengeYAML("docker-first", "docker", "beginner", "First", "", ""), "true")),
+	}
+	if errs := Lint(fsys, nil); len(errs) > 0 {
+		t.Fatal(errors.Join(errs...))
+	}
+	m, err := ParseMigration(file2, fsys[file2].Data, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if v := m.Ops[0].Challenge.SolvableWithoutCode; v == nil || !*v {
+		t.Fatalf("solvableWithoutCode = %v, want true", v)
+	}
+	// A later upsert that drops the declaration leaves it undeclared.
+	fsys[file3] = migration("z", strings.Replace(challengeYAML("docker-second", "docker", "beginner", "Second", "", ""), "      solvableWithoutCode: false\n", "", 1))
+	joined := errors.Join(Lint(fsys, nil)...)
+	if joined == nil || !strings.Contains(joined.Error(), "challenge docker-second: solvableWithoutCode must be declared") {
 		t.Fatalf("got %v", joined)
 	}
 }

@@ -1,0 +1,23 @@
+# Grant: drag the web app onto the vault and pick Read: Nimbo adds a
+# system-assigned identity to the app and an azurerm_role_assignment of Key
+# Vault Secrets User scoped to the vault. Transport switches/selects and the
+# vault's RBAC + purge protection switches in the inspector; the
+# DB_PASSWORD app setting becomes a Key Vault reference typed in the
+# key/value editor (the vault URI of kv-shopapi-dev written out, since a
+# map value can't interpolate azurerm_key_vault.main.vault_uri).
+steps:
+  - connect: {source: azurerm_linux_web_app.api, target: azurerm_key_vault.main, recipe: "access:read"}
+  - set:
+      node: azurerm_linux_web_app.api
+      attrs:
+        https_only: true
+        site_config[0].minimum_tls_version: "1.2"
+        site_config[0].ftps_state: Disabled
+        app_settings:
+          DB_HOST: sql-shopapi-dev.database.windows.net
+          DB_PASSWORD: "@Microsoft.KeyVault(SecretUri=https://kv-shopapi-dev.vault.azure.net/secrets/db-password/)"
+  - set:
+      node: azurerm_key_vault.main
+      attrs:
+        rbac_authorization_enabled: true
+        purge_protection_enabled: true

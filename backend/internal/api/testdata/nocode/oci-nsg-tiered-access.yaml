@@ -1,0 +1,68 @@
+# Each instance joins its tier's NSG through create_vnic_details.nsg_ids:
+# Link to… in the nested block appends the NSG id to the list.
+steps:
+  - set:
+      node: oci_core_security_list.shared
+      attrs:
+        ingress_security_rules[0]: {unset: true}
+  - set:
+      node: oci_core_security_list.shared
+      attrs:
+        ingress_security_rules[0]: {unset: true}
+  - set:
+      node: oci_core_security_list.shared
+      attrs:
+        ingress_security_rules[0]: {unset: true}
+  - add: {type: oci_core_network_security_group, name: web}
+  - set:
+      node: oci_core_network_security_group.web
+      attrs:
+        compartment_id: {link: var.compartment_ocid}
+        vcn_id: {link: oci_core_vcn.main.id}
+        display_name: learn-dev-web
+  - add: {type: oci_core_network_security_group, name: app}
+  - set:
+      node: oci_core_network_security_group.app
+      attrs:
+        compartment_id: {link: var.compartment_ocid}
+        vcn_id: {link: oci_core_vcn.main.id}
+        display_name: learn-dev-app
+  - add: {type: oci_core_network_security_group_security_rule, name: web_https}
+  - set:
+      node: oci_core_network_security_group_security_rule.web_https
+      attrs:
+        network_security_group_id: {link: oci_core_network_security_group.web.id}
+        direction: INGRESS
+        protocol: "6"
+        source_type: CIDR_BLOCK
+        source: 0.0.0.0/0
+        tcp_options[0].destination_port_range[0].min: 443
+        tcp_options[0].destination_port_range[0].max: 443
+  - add: {type: oci_core_network_security_group_security_rule, name: app_from_web}
+  - set:
+      node: oci_core_network_security_group_security_rule.app_from_web
+      attrs:
+        network_security_group_id: {link: oci_core_network_security_group.app.id}
+        direction: INGRESS
+        protocol: "6"
+        source_type: NETWORK_SECURITY_GROUP
+        source: {link: oci_core_network_security_group.web.id}
+        tcp_options[0].destination_port_range[0].min: 8080
+        tcp_options[0].destination_port_range[0].max: 8080
+  - set:
+      node: oci_core_instance.web
+      attrs:
+        create_vnic_details[0].nsg_ids: {link: oci_core_network_security_group.web.id, append: true}
+  - set:
+      node: oci_core_instance.app
+      attrs:
+        create_vnic_details[0].nsg_ids: {link: oci_core_network_security_group.app.id, append: true}
+  - add: {type: oci_bastion_bastion, name: app}
+  - set:
+      node: oci_bastion_bastion.app
+      attrs:
+        name: learndevbastion
+        bastion_type: STANDARD
+        compartment_id: {link: var.compartment_ocid}
+        target_subnet_id: {link: oci_core_subnet.app.id}
+        client_cidr_block_allow_list: [203.0.113.0/24]

@@ -94,7 +94,9 @@ export function MetaArguments({
             </SelectContent>
           </Select>
           {aliases.length === 0 && (
-            <p className="text-[11px] text-muted-foreground">Add a provider block with an alias to target another region or account.</p>
+            <p className="text-[11px] text-muted-foreground">
+              Add a provider with an alias (Providers, in the workflow overview: click the canvas background) to target another region or account.
+            </p>
           )}
         </div>
       )}

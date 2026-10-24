@@ -1,12 +1,15 @@
 import { useQuery } from "@tanstack/react-query"
-import { ActivityIcon, BoxIcon, HardDriveIcon, LinkIcon, NetworkIcon, PlugIcon, RotateCwIcon, VariableIcon } from "lucide-react"
+import { useState } from "react"
+import { ActivityIcon, BoxIcon, HardDriveIcon, LinkIcon, NetworkIcon, PlugIcon, RotateCwIcon, ScrollTextIcon, TagIcon, VariableIcon } from "lucide-react"
 import { Checkbox } from "@/components/ui/checkbox"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
+import { Switch } from "@/components/ui/switch"
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group"
 import type {
   ComposeDependency,
   ComposeEnvVar,
   ComposeHealthcheck,
+  ComposeLogging,
   ComposeMount,
   ComposeNode,
   ComposePortMapping,
@@ -18,7 +21,22 @@ import { patchService } from "../actions"
 import { loadDockerImages } from "../intel"
 import { overridden } from "../environments/model"
 import { CommitInput, Field, ListEditor, SecretInput, Section } from "./fields"
+import { HardeningSection } from "./hardening-section"
+import { StageBaseField } from "./stage-base-field"
 import { OverrideMark, useActiveComposeEnvironment } from "./override-mark"
+import {
+  type LabelRow,
+  labelsPatch,
+  LOG_DRIVERS,
+  LOG_FILES_RE,
+  LOG_SIZE_RE,
+  loggingPatch,
+  resourcesPatch,
+  ROTATION,
+  rotatesFiles,
+  scrapeLabels,
+  withScope,
+} from "./service-patch"
 
 const NAME_RE = /^[a-zA-Z0-9][a-zA-Z0-9_.-]*$/
 const PORT_RE = /^\d{1,5}(-\d{1,5})?$/
@@ -49,28 +67,47 @@ export function ServiceForm({ node }: { node: ComposeNode }) {
   const services = (graph?.nodes ?? []).filter((n) => n.kind === "service" && n.id !== node.id).map((n) => n.name)
   const networks = (graph?.nodes ?? []).filter((n) => n.kind === "network" || (n.kind === "external" && n.externalKind === "network")).map((n) => n.name)
   const volumes = (graph?.nodes ?? []).filter((n) => n.kind === "volume" || (n.kind === "external" && n.externalKind === "volume")).map((n) => n.name)
+  // A single-stage build is the service itself (no stage nodes): its FROM is edited here; multi-stage builds edit
+  // each stage on its own card.
+  const stageFrom = svc.build && svc.baseImages.length === 1 && !(graph?.nodes ?? []).some((n) => n.kind === "build-stage" && n.parent === node.id) ? svc.baseImages[0] : undefined
   const images = useQuery({ queryKey: ["docker-images"], queryFn: loadDockerImages, staleTime: Infinity })
-  const patch = (p: ServicePatch) => void patchService(node.name, p)
   const env = useActiveComposeEnvironment()
-  const mark = (...attrs: string[]) => <OverrideMark facts={svc} attrs={attrs} onReset={(resetOverrides) => patch({ resetOverrides })} />
+  // "Only in <env>": edits go to the environment's override file alone. Off again when another environment is active.
+  const [scopedEnv, setScopedEnv] = useState<string | null>(null)
+  const scoped = !!env?.file && scopedEnv === env.name
+  const patch = (p: ServicePatch) => void patchService(node.name, withScope(p, scoped))
+  const mark = (...attrs: string[]) => <OverrideMark facts={svc} attrs={attrs} onReset={(resetOverrides) => void patchService(node.name, { resetOverrides })} />
 
   return (
     <div className="flex flex-col gap-5">
       {env && (
-        <p className="rounded-md bg-muted/60 px-2 py-1.5 text-[11px] text-muted-foreground" data-testid="docker-env-edit-hint">
-          <span className="font-medium text-foreground">{env.name}</span> is active:{" "}
-          {env.file ? (
-            <>
-              fields marked “{env.name} override” are written to <span className="font-mono">{env.file}</span>; the others to
-              the base files, shared by every environment.
-            </>
-          ) : (
-            <>
-              it only changes variables (<span className="font-mono">{env.envFile}</span>), so edits here go to the base files,
-              shared by every environment.
-            </>
+        <div className="flex flex-col gap-1.5 rounded-md bg-muted/60 px-2 py-1.5 text-[11px] text-muted-foreground" data-testid="docker-env-edit-hint">
+          <p>
+            <span className="font-medium text-foreground">{env.name}</span> is active:{" "}
+            {!env.file ? (
+              <>
+                it only changes variables (<span className="font-mono">{env.envFile}</span>), so edits here go to the base files,
+                shared by every environment.
+              </>
+            ) : scoped ? (
+              <>
+                every edit is written to <span className="font-mono">{env.file}</span> only; the base files and the other
+                environments keep their values. Removing a field removes it in {env.name} only.
+              </>
+            ) : (
+              <>
+                fields marked “{env.name} override” are written to <span className="font-mono">{env.file}</span>; the others to
+                the base files, shared by every environment.
+              </>
+            )}
+          </p>
+          {env.file && (
+            <label className="flex items-center gap-2 text-xs font-medium text-foreground">
+              <Switch size="sm" checked={scoped} onCheckedChange={(on) => setScopedEnv(on ? env.name : null)} data-testid="docker-env-scope" />
+              Only in {env.name}
+            </label>
           )}
-        </p>
+        </div>
       )}
       <Section title="Container" icon={<BoxIcon className="size-3.5" />}>
         <Field label="Service name" htmlFor="svc-name" hint="Other services reach it by this name on shared networks.">
@@ -123,6 +160,7 @@ export function ServiceForm({ node }: { node: ComposeNode }) {
             </datalist>
           </Field>
         )}
+        {stageFrom && <StageBaseField nodeId={node.id} from={stageFrom} />}
         {pro && (
           <Field label="Command" htmlFor="svc-command" hint="Overrides the image's CMD (shell form)." badge={mark("command")}>
             <CommitInput id="svc-command" className="font-mono" value={svc.command ?? ""} placeholder="from the image" onCommit={(command) => patch({ command: command || null })} />
@@ -299,13 +337,51 @@ export function ServiceForm({ node }: { node: ComposeNode }) {
             />
           </Field>
           <Field label="CPUs" htmlFor="svc-cpus" badge={mark("deploy.resources")}>
-            <CommitInput id="svc-cpus" className="font-mono" placeholder="no limit" value={svc.resources?.cpus ?? ""} validate={(v) => (v === "" || /^\d+(\.\d+)?$/.test(v) ? undefined : "e.g. 0.5")} onCommit={(cpus) => patch({ resources: cpus || svc.resources?.memory ? { ...svc.resources, cpus: cpus || undefined } : null })} />
+            <CommitInput id="svc-cpus" className="font-mono" placeholder="no limit" value={svc.resources?.cpus ?? ""} validate={(v) => (v === "" || /^\d+(\.\d+)?$/.test(v) ? undefined : "e.g. 0.5")} onCommit={(cpus) => patch(resourcesPatch(svc.resources, { cpus }))} />
           </Field>
           <Field label="Memory" htmlFor="svc-memory" badge={mark("deploy.resources")}>
-            <CommitInput id="svc-memory" className="font-mono" placeholder="no limit" value={svc.resources?.memory ?? ""} validate={(v) => (v === "" || /^\d+(\.\d+)?[bkmg]?b?$/i.test(v) ? undefined : "e.g. 512M")} onCommit={(memory) => patch({ resources: memory || svc.resources?.cpus ? { ...svc.resources, memory: memory || undefined } : null })} />
+            <CommitInput id="svc-memory" className="font-mono" placeholder="no limit" value={svc.resources?.memory ?? ""} validate={(v) => (v === "" || /^\d+(\.\d+)?[bkmg]?b?$/i.test(v) ? undefined : "e.g. 512M")} onCommit={(memory) => patch(resourcesPatch(svc.resources, { memory }))} />
+          </Field>
+          <Field label="Processes" htmlFor="svc-pids" badge={mark("deploy.resources")} hint="Most processes it can start (pids): stops fork bombs.">
+            <CommitInput
+              id="svc-pids"
+              inputMode="numeric"
+              placeholder="no limit"
+              value={svc.resources?.pids ? String(svc.resources.pids) : ""}
+              validate={(v) => (v === "" || /^[1-9]\d*$/.test(v) ? undefined : "e.g. 100")}
+              onCommit={(pids) => patch(resourcesPatch(svc.resources, { pids: pids ? Number(pids) : undefined }))}
+            />
           </Field>
         </div>
       </Section>
+
+      <Section title="Logging" icon={<ScrollTextIcon className="size-3.5" />} action={mark("logging")}>
+        <LoggingFields logging={svc.logging} onChange={(change) => patch(loggingPatch(svc.logging, change))} />
+      </Section>
+
+      <Section title="Labels" icon={<TagIcon className="size-3.5" />} action={mark("labels")}>
+        <ListEditor<LabelRow>
+          items={Object.entries(svc.labels ?? {}).map(([key, value]) => ({ key, value }))}
+          empty="No labels."
+          addLabel="Add label"
+          blank={() => ({ key: "", value: "" })}
+          complete={(l) => l.key !== ""}
+          onChange={(rows) => patch(labelsPatch(rows))}
+          render={(l, update) => (
+            <>
+              <CommitInput aria-label="Label" width="basis-44" className="font-mono" placeholder="com.example.team" value={l.key} validate={(v) => (/\s/.test(v) ? "No spaces" : undefined)} onCommit={(key) => update({ ...l, key })} />
+              <CommitInput aria-label={`Value of ${l.key}`} className="font-mono" placeholder="value" value={l.value} onCommit={(value) => update({ ...l, value })} />
+            </>
+          )}
+        />
+        {svc.labels?.["prometheus.io/scrape"] !== "true" && (
+          <button type="button" className="self-start text-xs text-primary underline-offset-2 hover:underline" onClick={() => patch({ labels: scrapeLabels(svc) })} data-testid="svc-scrape-labels">
+            Label for Prometheus scraping (/metrics on port {scrapeLabels(svc)["prometheus.io/port"]})
+          </button>
+        )}
+      </Section>
+
+      <HardeningSection node={node} isSecretKey={(key) => SECRET_KEY.test(key)} mark={mark} scoped={scoped} />
 
       <Section title="Networks" icon={<NetworkIcon className="size-3.5" />} action={mark("networks")}>
         {networks.length === 0 ? (
@@ -336,7 +412,8 @@ function HealthcheckFields({ hc, fromDockerfile, onChange }: { hc?: ComposeHealt
         <p className="text-[11px] text-muted-foreground">
           {hc?.disabled ? "Disabled." : "No health check: services that wait for it to be healthy never start."}
         </p>
-        <button type="button" className="self-start text-xs text-primary underline-offset-2 hover:underline" onClick={() => onChange({ test: "CMD-SHELL curl -fsS http://localhost/ || exit 1", interval: "10s", timeout: "3s", retries: 5 })}>
+        {/* The daemon writes the test as ["CMD-SHELL", test]: no CMD-SHELL prefix here. */}
+        <button type="button" className="self-start text-xs text-primary underline-offset-2 hover:underline" onClick={() => onChange({ test: "curl -fsS http://localhost/ || exit 1", interval: "10s", timeout: "3s", retries: 5 })}>
           Add a health check
         </button>
       </div>
@@ -366,6 +443,48 @@ function HealthcheckFields({ hc, fromDockerfile, onChange }: { hc?: ComposeHealt
       <button type="button" className="self-start text-xs text-muted-foreground underline-offset-2 hover:text-destructive hover:underline" onClick={() => onChange(null)}>
         Remove health check
       </button>
+    </div>
+  )
+}
+
+function LoggingFields({ logging, onChange }: { logging?: ComposeLogging; onChange: (change: Partial<ComposeLogging>) => void }) {
+  const rotating = !!logging?.maxSize
+  return (
+    <div className="flex flex-col gap-2">
+      <div className="grid grid-cols-3 gap-2">
+        <Field label="Driver">
+          <Select value={logging?.driver ?? NONE} onValueChange={(v) => onChange({ driver: v === NONE ? undefined : v })}>
+            <SelectTrigger size="sm" className="h-8 w-full text-xs" aria-label="Log driver" data-testid="svc-log-driver">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              {LOG_DRIVERS.map((d) => (
+                <SelectItem key={d.value || NONE} value={d.value || NONE}>
+                  {d.label}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </Field>
+        {rotatesFiles(logging?.driver) && (
+          <>
+            <Field label="Max size" htmlFor="svc-log-size">
+              <CommitInput id="svc-log-size" className="font-mono" placeholder="no limit" value={logging?.maxSize ?? ""} validate={(v) => (v === "" || LOG_SIZE_RE.test(v) ? undefined : "e.g. 10m")} onCommit={(maxSize) => onChange({ maxSize })} />
+            </Field>
+            <Field label="Max files" htmlFor="svc-log-files">
+              <CommitInput id="svc-log-files" className="font-mono" placeholder="1" value={logging?.maxFile ?? ""} validate={(v) => (v === "" || LOG_FILES_RE.test(v) ? undefined : "e.g. 3")} onCommit={(maxFile) => onChange({ maxFile })} />
+            </Field>
+          </>
+        )}
+      </div>
+      {rotatesFiles(logging?.driver) && !rotating && (
+        <div className="flex items-center gap-2 text-[11px] text-muted-foreground">
+          <span className="flex-1">Without a max size, the log file grows until the disk is full.</span>
+          <button type="button" className="text-xs text-primary underline-offset-2 hover:underline" onClick={() => onChange(ROTATION)} data-testid="svc-log-rotate">
+            Rotate logs (10m × 3)
+          </button>
+        </div>
+      )}
     </div>
   )
 }

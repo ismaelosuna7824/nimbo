@@ -1,0 +1,12 @@
+# The single-stage build keeps building site/: the service form's
+# "Base image (FROM)" field pins the Dockerfile's FROM to nginx:1.27-alpine,
+# then the port is published, a healthcheck added (BusyBox wget) and a
+# restart policy picked.
+steps:
+  - composeStage: {node: "service:web", from: "nginx:1.27-alpine"}
+  - composePatch: {service: web, patch: {ports: [{host: "8080", container: "80"}]}}
+  - composePatch:
+      service: web
+      patch:
+        healthcheck: {test: "wget -qO- http://127.0.0.1/ >/dev/null || exit 1", interval: 10s, timeout: 3s, retries: 3, startPeriod: 5s}
+  - composePatch: {service: web, patch: {restart: unless-stopped}}

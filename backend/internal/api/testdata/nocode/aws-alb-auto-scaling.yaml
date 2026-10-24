@@ -1,0 +1,84 @@
+# The security groups' rules are object-list cards: the app group's only
+# ingress card takes the ALB group as its source (Link to… appending to
+# security_groups). The ALB, its target group and the ASG link the
+# starter's local.subnet_ids and the ALB group with Link to…; the launch
+# template's user_data is Link to… local.user_data with Base64-encode.
+steps:
+  - delete: {node: aws_instance.web}
+  - add: {type: aws_security_group, name: alb}
+  - set:
+      node: aws_security_group.alb
+      attrs:
+        name: learn-dev-alb
+        description: Load balancer
+        vpc_id: {link: data.aws_vpc.default.id}
+        ingress:
+          - description: HTTP
+            from_port: 80
+            to_port: 80
+            protocol: tcp
+            cidr_blocks: [0.0.0.0/0]
+        egress:
+          - description: All outbound traffic
+            from_port: 0
+            to_port: 0
+            protocol: "-1"
+            cidr_blocks: [0.0.0.0/0]
+  - set:
+      node: aws_security_group.web
+      attrs:
+        ingress:
+          - description: App from the load balancer
+            from_port: 8080
+            to_port: 8080
+            protocol: tcp
+            security_groups: [{link: aws_security_group.alb.id}]
+  - add: {type: aws_lb, name: app}
+  - set:
+      node: aws_lb.app
+      attrs:
+        name: learn-dev-alb
+        load_balancer_type: application
+        security_groups: {link: aws_security_group.alb.id, append: true}
+        subnets: {link: local.subnet_ids}
+  - add: {type: aws_lb_target_group, name: app}
+  - set:
+      node: aws_lb_target_group.app
+      attrs:
+        name: learn-dev-app
+        port: 8080
+        protocol: HTTP
+        vpc_id: {link: data.aws_vpc.default.id}
+        health_check[0].path: /health
+  - add: {type: aws_lb_listener, name: http}
+  - set:
+      node: aws_lb_listener.http
+      attrs:
+        load_balancer_arn: {link: aws_lb.app.arn}
+        port: 80
+        protocol: HTTP
+        default_action[0].type: forward
+        default_action[0].target_group_arn: {link: aws_lb_target_group.app.arn}
+  - add: {type: aws_launch_template, name: app}
+  - set:
+      node: aws_launch_template.app
+      attrs:
+        name: learn-dev-app
+        image_id: {link: data.aws_ssm_parameter.al2023.value}
+        instance_type: {link: var.instance_type}
+        vpc_security_group_ids: {link: aws_security_group.web.id, append: true}
+        metadata_options[0].http_tokens: required
+        user_data: {link: local.user_data, base64: true}
+  - add: {type: aws_autoscaling_group, name: app}
+  - set:
+      node: aws_autoscaling_group.app
+      attrs:
+        name: learn-dev-app
+        min_size: 2
+        max_size: 4
+        desired_capacity: 2
+        health_check_type: ELB
+        vpc_zone_identifier: {link: local.subnet_ids}
+        target_group_arns: {link: aws_lb_target_group.app.arn, append: true}
+        launch_template[0].id: {link: aws_launch_template.app.id}
+        launch_template[0].version: {link: aws_launch_template.app.latest_version}

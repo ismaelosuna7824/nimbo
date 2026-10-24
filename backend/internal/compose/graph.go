@@ -2,6 +2,7 @@ package compose
 
 import (
 	"fmt"
+	"maps"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -303,6 +304,14 @@ func (p *Project) serviceFacts(s types.ServiceConfig) *model.ServiceFacts {
 		Restart: s.Restart, Profiles: s.Profiles, Links: s.Links, ContainerName: s.ContainerName, Hostname: s.Hostname,
 		User: s.User, WorkingDir: s.WorkingDir, Platform: s.Platform,
 	}
+	if s.User != "" {
+		f.UserFrom = "compose"
+	}
+	f.ReadOnly, f.Privileged, f.Init = s.ReadOnly, s.Privileged, s.Init != nil && *s.Init
+	f.CapDrop, f.CapAdd, f.SecurityOpt, f.Tmpfs = s.CapDrop, s.CapAdd, s.SecurityOpt, []string(s.Tmpfs)
+	for _, sec := range s.Secrets {
+		f.Secrets = append(f.Secrets, sec.Source)
+	}
 	if s.Build != nil {
 		f.Image = nil
 		if s.Image != "" {
@@ -352,8 +361,8 @@ func (p *Project) serviceFacts(s types.ServiceConfig) *model.ServiceFacts {
 			r := *s.Deploy.Replicas
 			f.Replicas = &r
 		}
-		if l := s.Deploy.Resources.Limits; l != nil && (l.NanoCPUs != 0 || l.MemoryBytes != 0) {
-			f.Resources = &model.ServiceResources{}
+		if l := s.Deploy.Resources.Limits; l != nil && (l.NanoCPUs != 0 || l.MemoryBytes != 0 || l.Pids != 0) {
+			f.Resources = &model.ServiceResources{Pids: int(l.Pids)}
 			if l.NanoCPUs != 0 {
 				f.Resources.CPUs = strconv.FormatFloat(float64(l.NanoCPUs), 'f', -1, 32)
 			}
@@ -361,6 +370,12 @@ func (p *Project) serviceFacts(s types.ServiceConfig) *model.ServiceFacts {
 				f.Resources.Memory = formatBytes(int64(l.MemoryBytes))
 			}
 		}
+	}
+	if s.Logging != nil {
+		f.Logging = &model.ServiceLogging{Driver: s.Logging.Driver, MaxSize: s.Logging.Options["max-size"], MaxFile: s.Logging.Options["max-file"]}
+	}
+	if len(s.Labels) > 0 {
+		f.Labels = maps.Clone(map[string]string(s.Labels))
 	}
 	if f.Replicas == nil && s.Scale != nil {
 		r := *s.Scale
@@ -448,6 +463,20 @@ func (p *Project) serviceFacts(s types.ServiceConfig) *model.ServiceFacts {
 			f.WorkingDir = final.Workdir
 		}
 		f.BaseImages = p.baseImages(s)
+	}
+	if f.User != "" && f.UserFrom == "" {
+		f.UserFrom = "dockerfile"
+	}
+	// What the image documents about running unprivileged and *_FILE.
+	runtimeRef := s.Image
+	if s.Build != nil {
+		runtimeRef = ""
+		if n := len(f.BaseImages); n > 0 {
+			runtimeRef = f.BaseImages[n-1]
+		}
+	}
+	if rt, ok := runtimeOf(runtimeRef); ok {
+		f.NonRootUser, f.FileEnv = rt.user, rt.fileEnv
 	}
 	f.Overrides = p.overrides(s.Name)
 	return f

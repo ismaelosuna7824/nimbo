@@ -1,0 +1,12 @@
+# Environments tab: delete the bare prod overlay and create prod again as a
+# copy of dev (the copy renames storefront-dev to storefront-prod: its own
+# namespace and Namespace object), then prod's settings: 3 replicas and a
+# 256Mi memory limit, written to the prod overlay only.
+steps:
+  - envDelete: {env: prod}
+  - envCreate: {name: prod, from: dev}
+  - envSettings:
+      env: prod
+      values:
+        replicas: "3"
+        memory.limit:storefront: 256Mi

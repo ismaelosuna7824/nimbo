@@ -1,0 +1,50 @@
+# Two private subnets added separately in the zone lookup's names[0] /
+# names[1] (Link to… → More…); the subnet group's Link to… appends them
+# (replacing the starter's public[*] expression with a list). The db
+# group's ingress card takes the app group as its source.
+steps:
+  - add: {type: aws_subnet, name: private}
+  - set:
+      node: aws_subnet.private
+      attrs:
+        vpc_id: {link: aws_vpc.main.id}
+        cidr_block: 10.0.10.0/24
+        availability_zone: {link: "data.aws_availability_zones.available.names[0]"}
+        tags: {Name: learn-dev-private-a}
+  - add: {type: aws_subnet, name: private_b}
+  - set:
+      node: aws_subnet.private_b
+      attrs:
+        vpc_id: {link: aws_vpc.main.id}
+        cidr_block: 10.0.11.0/24
+        availability_zone: {link: "data.aws_availability_zones.available.names[1]"}
+        tags: {Name: learn-dev-private-b}
+  - set:
+      node: aws_db_subnet_group.db
+      attrs:
+        subnet_ids: {link: aws_subnet.private.id, append: true}
+  - set:
+      node: aws_db_subnet_group.db
+      attrs:
+        subnet_ids: {link: aws_subnet.private_b.id, append: true}
+  - set:
+      node: aws_security_group.db
+      attrs:
+        ingress:
+          - description: PostgreSQL from the app tier
+            from_port: 5432
+            to_port: 5432
+            protocol: tcp
+            security_groups: [{link: aws_security_group.app.id}]
+  - set:
+      node: aws_db_instance.main
+      attrs:
+        password: {unset: true}
+        manage_master_user_password: true
+        publicly_accessible: false
+        multi_az: true
+        storage_encrypted: true
+        backup_retention_period: 7
+        skip_final_snapshot: false
+        final_snapshot_identifier: learn-dev-db-final
+  - variable: {name: db_password, removeDefault: true, sensitive: true}

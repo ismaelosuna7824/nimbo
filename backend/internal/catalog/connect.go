@@ -6,6 +6,7 @@ import (
 	"slices"
 	"strings"
 
+	"github.com/ismaelosuna7824/nimbo/backend/internal/access"
 	"github.com/ismaelosuna7824/nimbo/backend/internal/model"
 )
 
@@ -63,7 +64,8 @@ func (c *Catalog) Connections(wf *model.Workflow, sourceID, targetID string) []m
 	if src == nil || dst == nil || src == dst {
 		return nil
 	}
-	var out []model.ConnectionRecipe
+	// Grant recipes ("What can it do?") come first.
+	out := c.accessRecipes(wf, src, dst)
 	covered := map[string]bool{} // nodeID + "." + attr
 	cover := func(r *recipe, rs, rd *model.Node) {
 		for _, s := range r.sets {
@@ -142,6 +144,11 @@ func (c *Catalog) Connect(wf *model.Workflow, sourceID, targetID, recipeID strin
 	}
 	b := newBuilder(c, wf)
 	switch {
+	case strings.HasPrefix(recipeID, model.AccessRecipePrefix):
+		level, _ := access.ParseRecipeID(recipeID)
+		if err := c.applyAccess(b, wf, src, dst, level); err != nil {
+			return err
+		}
 	case recipeID == dependsOnID:
 		a := getAttr(&dst.Body, "depends_on")
 		var cur *model.Value

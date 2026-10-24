@@ -1,0 +1,47 @@
+# A palette vault and key (management_endpoint via Link to…, HSM select,
+# key_shape block), Link to… the key's id on the bucket and the volume, and
+# a palette policy whose sentence lets the two storage services use keys in
+# the tenancy "where target.key.id = '${oci_kms_key.cmk.id}'" (condition
+# typed, the key's id appended by the where field's Link to…).
+steps:
+  - add: {type: oci_kms_vault, name: main}
+  - set:
+      node: oci_kms_vault.main
+      attrs:
+        compartment_id: ocid1.tenancy.oc1..flocilocaltenancy0000000000000000000000000000000000000000
+        display_name: learn-dev-vault
+        vault_type: DEFAULT
+  - add: {type: oci_kms_key, name: cmk}
+  - set:
+      node: oci_kms_key.cmk
+      attrs:
+        compartment_id: ocid1.tenancy.oc1..flocilocaltenancy0000000000000000000000000000000000000000
+        display_name: learn-dev-cmk
+        management_endpoint: {link: oci_kms_vault.main.management_endpoint}
+        protection_mode: HSM
+        key_shape[0].algorithm: AES
+        key_shape[0].length: 32
+  - set:
+      node: oci_objectstorage_bucket.reports
+      attrs:
+        kms_key_id: {link: oci_kms_key.cmk.id}
+  - set:
+      node: oci_core_volume.db
+      attrs:
+        kms_key_id: {link: oci_kms_key.cmk.id}
+  - add: {type: oci_identity_policy, name: storage_keys}
+  - set:
+      node: oci_identity_policy.storage_keys
+      attrs:
+        compartment_id: ocid1.tenancy.oc1..flocilocaltenancy0000000000000000000000000000000000000000
+        name: learn-dev-storage-keys
+        description: Lets Block Volume and Object Storage use the customer managed key
+  - accessOCI:
+      node: oci_identity_policy.storage_keys
+      add:
+        - subjectType: service
+          subjects: [blockstorage, objectstorage-us-ashburn-1]
+          verb: use
+          resourceType: keys
+          location: tenancy
+          condition: "target.key.id = '${oci_kms_key.cmk.id}'"

@@ -72,6 +72,7 @@ tells the daemon what is open and the tools use it when no workflow is named.
 | Deploy + load test | "Deploy this workflow and load test the API: I need p95 under 200 ms at 50 rps." | "Despliega este workflow y haz una prueba de carga a la API: necesito p95 menor a 200 ms con 50 rps." |
 | Test a network | "Check my VPC design and tell me if the database is reachable from the internet." | "Revisa el diseño de mi VPC y dime si la base de datos es accesible desde internet." |
 | See traffic really flow | "Add a test instance to the public subnet, deploy, and prove port 80 is reachable." | "Agrega una instancia de prueba a la subred pública, despliega y demuestra que el puerto 80 es accesible." |
+| Least privilege | "The Lambda only reads the orders table and writes its own logs: replace its admin policy." | "La Lambda solo lee la tabla de pedidos y escribe sus propios logs: reemplaza su política de administrador." |
 | Test a deployed service | "Load test our staging API at https://staging.example.com using a connection." | "Haz una prueba de carga a nuestra API de staging en https://staging.example.com usando una conexión." |
 | Containers (Docker) | "Create a docker compose stack with an Express API, PostgreSQL and Redis, with healthchecks and credentials in .env." | "Crea un stack de docker compose con una API en Express, PostgreSQL y Redis, con healthchecks y credenciales en .env." |
 | Close finished work | "Archive the old demo workflows." | "Archiva los workflows de demo viejos." |
@@ -343,7 +344,7 @@ summarized in `review` and listed by `review_docker`).
 | `list_docker_images` | Curated images (id, image:tag, category, icon, ports, env, volumes, healthcheck, connection variables) |
 | `get_compose` | Compose files (in `-f` order), Dockerfiles and `.env` (secret values redacted) with content |
 | `add_service` | From `catalog_id`, `image` or `build_context` (+ `starter` scaffolds a buildable Dockerfile) |
-| `update_service` | Partial patch (`null` deletes; lists replace); rename updates every reference; comments/formatting kept |
+| `update_service` | Partial patch (`null` deletes; lists replace); rename updates every reference; comments/formatting kept. `resources {cpus?, memory?, pids?}`, `logging {driver?, maxSize?, maxFile?}` (rotation options), `labels {name: value}`. Hardening keys: `readOnly`, `privileged`, `init`, `capDrop`, `capAdd`, `securityOpt`, `tmpfs`, `secrets`; `secretFromEnv {key, secret?, fileEnv?}` moves a variable into `./secrets/<secret>.txt` as a granted secret (and sets `<key>_FILE`) |
 | `remove_service` | Removes it and other services' references to it |
 | `connect_services` | Without `kind`/`recipe_id`: the options; else depends_on (condition), network, volume (target), env recipe |
 | `apply_terraform_code` | Kind-aware: writes any file of a docker workflow (`""` deletes); YAML/Dockerfile syntax errors are refused |
@@ -595,8 +596,13 @@ Docker edits with an active environment: `update_service` writes a key to
 the override when the override sets it (lists tagged `!override`, so
 items are never duplicated) and to the base files otherwise; `null`
 removes a key from the override only, and `resetOverrides` drops keys
-from it so the base values apply. `get_workflow` lists per service the
-`overrides` the active environment sets.
+from it so the base values apply. With `scope: "environment"` every key
+of the patch goes to the override only (what the inspector's "Only in
+<env>" switch does): lists are tagged `!override`, `null` resets a key the
+base sets (`!reset null`), and the base files stay as they are (not for
+`name`, `environment`, `dependsOn`, `networks`, `labels`, `secrets`).
+`get_workflow` lists per service the `overrides` the active environment
+sets.
 
 | Tool | Inputs | What it does |
 |---|---|---|
@@ -651,6 +657,42 @@ Example: "Is the docker stack ready for production?" → `production_readiness`
 `run_load_test {scenario: {id: kill_replica, target: service:api, atSec: 15}}`,
 `plan_capacity {target_rps: 300}` → `production_readiness` again.
 
+## Access (permissions)
+
+Read and edit permissions structurally instead of writing policy JSON, role
+assignments or RBAC YAML. The tools use the same editors as the desktop's
+inspector "Access" section and the same grant as dragging an identity onto
+a resource on the canvas ("What can it do? Read / Write / Manage"), so the
+result is least privilege in each provider's own model:
+
+| Provider | `get_access` / `set_access` edit | `grant_access` writes |
+|---|---|---|
+| AWS | Policy documents (statements: `sid`, `effect`, `actions`, `resources` as HCL expressions, `principals`) of IAM policies, role trust/inline policies, `aws_iam_policy_document` and S3/SQS/SNS resource policies | A statement with the level's least-privilege actions on that resource's ARN, in the identity's inline policy (role, Lambda function, ECS task definition, user, group) |
+| Azure | `azurerm_role_assignment` (scope, role, principal) | A role assignment with the level's built-in role scoped to the resource (and a system-assigned identity when missing) |
+| GCP | `google_*_iam_member` / `_binding` (resource, role, members) | A `google_<resource>_iam_member` with the level's predefined role for the service account |
+| OCI | `oci_identity_policy` statements (subject, verb, resource type, location, condition) | A statement in the compartment's policy (read / use / manage) |
+| Kubernetes | Role/ClusterRole `rules`, binding `role_ref`/`subjects`, workload `service_account`, `automount_token` | ServiceAccount + Role (scoped with `resourceNames`) + RoleBinding + `serviceAccountName` |
+
+Parts an editor can't represent (conditions it doesn't model, dynamic
+expressions, Helm templates, …) come back with `editable: false` and their
+source; they are kept verbatim and edits to them are refused. Every view
+carries least-privilege `warnings` (wildcards, admin/basic/privileged
+roles, tenancy/subscription/cluster-wide grants, public principals).
+Docker has no IAM: harden services with `update_service` (`readOnly`,
+`capDrop`, `securityOpt`, `tmpfs`, `user`, `secretFromEnv`, …).
+
+| Tool | Inputs | What it does |
+|---|---|---|
+| `get_access` | `workflow`, `node` | The node's permissions as structure, with warnings (Terraform: `AccessView`; Kubernetes: `KubeAccessView`) |
+| `set_access` | `workflow`, `node`, `aws?` \| `azure?` \| `gcp?` \| `oci?` (Terraform), `rules?`, `role_ref?`, `subjects?`, `service_account?`, `automount_token?` (Kubernetes) | Write what `get_access` returned after changing it: AWS documents are matched by `path`; send every statement (omitted ones are deleted; unchanged ones keep their `source`) |
+| `grant_access` | `workflow`, `identity`, `resource`, `level?` | Without `level`: the Read/Write/Manage options with exactly what each writes. With `level`: applies it (Terraform `access:<level>` connect recipe; Kubernetes `access:<level>` kube recipe) |
+| `list_access_catalog` | `provider`, `service?`, `resource_type?`, `query?` | Pinned official reference data with source and date: AWS services and actions (access level, resource types), Azure built-in roles, GCP predefined roles (suggested ones for a Terraform type first), OCI verbs and resource types, Kubernetes resources and verbs |
+
+Example: "The Lambda function only reads the orders table" →
+`grant_access {identity: aws_iam_role.reader, resource:
+aws_dynamodb_table.orders, level: read}` → `get_access {node:
+aws_iam_role_policy.reader}` → drop the `"*"` statement with `set_access`.
+
 ## Learn
 
 Nimbo Learn has roadmaps (beginner → expert) and hands-on challenges for
@@ -663,7 +705,7 @@ solution is only returned on request.
 | Tool | Inputs | What it does |
 |---|---|---|
 | `list_learning_paths` | `provider?` | Without `provider`: every provider with challenge counts per level, the user's completions and content load errors. With `provider`: its roadmap. Each level has goals and steps, and each step has its linked challenges (id, title, level, the user's status) and official docs |
-| `list_challenges` | `provider?`, `level?`, `tag?`, `query?` | Challenges with summary, minutes, runtime (`local`, `emulated`, `design`), tags and the user's status (`not_started`, `in_progress`, `completed`) |
+| `list_challenges` | `provider?`, `level?`, `tag?`, `query?` | Challenges with summary, minutes, runtime (`local`, `emulated`, `design`), tags, the user's status (`not_started`, `in_progress`, `completed`) and `solvableWithoutCode` (false: some step needs code or file edits; the hints of the others are UI steps) |
 | `get_challenge` | `id`, `include_solution?` | Problem, requirements, hints, graded checks, starter, adaptations (global), official sources, prerequisites (with completion) and progress (attempts, passed check ids, workflow id). The solution and its files are only included with `include_solution: true` |
 | `start_challenge` | `challenge`, `name?` | Creates a workflow from the challenge's starter (broken on purpose), linked to it, and marks the challenge in progress |
 | `check_challenge` | `workflow`, `wait?` | Grades the challenge workflow for real: validate / rules_clean / has on the files (every rule on), one deploy before the first runtime check, http calls, load tests, incident scenarios, readiness. Waits (up to 25 min) by default; returns per check status, measured vs expected values, detail and load test run id, plus passed and score. Progress is recorded in Learn |
@@ -729,6 +771,10 @@ Conventions).
 | `get_challenge` | `id`, `include_solution?` | One challenge: problem, requirements, hints, checks, starter, adaptations, sources, prerequisites, progress (solution only on request) |
 | `start_challenge` | `challenge`, `name?` | New workflow from a challenge's starter, linked to it |
 | `check_challenge` | `workflow`, `wait?` | Grade a challenge workflow for real (static checks, deploy, http, load, scenarios, readiness); per-check measurements, passed, score |
+| `get_access` | `workflow`, `node` | Structured permissions of a node (AWS policy statements, Azure role assignment, GCP IAM member/binding, OCI policy statements, Kubernetes RBAC) with least-privilege warnings |
+| `set_access` | `workflow`, `node`, provider structure | Write a node's permissions back from that structure; read-only parts are kept verbatim |
+| `grant_access` | `workflow`, `identity`, `resource`, `level?` | Give an identity Read/Write/Manage on a resource in the provider's model (lists the options without `level`) |
+| `list_access_catalog` | `provider`, `service?`, `resource_type?`, `query?` | Pinned official actions, roles, verbs and resource types |
 | `list_connections` | — | Saved connections (secrets never returned) |
 | `get_connection` | `connection` | One saved connection |
 | `create_connection` | `name`, `kind` (`http`/`postgres`/`mysql`/`redis`/`mongodb`/`aws`), `description?`, http: `base_url`, `headers?`, `auth?`, `insecure_skip_verify?`; databases: `uri?` \| `host`, `port?`, `username?`, `password?`, `database?`, `tls?`; aws: `profile?`, `region?` | Save a connection |

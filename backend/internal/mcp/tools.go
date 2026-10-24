@@ -111,6 +111,7 @@ func registerTools(r *registry, t *tools) {
 	registerCapacityTools(r, t)
 	registerLearnTools(r, t)
 	registerChallengeTools(r, t)
+	registerAccessTools(r, t)
 	r.group = groupConnections
 	addTool(r, "run_connection_load_test", "Run connection load test", "Run a load test against a saved connection (no workflow needed): target is an index from list_connection_targets or a target object; preset (smoke, load, stress, spike, soak) or custom stages; optional thresholds. confirm_external must be true. Waits for the result by default."+externalWarning, t.runConnectionLoadTest)
 }

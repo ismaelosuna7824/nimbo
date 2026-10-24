@@ -1,5 +1,5 @@
 import { createContext, useContext } from "react"
-import type { Diagnostic, ResourceSchema, WorkflowNode } from "@/lib/api/types"
+import type { Attr, Diagnostic, NamedBlock, ResourceSchema, WorkflowNode } from "@/lib/api/types"
 import type { UserMode } from "@/state/workflow-store"
 
 export interface InspectorContextValue {
@@ -7,6 +7,9 @@ export interface InspectorContextValue {
   mode: UserMode
   /** Every node of the workflow (for reference pickers and chips). */
   nodes: WorkflowNode[]
+  /** The workflow's input variables and locals (Link to… lists them). */
+  variables: NamedBlock[]
+  locals: Attr[]
   /** Schemas by schemaKey(kind, type). */
   schemas: Map<string, ResourceSchema>
   diagnostics: Diagnostic[]

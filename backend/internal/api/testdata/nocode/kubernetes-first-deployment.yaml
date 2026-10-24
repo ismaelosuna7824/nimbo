@@ -1,0 +1,14 @@
+# Replicas and image in the workload form; the Service form's selector
+# (or the "Route the Service to these pods" recipe) and its port target.
+steps:
+  - kubePatch:
+      node: Deployment/hello/hello
+      set:
+        spec.replicas: 2
+        spec.template.spec.containers[name=podinfo].image: ghcr.io/stefanprodan/podinfo:6.15.0
+  - kubeConnect: {from: Service/hello/hello, to: Deployment/hello/hello, recipe: selects}
+  - kubePatch:
+      node: Service/hello/hello
+      set:
+        spec.ports:
+          - {name: http, port: 80, targetPort: http}

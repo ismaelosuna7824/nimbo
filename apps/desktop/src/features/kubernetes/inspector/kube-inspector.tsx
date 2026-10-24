@@ -6,18 +6,20 @@ import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Empty, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from "@/components/ui/empty"
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip"
-import { Section } from "@/features/docker/inspector/fields"
+import { CommitInput, Section } from "@/features/docker/inspector/fields"
 import { DiagnosticRow } from "@/features/panels/components/diagnostic-row"
 import { revealFiles } from "@/features/panels/terraform/reveal-files"
 import { api } from "@/lib/api/client"
 import type { KubeNode, KubeSource, KubeWorkloadStatus } from "@/lib/api/types"
 import { cn } from "@/lib/utils"
 import { useWorkflowStore } from "@/state/workflow-store"
-import { deleteObject, restartWorkload } from "../actions"
+import { deleteObject, patchObject, restartWorkload } from "../actions"
 import { podDot } from "../canvas/model"
 import { ChartInspector } from "./chart-inspector"
-import { KubeFieldsContext } from "./kube-fields"
-import { ClaimForm, HpaForm, IngressForm, ServiceForm } from "./object-forms"
+import { KubeFieldsContext, useFieldAccess } from "./kube-fields"
+import { BudgetForm, ClaimForm, DataForm, HpaForm, IngressForm, NamespaceForm, ServiceForm } from "./object-forms"
+import { KubeAccessPanel, WorkloadIdentity } from "./rbac-forms"
+import { isRbacNode } from "./rbac-model"
 import { WorkloadForm } from "./workload-form"
 
 /** The inspector of a Kubernetes workspace's selected object or chart (null when nothing of the graph is selected). */
@@ -60,7 +62,12 @@ function NodeInspector({ node }: { node: KubeNode }) {
           )}
           {status && status.state !== "absent" && <Live status={status} />}
           {node.workload ? (
-            <WorkloadForm node={node} />
+            <>
+              <WorkloadForm node={node} />
+              <WorkloadIdentity node={node} />
+            </>
+          ) : isRbacNode(node) ? (
+            <KubeAccessPanel node={node} />
           ) : node.kind === "Service" && node.service ? (
             <ServiceForm node={node} />
           ) : node.routes ? (
@@ -69,6 +76,12 @@ function NodeInspector({ node }: { node: KubeNode }) {
             <HpaForm node={node} />
           ) : node.kind === "PersistentVolumeClaim" ? (
             <ClaimForm node={node} />
+          ) : node.kind === "Namespace" ? (
+            <NamespaceForm node={node} />
+          ) : node.kind === "PodDisruptionBudget" && node.apiVersion === "policy/v1" ? (
+            <BudgetForm node={node} />
+          ) : (node.kind === "ConfigMap" || node.kind === "Secret") && node.apiVersion === "v1" ? (
+            <DataForm node={node} />
           ) : (
             <Facts node={node} />
           )}
@@ -90,7 +103,7 @@ function Header({ node, status }: { node: KubeNode; status?: KubeWorkloadStatus 
         <K8sIcon icon={node.kind} size={26} />
       </span>
       <div className="min-w-0 flex-1">
-        <div className="truncate font-heading text-base leading-tight font-medium">{node.name}</div>
+        <ObjectName node={node} />
         <div className="truncate font-mono text-[11px] text-muted-foreground">
           {node.namespace ? `${node.namespace} · ` : ""}
           {node.apiVersion}
@@ -152,6 +165,31 @@ function Header({ node, status }: { node: KubeNode; status?: KubeWorkloadStatus 
   )
 }
 
+const DNS_LABEL_RE = /^[a-z0-9]([-a-z0-9]*[a-z0-9])?$/
+
+/**
+ * The object's name, renamed in place for objects of plain manifests (metadata.name; what refers to it by name keeps
+ * the old one). Kustomize and Helm names come from transformers and templates, so they stay as written.
+ */
+function ObjectName({ node }: { node: KubeNode }) {
+  const access = useFieldAccess("metadata.name")
+  const select = useWorkflowStore((s) => s.select)
+  if (node.sourceKind !== "manifests" || !access.editable) return <div className="truncate font-heading text-base leading-tight font-medium">{node.name}</div>
+  return (
+    <CommitInput
+      aria-label="Name"
+      data-testid="k8s-inspector-name"
+      title="Rename: references to it by name keep the old one"
+      className="h-7 border-transparent px-1 font-heading text-base font-medium shadow-none hover:border-input focus-visible:border-input"
+      value={node.name}
+      validate={(v) => (DNS_LABEL_RE.test(v) && v.length <= 63 ? undefined : "Lowercase letters, digits and -")}
+      onCommit={(name) => {
+        void patchObject(node, { "metadata.name": name }).then((ok) => ok && select(`${node.id.slice(0, node.id.length - node.name.length)}${name}`))
+      }}
+    />
+  )
+}
+
 const TONE: Record<string, string> = {
   ok: "bg-emerald-500",
   pending: "bg-amber-500",
@@ -201,7 +239,6 @@ function Live({ status }: { status: KubeWorkloadStatus }) {
 /** Objects without a form: their facts, edited in code. */
 function Facts({ node }: { node: KubeNode }) {
   const facts: [string, string | undefined][] = [
-    ["Keys", node.data?.length ? node.data.join(", ") : node.kind === "ConfigMap" || node.kind === "Secret" ? "none" : undefined],
     ["Min available", node.disruption?.minAvailable],
     ["Max unavailable", node.disruption?.maxUnavailable],
     ["Selector", node.disruption?.selector && Object.entries(node.disruption.selector).map(([k, v]) => `${k}=${v}`).join(", ")],
@@ -225,7 +262,6 @@ function Facts({ node }: { node: KubeNode }) {
             </div>
           ))}
       </dl>
-      {node.kind === "Secret" && <p className="text-[11px] text-muted-foreground">Values never leave your files; edit them in code.</p>}
       {node.file && (
         <Button variant="outline" size="xs" className="self-start" onClick={() => revealFiles("", node.file, node.line)}>
           <Code2Icon />

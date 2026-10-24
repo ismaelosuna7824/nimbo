@@ -1,0 +1,15 @@
+# Bucket switches/selects in the inspector, the analysts_group variable in
+# the Variables panel, and the public grant fixed in the GCP IAM editor: the
+# member type becomes "Google group" and its value the variable
+# (${var.analysts_group}, what Link to… var.analysts_group writes there).
+steps:
+  - set:
+      node: google_storage_bucket.reports
+      attrs:
+        uniform_bucket_level_access: true
+        public_access_prevention: enforced
+  - variable: {name: analysts_group, type: string, description: "Email of the Google group whose members read the reports."}
+  - accessGCP:
+      node: google_storage_bucket_iam_member.public_read
+      set:
+        members: ['"group:${var.analysts_group}"']

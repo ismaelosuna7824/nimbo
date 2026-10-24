@@ -1,13 +1,26 @@
-import { ExpandIcon, HardDriveIcon, LinkIcon, PlugIcon, RouteIcon, TriangleAlertIcon } from "lucide-react"
+import { ExpandIcon, HardDriveIcon, KeyRoundIcon, LinkIcon, PlugIcon, RouteIcon, ShieldCheckIcon, TriangleAlertIcon } from "lucide-react"
+import { useContext } from "react"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import { Checkbox } from "@/components/ui/checkbox"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
-import { CommitInput, ListEditor, Section } from "@/features/docker/inspector/fields"
+import { CommitInput, ListEditor, SecretInput, Section } from "@/features/docker/inspector/fields"
 import type { KubeNode, KubeRoute, KubeServicePort } from "@/lib/api/types"
 import { useWorkflowStore } from "@/state/workflow-store"
 import { patchObject } from "../actions"
-import { KField, KList } from "./kube-fields"
+import { KField, KList, KubeFieldsContext } from "./kube-fields"
 import { hpaMetrics, ingressRules, servicePorts } from "./paths"
+import {
+  budgetPatch,
+  DATA_KEY_RE,
+  dataEntries,
+  dataPatch,
+  labelsPatch,
+  POD_SECURITY_LABEL,
+  POD_SECURITY_LEVELS,
+  withPodSecurity,
+  type BudgetMode,
+  type DataEntry,
+} from "./workload-extras"
 
 const PORT_RE = /^\d{1,5}$/
 const LABEL_KEY_RE = /^([a-z0-9.-]+\/)?[A-Za-z0-9]([-A-Za-z0-9_.]*[A-Za-z0-9])?$/
@@ -193,29 +206,34 @@ export function HpaForm({ node }: { node: KubeNode }) {
           <span className="font-mono">{s.target}</span>
         )}
       </p>
-      <div className="grid grid-cols-3 gap-2">
+      <div className="grid grid-cols-2 gap-2">
         <KField path="spec.minReplicas" label="Min" htmlFor="k8s-hpa-min" display={String(s.minReplicas)}>
           <CommitInput id="k8s-hpa-min" inputMode="numeric" value={String(s.minReplicas)} validate={(v) => (intRe.test(v) && Number(v) >= 1 && Number(v) <= s.maxReplicas ? undefined : `1–${s.maxReplicas}`)} onCommit={(v) => patch({ "spec.minReplicas": Number(v) })} />
         </KField>
         <KField path="spec.maxReplicas" label="Max" htmlFor="k8s-hpa-max" display={String(s.maxReplicas)}>
           <CommitInput id="k8s-hpa-max" inputMode="numeric" value={String(s.maxReplicas)} validate={(v) => (intRe.test(v) && Number(v) >= s.minReplicas && Number(v) <= 100 ? undefined : `${s.minReplicas}–100`)} onCommit={(v) => patch({ "spec.maxReplicas": Number(v) })} />
         </KField>
-        <KField path="spec.metrics" label="CPU target %" htmlFor="k8s-hpa-cpu" display={s.cpu ? `${s.cpu}%` : ""}>
-          <CommitInput
-            id="k8s-hpa-cpu"
-            inputMode="numeric"
-            value={s.cpu ? String(s.cpu) : ""}
-            placeholder="none"
-            validate={(v) => (v === "" || (intRe.test(v) && Number(v) >= 1 && Number(v) <= 100) ? undefined : "1–100")}
-            onCommit={(v) => {
-              const metrics = hpaMetrics({ cpu: v ? Number(v) : undefined, memory: s.memory })
-              if (metrics.length) patch({ "spec.metrics": metrics })
-              else patch(undefined, ["spec.metrics"])
-            }}
-          />
-        </KField>
+        {(["cpu", "memory"] as const).map((res) => (
+          <KField key={res} path="spec.metrics" label={`${res === "cpu" ? "CPU" : "Memory"} target %`} htmlFor={`k8s-hpa-${res}`} display={s[res] ? `${s[res]}%` : ""}>
+            <CommitInput
+              id={`k8s-hpa-${res}`}
+              inputMode="numeric"
+              value={s[res] ? String(s[res]) : ""}
+              placeholder="none"
+              validate={(v) => (v === "" || (intRe.test(v) && Number(v) >= 1 && Number(v) <= 100) ? undefined : "1–100")}
+              onCommit={(v) => {
+                const metrics = hpaMetrics({ cpu: s.cpu, memory: s.memory, [res]: v ? Number(v) : undefined })
+                if (metrics.length) patch({ "spec.metrics": metrics })
+                else patch(undefined, ["spec.metrics"])
+              }}
+            />
+          </KField>
+        ))}
       </div>
-      <p className="text-[11px] text-muted-foreground">Needs CPU requests on the containers; the local cluster runs metrics-server.</p>
+      <p className="text-[11px] text-muted-foreground">
+        Needs requests on the containers for the resources it watches (CPU is the usual signal: memory rarely drops when load does); the local cluster runs
+        metrics-server.
+      </p>
     </Section>
   )
 }
@@ -234,6 +252,174 @@ export function ClaimForm({ node }: { node: KubeNode }) {
         </KField>
       </div>
       {st.accessModes && st.accessModes.length > 0 && <p className="font-mono text-[11px] text-muted-foreground">{st.accessModes.join(", ")}</p>}
+    </Section>
+  )
+}
+
+/** Pairs editor of a string map (labels, selectors). */
+function PairsEditor({ pairs, empty, placeholder, onChange }: { pairs: Pair[]; empty: string; placeholder: string; onChange: (map: Record<string, string>) => void }) {
+  return (
+    <ListEditor<Pair>
+      items={pairs}
+      empty={empty}
+      addLabel="Add label"
+      blank={() => ({ key: "", value: "" })}
+      complete={(p) => p.key !== ""}
+      onChange={(next) => onChange(Object.fromEntries(next.filter((p) => p.key).map((p) => [p.key, p.value])))}
+      render={(p, update) => (
+        <>
+          <CommitInput aria-label="Label" className="font-mono" placeholder={placeholder} value={p.key} validate={(v) => (v === "" || LABEL_KEY_RE.test(v) ? undefined : "A label key")} onCommit={(key) => update({ ...p, key })} />
+          <span className="mt-1.5 text-xs text-muted-foreground">=</span>
+          <CommitInput aria-label={`Value of ${p.key}`} className="font-mono" placeholder="value" value={p.value} onCommit={(value) => update({ ...p, value })} />
+        </>
+      )}
+    />
+  )
+}
+
+const toPairs = (m: Record<string, string> | undefined): Pair[] => Object.entries(m ?? {}).map(([key, value]) => ({ key, value }))
+
+const POD_SECURITY_HINT: Record<string, string> = {
+  "": "Not enforced: any pod is admitted.",
+  privileged: "Unrestricted: any pod is admitted.",
+  baseline: "Blocks known privilege escalations (privileged, host namespaces, hostPath).",
+  restricted: "Also requires non-root, no privilege escalation, dropped capabilities and a seccomp profile.",
+}
+
+/** A Namespace's labels, with the Pod Security admission level as a select. */
+export function NamespaceForm({ node }: { node: KubeNode }) {
+  const labels = node.labels ?? {}
+  const write = (next: Record<string, string>) => {
+    const p = labelsPatch(next)
+    void patchObject(node, p.set, p.unset)
+  }
+  const level = labels[POD_SECURITY_LABEL] ?? ""
+  return (
+    <Section title="Namespace" icon={<ShieldCheckIcon className="size-3.5" />}>
+      <KField path="metadata.labels" label="Pod Security (enforce)" htmlFor="k8s-ns-pod-security" display={level} hint={POD_SECURITY_HINT[level]}>
+        <Select value={level || "none"} onValueChange={(v) => write(withPodSecurity(labels, v === "none" ? "" : v))}>
+          <SelectTrigger id="k8s-ns-pod-security" size="sm" className="h-8 w-full text-xs" aria-label="Pod Security level" data-testid="k8s-ns-pod-security">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="none">Not enforced</SelectItem>
+            {POD_SECURITY_LEVELS.map((l) => (
+              <SelectItem key={l} value={l}>
+                {l}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+      </KField>
+      <span className="text-[11px] font-medium text-muted-foreground">Labels</span>
+      <KList path="metadata.labels" display={Object.entries(labels).map(([k, v]) => `${k}=${v}`).join(", ")}>
+        <PairsEditor pairs={toPairs(labels)} empty="No labels." placeholder="team" onChange={write} />
+      </KList>
+    </Section>
+  )
+}
+
+const BUDGET_RE = /^\d+%?$/
+
+/** A PodDisruptionBudget: how many pods may be evicted at once, and which pods. */
+export function BudgetForm({ node }: { node: KubeNode }) {
+  const d = node.disruption ?? {}
+  const mode: BudgetMode = d.maxUnavailable !== undefined || d.minAvailable === undefined ? "maxUnavailable" : "minAvailable"
+  const value = (mode === "maxUnavailable" ? d.maxUnavailable : d.minAvailable) ?? ""
+  const write = (m: BudgetMode, v: string) => {
+    const p = budgetPatch(m, v)
+    void patchObject(node, p.set, p.unset)
+  }
+  const graph = useWorkflowStore((s) => s.workflow!.kubernetes?.graph)
+  const selector = d.selector ?? {}
+  const selected = (graph?.nodes ?? []).filter(
+    (n) => n.workload && n.namespace === node.namespace && Object.keys(selector).length > 0 && Object.entries(selector).every(([k, v]) => n.workload?.podLabels?.[k] === v),
+  )
+  return (
+    <div className="flex flex-col gap-5">
+      <Section title="Disruption budget" icon={<ShieldCheckIcon className="size-3.5" />}>
+        <div className="grid grid-cols-2 gap-2">
+          <KField path={`spec.${mode}`} label="Rule" htmlFor="k8s-pdb-mode" display={mode}>
+            <Select value={mode} onValueChange={(m) => value && write(m as BudgetMode, value)}>
+              <SelectTrigger id="k8s-pdb-mode" size="sm" className="h-8 w-full text-xs" aria-label="Budget rule" data-testid="k8s-pdb-mode">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="maxUnavailable">Max unavailable</SelectItem>
+                <SelectItem value="minAvailable">Min available</SelectItem>
+              </SelectContent>
+            </Select>
+          </KField>
+          <KField path={`spec.${mode}`} label="Pods" htmlFor="k8s-pdb-value" display={value}>
+            <CommitInput id="k8s-pdb-value" className="font-mono" value={value} placeholder="1" validate={(v) => (BUDGET_RE.test(v) ? undefined : "A number or a %")} onCommit={(v) => write(mode, v)} />
+          </KField>
+        </div>
+        <p className="text-[11px] text-muted-foreground">Max unavailable 1 lets node drains move pods one at a time; a minimum equal to the replicas blocks every eviction.</p>
+      </Section>
+      <Section title="Selector" icon={<LinkIcon className="size-3.5" />}>
+        <KList path="spec.selector.matchLabels" display={Object.entries(selector).map(([k, v]) => `${k}=${v}`).join(", ")}>
+          <PairsEditor
+            pairs={toPairs(selector)}
+            empty="No selector: the budget protects no pods."
+            placeholder="app"
+            onChange={(m) => (Object.keys(m).length ? void patchObject(node, { "spec.selector.matchLabels": m }) : void patchObject(node, undefined, ["spec.selector.matchLabels"]))}
+          />
+        </KList>
+        <p className="text-[11px] text-muted-foreground" data-testid="k8s-pdb-selected">
+          {selected.length ? `Protects ${selected.map((n) => `${n.kind} ${n.name}`).join(", ")}.` : "Selects no workload: use the labels of a workload's pods."}
+        </p>
+      </Section>
+    </div>
+  )
+}
+
+/**
+ * The keys of a ConfigMap (with their values) or a Secret (write-only values, written as plain text under
+ * stringData: the API server stores them base64-encoded).
+ */
+export function DataForm({ node }: { node: KubeNode }) {
+  const { fields } = useContext(KubeFieldsContext)!
+  const secret = node.kind === "Secret"
+  const entries = dataEntries(fields, node.kind)
+  const write = (next: DataEntry[]) => {
+    const p = dataPatch(node.kind, entries, next)
+    if (Object.keys(p.set ?? {}).length || p.unset?.length) void patchObject(node, p.set, p.unset?.length ? p.unset : undefined)
+  }
+  return (
+    <Section title={secret ? "Secret keys" : "Keys"} icon={<KeyRoundIcon className="size-3.5" />}>
+      <KList path={secret ? "stringData" : "data"} display={(node.data ?? []).join(", ")}>
+        <ListEditor<DataEntry>
+          items={entries}
+          empty="No keys."
+          addLabel="Add key"
+          blank={() => ({ key: "", value: "", from: secret ? "stringData" : "data" })}
+          complete={(e) => DATA_KEY_RE.test(e.key)}
+          onChange={write}
+          render={(e, update) => (
+            <>
+              <CommitInput
+                aria-label="Key"
+                width="basis-36"
+                className="font-mono"
+                placeholder="KEY"
+                value={e.key}
+                validate={(v) => (v === "" || DATA_KEY_RE.test(v) ? (v !== e.key && entries.some((x) => x.key === v) ? "Already a key" : undefined) : "Letters, digits, - _ .")}
+                onCommit={(key) => update({ ...e, key })}
+              />
+              {secret ? (
+                <SecretInput label={`Value of ${e.key}`} value="" placeholder={entries.some((x) => x.key === e.key) ? "unchanged" : "value"} onCommit={(value) => update({ ...e, value })} />
+              ) : (
+                <CommitInput aria-label={`Value of ${e.key}`} className="font-mono" placeholder="value" value={e.value} onCommit={(value) => update({ ...e, value })} />
+              )}
+            </>
+          )}
+        />
+      </KList>
+      <p className="text-[11px] text-muted-foreground">
+        {secret
+          ? "Values are written to your files as plain text under stringData and never shown here: keep real credentials out of git."
+          : "Not for credentials: keep passwords and tokens in a Secret."}
+      </p>
     </Section>
   )
 }

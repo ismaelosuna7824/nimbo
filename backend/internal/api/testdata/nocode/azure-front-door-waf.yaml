@@ -1,0 +1,42 @@
+# Premium tier select, a WAF policy from the palette (custom rule and
+# managed rule set blocks) and a security policy linking it to the
+# endpoint. The template's origins already only accept Front Door traffic.
+steps:
+  - set:
+      node: azurerm_cdn_frontdoor_profile.main
+      attrs:
+        sku_name: Premium_AzureFrontDoor
+  - add: {type: azurerm_cdn_frontdoor_firewall_policy, name: main}
+  - set:
+      node: azurerm_cdn_frontdoor_firewall_policy.main
+      attrs:
+        name: wafwebdev
+        resource_group_name: {link: azurerm_resource_group.main.name}
+        sku_name: Premium_AzureFrontDoor
+        enabled: true
+        mode: Prevention
+        custom_rule[0].name: RateLimitPerClient
+        custom_rule[0].type: RateLimitRule
+        custom_rule[0].action: Block
+        custom_rule[0].enabled: true
+        custom_rule[0].priority: 100
+        custom_rule[0].rate_limit_duration_in_minutes: 1
+        custom_rule[0].rate_limit_threshold: 1000
+        custom_rule[0].match_condition[0].match_variable: RequestUri
+        custom_rule[0].match_condition[0].operator: BeginsWith
+        custom_rule[0].match_condition[0].match_values: [/]
+        managed_rule[0].type: Microsoft_DefaultRuleSet
+        managed_rule[0].version: "2.1"
+        managed_rule[0].action: Block
+        managed_rule[1].type: Microsoft_BotManagerRuleSet
+        managed_rule[1].version: "1.1"
+        managed_rule[1].action: Block
+  - add: {type: azurerm_cdn_frontdoor_security_policy, name: main}
+  - set:
+      node: azurerm_cdn_frontdoor_security_policy.main
+      attrs:
+        name: web-dev-waf
+        cdn_frontdoor_profile_id: {link: azurerm_cdn_frontdoor_profile.main.id}
+        security_policies[0].firewall[0].cdn_frontdoor_firewall_policy_id: {link: azurerm_cdn_frontdoor_firewall_policy.main.id}
+        security_policies[0].firewall[0].association[0].patterns_to_match: [/*]
+        security_policies[0].firewall[0].association[0].domain[0].cdn_frontdoor_domain_id: {link: azurerm_cdn_frontdoor_endpoint.main.id}

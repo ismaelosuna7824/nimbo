@@ -194,6 +194,30 @@ func (d *Doc) Get(path ...string) (key, val *yaml.Node) {
 	return nil, cur
 }
 
+// node returns the node at path, whose segments may all index block
+// sequences (Get needs a mapping key last): the parent of an entry of a
+// list item ("spec.containers.0").
+func (d *Doc) node(path []string) *yaml.Node {
+	cur := d.Root
+	for _, p := range path {
+		switch {
+		case cur == nil:
+			return nil
+		case cur.Kind == yaml.SequenceNode:
+			n, err := strconv.Atoi(p)
+			if err != nil || n < 0 || n >= len(cur.Content) {
+				return nil
+			}
+			cur = cur.Content[n]
+		case cur.Kind == yaml.MappingNode:
+			_, cur = mapGet(cur, p)
+		default:
+			return nil
+		}
+	}
+	return cur
+}
+
 // Resolve follows an alias.
 func Resolve(n *yaml.Node) *yaml.Node {
 	for n != nil && n.Kind == yaml.AliasNode {
@@ -581,7 +605,7 @@ func (d *Doc) Delete(path []string, pruneEmpty bool) error {
 		return nil
 	}
 	if len(path) > 1 {
-		_, parent := d.Get(path[:len(path)-1]...)
+		parent := d.node(path[:len(path)-1])
 		if parent.Style&yaml.FlowStyle != 0 {
 			next := &yaml.Node{Kind: yaml.MappingNode, Style: yaml.FlowStyle}
 			for i := 0; i+1 < len(parent.Content); i += 2 {

@@ -134,7 +134,11 @@ type ServiceFacts struct {
 	Restart         string            `json:"restart,omitempty"`
 	Replicas        *int              `json:"replicas,omitempty"`
 	Resources       *ServiceResources `json:"resources,omitempty"`
-	Profiles        []string          `json:"profiles,omitempty"`
+	// Logging is the service's logging: (nil when it has none).
+	Logging  *ServiceLogging `json:"logging,omitempty"`
+	Profiles []string        `json:"profiles,omitempty"`
+	// Labels are the container labels (labels:), e.g. prometheus.io/scrape.
+	Labels map[string]string `json:"labels,omitempty"`
 	// Environment: values of secret-looking keys are left out (Secret set).
 	Environment   []ServiceEnv        `json:"environment"`
 	EnvFiles      []string            `json:"envFiles,omitempty"`
@@ -145,8 +149,28 @@ type ServiceFacts struct {
 	ContainerName string              `json:"containerName,omitempty"`
 	Hostname      string              `json:"hostname,omitempty"`
 	User          string              `json:"user,omitempty"`
-	WorkingDir    string              `json:"workingDir,omitempty"`
-	Platform      string              `json:"platform,omitempty"`
+	// UserFrom is "compose" (the service's user:) or "dockerfile" (the
+	// final stage's USER) when User is set.
+	UserFrom string `json:"userFrom,omitempty"`
+	// NonRootUser is the unprivileged user the image (or the final stage's
+	// base image) documents, for "run as non-root"; "" when unknown.
+	NonRootUser string `json:"nonRootUser,omitempty"`
+	// FileEnv are the variables the image (or the final stage's base image)
+	// also reads from a file named by <VAR>_FILE (Docker secrets).
+	FileEnv []string `json:"fileEnv,omitempty"`
+	// Runtime hardening (compose service keys).
+	ReadOnly    bool     `json:"readOnly,omitempty"`    // read_only
+	CapDrop     []string `json:"capDrop,omitempty"`     // cap_drop
+	CapAdd      []string `json:"capAdd,omitempty"`      // cap_add
+	SecurityOpt []string `json:"securityOpt,omitempty"` // security_opt
+	Tmpfs       []string `json:"tmpfs,omitempty"`       // tmpfs
+	Privileged  bool     `json:"privileged,omitempty"`
+	Init        bool     `json:"init,omitempty"`
+	// Secrets are the secrets granted to the service (their sources), each
+	// mounted at /run/secrets/<target or source>.
+	Secrets    []string `json:"secrets,omitempty"`
+	WorkingDir string   `json:"workingDir,omitempty"`
+	Platform   string   `json:"platform,omitempty"`
 	// Extends is the service this one extends ("svc" or "file#svc").
 	Extends string `json:"extends,omitempty"`
 	// Overrides are the attributes the active environment's override file
@@ -228,6 +252,15 @@ type ServiceHealthcheck struct {
 type ServiceResources struct {
 	CPUs   string `json:"cpus,omitempty"`
 	Memory string `json:"memory,omitempty"`
+	Pids   int    `json:"pids,omitempty"` // the number of processes (pids)
+}
+
+// ServiceLogging is a service's `logging:` with the json-file / local
+// rotation options (options.max-size, options.max-file).
+type ServiceLogging struct {
+	Driver  string `json:"driver,omitempty"` // "" = Docker's default (json-file)
+	MaxSize string `json:"maxSize,omitempty"`
+	MaxFile string `json:"maxFile,omitempty"`
 }
 
 // StageFacts describe one stage of a service's Dockerfile.

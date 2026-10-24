@@ -1,0 +1,32 @@
+# nsg_ids gets the database NSG with Link to… (appended to the list);
+# compartments and the VCN range come from the variables via Link to….
+steps:
+  - set:
+      node: oci_core_subnet.data
+      attrs:
+        prohibit_public_ip_on_vnic: true
+  - add: {type: oci_core_network_security_group, name: db}
+  - set:
+      node: oci_core_network_security_group.db
+      attrs:
+        compartment_id: {link: var.compartment_ocid}
+        vcn_id: {link: oci_core_vcn.main.id}
+        display_name: learn-dev-db
+  - add: {type: oci_core_network_security_group_security_rule, name: db_from_vcn}
+  - set:
+      node: oci_core_network_security_group_security_rule.db_from_vcn
+      attrs:
+        network_security_group_id: {link: oci_core_network_security_group.db.id}
+        direction: INGRESS
+        protocol: "6"
+        source_type: CIDR_BLOCK
+        source: {link: var.vcn_cidr}
+        tcp_options[0].destination_port_range[0].min: 1522
+        tcp_options[0].destination_port_range[0].max: 1522
+  - set:
+      node: oci_database_autonomous_database.orders
+      attrs:
+        subnet_id: {link: oci_core_subnet.data.id}
+        nsg_ids: {link: oci_core_network_security_group.db.id, append: true}
+        whitelisted_ips: {unset: true}
+  - variable: {name: db_admin_password, removeDefault: true, sensitive: true}

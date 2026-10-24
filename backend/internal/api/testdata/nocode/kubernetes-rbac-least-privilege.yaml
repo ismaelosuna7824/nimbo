@@ -1,0 +1,12 @@
+# Delete the cluster-admin binding on the canvas, "Give it its own Role"
+# on the ServiceAccount (grant recipe access:role), tick configmaps
+# get/list/watch in the Role's rule editor, and switch the API token off
+# in the web Deployment's identity section.
+steps:
+  - kubeDelete: {node: ClusterRoleBinding/config-reader-admin}
+  - kubeConnect: {from: ServiceAccount/reports/config-reader, to: "", recipe: "access:role"}
+  - kubeAccess:
+      node: Role/reports/config-reader
+      rules:
+        - {apiGroups: [""], resources: [configmaps], verbs: [get, list, watch]}
+  - kubeAccess: {node: Deployment/reports/web, automountToken: false}

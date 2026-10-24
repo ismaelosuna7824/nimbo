@@ -1,0 +1,66 @@
+# Network: two palette private subnets (Link to… the VPC id, zones typed:
+# Link to… can't index the zones data source's names list; no public IPs); the DB subnet group's list is
+# cleared and both appended with Link to…; the security groups' ingress
+# cards (object-list editor): the web group keeps HTTPS only, the db group
+# accepts 5432 from the web group (no CIDR). Data: switches on the
+# instance, the password cleared. Host: metadata_options block. Identity:
+# the admin statement is replaced in the AWS policy editor by one reading
+# the database's managed secret (Link to… its nested secret_arn).
+steps:
+  - add: {type: aws_subnet, name: private}
+  - set:
+      node: aws_subnet.private
+      attrs:
+        vpc_id: {link: aws_vpc.main.id}
+        cidr_block: 10.20.10.0/24
+        availability_zone: us-east-1a
+        map_public_ip_on_launch: false
+  - add: {type: aws_subnet, name: private_b}
+  - set:
+      node: aws_subnet.private_b
+      attrs:
+        vpc_id: {link: aws_vpc.main.id}
+        cidr_block: 10.20.11.0/24
+        availability_zone: us-east-1b
+        map_public_ip_on_launch: false
+  - set:
+      node: aws_db_subnet_group.db
+      attrs:
+        subnet_ids: []
+  - set:
+      node: aws_db_subnet_group.db
+      attrs:
+        subnet_ids: {link: aws_subnet.private.id, append: true}
+  - set:
+      node: aws_db_subnet_group.db
+      attrs:
+        subnet_ids: {link: aws_subnet.private_b.id, append: true}
+  - set:
+      node: aws_security_group.web
+      attrs:
+        ingress:
+          - {description: HTTPS from clients, from_port: 443, to_port: 443, protocol: tcp, cidr_blocks: [0.0.0.0/0]}
+  - set:
+      node: aws_security_group.db
+      attrs:
+        ingress:
+          - {description: PostgreSQL from the web tier, from_port: 5432, to_port: 5432, protocol: tcp, security_groups: [{link: aws_security_group.web.id}]}
+  - set:
+      node: aws_db_instance.db
+      attrs:
+        password: {unset: true}
+        manage_master_user_password: true
+        storage_encrypted: true
+        publicly_accessible: false
+  - set:
+      node: aws_instance.web
+      attrs:
+        metadata_options[0].http_tokens: required
+  - accessAWS:
+      node: aws_iam_role_policy.web
+      path: policy
+      removeWhere: {actions: ["*"], resources: ['"*"']}
+      add:
+        - sid: ReadDatabaseSecret
+          actions: ["secretsmanager:GetSecretValue"]
+          resources: ["aws_db_instance.db.master_user_secret[0].secret_arn"]

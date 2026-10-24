@@ -1,0 +1,110 @@
+# The starter "workloads" compartment (already under the tenancy) becomes
+# the enclosing compartment; four palette child compartments Link to… its
+# id. Three palette role groups join "ops" (renamed to the network admins).
+# The tenancy-admin statement is deleted in the OCI sentence builder and
+# replaced by per-role sentences scoped with the compartment path typed in
+# the compartment field. Cloud Guard, the topic + subscription, two events
+# rules (condition_details tag inputs, actions.action block), a vault in
+# the security compartment and a budget (targets: Link to… appended) with an
+# alert rule come from the palette.
+steps:
+  - set:
+      node: oci_identity_group.ops
+      attrs:
+        name: network-admins
+        description: Network administrators
+  - add: {type: oci_identity_group, name: security_admins}
+  - set:
+      node: oci_identity_group.security_admins
+      attrs: {compartment_id: &tenancy ocid1.tenancy.oc1..flocilocaltenancy0000000000000000000000000000000000000000, name: security-admins, description: Security administrators}
+  - add: {type: oci_identity_group, name: app_admins}
+  - set:
+      node: oci_identity_group.app_admins
+      attrs: {compartment_id: *tenancy, name: app-admins, description: Application administrators}
+  - add: {type: oci_identity_group, name: database_admins}
+  - set:
+      node: oci_identity_group.database_admins
+      attrs: {compartment_id: *tenancy, name: database-admins, description: Database administrators}
+  - add: {type: oci_identity_compartment, name: network}
+  - set:
+      node: oci_identity_compartment.network
+      attrs: {compartment_id: {link: oci_identity_compartment.workloads.id}, name: network, description: Network resources}
+  - add: {type: oci_identity_compartment, name: security}
+  - set:
+      node: oci_identity_compartment.security
+      attrs: {compartment_id: {link: oci_identity_compartment.workloads.id}, name: security, description: Security resources}
+  - add: {type: oci_identity_compartment, name: app}
+  - set:
+      node: oci_identity_compartment.app
+      attrs: {compartment_id: {link: oci_identity_compartment.workloads.id}, name: app, description: Application resources}
+  - add: {type: oci_identity_compartment, name: database}
+  - set:
+      node: oci_identity_compartment.database
+      attrs: {compartment_id: {link: oci_identity_compartment.workloads.id}, name: database, description: Database resources}
+  - accessOCI:
+      node: oci_identity_policy.ops
+      remove: [0]
+      add:
+        - {subjectType: group, subjects: [network-admins], verb: manage, resourceType: virtual-network-family, location: compartment, compartment: "workloads:network"}
+        - {subjectType: group, subjects: [security-admins], verb: manage, resourceType: vaults, location: compartment, compartment: "workloads:security"}
+        - {subjectType: group, subjects: [security-admins], verb: manage, resourceType: keys, location: compartment, compartment: "workloads:security"}
+        - {subjectType: group, subjects: [app-admins], verb: manage, resourceType: instance-family, location: compartment, compartment: "workloads:app"}
+        - {subjectType: group, subjects: [database-admins], verb: manage, resourceType: database-family, location: compartment, compartment: "workloads:database"}
+  - add: {type: oci_cloud_guard_cloud_guard_configuration, name: main}
+  - set:
+      node: oci_cloud_guard_cloud_guard_configuration.main
+      attrs: {compartment_id: *tenancy, reporting_region: us-ashburn-1, status: ENABLED}
+  - add: {type: oci_ons_notification_topic, name: security}
+  - set:
+      node: oci_ons_notification_topic.security
+      attrs: {compartment_id: {link: oci_identity_compartment.security.id}, name: lz-prod-security}
+  - add: {type: oci_ons_subscription, name: security_email}
+  - set:
+      node: oci_ons_subscription.security_email
+      attrs: {compartment_id: {link: oci_identity_compartment.security.id}, topic_id: {link: oci_ons_notification_topic.security.id}, protocol: EMAIL, endpoint: security@example.com}
+  - add: {type: oci_events_rule, name: iam_changes}
+  - set:
+      node: oci_events_rule.iam_changes
+      attrs:
+        compartment_id: *tenancy
+        display_name: lz-prod-iam-changes
+        is_enabled: true
+        condition_details[0].event_types: [com.oraclecloud.identityControlPlane.CreatePolicy, com.oraclecloud.identityControlPlane.UpdatePolicy, com.oraclecloud.identityControlPlane.DeletePolicy, com.oraclecloud.identityControlPlane.AddUserToGroup]
+        actions[0].action[0].action_type: ONS
+        actions[0].action[0].is_enabled: true
+        actions[0].action[0].topic_id: {link: oci_ons_notification_topic.security.id}
+  - add: {type: oci_events_rule, name: network_changes}
+  - set:
+      node: oci_events_rule.network_changes
+      attrs:
+        compartment_id: *tenancy
+        display_name: lz-prod-network-changes
+        is_enabled: true
+        condition_details[0].event_types: [com.oraclecloud.virtualnetwork.updatesecuritylist, com.oraclecloud.virtualnetwork.updatenetworksecuritygroup, com.oraclecloud.virtualnetwork.updateroutetable]
+        actions[0].action[0].action_type: ONS
+        actions[0].action[0].is_enabled: true
+        actions[0].action[0].topic_id: {link: oci_ons_notification_topic.security.id}
+  - add: {type: oci_kms_vault, name: lz}
+  - set:
+      node: oci_kms_vault.lz
+      attrs: {compartment_id: {link: oci_identity_compartment.security.id}, display_name: lz-prod-vault, vault_type: DEFAULT}
+  - add: {type: oci_budget_budget, name: lz}
+  - set:
+      node: oci_budget_budget.lz
+      attrs:
+        compartment_id: *tenancy
+        display_name: lz-prod-monthly
+        amount: 500
+        reset_period: MONTHLY
+        target_type: COMPARTMENT
+        targets: {link: oci_identity_compartment.workloads.id, append: true}
+  - add: {type: oci_budget_alert_rule, name: forecast}
+  - set:
+      node: oci_budget_alert_rule.forecast
+      attrs:
+        budget_id: {link: oci_budget_budget.lz.id}
+        display_name: forecast-100
+        type: FORECAST
+        threshold: 100
+        threshold_type: PERCENTAGE
+        recipients: security@example.com

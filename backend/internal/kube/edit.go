@@ -374,6 +374,8 @@ func toNode(v any, old *yaml.Node) *yaml.Node {
 	switch t := v.(type) {
 	case nil:
 		return &yaml.Node{Kind: yaml.ScalarNode, Tag: "!!null", Value: "null"}
+	case *yaml.Node:
+		return t
 	case string:
 		if old != nil && old.Kind == yaml.ScalarNode && old.Style == 0 {
 			switch old.Tag {
@@ -402,6 +404,11 @@ func toNode(v any, old *yaml.Node) *yaml.Node {
 		return compose.Str(fmt.Sprint(v))
 	}
 	n.Style = 0
+	// A flow list of scalars ([get, list]) stays a flow list.
+	if old != nil && old.Kind == yaml.SequenceNode && old.Style&yaml.FlowStyle != 0 && len(old.Content) > 0 && n.Kind == yaml.SequenceNode &&
+		!slices.ContainsFunc(n.Content, func(c *yaml.Node) bool { return c.Kind != yaml.ScalarNode }) {
+		n.Style = yaml.FlowStyle
+	}
 	return &n
 }
 

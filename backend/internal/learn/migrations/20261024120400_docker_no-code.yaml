@@ -1,0 +1,3109 @@
+description: Marks which docker challenges are solvable without code and rewrites their hints as UI steps
+operations:
+- op: upsert
+  kind: challenge
+  id: docker-first-web-service
+  data:
+    provider: docker
+    level: beginner
+    title: Your first web service
+    summary: Serve a static site from a pinned image, publish its port, and let Docker know when it is healthy and restart it when it crashes.
+    minutes: 15
+    tags: [compose, dockerfile, nginx, healthcheck, restart]
+    runtime: local
+    problem: |
+      Your team's landing page is a single `index.html`. A teammate wrapped it in a
+      Dockerfile and a `compose.yaml`, but nothing works the way it should:
+
+      - the image is built `FROM nginx` with no tag, so every rebuild may pull a
+        different NGINX version;
+      - the container's port 80 is never published, so nobody can open the page
+        from the host;
+      - Docker only knows that the process is running, not whether it actually
+        answers HTTP requests;
+      - when the container stops (a crash, or Docker restarting), it stays down.
+
+      Turn it into a small, well-behaved web service.
+    requirements:
+    - The Dockerfile's `FROM` names a version tag (for example `nginx:1.27-alpine`), not `latest` or no tag.
+    - The `web` service publishes container port 80 on a host port, so `GET /` answers 200 from the host.
+    - The service has a healthcheck (a compose `healthcheck:` or a Dockerfile `HEALTHCHECK`) that fails when NGINX can't serve.
+    - The service has a restart policy such as `unless-stopped`.
+    hints:
+    - 'Image tags can change: `nginx` alone means `nginx:latest`. Click the `web` service and find **Base image (FROM)** in its **Container** section. It rewrites the FROM line of `site/Dockerfile`.'
+    - Pin a major-minor tag from the official image, such as `nginx:1.27-alpine`. Then, in **Ports**, use **Publish a port** with host port `8080` and container port `80`.
+    - In **Health check**, click **Add a health check** and set **Test** to `wget -qO- http://127.0.0.1/ >/dev/null || exit 1` (the Alpine image ships BusyBox wget; `127.0.0.1` avoids IPv6 surprises). Finally pick **Unless stopped** under **Restart**.
+    solution: |
+      **Why.** Docker's building best practices recommend pinning base image
+      versions (tags are mutable) and choosing a minimal official base. Compose
+      only publishes the ports you list in `ports:`. A healthcheck lets Docker
+      (and Compose `depends_on`) tell a running container from one that can
+      serve, and a restart policy brings a stopped container back.
+
+      **Steps.**
+      1. In `site/Dockerfile`, change `FROM nginx` to `FROM nginx:1.27-alpine`.
+      2. In `compose.yaml`, publish the port with `ports: ["8080:80"]`.
+      3. Add a healthcheck that requests the page:
+         `test: ["CMD-SHELL", "wget -qO- http://127.0.0.1/ >/dev/null || exit 1"]`
+         with `interval: 10s`, `timeout: 3s`, `retries: 3` and `start_period: 5s`
+         (keep the timeout below the interval).
+      4. Add `restart: unless-stopped`.
+      5. Deploy and open `http://localhost:8080/`; the Deploy tab shows the
+         service as healthy once the first check passes.
+
+      **Without writing code in Nimbo**
+
+      1. Click the `web` service. In **Container**, set **Base image (FROM)** to `nginx:1.27-alpine`. The service keeps building from `./site`.
+      2. In **Ports**, click **Publish a port**: **Host port** `8080`, **Container port** `80`.
+      3. In **Health check**, click **Add a health check**. Set **Test** to `wget -qO- http://127.0.0.1/ >/dev/null || exit 1`, **Interval** `10s`, **Timeout** `3s`, **Retries** `3`, **Start period** `5s`.
+      4. In **Restart & resources**, set **Restart** to **Unless stopped**.
+      5. Deploy and open `http://localhost:8080/`.
+    solutionFiles:
+      compose.yaml: |
+        # A static site served by NGINX: pinned image, published port,
+        # healthcheck and restart policy.
+        services:
+          web:
+            build: ./site
+            ports:
+              - "8080:80"
+            restart: unless-stopped
+            healthcheck:
+              test: ["CMD-SHELL", "wget -qO- http://127.0.0.1/ >/dev/null || exit 1"]
+              interval: 10s
+              timeout: 3s
+              retries: 3
+              start_period: 5s
+      site/Dockerfile: |
+        # Pinned official image (Alpine variant: small, ships BusyBox wget).
+        FROM nginx:1.27-alpine
+        COPY index.html /usr/share/nginx/html/index.html
+        EXPOSE 80
+    starter:
+      kind: docker
+      files:
+        compose.yaml: |
+          services:
+            web:
+              build: ./site
+        site/Dockerfile: |
+          FROM nginx
+          COPY index.html /usr/share/nginx/html/index.html
+        site/.dockerignore: |
+          Dockerfile
+          .dockerignore
+        site/index.html: |
+          <!doctype html>
+          <html lang="en">
+            <head>
+              <meta charset="utf-8">
+              <title>Nimbo Learn</title>
+            </head>
+            <body>
+              <h1>Hello from Docker</h1>
+              <p>This page is served by NGINX running in a container.</p>
+            </body>
+          </html>
+    checks:
+    - id: valid
+      label: The compose project is valid
+      type: validate
+    - id: pinned
+      label: The base image is pinned to a version tag
+      type: rules_clean
+      rules_clean: {codes: [dk_latest_tag], minSeverity: info}
+    - id: healthcheck
+      label: The web service has a healthcheck
+      type: rules_clean
+      rules_clean: {codes: [dk_missing_healthcheck, dk_healthcheck_timing], minSeverity: info}
+    - id: restart
+      label: The web service has a restart policy
+      type: rules_clean
+      rules_clean: {codes: [dk_no_restart], minSeverity: info}
+    - id: deploy
+      label: The project deploys
+      type: deploy
+    - id: page
+      label: The page answers 200 from the host
+      type: http
+      http: {service: web, port: 80, path: /, status: 200, contains: Hello from Docker}
+    sources:
+    - {title: 'Docker Docs: Building best practices (pin base image versions, choose the right base image)', url: 'https://docs.docker.com/build/building/best-practices/'}
+    - {title: 'Docker Docs: Compose file reference, services (ports, healthcheck, restart)', url: 'https://docs.docker.com/reference/compose-file/services/'}
+    - {title: 'Docker Docs: Dockerfile reference (FROM, EXPOSE, HEALTHCHECK)', url: 'https://docs.docker.com/reference/dockerfile/'}
+    - {title: 'Docker Docs: Start containers automatically (restart policies)', url: 'https://docs.docker.com/engine/containers/start-containers-automatically/'}
+    solvableWithoutCode: true
+- op: upsert
+  kind: challenge
+  id: docker-cache-friendly-dockerfile
+  data:
+    provider: docker
+    level: beginner
+    title: A Dockerfile that builds fast and stops cleanly
+    summary: Reorder a Node.js Dockerfile so dependency installs are cached, run it on a pinned slim base, and start the app in exec form so it receives SIGTERM.
+    minutes: 20
+    tags: [dockerfile, build-cache, node, exec-form, dockerignore]
+    prerequisites: [docker-first-web-service]
+    runtime: local
+    problem: |
+      Every small change to the catalog API's source rebuilds its image from
+      scratch, and `docker compose down` always takes ten seconds before the
+      container goes away. The Dockerfile looks innocent:
+
+      ```dockerfile
+      FROM node
+      WORKDIR /app
+      COPY . .
+      RUN npm install --omit=dev
+      CMD npm start
+      ```
+
+      Fix the image so that editing `server.js` reuses the cached dependency
+      layer, the image is based on a pinned slim Node.js image, and the app
+      shuts down as soon as Docker asks it to.
+    requirements:
+    - The final image is based on a pinned, slim Node.js tag (for example `node:22-alpine`), not `node` / `node:latest`.
+    - '`package.json` is copied and dependencies are installed **before** the application sources are copied.'
+    - '`CMD` uses the exec (JSON array) form and runs `node` directly.'
+    - A `.dockerignore` keeps `node_modules`, logs and env files out of the build context.
+    - The service still builds and `GET /health` answers 200.
+    hints:
+    - Docker rebuilds a layer when anything copied before it changed. If `COPY . .` comes first, every source edit invalidates `npm install`.
+    - 'Copy only the manifest first: `COPY package.json ./`, then `RUN npm install --omit=dev`, then `COPY server.js ./` (or `COPY . .`).'
+    - '`CMD npm start` is the shell form: `/bin/sh -c` becomes PID 1 and doesn''t forward SIGTERM, and `npm` doesn''t either. Use `CMD ["node", "server.js"]`.'
+    - '`node` without a tag is the full Debian-based image. The `-alpine` (or `-slim`) variants carry far fewer packages.'
+    solution: |
+      **Why.** Docker's cache guide explains that a changed layer invalidates
+      every layer after it, so dependency manifests should be copied and
+      installed before the frequently changing sources. The building best
+      practices recommend a minimal, pinned base image and a `.dockerignore`
+      so the build context only holds what the image needs. The Dockerfile
+      reference recommends the exec form for `CMD`/`ENTRYPOINT`: with the shell
+      form the app runs under `/bin/sh -c` and does not receive signals, so
+      `docker stop` waits for the grace period and kills it.
+
+      **Steps.**
+      1. `FROM node:22-alpine` and `ENV NODE_ENV=production`.
+      2. `COPY package.json ./` then `RUN npm install --omit=dev --no-audit --no-fund`.
+      3. `COPY server.js ./` after the install.
+      4. Run as the image's unprivileged `node` user (`USER node`) and `EXPOSE 3000`.
+      5. `CMD ["node", "server.js"]`; the app already closes its server on SIGTERM.
+      6. Add `api/.dockerignore` with `node_modules`, `npm-debug.log*`, `.env*`, `.git`.
+      7. Optionally add a `HEALTHCHECK` (BusyBox `wget` is available on Alpine).
+
+      Rebuild after editing `server.js`: the `npm install` step now shows `CACHED`.
+
+      **Without writing code in Nimbo**
+
+      The **Base image (FROM)** field in the `api` service form can pin `node:22-alpine`. Moving `COPY package.json` and `npm install` before `COPY . .`, writing `CMD` in exec form, and adding `.dockerignore` all mean editing files in the code editor: the canvas has no Dockerfile editor.
+    solutionFiles:
+      api/Dockerfile: |
+        # Dependencies first (cached until package.json changes), then the code.
+        FROM node:22-alpine
+        ENV NODE_ENV=production
+        WORKDIR /app
+        COPY package.json ./
+        RUN npm install --omit=dev --no-audit --no-fund
+        COPY server.js ./
+        USER node
+        EXPOSE 3000
+        HEALTHCHECK --interval=10s --timeout=3s --start-period=5s --retries=3 \
+          CMD wget -qO- http://127.0.0.1:3000/health >/dev/null || exit 1
+        # Exec form: node is PID 1's direct command and receives SIGTERM.
+        CMD ["node", "server.js"]
+      api/.dockerignore: |
+        node_modules
+        npm-debug.log*
+        .env*
+        .git
+        Dockerfile
+        .dockerignore
+    starter:
+      kind: docker
+      files:
+        compose.yaml: |
+          services:
+            api:
+              build: ./api
+              init: true
+              ports:
+                - "3000:3000"
+              restart: unless-stopped
+        api/Dockerfile: |
+          FROM node
+          WORKDIR /app
+          COPY . .
+          RUN npm install --omit=dev
+          EXPOSE 3000
+          CMD npm start
+        api/package.json: |
+          {
+            "name": "catalog-api",
+            "version": "1.0.0",
+            "private": true,
+            "main": "server.js",
+            "scripts": {
+              "start": "node server.js"
+            }
+          }
+        api/server.js: |
+          const http = require("node:http");
+
+          const port = Number(process.env.PORT ?? 3000);
+
+          function send(res, status, body) {
+            res.writeHead(status, { "Content-Type": "application/json" });
+            res.end(JSON.stringify(body));
+          }
+
+          const server = http.createServer((req, res) => {
+            const path = new URL(req.url, "http://localhost").pathname;
+            if (path === "/health") return send(res, 200, { status: "ok" });
+            if (path === "/") return send(res, 200, { message: "Hello from the catalog API" });
+            send(res, 404, { error: "not found" });
+          });
+
+          server.listen(port, () => console.log(`listening on :${port}`));
+
+          // Stop accepting connections and exit when Docker asks us to stop.
+          process.on("SIGTERM", () => server.close(() => process.exit(0)));
+    checks:
+    - id: valid
+      label: The compose project is valid
+      type: validate
+    - id: base
+      label: The image runs on a pinned, slim Node.js base
+      type: rules_clean
+      rules_clean: {codes: [dk_latest_tag, dk_heavy_base], minSeverity: info}
+    - id: layers
+      label: Dependencies install before the sources are copied
+      type: rules_clean
+      rules_clean: {codes: [dk_layer_order], minSeverity: warning}
+    - id: exec-form
+      label: CMD uses the exec form
+      type: rules_clean
+      rules_clean: {codes: [dk_shell_form], minSeverity: warning}
+    - id: deploy
+      label: The project deploys
+      type: deploy
+    - id: health
+      label: GET /health answers 200
+      type: http
+      http: {service: api, port: 3000, path: /health, status: 200}
+    sources:
+    - {title: 'Docker Docs: Optimize cache usage in builds (order your layers)', url: 'https://docs.docker.com/build/cache/optimize/'}
+    - {title: 'Docker Docs: Building best practices', url: 'https://docs.docker.com/build/building/best-practices/'}
+    - {title: 'Docker Docs: Dockerfile reference (shell and exec form)', url: 'https://docs.docker.com/reference/dockerfile/'}
+    - {title: 'Docker Docs: Build context and .dockerignore files', url: 'https://docs.docker.com/build/concepts/context/'}
+    solvableWithoutCode: false
+- op: upsert
+  kind: challenge
+  id: docker-app-with-postgres
+  data:
+    provider: docker
+    level: beginner
+    title: An API and its PostgreSQL database
+    summary: Keep PostgreSQL data in a named volume, start the API only once the database is healthy, and stop exposing the database to your whole network.
+    minutes: 25
+    tags: [compose, postgres, volumes, depends_on, healthcheck, startup-order]
+    prerequisites: [docker-first-web-service]
+    runtime: local
+    problem: |
+      The visits API counts every request in PostgreSQL. It works on a good day,
+      but:
+
+      - after `docker compose down` and `up` the counter is back to zero:
+        PostgreSQL writes to an anonymous volume nobody reuses;
+      - on a cold start the API boots before PostgreSQL accepts connections and
+        its first requests fail;
+      - the database is published as `5432:5432`, so anyone on the same Wi-Fi
+        can try the password.
+
+      Make the stack start in the right order, keep its data, and keep the
+      database private to the project.
+    requirements:
+    - PostgreSQL stores `/var/lib/postgresql/data` in a **named** volume declared under the top-level `volumes:`.
+    - The `db` service has a healthcheck that succeeds only when PostgreSQL accepts connections.
+    - 'The `api` service waits for `db` with `depends_on: {db: {condition: service_healthy}}`.'
+    - The database is not published on every network interface (drop `ports:`, or bind it to `127.0.0.1`).
+    - The stack deploys and `GET /health` on the API answers 200.
+    hints:
+    - The postgres image keeps its data in `/var/lib/postgresql/data`. If you mount nothing there, Docker creates an anonymous volume with a random name. Add a **Volume** from the palette and give it a clear name such as `pgdata`.
+    - 'Mount it in the `db` service''s **Volumes** section (type **volume**, source `pgdata`, path `/var/lib/postgresql/data`). Then click **Add a health check** and use a **Test** that succeeds only when PostgreSQL accepts connections: the image ships `pg_isready`.'
+    - 'Set the test to `pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}`. In `api`, under **Depends on**, make it wait for `db` **until healthy**. Remove the `db` row from **Ports**: other services reach it as `db:5432` without a published port.'
+    solution: |
+      **Why.** Docker's volume docs explain that named volumes persist
+      independently of containers and are reused by name, while anonymous
+      volumes get random names. Compose's startup-order guide notes that
+      Compose waits for a dependency to be *running*, not *ready*, unless you
+      use `condition: service_healthy` with a healthcheck. Compose networking
+      gives every service a DNS name on the project network, so a database
+      doesn't need a published port for the API to reach it.
+
+      **Steps.**
+      1. Mount `pgdata:/var/lib/postgresql/data` on `db` and declare `pgdata:` under `volumes:`.
+      2. Add a `pg_isready` healthcheck to `db` (interval 5s, timeout 5s, retries 10).
+      3. Change the API's `depends_on` to the long form with `condition: service_healthy`.
+      4. Remove `ports:` from `db` (use `"127.0.0.1:5432:5432"` only if you need a local SQL client).
+      5. Deploy, call `/` a few times, redeploy: the visit counter keeps counting.
+
+      **Without writing code in Nimbo**
+
+      1. From the palette (Networking & storage), add a **Volume**. In its inspector, rename it to `pgdata`.
+      2. Click the `db` service. In **Volumes**, add a **Mount**: type **volume**, **Source** `pgdata`, **Path in the container** `/var/lib/postgresql/data`.
+      3. In **Health check**, click **Add a health check**. Set **Test** to `pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}`, **Interval** `5s`, **Timeout** `5s`, **Retries** `10`. Compose fills in the user and database from `.env`.
+      4. In **Ports**, remove the `db` row.
+      5. Click the `api` service. In **Depends on**, set the `db` row to **until healthy** (**Add dependency** if it's missing).
+      6. Deploy: `GET /health` on the API answers 200.
+    solutionFiles:
+      compose.yaml: |
+        # The API reaches PostgreSQL as db:5432 on the project network; only
+        # the API is published. The database keeps its data in a named volume
+        # and the API starts once the database is healthy.
+        services:
+          api:
+            build: ./api
+            init: true
+            ports:
+              - "3000:3000"
+            environment:
+              DATABASE_URL: postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB}
+            depends_on:
+              db:
+                condition: service_healthy
+            restart: unless-stopped
+
+          db:
+            image: postgres:16-alpine
+            environment:
+              POSTGRES_USER: ${POSTGRES_USER}
+              POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+              POSTGRES_DB: ${POSTGRES_DB}
+            volumes:
+              - pgdata:/var/lib/postgresql/data
+            healthcheck:
+              test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+              interval: 5s
+              timeout: 5s
+              retries: 10
+            restart: unless-stopped
+
+        volumes:
+          pgdata:
+    starter:
+      kind: docker
+      files:
+        compose.yaml: |
+          services:
+            api:
+              build: ./api
+              init: true
+              ports:
+                - "3000:3000"
+              environment:
+                DATABASE_URL: postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB}
+              depends_on:
+                - db
+              restart: unless-stopped
+
+            db:
+              image: postgres:16-alpine
+              ports:
+                - "5432:5432"
+              environment:
+                POSTGRES_USER: ${POSTGRES_USER}
+                POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+                POSTGRES_DB: ${POSTGRES_DB}
+              restart: unless-stopped
+        .env: |
+          # Local development credentials only: keep real ones out of git.
+          POSTGRES_USER=visits
+          POSTGRES_PASSWORD=local-dev-only
+          POSTGRES_DB=visits
+        api/Dockerfile: |
+          # Dependencies first (cached until package.json changes), then the code.
+          FROM node:22-alpine
+          ENV NODE_ENV=production
+          WORKDIR /app
+          COPY package.json ./
+          RUN npm install --omit=dev --no-audit --no-fund
+          COPY server.js ./
+          USER node
+          EXPOSE 3000
+          HEALTHCHECK --interval=10s --timeout=3s --start-period=5s --retries=3 \
+            CMD wget -qO- http://127.0.0.1:3000/health >/dev/null || exit 1
+          CMD ["node", "server.js"]
+        api/.dockerignore: |
+          node_modules
+          npm-debug.log*
+          .env*
+          Dockerfile
+          .dockerignore
+        api/package.json: |
+          {
+            "name": "visits-api",
+            "version": "1.0.0",
+            "private": true,
+            "main": "server.js",
+            "dependencies": {
+              "pg": "8.13.1"
+            }
+          }
+        api/server.js: |
+          const http = require("node:http");
+          const { Pool } = require("pg");
+
+          const port = Number(process.env.PORT ?? 3000);
+          const pool = new Pool({ connectionString: process.env.DATABASE_URL, max: 5 });
+          // An idle client losing its connection must not crash the process.
+          pool.on("error", (err) => console.error("postgres:", err.message));
+
+          // Create the table once; retried on the next request if it failed.
+          let schema;
+          function ensureSchema() {
+            schema ??= pool
+              .query("CREATE TABLE IF NOT EXISTS visits (id serial PRIMARY KEY, at timestamptz NOT NULL DEFAULT now())")
+              .catch((err) => {
+                schema = undefined;
+                throw err;
+              });
+            return schema;
+          }
+
+          function send(res, status, body) {
+            res.writeHead(status, { "Content-Type": "application/json" });
+            res.end(JSON.stringify(body));
+          }
+
+          const server = http.createServer(async (req, res) => {
+            const path = new URL(req.url, "http://localhost").pathname;
+            try {
+              if (path === "/health") {
+                await pool.query("SELECT 1");
+                return send(res, 200, { status: "ok" });
+              }
+              if (path === "/") {
+                await ensureSchema();
+                await pool.query("INSERT INTO visits DEFAULT VALUES");
+                const { rows } = await pool.query("SELECT count(*)::int AS total FROM visits");
+                return send(res, 200, { visits: rows[0].total });
+              }
+              send(res, 404, { error: "not found" });
+            } catch (err) {
+              console.error(err.message);
+              send(res, 503, { error: "database unavailable" });
+            }
+          });
+
+          server.listen(port, () => console.log(`listening on :${port}`));
+
+          process.on("SIGTERM", () => server.close(() => pool.end().then(() => process.exit(0))));
+    checks:
+    - id: valid
+      label: The compose project is valid
+      type: validate
+    - id: named-volume
+      label: PostgreSQL keeps its data in a named volume
+      type: rules_clean
+      rules_clean: {codes: [dk_anon_volume], minSeverity: warning}
+    - id: db-healthcheck
+      label: The database has a healthcheck
+      type: has
+      has:
+        compose:
+          service: db
+          where: {healthcheck.test: {exists: true}}
+    - id: healthy-order
+      label: The API waits until the database is healthy
+      type: has
+      has:
+        compose:
+          service: api
+          where: {depends_on.db.condition: service_healthy}
+    - id: private-db
+      label: The database is not published on every interface
+      type: rules_clean
+      rules_clean: {codes: [dk_db_published], minSeverity: warning}
+    - id: deploy
+      label: The stack deploys
+      type: deploy
+    - id: health
+      label: The API reaches the database (GET /health answers 200)
+      type: http
+      http: {service: api, port: 3000, path: /health, status: 200}
+    sources:
+    - {title: 'Docker Docs: Control startup and shutdown order in Compose', url: 'https://docs.docker.com/compose/how-tos/startup-order/'}
+    - {title: 'Docker Docs: Volumes', url: 'https://docs.docker.com/engine/storage/volumes/'}
+    - {title: 'Docker Docs: Compose file reference, volumes top-level element', url: 'https://docs.docker.com/reference/compose-file/volumes/'}
+    - {title: 'Docker Docs: Networking in Compose', url: 'https://docs.docker.com/compose/how-tos/networking/'}
+    - {title: 'Docker Docs: Compose file reference, services (depends_on, healthcheck, ports)', url: 'https://docs.docker.com/reference/compose-file/services/'}
+    solvableWithoutCode: true
+- op: upsert
+  kind: challenge
+  id: docker-multi-stage-nonroot
+  data:
+    provider: docker
+    level: intermediate
+    title: A small, non-root image with a multi-stage build
+    summary: Build a Go service in a build stage and ship only the static binary on a minimal runtime image that runs as a non-root user.
+    minutes: 30
+    tags: [dockerfile, multi-stage, go, distroless, non-root, image-size]
+    prerequisites: [docker-cache-friendly-dockerfile]
+    runtime: local
+    problem: |
+      The inventory service is a single Go binary, yet its image weighs several
+      hundred megabytes: it is built and run in the same `golang` stage, so the
+      container ships the Go toolchain, the module cache and the sources, and the
+      process runs as `root`.
+
+      Security asked for two things before the service can go anywhere near
+      production: the runtime image must contain only what the binary needs, and
+      the process must not run as root.
+    requirements:
+    - The Dockerfile has a build stage (on a pinned `golang` image) that compiles a static binary (`CGO_ENABLED=0`).
+    - The final stage is a minimal runtime image (for example `gcr.io/distroless/static-debian12`, or a pinned `alpine`) that only receives the binary with `COPY --from=`.
+    - The final stage runs as a non-root user (`USER`).
+    - The service still deploys and `GET /health` answers 200.
+    hints:
+    - Each `FROM` starts a new stage. Name the first one (`FROM golang:1.23-alpine AS build`) and copy its output into the next with `COPY --from=build /out/app /app`.
+    - A binary built with `CGO_ENABLED=0` has no libc dependency, so it runs on an image with no shell or package manager.
+    - '`gcr.io/distroless/static-debian12:nonroot` already defines a `nonroot` user (uid 65532); add `USER nonroot:nonroot` so the intent is explicit in your Dockerfile. On Alpine, create one with `adduser -D -u 10001 app`.'
+    - 'Distroless has no `wget` or shell for a healthcheck. The service supports `-healthcheck`: `HEALTHCHECK CMD ["/app", "-healthcheck"]` (exec form, no shell needed).'
+    solution: |
+      **Why.** Docker's multi-stage build guide shows how to compile in one
+      stage and copy only the artifacts into a clean final stage, so the image
+      carries no compilers, caches or sources. The building best practices
+      recommend a minimal base image to reduce size and attack surface, and
+      switching to a non-root `USER` when the service doesn't need privileges.
+      The Docker security docs explain why: root in a container is still root
+      over everything mounted into it.
+
+      **Steps.**
+      1. Build stage: `FROM golang:1.23-alpine AS build`, `WORKDIR /src`,
+         `COPY go.mod ./` then `RUN go mod download` (a cacheable layer),
+         `COPY . .`, then
+         `RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/app .`
+      2. Runtime stage: `FROM gcr.io/distroless/static-debian12:nonroot`,
+         `COPY --from=build /out/app /app`, `USER nonroot:nonroot`, `EXPOSE 8080`.
+      3. `HEALTHCHECK --interval=10s --timeout=3s --start-period=5s --retries=3 CMD ["/app", "-healthcheck"]`
+      4. `ENTRYPOINT ["/app"]`
+      5. Rebuild and compare `docker image ls`: the image shrinks from hundreds
+         of MB to a few MB.
+
+      **Without writing code in Nimbo**
+
+      The **Base image (FROM)** field only rewrites an existing FROM line, and the **Run as non-root** switch in **Hardening** writes compose `user:`, not a Dockerfile `USER`. The second stage (`COPY --from=build` into a minimal image) and `USER` must be written in `inventory/Dockerfile` in the code editor.
+    solutionFiles:
+      inventory/Dockerfile: |
+        # Build a static binary in the build stage...
+        FROM golang:1.23-alpine AS build
+        WORKDIR /src
+        COPY go.mod ./
+        RUN go mod download
+        COPY . .
+        RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/app .
+
+        # ...and run it alone on distroless as a non-root user
+        # (no shell, no package manager: a few MB).
+        FROM gcr.io/distroless/static-debian12:nonroot
+        COPY --from=build /out/app /app
+        USER nonroot:nonroot
+        EXPOSE 8080
+        HEALTHCHECK --interval=10s --timeout=3s --start-period=5s --retries=3 CMD ["/app", "-healthcheck"]
+        ENTRYPOINT ["/app"]
+    starter:
+      kind: docker
+      files:
+        compose.yaml: |
+          services:
+            inventory:
+              build: ./inventory
+              ports:
+                - "8080:8080"
+              restart: unless-stopped
+        inventory/Dockerfile: |
+          FROM golang:1.23-alpine
+          WORKDIR /src
+          COPY . .
+          RUN go build -o /usr/local/bin/inventory .
+          EXPOSE 8080
+          HEALTHCHECK --interval=10s --timeout=3s --start-period=5s --retries=3 CMD ["inventory", "-healthcheck"]
+          CMD ["inventory"]
+        inventory/.dockerignore: |
+          .git
+          Dockerfile
+          .dockerignore
+        inventory/go.mod: |
+          module example.com/inventory
+
+          go 1.23
+        inventory/main.go: |
+          // Command inventory serves a small product inventory over HTTP.
+          package main
+
+          import (
+          	"context"
+          	"encoding/json"
+          	"flag"
+          	"log"
+          	"net/http"
+          	"os"
+          	"os/signal"
+          	"syscall"
+          	"time"
+          )
+
+          var items = []map[string]any{
+          	{"sku": "NB-001", "name": "Notebook", "stock": 42},
+          	{"sku": "PN-002", "name": "Pen", "stock": 310},
+          }
+
+          func main() {
+          	// The runtime image may have no shell or wget: the binary probes itself.
+          	healthcheck := flag.Bool("healthcheck", false, "probe the running server and exit")
+          	flag.Parse()
+          	if *healthcheck {
+          		client := http.Client{Timeout: 3 * time.Second}
+          		resp, err := client.Get("http://127.0.0.1:8080/health")
+          		if err != nil || resp.StatusCode != http.StatusOK {
+          			os.Exit(1)
+          		}
+          		return
+          	}
+
+          	mux := http.NewServeMux()
+          	mux.HandleFunc("GET /health", func(w http.ResponseWriter, r *http.Request) {
+          		writeJSON(w, map[string]string{"status": "ok"})
+          	})
+          	mux.HandleFunc("GET /items", func(w http.ResponseWriter, r *http.Request) {
+          		writeJSON(w, items)
+          	})
+          	srv := &http.Server{Addr: ":8080", Handler: mux, ReadHeaderTimeout: 5 * time.Second}
+
+          	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGTERM, os.Interrupt)
+          	defer stop()
+          	go func() {
+          		<-ctx.Done()
+          		shutdown, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+          		defer cancel()
+          		_ = srv.Shutdown(shutdown)
+          	}()
+          	log.Println("listening on :8080")
+          	if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+          		log.Fatal(err)
+          	}
+          }
+
+          func writeJSON(w http.ResponseWriter, v any) {
+          	w.Header().Set("Content-Type", "application/json")
+          	_ = json.NewEncoder(w).Encode(v)
+          }
+    checks:
+    - id: valid
+      label: The compose project is valid
+      type: validate
+    - id: multi-stage
+      label: The Go toolchain stays in a build stage
+      type: rules_clean
+      rules_clean: {codes: [dk_single_stage], minSeverity: info}
+    - id: slim-runtime
+      label: The final stage runs on a minimal image
+      type: rules_clean
+      rules_clean: {codes: [dk_heavy_base, dk_latest_tag], minSeverity: info}
+    - id: non-root
+      label: The container runs as a non-root user
+      type: rules_clean
+      rules_clean: {codes: [dk_root_user], minSeverity: info}
+    - id: deploy
+      label: The service deploys
+      type: deploy
+    - id: health
+      label: GET /health answers 200
+      type: http
+      http: {service: inventory, port: 8080, path: /health, status: 200}
+    sources:
+    - {title: 'Docker Docs: Multi-stage builds', url: 'https://docs.docker.com/build/building/multi-stage/'}
+    - {title: 'Docker Docs: Multi-stage builds (Docker concepts)', url: 'https://docs.docker.com/get-started/docker-concepts/building-images/multi-stage-builds/'}
+    - {title: 'Docker Docs: Building best practices (choose the right base image, USER)', url: 'https://docs.docker.com/build/building/best-practices/'}
+    - {title: 'Docker Docs: Docker Engine security', url: 'https://docs.docker.com/engine/security/'}
+    - {title: 'Docker Docs: Dockerfile reference (HEALTHCHECK, USER, COPY --from)', url: 'https://docs.docker.com/reference/dockerfile/'}
+    solvableWithoutCode: false
+- op: upsert
+  kind: challenge
+  id: docker-secrets-as-files
+  data:
+    provider: docker
+    level: intermediate
+    title: Database passwords as secrets, not environment variables
+    summary: Move a password out of environment variables into a Compose secret mounted as a file, for both PostgreSQL and the API.
+    minutes: 25
+    tags: [compose, secrets, postgres, security]
+    prerequisites: [docker-app-with-postgres]
+    runtime: local
+    problem: |
+      The orders API and its PostgreSQL database share a password that is
+      written right into `compose.yaml`, in the `environment:` of both services.
+      It is in the repository history, `docker inspect` prints it, and any
+      process in the containers can read it from the environment.
+
+      Docker Compose can hand the password to exactly the services that need it
+      as a file under `/run/secrets/`. The official postgres image reads
+      `POSTGRES_PASSWORD_FILE`, and the API already reads `PGPASSWORD_FILE` when
+      it is set (see `api/server.js`).
+    requirements:
+    - A top-level `secrets:` entry provides the database password from a file (for example `./secrets/db_password.txt`).
+    - '`db` and `api` are both granted the secret with a service-level `secrets:` list.'
+    - '`db` uses `POSTGRES_PASSWORD_FILE` and no longer sets `POSTGRES_PASSWORD`.'
+    - '`api` uses `PGPASSWORD_FILE` and no longer sets `PGPASSWORD`.'
+    - No password is written literally in the compose file, and the stack still deploys with `GET /health` answering 200.
+    hints:
+    - Compose can mount a secret as a file at `/run/secrets/<name>`, so the password doesn't sit in the environment. Look at the `db` service's **Hardening** section, under **Secrets as files**.
+    - 'On `db`, move `POSTGRES_PASSWORD` to a secret file named `db_password`, and tick **Set POSTGRES_PASSWORD_FILE**: the postgres image reads that variable (Docker Official Images follow this `_FILE` convention).'
+    - 'On `api`, move `PGPASSWORD` to the same secret (type `db_password` to reuse it) and tick **Set PGPASSWORD_FILE**: this app reads it. Keep `secrets/` out of git.'
+    solution: |
+      **Why.** Docker's Compose secrets guide explains that environment
+      variables are visible to every process in the container, are hard to
+      track and can leak into logs, while secrets are mounted as files in
+      `/run/secrets/<name>` and only for the services that are explicitly
+      granted them. The postgres Official Image supports `*_FILE` variables for
+      exactly this.
+
+      **Steps.**
+      1. Create `secrets/db_password.txt` with the password (no trailing secrets
+         in git: ignore the folder).
+      2. Declare it: `secrets: {db_password: {file: ./secrets/db_password.txt}}`.
+      3. `db`: replace `POSTGRES_PASSWORD` with
+         `POSTGRES_PASSWORD_FILE: /run/secrets/db_password` and add `secrets: [db_password]`.
+      4. `api`: replace `PGPASSWORD` with `PGPASSWORD_FILE: /run/secrets/db_password`
+         and add `secrets: [db_password]`.
+      5. PostgreSQL only reads the password when it initializes an empty data
+         directory: if you deployed the starter before, redeploy with volumes
+         removed so the database is created with the secret.
+
+      **Without writing code in Nimbo**
+
+      1. Click the `db` service. In **Hardening** → **Secrets as files**, find the `POSTGRES_PASSWORD` row. Name the secret `db_password`, keep **Set POSTGRES_PASSWORD_FILE=/run/secrets/db_password** ticked, and click **Move to a secret file**. Nimbo writes the value to `./secrets/db_password.txt`, declares the secret, grants it to `db` and removes the variable.
+      2. Click the `api` service. In the `PGPASSWORD` row, type `db_password` to reuse the declared secret, tick **Set PGPASSWORD_FILE=/run/secrets/db_password**, and click **Move to a secret file**.
+      3. Add `secrets/` to `.gitignore`, then deploy: `GET /health` answers 200. If the database volume was created with another password, recreate it.
+    solutionFiles:
+      compose.yaml: |
+        # The password reaches db and api as /run/secrets/db_password, only
+        # in the containers granted the secret.
+        services:
+          api:
+            build: ./api
+            init: true
+            ports:
+              - "3000:3000"
+            environment:
+              PGHOST: db
+              PGUSER: orders
+              PGDATABASE: orders
+              PGPASSWORD_FILE: /run/secrets/db_password
+            secrets:
+              - db_password
+            depends_on:
+              db:
+                condition: service_healthy
+            restart: unless-stopped
+
+          db:
+            image: postgres:16-alpine
+            environment:
+              POSTGRES_USER: orders
+              POSTGRES_DB: orders
+              POSTGRES_PASSWORD_FILE: /run/secrets/db_password
+            secrets:
+              - db_password
+            volumes:
+              - pgdata:/var/lib/postgresql/data
+            healthcheck:
+              test: ["CMD-SHELL", "pg_isready -U orders -d orders"]
+              interval: 5s
+              timeout: 5s
+              retries: 10
+            restart: unless-stopped
+
+        secrets:
+          db_password:
+            file: ./secrets/db_password.txt
+
+        volumes:
+          pgdata:
+      secrets/db_password.txt: |
+        local-dev-only-change-me
+      .gitignore: |
+        secrets/
+    starter:
+      kind: docker
+      files:
+        compose.yaml: |
+          services:
+            api:
+              build: ./api
+              init: true
+              ports:
+                - "3000:3000"
+              environment:
+                PGHOST: db
+                PGUSER: orders
+                PGDATABASE: orders
+                PGPASSWORD: "s3cr3t-orders-pw"
+              depends_on:
+                db:
+                  condition: service_healthy
+              restart: unless-stopped
+
+            db:
+              image: postgres:16-alpine
+              environment:
+                POSTGRES_USER: orders
+                POSTGRES_DB: orders
+                POSTGRES_PASSWORD: "s3cr3t-orders-pw"
+              volumes:
+                - pgdata:/var/lib/postgresql/data
+              healthcheck:
+                test: ["CMD-SHELL", "pg_isready -U orders -d orders"]
+                interval: 5s
+                timeout: 5s
+                retries: 10
+              restart: unless-stopped
+
+          volumes:
+            pgdata:
+        api/Dockerfile: |
+          FROM node:22-alpine
+          ENV NODE_ENV=production
+          WORKDIR /app
+          COPY package.json ./
+          RUN npm install --omit=dev --no-audit --no-fund
+          COPY server.js ./
+          USER node
+          EXPOSE 3000
+          HEALTHCHECK --interval=10s --timeout=3s --start-period=5s --retries=3 \
+            CMD wget -qO- http://127.0.0.1:3000/health >/dev/null || exit 1
+          CMD ["node", "server.js"]
+        api/.dockerignore: |
+          node_modules
+          npm-debug.log*
+          .env*
+          Dockerfile
+          .dockerignore
+        api/package.json: |
+          {
+            "name": "orders-api",
+            "version": "1.0.0",
+            "private": true,
+            "main": "server.js",
+            "dependencies": {
+              "pg": "8.13.1"
+            }
+          }
+        api/server.js: |
+          const fs = require("node:fs");
+          const http = require("node:http");
+          const { Pool } = require("pg");
+
+          const port = Number(process.env.PORT ?? 3000);
+
+          // PGHOST, PGUSER, PGDATABASE and PGPASSWORD come from the environment
+          // (node-postgres reads them). When PGPASSWORD_FILE is set, the password
+          // is read from that file instead (a Compose secret in /run/secrets/).
+          const passwordFile = process.env.PGPASSWORD_FILE;
+          const password = passwordFile ? fs.readFileSync(passwordFile, "utf8").trim() : undefined;
+
+          const pool = new Pool({ password, max: 5 });
+          pool.on("error", (err) => console.error("postgres:", err.message));
+
+          function send(res, status, body) {
+            res.writeHead(status, { "Content-Type": "application/json" });
+            res.end(JSON.stringify(body));
+          }
+
+          const server = http.createServer(async (req, res) => {
+            const path = new URL(req.url, "http://localhost").pathname;
+            try {
+              if (path === "/health") {
+                await pool.query("SELECT 1");
+                return send(res, 200, { status: "ok" });
+              }
+              if (path === "/") {
+                const { rows } = await pool.query("SELECT current_user AS user, now() AS at");
+                return send(res, 200, rows[0]);
+              }
+              send(res, 404, { error: "not found" });
+            } catch (err) {
+              console.error(err.message);
+              send(res, 503, { error: "database unavailable" });
+            }
+          });
+
+          server.listen(port, () => console.log(`listening on :${port}`));
+
+          process.on("SIGTERM", () => server.close(() => pool.end().then(() => process.exit(0))));
+    checks:
+    - id: valid
+      label: The compose project is valid
+      type: validate
+    - id: no-literal-secrets
+      label: No password is written in the compose file
+      type: rules_clean
+      rules_clean: {codes: [dk_secret_env], minSeverity: warning}
+    - id: secret-from-file
+      label: A top-level secret is read from a file
+      type: has
+      has:
+        compose:
+          where: {secrets.*.file: {exists: true}}
+    - id: db-secret
+      label: PostgreSQL reads its password from the secret file
+      type: has
+      has:
+        compose:
+          service: db
+          where:
+            secrets: {exists: true}
+            environment.POSTGRES_PASSWORD_FILE: {contains: /run/secrets/}
+            environment.POSTGRES_PASSWORD: {exists: false}
+    - id: api-secret
+      label: The API reads its password from the secret file
+      type: has
+      has:
+        compose:
+          service: api
+          where:
+            secrets: {exists: true}
+            environment.PGPASSWORD_FILE: {contains: /run/secrets/}
+            environment.PGPASSWORD: {exists: false}
+    - id: deploy
+      label: The stack deploys
+      type: deploy
+    - id: health
+      label: The API authenticates to the database (GET /health answers 200)
+      type: http
+      http: {service: api, port: 3000, path: /health, status: 200}
+    sources:
+    - {title: 'Docker Docs: Manage secrets securely in Docker Compose', url: 'https://docs.docker.com/compose/how-tos/use-secrets/'}
+    - {title: 'Docker Docs: Compose file reference, secrets top-level element', url: 'https://docs.docker.com/reference/compose-file/secrets/'}
+    - {title: 'Docker Docs: Compose file reference, services (secrets)', url: 'https://docs.docker.com/reference/compose-file/services/'}
+    - {title: 'Docker Docs: Set environment variables within your container''s environment', url: 'https://docs.docker.com/compose/how-tos/environment-variables/set-environment-variables/'}
+    solvableWithoutCode: true
+- op: upsert
+  kind: challenge
+  id: docker-network-isolation
+  data:
+    provider: docker
+    level: intermediate
+    title: Front and back networks
+    summary: Split a proxy, an API and a database across a public front network and an internal back network so only the proxy is reachable and the database never is.
+    minutes: 30
+    tags: [compose, networks, nginx, reverse-proxy, postgres, isolation]
+    prerequisites: [docker-app-with-postgres]
+    runtime: local
+    problem: |
+      The shop runs NGINX in front of an API backed by PostgreSQL. Everything is
+      on Compose's single default network and every service publishes a port, so
+      the API can be called without going through the proxy, the database is
+      reachable from the host, and the proxy container could open connections
+      straight to PostgreSQL.
+
+      Give the stack the classic two-tier layout: only the proxy faces the
+      outside world, and the database lives on a network with no external
+      connectivity at all.
+    requirements:
+    - 'Two networks are declared: `front` and `back`; `back` is `internal: true`.'
+    - '`proxy` is attached to `front` only and is the only service with published `ports:`.'
+    - '`api` is attached to `front` and `back` (the proxy reaches it; it reaches the database).'
+    - '`db` is attached to `back` only and publishes no port.'
+    - The stack deploys and the proxy serves `/` and `/health` from the API.
+    hints:
+    - On one shared network, every service can reach every other. Add two **Network**s from the palette and rename them `front` and `back` in their inspector.
+    - 'Tick **Internal: no access to the outside world** on `back`. Then choose each service''s networks with the checkboxes in its **Networks** section: a service that picks networks leaves the default one.'
+    - '`proxy` → `front` only, `api` → `front` and `back`, `db` → `back` only. Remove the `api` and `db` rows from **Ports**: services still reach each other by name on a shared network.'
+    solution: |
+      **Why.** Compose's networking guide shows custom networks isolating a
+      proxy from a database: services can only reach services that share a
+      network, and only the app joins both. The Compose networks reference
+      documents `internal: true` for an externally isolated network. Published
+      ports are how traffic enters from the host, so only the entry point should
+      have them.
+
+      **Steps.**
+      1. Add `networks: {front: {}, back: {internal: true}}`.
+      2. `proxy`: `networks: [front]`, keep `ports: ["8080:80"]`.
+      3. `api`: `networks: [front, back]`, remove `ports:`.
+      4. `db`: `networks: [back]`, remove `ports:`.
+      5. Deploy and call `http://localhost:8080/health`: the proxy forwards to
+         `api:3000`, which queries `db:5432`.
+
+      **Without writing code in Nimbo**
+
+      1. From the palette (Networking & storage), add a **Network** twice. Rename them `front` and `back` in the **Network** inspector (**Name**).
+      2. On `back`, tick **Internal: no access to the outside world**.
+      3. In each service's **Networks** section, tick: `proxy` → `front`; `api` → `front` and `back`; `db` → `back`.
+      4. In **Ports**, remove every row of `api` and of `db`. `proxy` stays the only published service.
+      5. Deploy: the proxy serves `/` and `/health`.
+    solutionFiles:
+      compose.yaml: |
+        # proxy (front) -> api (front + back) -> db (back, internal).
+        # Only the proxy publishes a port; db can't reach or be reached from
+        # outside the back network.
+        services:
+          proxy:
+            build: ./proxy
+            ports:
+              - "8080:80"
+            networks: [front]
+            depends_on:
+              api:
+                condition: service_healthy
+            restart: unless-stopped
+
+          api:
+            build: ./api
+            init: true
+            environment:
+              DATABASE_URL: postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB}
+            networks: [front, back]
+            depends_on:
+              db:
+                condition: service_healthy
+            restart: unless-stopped
+
+          db:
+            image: postgres:16-alpine
+            environment:
+              POSTGRES_USER: ${POSTGRES_USER}
+              POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+              POSTGRES_DB: ${POSTGRES_DB}
+            volumes:
+              - pgdata:/var/lib/postgresql/data
+            networks: [back]
+            healthcheck:
+              test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+              interval: 5s
+              timeout: 5s
+              retries: 10
+            restart: unless-stopped
+
+        networks:
+          front: {}
+          back:
+            internal: true
+
+        volumes:
+          pgdata:
+    starter:
+      kind: docker
+      files:
+        compose.yaml: |
+          services:
+            proxy:
+              build: ./proxy
+              ports:
+                - "8080:80"
+              depends_on:
+                api:
+                  condition: service_healthy
+              restart: unless-stopped
+
+            api:
+              build: ./api
+              init: true
+              ports:
+                - "3000:3000"
+              environment:
+                DATABASE_URL: postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB}
+              depends_on:
+                db:
+                  condition: service_healthy
+              restart: unless-stopped
+
+            db:
+              image: postgres:16-alpine
+              ports:
+                - "127.0.0.1:5432:5432"
+              environment:
+                POSTGRES_USER: ${POSTGRES_USER}
+                POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+                POSTGRES_DB: ${POSTGRES_DB}
+              volumes:
+                - pgdata:/var/lib/postgresql/data
+              healthcheck:
+                test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+                interval: 5s
+                timeout: 5s
+                retries: 10
+              restart: unless-stopped
+
+          volumes:
+            pgdata:
+        .env: |
+          # Local development credentials only: keep real ones out of git.
+          POSTGRES_USER=shop
+          POSTGRES_PASSWORD=local-dev-only
+          POSTGRES_DB=shop
+        proxy/Dockerfile: |
+          FROM nginx:1.27-alpine
+          COPY default.conf /etc/nginx/conf.d/default.conf
+          EXPOSE 80
+          HEALTHCHECK --interval=10s --timeout=3s --start-period=5s --retries=3 \
+            CMD wget -qO- http://127.0.0.1/health >/dev/null || exit 1
+        proxy/.dockerignore: |
+          Dockerfile
+          .dockerignore
+        proxy/default.conf: |
+          # Forward everything to the API service (resolved by Compose's DNS).
+          server {
+            listen 80;
+            location / {
+              proxy_pass http://api:3000;
+              proxy_set_header Host $host;
+              proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+            }
+          }
+        api/Dockerfile: |
+          FROM node:22-alpine
+          ENV NODE_ENV=production
+          WORKDIR /app
+          COPY package.json ./
+          RUN npm install --omit=dev --no-audit --no-fund
+          COPY server.js ./
+          USER node
+          EXPOSE 3000
+          HEALTHCHECK --interval=10s --timeout=3s --start-period=5s --retries=3 \
+            CMD wget -qO- http://127.0.0.1:3000/health >/dev/null || exit 1
+          CMD ["node", "server.js"]
+        api/.dockerignore: |
+          node_modules
+          npm-debug.log*
+          .env*
+          Dockerfile
+          .dockerignore
+        api/package.json: |
+          {
+            "name": "shop-api",
+            "version": "1.0.0",
+            "private": true,
+            "main": "server.js",
+            "dependencies": {
+              "pg": "8.13.1"
+            }
+          }
+        api/server.js: |
+          const http = require("node:http");
+          const { Pool } = require("pg");
+
+          const port = Number(process.env.PORT ?? 3000);
+          const pool = new Pool({ connectionString: process.env.DATABASE_URL, max: 5 });
+          pool.on("error", (err) => console.error("postgres:", err.message));
+
+          function send(res, status, body) {
+            res.writeHead(status, { "Content-Type": "application/json" });
+            res.end(JSON.stringify(body));
+          }
+
+          const server = http.createServer(async (req, res) => {
+            const path = new URL(req.url, "http://localhost").pathname;
+            try {
+              if (path === "/health") {
+                await pool.query("SELECT 1");
+                return send(res, 200, { status: "ok" });
+              }
+              if (path === "/") {
+                const { rows } = await pool.query("SELECT version() AS postgres");
+                return send(res, 200, { shop: "open", postgres: rows[0].postgres });
+              }
+              send(res, 404, { error: "not found" });
+            } catch (err) {
+              console.error(err.message);
+              send(res, 503, { error: "database unavailable" });
+            }
+          });
+
+          server.listen(port, () => console.log(`listening on :${port}`));
+
+          process.on("SIGTERM", () => server.close(() => pool.end().then(() => process.exit(0))));
+    checks:
+    - id: valid
+      label: The compose project is valid
+      type: validate
+    - id: internal-back
+      label: The back network is internal
+      type: has
+      has:
+        compose:
+          where: {networks.back.internal: true}
+    - id: front-network
+      label: A front network is declared
+      type: has
+      has:
+        compose:
+          where: {networks.front: {exists: true}}
+    - id: proxy-front-only
+      label: The proxy is on the front network only
+      type: has
+      has:
+        compose:
+          service: proxy
+          where:
+            networks.front: {exists: true}
+            networks.back: {exists: false}
+    - id: api-both
+      label: The API joins both networks
+      type: has
+      has:
+        compose:
+          service: api
+          where:
+            networks.front: {exists: true}
+            networks.back: {exists: true}
+    - id: db-back-only
+      label: The database is on the back network only
+      type: has
+      has:
+        compose:
+          service: db
+          where:
+            networks.back: {exists: true}
+            networks.front: {exists: false}
+            networks.default: {exists: false}
+    - id: api-not-published
+      label: The API publishes no port (only the proxy is reachable)
+      type: has
+      has:
+        compose:
+          service: api
+          where: {ports: {exists: false}}
+    - id: db-not-published
+      label: The database publishes no port
+      type: has
+      has:
+        compose:
+          service: db
+          where: {ports: {exists: false}}
+    - id: deploy
+      label: The stack deploys
+      type: deploy
+    - id: through-proxy
+      label: The proxy serves the API's /health
+      type: http
+      http: {service: proxy, port: 80, path: /health, status: 200}
+    sources:
+    - {title: 'Docker Docs: Networking in Compose (specify custom networks)', url: 'https://docs.docker.com/compose/how-tos/networking/'}
+    - {title: 'Docker Docs: Compose file reference, networks top-level element (internal)', url: 'https://docs.docker.com/reference/compose-file/networks/'}
+    - {title: 'Docker Docs: Bridge network driver', url: 'https://docs.docker.com/engine/network/drivers/bridge/'}
+    - {title: 'Docker Docs: Networking overview', url: 'https://docs.docker.com/engine/network/'}
+    solvableWithoutCode: true
+- op: upsert
+  kind: challenge
+  id: docker-prod-environment
+  data:
+    provider: docker
+    level: advanced
+    title: A production environment with compose.prod.yaml
+    summary: Keep compose.yaml for development and add a prod override plus .env.prod that removes code bind mounts, quiets logs, rotates them, caps resources and restarts the service.
+    minutes: 35
+    tags: [compose, environments, overrides, production, merge]
+    prerequisites: [docker-app-with-postgres, docker-cache-friendly-dockerfile]
+    runtime: local
+    problem: |
+      The pricing API's `compose.yaml` is tuned for development: it bind-mounts
+      `server.js` so edits show up without a rebuild, logs every request at
+      `debug` level and has no restart policy or limits. Now the same files
+      must also run in production.
+
+      Copying the file into a second, diverging `compose.yaml` is how drift
+      starts. Instead, follow the official multi-file pattern: keep the base
+      file for development and add only the differences for production in
+      `compose.prod.yaml` (Nimbo shows it as the **prod** environment), with
+      production values in `.env.prod`.
+    requirements:
+    - '`compose.yaml` stays the development setup (`LOG_LEVEL` resolves to `debug` and the code bind mount stays there).'
+    - 'A `prod` environment exists: `compose.prod.yaml` (and/or `.env.prod`).'
+    - In prod, the `api` service has no bind mount of application code (`volumes` is reset).
+    - In prod, `APP_ENV` is `production` and `LOG_LEVEL` is `info`, `warn` or `error`.
+    - In prod, `api` has a restart policy, memory/CPU limits and json-file log rotation (`max-size`).
+    hints:
+    - 'Compose can layer a production file over the base. In Nimbo that''s an environment: **Environments** tab → **New environment** named `prod`. `compose.yaml` stays the dev setup.'
+    - In prod's **Variables** tab, add `APP_ENV=production` and `LOG_LEVEL=info`. In its **Edit** tab, give `api` a **CPU limit** and a **Memory limit**. Restart, logging and dropping the code mount also belong only to prod.
+    - 'Switch to prod and click `api`. Turn on **Only in prod** at the top of the form, then remove the bind mount row in **Volumes**, set **Restart** to **Always** and click **Rotate logs (10m × 3)**. Switch back to **Base** before checking: the dev check is graded in the active environment.'
+    solution: |
+      **Why.** Docker's "Use Compose in production" guide lists the usual
+      production changes (remove code bind mounts, different environment
+      values such as less verbose logs, a restart policy, extra services) and
+      recommends putting them in an additional Compose file applied over the
+      base one. The merge guide explains how files combine: scalars are
+      replaced, mappings merge, and sequences are combined unless reset with
+      `!reset`. Resource limits come from the `deploy.resources` section of the
+      Compose spec, and the json-file logging driver keeps logs forever unless
+      `max-size` is set.
+
+      **Steps.**
+      1. Leave `compose.yaml` as is.
+      2. Create `compose.prod.yaml` overriding `api`: `volumes: !reset []`,
+         `restart: always`, `deploy.resources.limits` (`cpus: "0.5"`,
+         `memory: 128M`) and json-file logging with `max-size`/`max-file`.
+      3. Create `.env.prod` with `APP_ENV=production` and `LOG_LEVEL=info`.
+      4. Switch to the **prod** environment in Nimbo (or run
+         `docker compose -f compose.yaml -f compose.prod.yaml --env-file .env --env-file .env.prod config`)
+         and check the merged result: no bind mount, quieter logs, limits and
+         rotation in place.
+
+      **Without writing code in Nimbo**
+
+      1. Open the **Environments** tab, click **New environment**, name it `prod` (**Start from** Base). This creates `compose.prod.yaml`.
+      2. Select prod. In **Variables**, add `APP_ENV` = `production` and `LOG_LEVEL` = `info` (written to `.env.prod`).
+      3. In **Edit**, set `api`'s **CPU limit** `0.5` and **Memory limit** `128M`, then **Save**.
+      4. In prod's actions menu, pick **Switch to**. Click `api` and turn on **Only in prod** at the top of the service form. Every edit now goes to `compose.prod.yaml` only.
+      5. In **Volumes**, remove the code bind mount. In **Restart & resources**, set **Restart** to **Always**. In **Logging**, click **Rotate logs (10m × 3)**.
+      6. Switch back to **Base** (its **Switch to**) and check the challenge. `compose.yaml` still has the bind mount and `LOG_LEVEL` debug.
+    solutionFiles:
+      compose.prod.yaml: |
+        # Production differences only; merged over compose.yaml.
+        services:
+          api:
+            # The image already contains server.js: no code from the host.
+            volumes: !reset []
+            restart: always
+            logging:
+              driver: json-file
+              options:
+                max-size: "10m"
+                max-file: "3"
+            deploy:
+              resources:
+                limits:
+                  cpus: "0.5"
+                  memory: 128M
+      .env.prod: |
+        APP_ENV=production
+        LOG_LEVEL=info
+    starter:
+      kind: docker
+      files:
+        compose.yaml: |
+          # Development setup: server.js is bind-mounted so edits apply on a
+          # container restart, and every request is logged.
+          services:
+            api:
+              build: ./api
+              init: true
+              ports:
+                - "3000:3000"
+              environment:
+                APP_ENV: ${APP_ENV:-development}
+                LOG_LEVEL: ${LOG_LEVEL:-debug}
+              volumes:
+                - ./api/server.js:/app/server.js:ro
+        api/Dockerfile: |
+          FROM node:22-alpine
+          ENV NODE_ENV=production
+          WORKDIR /app
+          COPY package.json ./
+          RUN npm install --omit=dev --no-audit --no-fund
+          COPY server.js ./
+          USER node
+          EXPOSE 3000
+          HEALTHCHECK --interval=10s --timeout=3s --start-period=5s --retries=3 \
+            CMD wget -qO- http://127.0.0.1:3000/health >/dev/null || exit 1
+          CMD ["node", "server.js"]
+        api/.dockerignore: |
+          node_modules
+          npm-debug.log*
+          .env*
+          Dockerfile
+          .dockerignore
+        api/package.json: |
+          {
+            "name": "pricing-api",
+            "version": "1.0.0",
+            "private": true,
+            "main": "server.js"
+          }
+        api/server.js: |
+          const http = require("node:http");
+
+          const port = Number(process.env.PORT ?? 3000);
+          const appEnv = process.env.APP_ENV ?? "development";
+          const logLevel = process.env.LOG_LEVEL ?? "info";
+
+          const prices = { "NB-001": 4.5, "PN-002": 1.2 };
+
+          function send(res, status, body) {
+            res.writeHead(status, { "Content-Type": "application/json" });
+            res.end(JSON.stringify(body));
+          }
+
+          const server = http.createServer((req, res) => {
+            const path = new URL(req.url, "http://localhost").pathname;
+            if (logLevel === "debug") console.log(`${req.method} ${path}`);
+            if (path === "/health") return send(res, 200, { status: "ok" });
+            if (path === "/") return send(res, 200, { env: appEnv, logLevel, prices });
+            send(res, 404, { error: "not found" });
+          });
+
+          server.listen(port, () => console.log(`pricing API (${appEnv}) listening on :${port}`));
+
+          process.on("SIGTERM", () => server.close(() => process.exit(0)));
+    checks:
+    - id: base-stays-dev
+      label: compose.yaml is still the development setup
+      type: has
+      has:
+        compose:
+          service: api
+          where:
+            environment.LOG_LEVEL: debug
+            volumes: {exists: true}
+    - id: prod-valid
+      label: The prod environment exists and is valid
+      type: validate
+      environment: prod
+    - id: prod-no-bind
+      label: Prod runs the code baked into the image (no bind mount)
+      type: has
+      environment: prod
+      has:
+        compose:
+          service: api
+          where: {volumes: {exists: false}}
+    - id: prod-values
+      label: Prod sets APP_ENV=production and a quieter log level
+      type: has
+      environment: prod
+      has:
+        compose:
+          service: api
+          where:
+            environment.APP_ENV: production
+            environment.LOG_LEVEL: {in: [info, warn, error]}
+    - id: prod-rotated-logs
+      label: Prod rotates the json-file logs
+      type: has
+      environment: prod
+      has:
+        compose:
+          service: api
+          where: {logging.options.max-size: {exists: true}}
+    - id: prod-operational
+      label: Prod restarts the service and caps its resources
+      type: rules_clean
+      environment: prod
+      rules_clean: {codes: [dk_no_restart, dk_no_limits, dk_log_rotation, dk_unresolved_var], minSeverity: info}
+    - id: deploy
+      label: The project deploys
+      type: deploy
+    - id: health
+      label: GET /health answers 200
+      type: http
+      http: {service: api, port: 3000, path: /health, status: 200}
+    sources:
+    - {title: 'Docker Docs: Use Compose in production', url: 'https://docs.docker.com/compose/how-tos/production/'}
+    - {title: 'Docker Docs: Merge Compose files', url: 'https://docs.docker.com/compose/how-tos/multiple-compose-files/merge/'}
+    - {title: 'Docker Docs: Use multiple Compose files', url: 'https://docs.docker.com/compose/how-tos/multiple-compose-files/'}
+    - {title: 'Docker Docs: Environment variables in Compose', url: 'https://docs.docker.com/compose/how-tos/environment-variables/'}
+    - {title: 'Docker Docs: Environment variables precedence', url: 'https://docs.docker.com/compose/how-tos/environment-variables/envvars-precedence/'}
+    - {title: 'Docker Docs: Compose deploy specification (resources)', url: 'https://docs.docker.com/reference/compose-file/deploy/'}
+    - {title: 'Docker Docs: JSON File logging driver', url: 'https://docs.docker.com/engine/logging/drivers/json-file/'}
+    solvableWithoutCode: true
+- op: upsert
+  kind: challenge
+  id: docker-observability
+  data:
+    provider: docker
+    level: advanced
+    title: See your service with Prometheus metrics
+    summary: Instrument a Node.js API with an OpenTelemetry-named request duration histogram, expose it at /metrics, label it for scraping and add Prometheus with Add monitoring.
+    minutes: 40
+    tags: [observability, prometheus, opentelemetry, metrics, monitoring, grafana]
+    prerequisites: [docker-first-web-service, docker-cache-friendly-dockerfile]
+    runtime: local
+    problem: |
+      Customers say the quotes API "feels slow sometimes", and nobody can tell
+      how slow, how often, or since when: the service has no metrics at all.
+
+      Give it the standard HTTP server metrics and a Prometheus that collects
+      them:
+
+      - the API must expose Prometheus metrics at `GET /metrics`, including a
+        request duration **histogram** named after the OpenTelemetry HTTP
+        semantic conventions (`http.server.request.duration`, in seconds, which
+        Prometheus spells `http_server_request_duration_seconds`);
+      - the service must tell a scraper where its metrics are;
+      - a Prometheus must run in the project and scrape it. Nimbo's **Add
+        monitoring** (Monitoring tab, or the `add_monitoring` MCP tool) adds
+        Prometheus, Grafana and cAdvisor for you once the service is labelled.
+    requirements:
+    - '`GET /metrics` on the API answers 200 in the Prometheus text format and includes `http_server_request_duration_seconds`.'
+    - 'The histogram''s labels stay low-cardinality: method, route template and status code (never raw URLs or user ids).'
+    - 'The `api` service carries the labels `prometheus.io/scrape: "true"`, `prometheus.io/port: "3000"` and `prometheus.io/path: /metrics`.'
+    - A Prometheus service (`prom/prometheus`) runs in the project, is ready, and has the API as a scrape target.
+    hints:
+    - 'The official Prometheus client for Node.js is `prom-client`: add `"prom-client": "15.1.3"` to `package.json` dependencies.'
+    - 'Create a `client.Histogram` named `http_server_request_duration_seconds` with `labelNames: ["http_request_method", "http_route", "http_response_status_code"]`, time each request with `startTimer()` and serve `client.register.metrics()` at `/metrics`.'
+    - 'Use the route template (`/quotes/:id`) or an empty string for unknown paths as `http_route`: every distinct label value is a new time series.'
+    - Once the labels are on the service, open the Monitoring tab and click **Add monitoring**, then deploy. It writes `monitoring/compose.yaml` with a pinned Prometheus that discovers the API by its service name.
+    solution: |
+      **Why.** Prometheus' instrumentation practices recommend instrumenting
+      services with request counts and latency, using histograms for latency
+      so quantiles can be aggregated, using base units (seconds), and keeping
+      label cardinality low. OpenTelemetry's HTTP semantic conventions define
+      `http.server.request.duration` (seconds) with the attributes
+      `http.request.method`, `http.route` and `http.response.status_code`;
+      in Prometheus naming that becomes
+      `http_server_request_duration_seconds` with underscore labels.
+      Prometheus pulls metrics over HTTP from the targets it is configured to
+      scrape, which is what the scrape labels and Add monitoring set up.
+
+      **Steps.**
+      1. Add `prom-client` to `api/package.json`.
+      2. In `api/server.js`, create the histogram, collect default process
+         metrics, time each routed request and serve `/metrics` (not measured
+         itself, so scrapes don't skew the numbers).
+      3. Add the `prometheus.io/scrape`, `prometheus.io/port` and
+         `prometheus.io/path` labels to `api` in `compose.yaml`.
+      4. Add a Prometheus that scrapes it. Either:
+         - **Nimbo:** Monitoring tab → **Add monitoring** → deploy. It adds
+           Prometheus, Grafana (a per-service dashboard) and cAdvisor, with alert
+           rules on the same histogram (5xx share, p95); or
+         - **By hand** (the reference files): a pinned `prom/prometheus` service
+           with a `prometheus.yml` whose `api` job scrapes `api:3000/metrics`.
+           Published on `127.0.0.1` only.
+      5. Open Prometheus (Status → Targets): the `api` job is UP.
+
+      **Without writing code in Nimbo**
+
+      The compose half needs no code. On `api`, in **Labels**, click **Label for Prometheus scraping (/metrics on port 3000)**, then open the **Monitoring** tab and click **Add monitoring**. The `/metrics` endpoint with the `http_server_request_duration_seconds` histogram is app code: you edit `api/server.js` and `api/package.json` in the code editor.
+    solutionFiles:
+      compose.yaml: |
+        services:
+          api:
+            build: ./api
+            init: true
+            ports:
+              - "3000:3000"
+            # Scrapers (Nimbo's Add monitoring) read GET /metrics on this port.
+            labels:
+              prometheus.io/scrape: "true"
+              prometheus.io/port: "3000"
+              prometheus.io/path: /metrics
+            restart: unless-stopped
+
+          prometheus:
+            image: prom/prometheus:v2.54.1
+            command:
+              - --config.file=/etc/prometheus/prometheus.yml
+              - --storage.tsdb.path=/prometheus
+              - --storage.tsdb.retention.time=7d
+            ports:
+              - "127.0.0.1:9090:9090"
+            volumes:
+              - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+              - promdata:/prometheus
+            healthcheck:
+              test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:9090/-/ready >/dev/null || exit 1"]
+              interval: 10s
+              timeout: 5s
+              retries: 5
+            restart: unless-stopped
+
+        volumes:
+          promdata:
+      prometheus/prometheus.yml: |
+        global:
+          scrape_interval: 15s
+        scrape_configs:
+          - job_name: prometheus
+            static_configs:
+              - targets: ["localhost:9090"]
+          # The API, found by its Compose service name.
+          - job_name: api
+            metrics_path: /metrics
+            static_configs:
+              - targets: ["api:3000"]
+      api/package.json: |
+        {
+          "name": "quotes-api",
+          "version": "1.0.0",
+          "private": true,
+          "main": "server.js",
+          "dependencies": {
+            "prom-client": "15.1.3"
+          }
+        }
+      api/server.js: |
+        const http = require("node:http");
+        const client = require("prom-client");
+
+        const port = Number(process.env.PORT ?? 3000);
+
+        // HTTP server request duration, named after the OpenTelemetry semantic
+        // conventions (http.server.request.duration, seconds) in Prometheus form.
+        const requestDuration = new client.Histogram({
+          name: "http_server_request_duration_seconds",
+          help: "Duration of HTTP server requests.",
+          labelNames: ["http_request_method", "http_route", "http_response_status_code"],
+          buckets: [0.005, 0.01, 0.025, 0.05, 0.075, 0.1, 0.25, 0.5, 0.75, 1, 2.5, 5, 7.5, 10],
+        });
+        client.collectDefaultMetrics();
+
+        const quotes = ["Measure twice, cut once.", "Make it work, make it right, make it fast."];
+
+        function send(res, status, body) {
+          res.writeHead(status, { "Content-Type": "application/json" });
+          res.end(JSON.stringify(body));
+        }
+
+        // Route templates: the http_route label never holds raw paths.
+        function route(path) {
+          if (path === "/" || path === "/health") return path;
+          if (/^\/quotes\/\d+$/.test(path)) return "/quotes/:id";
+          return "";
+        }
+
+        const server = http.createServer(async (req, res) => {
+          const path = new URL(req.url, "http://localhost").pathname;
+          if (path === "/metrics") {
+            // Not measured itself: scrapes would skew the request metrics.
+            res.writeHead(200, { "Content-Type": client.register.contentType });
+            res.end(await client.register.metrics());
+            return;
+          }
+          const stop = requestDuration.startTimer({ http_request_method: req.method, http_route: route(path) });
+          res.on("finish", () => stop({ http_response_status_code: res.statusCode }));
+
+          if (path === "/health") return send(res, 200, { status: "ok" });
+          if (path === "/") return send(res, 200, { count: quotes.length });
+          const m = path.match(/^\/quotes\/(\d+)$/);
+          if (m && quotes[Number(m[1])]) {
+            // Some quotes take longer to "compute": visible in the histogram.
+            const delay = Number(m[1]) === 1 ? 300 : 5;
+            return setTimeout(() => send(res, 200, { quote: quotes[Number(m[1])] }), delay);
+          }
+          send(res, 404, { error: "not found" });
+        });
+
+        server.listen(port, () => console.log(`listening on :${port}`));
+
+        process.on("SIGTERM", () => server.close(() => process.exit(0)));
+    starter:
+      kind: docker
+      files:
+        compose.yaml: |
+          services:
+            api:
+              build: ./api
+              init: true
+              ports:
+                - "3000:3000"
+              restart: unless-stopped
+        api/Dockerfile: |
+          # Dependencies first (cached until package.json changes), then the code.
+          FROM node:22-alpine
+          ENV NODE_ENV=production
+          WORKDIR /app
+          COPY package.json ./
+          RUN npm install --omit=dev --no-audit --no-fund
+          COPY server.js ./
+          USER node
+          EXPOSE 3000
+          HEALTHCHECK --interval=10s --timeout=3s --start-period=5s --retries=3 \
+            CMD wget -qO- http://127.0.0.1:3000/health >/dev/null || exit 1
+          CMD ["node", "server.js"]
+        api/.dockerignore: |
+          node_modules
+          npm-debug.log*
+          .env*
+          Dockerfile
+          .dockerignore
+        api/package.json: |
+          {
+            "name": "quotes-api",
+            "version": "1.0.0",
+            "private": true,
+            "main": "server.js"
+          }
+        api/server.js: |
+          const http = require("node:http");
+
+          const port = Number(process.env.PORT ?? 3000);
+
+          const quotes = ["Measure twice, cut once.", "Make it work, make it right, make it fast."];
+
+          function send(res, status, body) {
+            res.writeHead(status, { "Content-Type": "application/json" });
+            res.end(JSON.stringify(body));
+          }
+
+          const server = http.createServer((req, res) => {
+            const path = new URL(req.url, "http://localhost").pathname;
+            if (path === "/health") return send(res, 200, { status: "ok" });
+            if (path === "/") return send(res, 200, { count: quotes.length });
+            const m = path.match(/^\/quotes\/(\d+)$/);
+            if (m && quotes[Number(m[1])]) {
+              // Some quotes take longer to "compute".
+              const delay = Number(m[1]) === 1 ? 300 : 5;
+              return setTimeout(() => send(res, 200, { quote: quotes[Number(m[1])] }), delay);
+            }
+            send(res, 404, { error: "not found" });
+          });
+
+          server.listen(port, () => console.log(`listening on :${port}`));
+
+          process.on("SIGTERM", () => server.close(() => process.exit(0)));
+    checks:
+    - id: valid
+      label: The compose project is valid
+      type: validate
+    - id: scrape-labels
+      label: The API is labelled for scraping
+      type: has
+      has:
+        compose:
+          service: api
+          where:
+            labels."prometheus.io/scrape": 'true'
+            labels."prometheus.io/port": '3000'
+            labels."prometheus.io/path": /metrics
+    - id: prometheus
+      label: A Prometheus service runs in the project
+      type: has
+      has:
+        compose:
+          image: prom/prometheus
+    - id: deploy
+      label: The project deploys
+      type: deploy
+    - id: metrics
+      label: GET /metrics exposes the request duration histogram
+      type: http
+      http: {service: api, port: 3000, path: /metrics, status: 200, contains: http_server_request_duration_seconds}
+    - id: prometheus-ready
+      label: Prometheus is ready
+      type: http
+      http: {service: prometheus, port: 9090, path: /-/ready, status: 200}
+    - id: api-target
+      label: Prometheus has the API as a scrape target
+      type: http
+      http: {service: prometheus, port: 9090, path: /api/v1/targets, status: 200, contains: '"job":"api"'}
+    sources:
+    - {title: 'Prometheus: Overview', url: 'https://prometheus.io/docs/introduction/overview/'}
+    - {title: 'Prometheus: Instrumentation best practices', url: 'https://prometheus.io/docs/practices/instrumentation/'}
+    - {title: 'Prometheus: Metric and label naming', url: 'https://prometheus.io/docs/practices/naming/'}
+    - {title: 'Prometheus: Histograms and summaries', url: 'https://prometheus.io/docs/practices/histograms/'}
+    - {title: 'OpenTelemetry: Semantic conventions for HTTP metrics', url: 'https://opentelemetry.io/docs/specs/semconv/http/http-metrics/'}
+    - {title: 'OpenTelemetry: What is OpenTelemetry?', url: 'https://opentelemetry.io/docs/what-is-opentelemetry/'}
+    solvableWithoutCode: false
+- op: upsert
+  kind: challenge
+  id: docker-hardened-runtime
+  data:
+    provider: docker
+    level: expert
+    title: Lock down a container's runtime
+    summary: Take a service that runs privileged, as root, with the Docker socket mounted, and give it least privilege (non-root, read-only root filesystem, no capabilities, no privilege escalation, bounded resources).
+    minutes: 45
+    tags: [security, hardening, least-privilege, capabilities, read-only, limits]
+    prerequisites: [docker-multi-stage-nonroot, docker-secrets-as-files]
+    runtime: local
+    problem: |
+      The report renderer was "made to work" during an incident and never
+      cleaned up. Its service now:
+
+      - runs with `privileged: true`;
+      - mounts `/var/run/docker.sock` "for debugging";
+      - runs as `root` (the Dockerfile has no `USER`);
+      - has a writable root filesystem, every default Linux capability, no
+        memory, CPU or process limits, no init process, and logs without
+        rotation.
+
+      If anyone finds a bug in it, they own the host. Apply least privilege
+      layer by layer until a compromise of the process is contained in a small,
+      read-only, unprivileged box. The renderer writes scratch files to `/tmp`
+      (its `/health` fails when it can't), so it must keep working.
+    requirements:
+    - No `privileged`, no Docker socket mount, no host network or PID namespace.
+    - The image's final stage runs as a non-root user.
+    - '`read_only: true` with a `tmpfs` for `/tmp`, `cap_drop: [ALL]` and `security_opt: ["no-new-privileges:true"]`.'
+    - '`deploy.resources.limits` caps memory, CPU and the number of processes (`pids`).'
+    - '`init: true` and json-file log rotation (`max-size`).'
+    - The service deploys and `GET /health` answers 200 (it can still write to `/tmp`).
+    hints:
+    - Start with what gives the container power over the host. The `renderer` service's **Hardening** section lists every protection and how many are off.
+    - Turn on **Not privileged**, click **Remove the mount** next to the Docker socket warning, and turn on **Run as non-root** (the node image's unprivileged `node` user). **Read-only filesystem** also adds a tmpfs at `/tmp`, so the app can still write scratch files.
+    - Then turn on **Drop all capabilities**, **No new privileges** and **Init process**. In **Restart & resources**, fill **CPUs**, **Memory** and **Processes**. In **Logging**, click **Rotate logs (10m × 3)**.
+    solution: |
+      **Why.** Docker's Engine security page explains that containers run
+      with a reduced capability set and that you should drop what you don't
+      need, and that access to the Docker daemon (its socket) is equivalent to
+      root on the host. The building best practices recommend a non-root
+      `USER`. The Compose services reference documents `read_only`, `tmpfs`,
+      `cap_drop`, `security_opt`, `init` and `privileged`; the deploy spec
+      documents `resources.limits` including `pids`; and the resource
+      constraints guide explains why unbounded memory lets one container
+      trigger the host's OOM killer. Rootless mode goes one step further by
+      running the daemon itself without root.
+
+      **Steps.**
+      1. Remove `privileged: true` and the `docker.sock` mount.
+      2. Add `USER node` to the Dockerfile's final stage.
+      3. Add `read_only: true`, `tmpfs: [/tmp]`, `cap_drop: [ALL]`,
+         `security_opt: ["no-new-privileges:true"]`.
+      4. Add `deploy.resources.limits` with `cpus: "0.5"`, `memory: 128M`,
+         `pids: 100`.
+      5. Add `init: true` and `logging` with `max-size: "10m"`, `max-file: "3"`.
+      6. Deploy: `/health` still answers 200 because `/tmp` is a writable
+         tmpfs while everything else is read-only.
+
+      **Without writing code in Nimbo**
+
+      1. Click the `renderer` service and open **Hardening**.
+      2. Turn on **Not privileged** and click **Remove the mount** on the Docker socket warning.
+      3. Turn on **Run as non-root** (it uses the image's documented `node` user), **Read-only filesystem** (adds tmpfs `/tmp`), **Drop all capabilities**, **No new privileges** and **Init process**.
+      4. In **Restart & resources**, set **CPUs** `0.5`, **Memory** `128M` and **Processes** `100`.
+      5. In **Logging**, click **Rotate logs (10m × 3)**.
+      6. Deploy: `GET /health` answers 200 and the app can still write to `/tmp`.
+    solutionFiles:
+      compose.yaml: |
+        # Least privilege: non-root, read-only root filesystem with a tmpfs
+        # for scratch files, no capabilities, no privilege escalation, and
+        # bounded memory, CPU, processes and logs.
+        services:
+          renderer:
+            build: ./renderer
+            init: true
+            ports:
+              - "3000:3000"
+            read_only: true
+            tmpfs:
+              - /tmp
+            cap_drop:
+              - ALL
+            security_opt:
+              - "no-new-privileges:true"
+            deploy:
+              resources:
+                limits:
+                  cpus: "0.5"
+                  memory: 128M
+                  pids: 100
+            logging:
+              driver: json-file
+              options:
+                max-size: "10m"
+                max-file: "3"
+            restart: unless-stopped
+      renderer/Dockerfile: |
+        FROM node:22-alpine
+        ENV NODE_ENV=production
+        WORKDIR /app
+        COPY package.json ./
+        RUN npm install --omit=dev --no-audit --no-fund
+        COPY server.js ./
+        # The official image's unprivileged user.
+        USER node
+        EXPOSE 3000
+        HEALTHCHECK --interval=10s --timeout=3s --start-period=5s --retries=3 \
+          CMD wget -qO- http://127.0.0.1:3000/health >/dev/null || exit 1
+        CMD ["node", "server.js"]
+    starter:
+      kind: docker
+      files:
+        compose.yaml: |
+          services:
+            renderer:
+              build: ./renderer
+              privileged: true
+              ports:
+                - "3000:3000"
+              volumes:
+                - /var/run/docker.sock:/var/run/docker.sock
+              logging:
+                driver: json-file
+              restart: unless-stopped
+        renderer/Dockerfile: |
+          FROM node:22-alpine
+          ENV NODE_ENV=production
+          WORKDIR /app
+          COPY package.json ./
+          RUN npm install --omit=dev --no-audit --no-fund
+          COPY server.js ./
+          EXPOSE 3000
+          HEALTHCHECK --interval=10s --timeout=3s --start-period=5s --retries=3 \
+            CMD wget -qO- http://127.0.0.1:3000/health >/dev/null || exit 1
+          CMD ["node", "server.js"]
+        renderer/.dockerignore: |
+          node_modules
+          npm-debug.log*
+          .env*
+          Dockerfile
+          .dockerignore
+        renderer/package.json: |
+          {
+            "name": "report-renderer",
+            "version": "1.0.0",
+            "private": true,
+            "main": "server.js"
+          }
+        renderer/server.js: |
+          const fs = require("node:fs");
+          const http = require("node:http");
+          const os = require("node:os");
+          const path = require("node:path");
+
+          const port = Number(process.env.PORT ?? 3000);
+          const scratch = path.join(os.tmpdir(), "renderer");
+
+          // Renders a tiny text report into a scratch file and reads it back.
+          function render(name) {
+            fs.mkdirSync(scratch, { recursive: true });
+            const file = path.join(scratch, `${name}.txt`);
+            fs.writeFileSync(file, `report ${name} rendered at ${new Date().toISOString()}\n`);
+            const body = fs.readFileSync(file, "utf8");
+            fs.rmSync(file);
+            return body;
+          }
+
+          function send(res, status, body) {
+            res.writeHead(status, { "Content-Type": "application/json" });
+            res.end(JSON.stringify(body));
+          }
+
+          const server = http.createServer((req, res) => {
+            const url = new URL(req.url, "http://localhost");
+            try {
+              if (url.pathname === "/health") {
+                render("health");
+                return send(res, 200, { status: "ok", scratch: "writable", uid: process.getuid() });
+              }
+              if (url.pathname === "/") {
+                return send(res, 200, { report: render("daily") });
+              }
+              send(res, 404, { error: "not found" });
+            } catch (err) {
+              console.error(err.message);
+              send(res, 503, { error: "cannot write scratch files" });
+            }
+          });
+
+          server.listen(port, () => console.log(`listening on :${port}`));
+
+          process.on("SIGTERM", () => server.close(() => process.exit(0)));
+    checks:
+    - id: valid
+      label: The compose project is valid
+      type: validate
+    - id: no-host-power
+      label: No privileged mode, host namespaces or Docker socket
+      type: rules_clean
+      rules_clean: {codes: [dk_privileged, dk_docker_sock], minSeverity: warning}
+    - id: non-root
+      label: The container runs as a non-root user
+      type: rules_clean
+      rules_clean: {codes: [dk_root_user], minSeverity: info}
+    - id: hardened
+      label: Read-only root filesystem, no capabilities, no privilege escalation
+      type: rules_clean
+      rules_clean: {codes: [dk_hardening], minSeverity: info}
+    - id: scratch-tmpfs
+      label: /tmp is a tmpfs
+      type: has
+      has:
+        compose:
+          service: renderer
+          where: {tmpfs: {contains: /tmp}}
+    - id: limits
+      label: Memory, CPU and process count are capped
+      type: has
+      has:
+        compose:
+          service: renderer
+          where:
+            deploy.resources.limits.memory: {exists: true}
+            deploy.resources.limits.cpus: {exists: true}
+            deploy.resources.limits.pids: {exists: true}
+    - id: init-and-logs
+      label: An init process and rotated logs
+      type: rules_clean
+      rules_clean: {codes: [dk_no_init, dk_log_rotation, dk_no_limits], minSeverity: info}
+    - id: deploy
+      label: The service deploys
+      type: deploy
+    - id: health
+      label: The renderer still writes its scratch files (GET /health answers 200)
+      type: http
+      http: {service: renderer, port: 3000, path: /health, status: 200, contains: writable}
+    sources:
+    - {title: 'Docker Docs: Docker Engine security (capabilities, daemon attack surface)', url: 'https://docs.docker.com/engine/security/'}
+    - {title: 'Docker Docs: Compose file reference, services (read_only, tmpfs, cap_drop, security_opt, init, privileged)', url: 'https://docs.docker.com/reference/compose-file/services/'}
+    - {title: 'Docker Docs: Compose deploy specification (resources limits, pids)', url: 'https://docs.docker.com/reference/compose-file/deploy/'}
+    - {title: 'Docker Docs: Resource constraints', url: 'https://docs.docker.com/engine/containers/resource_constraints/'}
+    - {title: 'Docker Docs: Building best practices (USER)', url: 'https://docs.docker.com/build/building/best-practices/'}
+    - {title: 'Docker Docs: Rootless mode', url: 'https://docs.docker.com/engine/security/rootless/'}
+    - {title: 'Docker Docs: Seccomp security profiles for Docker', url: 'https://docs.docker.com/engine/security/seccomp/'}
+    solvableWithoutCode: true
+- op: upsert
+  kind: challenge
+  id: docker-build-secrets-supply-chain
+  data:
+    provider: docker
+    level: expert
+    title: Build secrets that never reach the image
+    summary: Replace a token passed as a build argument and an API key baked into ENV with a BuildKit secret mount for the build and a Compose secret file at runtime.
+    minutes: 45
+    tags: [security, buildkit, build-secrets, secrets, supply-chain, dockerfile]
+    prerequisites: [docker-secrets-as-files, docker-multi-stage-nonroot]
+    runtime: local
+    problem: |
+      The reports service needs two credentials:
+
+      - a **license token** while the image is built (the build step
+        `node fingerprint.js` validates it and records only a fingerprint);
+      - a **partner API key** while the container runs.
+
+      Today the token is passed with `build.args` and `ARG LICENSE_TOKEN`, and
+      the API key is written in the Dockerfile with `ENV`. Both end up inside
+      the image: anyone who can pull it reads them with `docker history` or
+      `docker inspect`, and they are pushed to every registry the image goes
+      to.
+
+      Rebuild the delivery so that neither credential is stored in any image
+      layer or configuration, while the service keeps working.
+    requirements:
+    - The Dockerfile has no `ARG` or `ENV` holding a token, key or password.
+    - The license token reaches the build through a BuildKit secret mount (`RUN --mount=type=secret`), granted with `build.secrets` in compose and defined by a top-level `secrets:` entry that reads it from the `LICENSE_TOKEN` variable (already in `.env`, which stays out of git).
+    - '`build.args` no longer passes the token.'
+    - The partner API key reaches the running container as a Compose secret file; the app reads `PARTNER_API_KEY_FILE`, and `PARTNER_API_KEY` is no longer set.
+    - The service deploys and `GET /` reports `"licensed":true` and `"partnerKeyConfigured":true`.
+    hints:
+    - Build arguments and environment variables persist in the final image. Secret mounts are only available to the single `RUN` instruction that mounts them.
+    - 'In the Dockerfile: `RUN --mount=type=secret,id=license_token,env=LICENSE_TOKEN,required=true node fingerprint.js > license.json`. Start the file with `# syntax=docker/dockerfile:1` so BuildKit uses a current Dockerfile frontend.'
+    - 'In compose: `build: {context: ./reports, secrets: [license_token]}` plus `secrets: {license_token: {environment: LICENSE_TOKEN}}`. Compose resolves the variable from `.env` like any other.'
+    - 'Runtime secrets work like in the PostgreSQL challenge: `secrets: [partner_api_key]` on the service and `PARTNER_API_KEY_FILE: /run/secrets/partner_api_key`.'
+    - After the change, `docker history --no-trunc` and `docker image inspect` on the new image show neither value.
+    solution: |
+      **Why.** Docker's build secrets guide states that build arguments and
+      environment variables are inappropriate for secrets because they persist
+      in the final image, and that secret mounts expose a secret to one build
+      instruction only, as a file or (with `env=`) an environment variable.
+      The Compose build reference grants build secrets per service with
+      `build.secrets`, and the Compose secrets guide mounts runtime secrets as
+      files in `/run/secrets/` for the services that are granted them. As a
+      supply-chain follow-up, the build attestations docs describe SBOM and
+      provenance attestations, and Docker Scout analyzes an image's packages
+      for known vulnerabilities.
+
+      **Steps.**
+      1. Keep the token in `.env` (`LICENSE_TOKEN=…`, ignored by git) and put the
+         key in `secrets/partner_api_key.txt` (ignored by git and excluded from
+         the build context).
+      2. Dockerfile: add `# syntax=docker/dockerfile:1`, delete `ARG LICENSE_TOKEN`
+         and the `ENV PARTNER_API_KEY` line, and run the fingerprint step with
+         `RUN --mount=type=secret,id=license_token,env=LICENSE_TOKEN,required=true`.
+      3. compose: replace `build.args` with `build.secrets: [license_token]`,
+         grant `secrets: [partner_api_key]` to the service, set
+         `PARTNER_API_KEY_FILE: /run/secrets/partner_api_key`, and declare the
+         secrets at the top level: `license_token` with
+         `environment: LICENSE_TOKEN`, `partner_api_key` with `file:`.
+      4. Deploy and call `/`: `licensed` and `partnerKeyConfigured` are true.
+      5. Going further: when you push images, build with SBOM and provenance
+         attestations (`docker buildx build --sbom=true --provenance=mode=max`)
+         and review them with `docker scout cves`.
+
+      **Without writing code in Nimbo**
+
+      This one needs the code editor. The token lives in `reports/Dockerfile` (`ARG`/`ENV`), and the fix is a `RUN --mount=type=secret` there. Compose `build.secrets` and a top-level secret read from the `LICENSE_TOKEN` variable have no form, and **Secrets as files** in **Hardening** only moves variables written in the compose `environment:`.
+    solutionFiles:
+      compose.yaml: |
+        # The license token only exists during the fingerprint RUN step; the
+        # partner key is a file in /run/secrets at runtime. Neither is stored
+        # in the image.
+        services:
+          reports:
+            build:
+              context: ./reports
+              secrets:
+                - license_token
+            init: true
+            ports:
+              - "3000:3000"
+            environment:
+              PARTNER_API_KEY_FILE: /run/secrets/partner_api_key
+            secrets:
+              - partner_api_key
+            restart: unless-stopped
+
+        secrets:
+          license_token:
+            environment: LICENSE_TOKEN
+          partner_api_key:
+            file: ./secrets/partner_api_key.txt
+      reports/Dockerfile: |
+        # syntax=docker/dockerfile:1
+        FROM node:22-alpine
+        ENV NODE_ENV=production
+        WORKDIR /app
+        COPY package.json ./
+        RUN npm install --omit=dev --no-audit --no-fund
+        COPY fingerprint.js server.js ./
+        # The token is mounted for this instruction only and never written to a layer.
+        RUN --mount=type=secret,id=license_token,env=LICENSE_TOKEN,required=true \
+          node fingerprint.js > license.json
+        USER node
+        EXPOSE 3000
+        HEALTHCHECK --interval=10s --timeout=3s --start-period=5s --retries=3 \
+          CMD wget -qO- http://127.0.0.1:3000/health >/dev/null || exit 1
+        CMD ["node", "server.js"]
+      secrets/partner_api_key.txt: |
+        pk-local-dev-not-a-real-key
+      .gitignore: |
+        .env
+        secrets/
+    starter:
+      kind: docker
+      files:
+        compose.yaml: |
+          services:
+            reports:
+              build:
+                context: ./reports
+                args:
+                  LICENSE_TOKEN: ${LICENSE_TOKEN}
+              init: true
+              ports:
+                - "3000:3000"
+              restart: unless-stopped
+        .env: |
+          # Local development value only.
+          LICENSE_TOKEN=lic-local-dev-0000-not-a-real-token
+        reports/Dockerfile: |
+          FROM node:22-alpine
+          ARG LICENSE_TOKEN
+          ENV NODE_ENV=production
+          ENV PARTNER_API_KEY=pk-local-dev-not-a-real-key
+          WORKDIR /app
+          COPY package.json ./
+          RUN npm install --omit=dev --no-audit --no-fund
+          COPY fingerprint.js server.js ./
+          RUN LICENSE_TOKEN="$LICENSE_TOKEN" node fingerprint.js > license.json
+          USER node
+          EXPOSE 3000
+          HEALTHCHECK --interval=10s --timeout=3s --start-period=5s --retries=3 \
+            CMD wget -qO- http://127.0.0.1:3000/health >/dev/null || exit 1
+          CMD ["node", "server.js"]
+        reports/.dockerignore: |
+          node_modules
+          npm-debug.log*
+          .env*
+          secrets
+          Dockerfile
+          .dockerignore
+        reports/package.json: |
+          {
+            "name": "reports",
+            "version": "1.0.0",
+            "private": true,
+            "main": "server.js"
+          }
+        reports/fingerprint.js: |
+          // Validates the license token at build time and prints a short
+          // SHA-256 fingerprint of it: the token itself is never written.
+          const { createHash } = require("node:crypto");
+
+          const token = (process.env.LICENSE_TOKEN ?? "").trim();
+          if (!token) {
+            console.error("LICENSE_TOKEN is required to build this image");
+            process.exit(1);
+          }
+          const fingerprint = createHash("sha256").update(token).digest("hex").slice(0, 12);
+          process.stdout.write(JSON.stringify({ fingerprint }) + "\n");
+        reports/server.js: |
+          const fs = require("node:fs");
+          const http = require("node:http");
+
+          const port = Number(process.env.PORT ?? 3000);
+          const license = JSON.parse(fs.readFileSync("/app/license.json", "utf8"));
+
+          // The partner key comes from PARTNER_API_KEY_FILE (a secret file) when
+          // set, otherwise from PARTNER_API_KEY.
+          const keyFile = process.env.PARTNER_API_KEY_FILE;
+          const partnerKey = keyFile ? fs.readFileSync(keyFile, "utf8").trim() : (process.env.PARTNER_API_KEY ?? "");
+
+          function send(res, status, body) {
+            res.writeHead(status, { "Content-Type": "application/json" });
+            res.end(JSON.stringify(body));
+          }
+
+          const server = http.createServer((req, res) => {
+            const path = new URL(req.url, "http://localhost").pathname;
+            if (path === "/health") return send(res, 200, { status: "ok" });
+            if (path === "/") {
+              return send(res, 200, {
+                licensed: Boolean(license.fingerprint),
+                licenseFingerprint: license.fingerprint,
+                partnerKeyConfigured: partnerKey.length > 0,
+              });
+            }
+            send(res, 404, { error: "not found" });
+          });
+
+          server.listen(port, () => console.log(`listening on :${port}`));
+
+          process.on("SIGTERM", () => server.close(() => process.exit(0)));
+    checks:
+    - id: valid
+      label: The compose project is valid
+      type: validate
+    - id: no-build-secrets
+      label: No ARG or ENV holds a credential
+      type: rules_clean
+      rules_clean: {codes: [dk_secret_build, dk_secret_env], minSeverity: warning}
+    - id: no-build-args
+      label: build.args no longer passes the token
+      type: has
+      has:
+        compose:
+          service: reports
+          where: {build.args.LICENSE_TOKEN: {exists: false}}
+    - id: build-secret
+      label: The build is granted a BuildKit secret
+      type: has
+      has:
+        compose:
+          service: reports
+          where: {build.secrets: {exists: true}}
+    - id: runtime-secret
+      label: The partner key is a runtime secret file
+      type: has
+      has:
+        compose:
+          service: reports
+          where:
+            secrets: {exists: true}
+            environment.PARTNER_API_KEY_FILE: {contains: /run/secrets/}
+            environment.PARTNER_API_KEY: {exists: false}
+    - id: secrets-from-files
+      label: The partner key secret is read from a file
+      type: has
+      has:
+        compose:
+          where: {secrets.partner_api_key.file: {exists: true}}
+    - id: build-secret-source
+      label: The license token secret comes from the LICENSE_TOKEN variable
+      type: has
+      has:
+        compose:
+          where: {secrets.license_token.environment: LICENSE_TOKEN}
+    - id: deploy
+      label: The service builds and deploys
+      type: deploy
+    - id: works
+      label: The service is licensed and has its partner key
+      type: http
+      http: {service: reports, port: 3000, path: /, status: 200, contains: '"partnerKeyConfigured":true'}
+    - id: licensed
+      label: The build validated the license
+      type: http
+      http: {service: reports, port: 3000, path: /, status: 200, contains: '"licensed":true'}
+    sources:
+    - {title: 'Docker Docs: Build secrets', url: 'https://docs.docker.com/build/building/secrets/'}
+    - {title: 'Docker Docs: Compose Build Specification (secrets)', url: 'https://docs.docker.com/reference/compose-file/build/'}
+    - {title: 'Docker Docs: Manage secrets securely in Docker Compose', url: 'https://docs.docker.com/compose/how-tos/use-secrets/'}
+    - {title: 'Docker Docs: Dockerfile reference (RUN --mount=type=secret)', url: 'https://docs.docker.com/reference/dockerfile/'}
+    - {title: 'Docker Docs: SBOM attestations', url: 'https://docs.docker.com/build/metadata/attestations/sbom/'}
+    - {title: 'Docker Docs: Docker Scout', url: 'https://docs.docker.com/scout/'}
+    solvableWithoutCode: false
+- op: upsert
+  kind: challenge
+  id: docker-cache-aside
+  data:
+    provider: docker
+    level: advanced
+    title: Reads are crushing the database
+    summary: Every product page hits PostgreSQL and the database can only run four queries at a time; add a cache so pages stay fast at 150 requests per second.
+    minutes: 20
+    tags:
+    - redis
+    - postgres
+    - caching
+    - performance
+    runtime: local
+    problem: |
+      The shop's product API renders each page straight from PostgreSQL. A page
+      needs an expensive query (about 40 ms of database time), and the API holds
+      only four database connections, so the database tops out near 100 pages per
+      second whatever machine it runs on. A promotion is about to send 150 requests
+      per second, and the same 200 products are read over and over.
+
+      Put a cache in front of the database so repeated reads never reach it. The
+      API already supports Redis (read the top of `api/server.js`): it caches pages
+      with the cache-aside pattern as soon as it gets a `REDIS_URL`.
+
+      Nimbo grades this for real: **Check my solution** deploys your stack and sends
+      150 requests per second for 40 seconds.
+    requirements:
+    - A Redis cache runs in the stack.
+    - The `api` service has `REDIS_URL` pointing at it.
+    - 'Keep the database as it is: the api keeps `DB_POOL_SIZE: "4"` and the same query.'
+    - At 150 requests per second, p95 latency stays under 100 ms with fewer than 1% errors.
+    hints:
+    - The database is the bottleneck, not the API. How many times is the same product read during the test?
+    - Keep answers that don't change in a cache in front of the database. Search the palette for **Redis** (Caches) and add it to the stack.
+    - 'Drag `api` onto `redis` and pick **Set connection settings**: it writes `REDIS_URL` on the api. Leave `DB_POOL_SIZE` and the query as they are.'
+    solution: |
+      **Why.** Cache-aside (lazy loading) keeps the database the source of truth
+      and reads it only on a cache miss: the app first asks the cache, and on a miss
+      loads from the database and stores the result with a time to live. With 200 hot
+      products, after the first 200 misses almost every request is served from Redis
+      in about a millisecond, so the four database connections are no longer the
+      limit.
+
+      **Steps.**
+      1. Add a `cache` service running Redis (pinned image, healthcheck).
+      2. Set `REDIS_URL: redis://cache:6379` on the `api` service.
+      3. Run **Check my solution**: p95 drops from seconds (requests queue for the
+         database) to a few milliseconds.
+
+      **Without writing code in Nimbo**
+
+      1. In the palette, find **Redis** (Caches) and add it.
+      2. Drag the `api` service onto `redis` and pick **Set connection settings**. This sets `REDIS_URL=redis://redis:6379` on `api`.
+      3. Deploy and run the load test at 150 requests per second.
+    solutionFiles:
+      compose.yaml: |
+        # Challenge: reads are crushing the database.
+        # The product API renders every page straight from PostgreSQL, and the
+        # database can only run a few of those queries at a time. Only the API is
+        # published; the database is reached by service name inside the project.
+
+        x-defaults: &defaults
+          restart: unless-stopped
+          logging:
+            driver: json-file
+            options:
+              max-size: "10m"
+              max-file: "3"
+
+        services:
+          api:
+            <<: *defaults
+            build: ./api
+            init: true
+            ports:
+              - "3401:3000"
+            environment:
+              DATABASE_URL: postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB}
+              DB_POOL_SIZE: "4"
+              REDIS_URL: redis://cache:6379
+            depends_on:
+              db:
+                condition: service_healthy
+            healthcheck:
+              test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:3000/health || exit 1"]
+              interval: 5s
+              timeout: 3s
+              retries: 5
+            deploy:
+              resources:
+                limits:
+                  cpus: "1"
+                  memory: 256M
+
+          db:
+            <<: *defaults
+            image: postgres:16.14-alpine
+            environment:
+              POSTGRES_USER: ${POSTGRES_USER}
+              POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+              POSTGRES_DB: ${POSTGRES_DB}
+            volumes:
+              - pgdata:/var/lib/postgresql/data
+              - ./db/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+            healthcheck:
+              test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+              interval: 5s
+              timeout: 5s
+              retries: 10
+            deploy:
+              resources:
+                limits:
+                  cpus: "1"
+                  memory: 512M
+
+          cache:
+            <<: *defaults
+            image: redis:7.4.6-alpine3.21
+            healthcheck:
+              test: ["CMD-SHELL", "redis-cli ping | grep PONG"]
+              interval: 5s
+              timeout: 3s
+              retries: 10
+            deploy:
+              resources:
+                limits:
+                  cpus: "0.5"
+                  memory: 128M
+
+        volumes:
+          pgdata:
+    starter:
+      templateId: starter-docker-cache-aside
+    checks:
+    - id: has-cache
+      label: A Redis cache runs in the stack
+      type: has
+      has:
+        compose:
+          category: cache
+    - id: api-uses-cache
+      label: The api is configured to use it
+      type: has
+      has:
+        compose:
+          service: api
+          where:
+            environment.REDIS_URL:
+              contains: redis://
+    - id: same-database
+      label: The database pool is unchanged
+      type: has
+      has:
+        compose:
+          service: api
+          where:
+            environment.DB_POOL_SIZE: '4'
+    - id: fast-pages
+      label: Pages stay fast at 150 req/s
+      type: load
+      load:
+        target:
+          service: api
+          port: 3000
+          path: /products/{{rand}}
+        spec:
+          stages:
+          - durationSec: 10
+            target: 150
+          - durationSec: 30
+            target: 150
+          timeoutMs: 2000
+        expect:
+        - metric: p95_ms
+          op: lt
+          value: 100
+        - metric: error_rate
+          op: lt
+          value: 0.01
+    sources:
+    - title: 'Database Caching Strategies Using Redis: caching patterns (cache-aside)'
+      url: https://docs.aws.amazon.com/whitepapers/latest/database-caching-strategies-using-redis/caching-patterns.html
+    - title: 'Amazon Builders'' Library: Caching challenges and strategies'
+      url: https://aws.amazon.com/builders-library/caching-challenges-and-strategies/
+    - title: 'Docker Compose: services (healthcheck, deploy)'
+      url: https://docs.docker.com/reference/compose-file/services/
+    solvableWithoutCode: true
+- op: upsert
+  kind: challenge
+  id: docker-lb-health-checks
+  data:
+    provider: docker
+    level: advanced
+    title: A dead instance still gets traffic
+    summary: HAProxy keeps sending requests to a replica that crashed and is still warming up; make the load balancer use only replicas that are ready.
+    minutes: 20
+    tags:
+    - haproxy
+    - health-checks
+    - load-balancer
+    - resilience
+    runtime: local
+    problem: |
+      The catalog runs as two replicas behind HAProxy. When one crashes, Docker
+      restarts it within a second, which looks fine on the Deploy tab. But a fresh
+      replica needs 15 seconds of warm-up before it can serve, and until then it
+      answers 503 to everything. HAProxy doesn't know: it keeps sending every other
+      request to it, so customers see errors after every crash.
+
+      **Check my solution** crashes one replica in the middle of steady traffic
+      (60 requests per second). Make the load balancer route around a replica that
+      isn't ready, so customers never notice.
+    requirements:
+    - Keep two `api` replicas behind the `lb` service.
+    - 'A replica crash under load is survived: errors and latency stay at their normal level.'
+    - Fewer than 2% of requests fail during the whole run.
+    hints:
+    - The replica answers `GET /health` with 503 while it warms up and 200 once it can serve. Who should be asking that question?
+    - HAProxy only stops using a server it health-checks. In `lb/haproxy.cfg`, add `option httpchk GET /health` to the api backend and the `check` keyword to the `server-template` line, with a short `inter`.
+    - Checks need a second or two to notice. Close the gap with `retry-on conn-failure empty-response 503`, `retries 2` and `option redispatch 1`, so a request that hits a bad replica is retried on the other one.
+    solution: |
+      **Why.** A load balancer can only avoid a backend it knows is unhealthy. HAProxy
+      learns that from active health checks (`option httpchk` plus `check` on the
+      servers); a restarted replica stays out of rotation until it passes `rise`
+      checks. Retries with redispatch cover the moment before the first failed check.
+
+      **Steps** (in `lb/haproxy.cfg`, backend `api`):
+      1. `option httpchk GET /health` and `http-check expect status 200`.
+      2. `default-server inter 1s fall 1 rise 2`.
+      3. `retry-on conn-failure empty-response 503`, `retries 2`, `option redispatch 1`.
+      4. Add `check` to `server-template api- 2 api:3000 ...`.
+
+      **Without writing code in Nimbo**
+
+      The fix lives in `lb/haproxy.cfg`, which no form edits: open it in the code editor. The two `api` replicas behind `lb` are already in place.
+    solutionFiles:
+      lb/haproxy.cfg: |
+        # HAProxy in front of the api replicas.
+        global
+          log stdout format raw local0 notice
+
+        defaults
+          mode http
+          log global
+          timeout connect 2s
+          timeout client 30s
+          timeout server 10s
+
+        # Docker's embedded DNS: "api" resolves to every running api replica.
+        resolvers docker
+          nameserver dns 127.0.0.11:53
+          hold valid 1s
+
+        frontend web
+          bind :8080
+          default_backend api
+
+        backend api
+          balance roundrobin
+          # Only replicas whose /health answers 200 get traffic.
+          option httpchk GET /health
+          http-check expect status 200
+          default-server inter 1s fall 1 rise 2
+          # A request that still hits a bad replica is retried on another one.
+          retry-on conn-failure empty-response 503
+          retries 2
+          option redispatch 1
+          # One slot per replica, filled from DNS.
+          server-template api- 2 api:3000 check resolvers docker init-addr none
+    starter:
+      templateId: starter-docker-lb-health-checks
+    checks:
+    - id: two-replicas
+      label: Two api replicas
+      type: has
+      has:
+        compose:
+          service: api
+          where:
+            deploy.replicas:
+              min: 2
+    - id: survive-crash
+      label: A replica crash goes unnoticed
+      type: scenario
+      scenario:
+        target:
+          service: lb
+          port: 8080
+          path: /catalog/{{rand}}
+        spec:
+          stages:
+          - durationSec: 0
+            target: 60
+          - durationSec: 60
+            target: 60
+          timeoutMs: 2000
+        scenario:
+          id: kill_replica
+          target: api
+          atSec: 20
+          durationSec: 20
+        expect:
+          verdict: survived
+          metrics:
+          - metric: error_rate
+            op: lt
+            value: 0.02
+    sources:
+    - title: HAProxy 3.0 configuration manual (option httpchk, check, retry-on, option redispatch)
+      url: https://docs.haproxy.org/3.0/configuration.html
+    - title: 'Docker Compose: services (healthcheck, restart)'
+      url: https://docs.docker.com/reference/compose-file/services/
+    solvableWithoutCode: false
+- op: upsert
+  kind: challenge
+  id: docker-slow-dependency
+  data:
+    provider: docker
+    level: expert
+    title: A slow dependency takes everyone down
+    summary: When the pricing service slows to a crawl, every quote request piles up behind it; make the quote API degrade gracefully instead of failing.
+    minutes: 25
+    tags:
+    - timeouts
+    - circuit-breaker
+    - resilience
+    - node
+    runtime: local
+    problem: |
+      Every quote the API returns needs a price from the pricing service. Pricing
+      normally answers in a few milliseconds, but today its network adds a full
+      second to every answer. The quote API waits patiently, its pool of 20
+      connections to pricing fills up, and requests queue until customers give up:
+      one slow dependency has taken the whole API down.
+
+      A quote with the catalog list price is far better than no quote. **Check my
+      solution** adds one second of latency to pricing for 25 seconds while 80
+      requests per second hit the quote API. Pricing stays slow: change how the API
+      copes (its knobs are documented at the top of `api/server.js`).
+    requirements:
+    - The api stops waiting for pricing after a bounded time.
+    - 'While pricing is slow, quotes keep flowing: fewer than 1% errors and p99 under 1 s.'
+    - The API recovers on its own when pricing does (verdict degraded or better).
+    hints:
+    - 'Read the top of `api/server.js`: which settings decide how long the API waits for pricing, and what it does when pricing doesn''t answer?'
+    - Waiting forever is the problem. In the `api` service's **Environment** section, add `PRICING_TIMEOUT_MS` with a few hundred milliseconds (a call normally takes 3 ms).
+    - A timeout alone turns slow answers into errors. Also add `PRICE_FALLBACK` = `list-price`, and `CIRCUIT_BREAKER` = `on` so the API stops calling pricing for a moment once it keeps failing.
+    solution: |
+      **Why.** A client that waits without a timeout lets a slow dependency hold its
+      resources (connections, memory) until it runs out of them. Set client timeouts
+      from the dependency's real latency, turn the hard dependency into a soft one with
+      a fallback answer, and use a circuit breaker so that while the dependency keeps
+      failing, calls are skipped instead of each paying the timeout.
+
+      **Steps** (api environment):
+      1. `PRICING_TIMEOUT_MS: "250"`
+      2. `PRICE_FALLBACK: list-price`
+      3. `CIRCUIT_BREAKER: "on"`
+
+      **Without writing code in Nimbo**
+
+      1. Click the `api` service. In **Environment**, use **Add variable** three times: `PRICING_TIMEOUT_MS` = `250`, `PRICE_FALLBACK` = `list-price`, `CIRCUIT_BREAKER` = `on`.
+      2. Deploy and run the load test with the slow-pricing scenario.
+    solutionFiles:
+      compose.yaml: |
+        # Challenge: a slow dependency takes everyone down.
+        # The quote api asks the pricing service for a price on every request.
+        # Only the quote api is published.
+
+        x-defaults: &defaults
+          restart: unless-stopped
+          logging:
+            driver: json-file
+            options:
+              max-size: "10m"
+              max-file: "3"
+
+        services:
+          api:
+            <<: *defaults
+            build: ./api
+            init: true
+            ports:
+              - "3403:3000"
+            environment:
+              PRICING_URL: http://pricing:4000
+              PRICING_TIMEOUT_MS: "250"
+              PRICE_FALLBACK: list-price
+              CIRCUIT_BREAKER: "on"
+            depends_on:
+              - pricing
+            deploy:
+              resources:
+                limits:
+                  cpus: "1"
+                  memory: 128M
+
+          pricing:
+            <<: *defaults
+            build: ./pricing
+            init: true
+            deploy:
+              resources:
+                limits:
+                  cpus: "0.5"
+                  memory: 128M
+    starter:
+      templateId: starter-docker-slow-dependency
+    checks:
+    - id: has-timeout
+      label: The api has a timeout for pricing
+      type: has
+      has:
+        compose:
+          service: api
+          where:
+            environment.PRICING_TIMEOUT_MS:
+              min: 1
+    - id: degrade-gracefully
+      label: Quotes keep flowing while pricing is slow
+      type: scenario
+      scenario:
+        target:
+          service: api
+          port: 3000
+          path: /quote/{{rand}}
+        spec:
+          stages:
+          - durationSec: 0
+            target: 80
+          - durationSec: 65
+            target: 80
+          timeoutMs: 2000
+        scenario:
+          id: dependency_latency
+          target: pricing
+          atSec: 20
+          durationSec: 25
+          params:
+            delayMs: '1000'
+        expect:
+          verdict: degraded
+          metrics:
+          - metric: error_rate
+            op: lt
+            value: 0.01
+          - metric: p99_ms
+            op: lt
+            value: 1000
+    sources:
+    - title: 'AWS Well-Architected REL05-BP05: Set client timeouts'
+      url: https://docs.aws.amazon.com/wellarchitected/latest/reliability-pillar/rel_mitigate_interaction_failure_client_timeouts.html
+    - title: 'AWS Well-Architected REL05-BP01: Implement graceful degradation (circuit breaker)'
+      url: https://docs.aws.amazon.com/wellarchitected/latest/reliability-pillar/rel_mitigate_interaction_failure_graceful_degradation.html
+    solvableWithoutCode: true
+- op: upsert
+  kind: challenge
+  id: docker-cache-stampede
+  data:
+    provider: docker
+    level: expert
+    title: Cache stampede after a flush
+    summary: The cache shields a slow database until it is emptied; then every request rushes to the database at once. Refill a cold cache without a stampede.
+    minutes: 25
+    tags:
+    - redis
+    - postgres
+    - caching
+    - resilience
+    prerequisites:
+    - docker-cache-aside
+    runtime: local
+    problem: |
+      The home page shows 20 featured products. Their pages are cached in Redis for
+      five minutes, so the database (about 100 ms per page, two connections for the API)
+      normally sees almost nothing. Then the cache is flushed during peak traffic. In the
+      next second, 150 requests miss together, and every one of them asks the database
+      for a page that dozens of others are already loading. The queue explodes and
+      customers get timeouts until the cache is warm again.
+
+      **Check my solution** empties Redis in the middle of 150 requests per second.
+      Keep the database, the pool size and the cache lifetime as they are.
+    requirements:
+    - A cache flush under 150 requests per second causes fewer than 0.5% errors (requests time out after 1.5 s).
+    - The API recovers on its own (verdict degraded or better).
+    - 'The api keeps `DB_POOL_SIZE: "2"` and `CACHE_TTL_SEC: "300"`.'
+    hints:
+    - After the flush, how many database loads does the API start for the same product while the first one is still running?
+    - Only one request per product needs to go to the database; the others can wait for its answer. That is request coalescing, and `api/server.js` has a setting for it.
+    - In the `api` service's **Environment** section, add `COALESCE_MISSES` = `true`. Leave `DB_POOL_SIZE` and `CACHE_TTL_SEC` as they are.
+    solution: |
+      **Why.** When a hot key is missing, every concurrent request for it becomes a
+      database query: a thundering herd that multiplies the load exactly when the cache
+      can't help. Request coalescing lets the first miss load the value while the
+      others wait for that same result, so a cold cache costs one query per key.
+
+      **Steps.** Set `COALESCE_MISSES: "true"` on the api service and run the check:
+      the flush now costs 20 queries instead of hundreds, and no request times out.
+
+      **Without writing code in Nimbo**
+
+      1. Click the `api` service. In **Environment**, click **Add variable**: `COALESCE_MISSES` = `true`.
+      2. Deploy and run the load test with the cache-flush scenario.
+    solutionFiles:
+      compose.yaml: |
+        # Challenge: cache stampede.
+        # The product API caches pages in Redis; the database behind it is slow
+        # and holds two connections for the API. Only the API is published.
+
+        x-defaults: &defaults
+          restart: unless-stopped
+          logging:
+            driver: json-file
+            options:
+              max-size: "10m"
+              max-file: "3"
+
+        services:
+          api:
+            <<: *defaults
+            build: ./api
+            init: true
+            ports:
+              - "3404:3000"
+            environment:
+              DATABASE_URL: postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB}
+              DB_POOL_SIZE: "2"
+              REDIS_URL: redis://cache:6379
+              CACHE_TTL_SEC: "300"
+              COALESCE_MISSES: "true"
+            depends_on:
+              db:
+                condition: service_healthy
+              cache:
+                condition: service_healthy
+            healthcheck:
+              test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:3000/health || exit 1"]
+              interval: 5s
+              timeout: 3s
+              retries: 5
+            deploy:
+              resources:
+                limits:
+                  cpus: "1"
+                  memory: 256M
+
+          db:
+            <<: *defaults
+            image: postgres:16.14-alpine
+            environment:
+              POSTGRES_USER: ${POSTGRES_USER}
+              POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+              POSTGRES_DB: ${POSTGRES_DB}
+            volumes:
+              - pgdata:/var/lib/postgresql/data
+              - ./db/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+            healthcheck:
+              test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+              interval: 5s
+              timeout: 5s
+              retries: 10
+            deploy:
+              resources:
+                limits:
+                  cpus: "1"
+                  memory: 512M
+
+          cache:
+            <<: *defaults
+            image: redis:7.4.6-alpine3.21
+            healthcheck:
+              test: ["CMD-SHELL", "redis-cli ping | grep PONG"]
+              interval: 5s
+              timeout: 3s
+              retries: 10
+            deploy:
+              resources:
+                limits:
+                  cpus: "0.5"
+                  memory: 128M
+
+        volumes:
+          pgdata:
+    starter:
+      templateId: starter-docker-cache-stampede
+    checks:
+    - id: same-limits
+      label: Pool size and cache lifetime unchanged
+      type: has
+      has:
+        compose:
+          service: api
+          where:
+            environment.DB_POOL_SIZE: '2'
+            environment.CACHE_TTL_SEC: '300'
+    - id: survive-flush
+      label: A cache flush causes no timeouts
+      type: scenario
+      scenario:
+        target:
+          service: api
+          port: 3000
+          path: /featured/{{rand}}
+        spec:
+          stages:
+          - durationSec: 10
+            target: 150
+          - durationSec: 35
+            target: 150
+          timeoutMs: 1500
+        scenario:
+          id: cache_flush
+          target: cache
+          atSec: 15
+          durationSec: 15
+        expect:
+          verdict: degraded
+          metrics:
+          - metric: error_rate
+            op: lt
+            value: 0.005
+    sources:
+    - title: 'Amazon Builders'' Library: Caching challenges and strategies (request coalescing, thundering herd)'
+      url: https://aws.amazon.com/builders-library/caching-challenges-and-strategies/
+    - title: 'Database Caching Strategies Using Redis: caching patterns'
+      url: https://docs.aws.amazon.com/whitepapers/latest/database-caching-strategies-using-redis/caching-patterns.html
+    solvableWithoutCode: true
+- op: upsert
+  kind: challenge
+  id: docker-noisy-neighbor
+  data:
+    provider: docker
+    level: advanced
+    title: A background job is starving the API
+    summary: A CPU-heavy report job runs inside the API process and freezes it for 400 ms every second; move it out without losing the reports.
+    minutes: 20
+    tags:
+    - node
+    - workers
+    - latency
+    - redis
+    runtime: local
+    problem: |
+      The orders API answers in about a millisecond, yet customers see slow pages. The
+      culprit shares its process: every second, a sales report job computes for 400 ms,
+      and a Node.js process runs JavaScript on one thread, so requests that arrive
+      during the job wait.
+
+      Give the job its own home so it can never freeze the API again. The reports still
+      matter: `GET /reports/latest` must keep answering 200 (it checks that a report
+      was produced in the last 10 seconds). The image already has two roles; read the
+      top of `app/server.js`.
+    requirements:
+    - At 50 requests per second, `GET /orders/:id` has p95 under 50 ms and fewer than 1% errors.
+    - '`GET /reports/latest` keeps answering 200.'
+    hints:
+    - Node runs your JavaScript on one thread. While the report job computes, which requests can the API answer?
+    - 'Turn the job off in the API: add `RUN_JOBS` = `false` to the `api` service''s **Environment**. Something else has to run the job now.'
+    - Add a service from the palette's **Build from Dockerfile** section. It is named `app` and builds the existing `./app` folder; rename it `worker`. Give it `ROLE` = `worker` and `REDIS_URL` = `redis://cache:6379`, no ports, and its own **CPUs** limit so it can't starve its neighbours.
+    solution: |
+      **Why.** CPU-bound work on the event loop blocks every other request in that
+      process. Run it elsewhere: a separate worker process (here a separate service
+      from the same image) with its own CPU limit, sharing results through Redis.
+
+      **Steps.**
+      1. On `api`, set `RUN_JOBS: "false"`.
+      2. Add a `worker` service: `build: ./app`, `environment: {ROLE: worker,
+         REDIS_URL: redis://cache:6379}`, `deploy.resources.limits.cpus: "0.5"`.
+
+      **Without writing code in Nimbo**
+
+      1. Click the `api` service. In **Environment**, click **Add variable**: `RUN_JOBS` = `false`.
+      2. From the palette's **Build from Dockerfile** section, add any entry (for example **Node.js app**). It is named `app` and builds `./app`, which already has its Dockerfile, so nothing is generated.
+      3. In its **Container** section, change **Service name** to `worker`.
+      4. In **Environment**, add `ROLE` = `worker` and `REDIS_URL` = `redis://cache:6379`.
+      5. In **Restart & resources**, set **CPUs** `0.5` and **Memory** `128M`.
+      6. In **Depends on**, add `cache` **until healthy**. In **Hardening**, turn on **Init process**.
+      7. Deploy and run the load test at 50 requests per second.
+    solutionFiles:
+      compose.yaml: |
+        # Challenge: a background job is starving the API.
+        # The orders api serves customers and also runs the sales report job in
+        # the same process. Redis holds the time of the last report.
+
+        x-defaults: &defaults
+          restart: unless-stopped
+          logging:
+            driver: json-file
+            options:
+              max-size: "10m"
+              max-file: "3"
+
+        services:
+          api:
+            <<: *defaults
+            build: ./app
+            init: true
+            ports:
+              - "3405:3000"
+            environment:
+              ROLE: api
+              RUN_JOBS: "false"
+              REDIS_URL: redis://cache:6379
+            depends_on:
+              cache:
+                condition: service_healthy
+            deploy:
+              resources:
+                limits:
+                  cpus: "1"
+                  memory: 128M
+
+          worker:
+            <<: *defaults
+            build: ./app
+            init: true
+            environment:
+              ROLE: worker
+              REDIS_URL: redis://cache:6379
+            depends_on:
+              cache:
+                condition: service_healthy
+            deploy:
+              resources:
+                limits:
+                  cpus: "0.5"
+                  memory: 128M
+
+          cache:
+            <<: *defaults
+            image: redis:7.4.6-alpine3.21
+            healthcheck:
+              test: ["CMD-SHELL", "redis-cli ping | grep PONG"]
+              interval: 5s
+              timeout: 3s
+              retries: 10
+            deploy:
+              resources:
+                limits:
+                  cpus: "0.5"
+                  memory: 128M
+    starter:
+      templateId: starter-docker-noisy-neighbor
+    checks:
+    - id: fast-orders
+      label: Orders answer quickly at 50 req/s
+      type: load
+      load:
+        target:
+          service: api
+          port: 3000
+          path: /orders/{{rand}}
+        spec:
+          stages:
+          - durationSec: 0
+            target: 50
+          - durationSec: 30
+            target: 50
+          timeoutMs: 2000
+        expect:
+        - metric: p95_ms
+          op: lt
+          value: 50
+        - metric: error_rate
+          op: lt
+          value: 0.01
+    - id: reports-fresh
+      label: Reports keep being produced
+      type: load
+      load:
+        target:
+          service: api
+          port: 3000
+          path: /reports/latest
+        spec:
+          stages:
+          - durationSec: 0
+            target: 5
+          - durationSec: 15
+            target: 5
+          timeoutMs: 2000
+        expect:
+        - metric: error_rate
+          op: lt
+          value: 0.01
+    sources:
+    - title: 'Node.js: Don''t block the event loop (or the worker pool)'
+      url: https://nodejs.org/en/learn/asynchronous-work/dont-block-the-event-loop
+    - title: Docker Compose deploy specification (resources)
+      url: https://docs.docker.com/reference/compose-file/deploy/
+    solvableWithoutCode: true

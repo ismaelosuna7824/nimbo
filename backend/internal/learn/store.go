@@ -341,7 +341,7 @@ func sortChallenges(list []model.Challenge, order map[string]int) {
 func summarize(c model.Challenge, p model.ChallengeProgress) model.ChallengeSummary {
 	return model.ChallengeSummary{
 		ID: c.ID, Provider: c.Provider, Level: c.Level, Title: c.Title, Summary: c.Summary,
-		Minutes: c.Minutes, Tags: nonNil(c.Tags), Runtime: c.Runtime,
+		Minutes: c.Minutes, Tags: nonNil(c.Tags), Runtime: c.Runtime, SolvableWithoutCode: c.SolvableWithoutCode,
 		Prerequisites: nonNil(c.Prerequisites), Checks: len(c.Checks), Progress: p,
 	}
 }

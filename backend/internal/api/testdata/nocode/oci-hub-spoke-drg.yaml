@@ -1,0 +1,78 @@
+# Each DRG attachment's network_details block shows its id field (the
+# id/tags_all filter applies to the resource block only); the spokes'
+# routes point at the DRG before the internet gateways are deleted.
+steps:
+  - add: {type: oci_core_drg, name: hub}
+  - set:
+      node: oci_core_drg.hub
+      attrs:
+        compartment_id: {link: var.compartment_ocid}
+        display_name: learn-shared-drg
+  - set:
+      node: oci_core_route_table.prod
+      attrs:
+        route_rules[0].destination: 10.0.0.0/8
+        route_rules[0].network_entity_id: {link: oci_core_drg.hub.id}
+  - set:
+      node: oci_core_route_table.dev
+      attrs:
+        route_rules[0].destination: 10.0.0.0/8
+        route_rules[0].network_entity_id: {link: oci_core_drg.hub.id}
+  - delete: {node: oci_core_internet_gateway.prod}
+  - delete: {node: oci_core_internet_gateway.dev}
+  - set:
+      node: oci_core_subnet.prod_app
+      attrs:
+        prohibit_public_ip_on_vnic: true
+  - set:
+      node: oci_core_subnet.dev_app
+      attrs:
+        prohibit_public_ip_on_vnic: true
+  - add: {type: oci_core_vcn, name: hub}
+  - set:
+      node: oci_core_vcn.hub
+      attrs:
+        compartment_id: {link: var.compartment_ocid}
+        display_name: learn-shared-hub
+        cidr_blocks: [10.0.0.0/16]
+        dns_label: hub
+  - add: {type: oci_core_subnet, name: hub_mgmt}
+  - set:
+      node: oci_core_subnet.hub_mgmt
+      attrs:
+        compartment_id: {link: var.compartment_ocid}
+        vcn_id: {link: oci_core_vcn.hub.id}
+        display_name: learn-shared-hub-mgmt
+        cidr_block: 10.0.1.0/24
+        dns_label: mgmt
+        prohibit_public_ip_on_vnic: true
+  - add: {type: oci_core_drg_attachment, name: hub}
+  - set:
+      node: oci_core_drg_attachment.hub
+      attrs:
+        drg_id: {link: oci_core_drg.hub.id}
+        network_details[0].type: VCN
+        network_details[0].id: {link: oci_core_vcn.hub.id}
+  - add: {type: oci_core_drg_attachment, name: prod}
+  - set:
+      node: oci_core_drg_attachment.prod
+      attrs:
+        drg_id: {link: oci_core_drg.hub.id}
+        network_details[0].type: VCN
+        network_details[0].id: {link: oci_core_vcn.prod.id}
+  - add: {type: oci_core_drg_attachment, name: dev}
+  - set:
+      node: oci_core_drg_attachment.dev
+      attrs:
+        drg_id: {link: oci_core_drg.hub.id}
+        network_details[0].type: VCN
+        network_details[0].id: {link: oci_core_vcn.dev.id}
+  - add: {type: oci_bastion_bastion, name: hub}
+  - set:
+      node: oci_bastion_bastion.hub
+      attrs:
+        name: learnsharedbastion
+        bastion_type: STANDARD
+        compartment_id: {link: var.compartment_ocid}
+        target_subnet_id: {link: oci_core_subnet.hub_mgmt.id}
+        client_cidr_block_allow_list: [203.0.113.0/24]

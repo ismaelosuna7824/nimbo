@@ -1,0 +1,13 @@
+# Grants: drag the function onto the table (Read) and onto a new log group
+# (Write); the lambda-log-group recipe names the group /aws/lambda/<fn> and
+# sets 14 days of retention. The admin statement is deleted in the AWS
+# policy editor.
+steps:
+  - connect: {source: aws_lambda_function.reader, target: aws_dynamodb_table.orders, recipe: "access:read"}
+  - add: {type: aws_cloudwatch_log_group, name: reader}
+  - connect: {source: aws_lambda_function.reader, target: aws_cloudwatch_log_group.reader, recipe: lambda-log-group}
+  - connect: {source: aws_lambda_function.reader, target: aws_cloudwatch_log_group.reader, recipe: "access:write"}
+  - accessAWS:
+      node: aws_iam_role_policy.reader
+      path: policy
+      removeWhere: {actions: ["*"], resources: ['"*"']}

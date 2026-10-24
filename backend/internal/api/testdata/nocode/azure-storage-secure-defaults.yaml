@@ -1,0 +1,12 @@
+# Inspector switches and selects on the storage account and its container.
+steps:
+  - set:
+      node: azurerm_storage_account.uploads
+      attrs:
+        min_tls_version: TLS1_2
+        https_traffic_only_enabled: true
+        allow_nested_items_to_be_public: false
+  - set:
+      node: azurerm_storage_container.uploads
+      attrs:
+        container_access_type: private

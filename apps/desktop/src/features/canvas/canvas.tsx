@@ -407,6 +407,59 @@ function CanvasInner() {
     window.requestAnimationFrame(() => void flow.fitView({ padding: 0.15, duration: 400 }))
   }, [savePositions, flow])
 
+  const describeNode = useCallback(
+    (id: string) => {
+      const n = useWorkflowStore.getState().workflow!.nodes.find((x) => x.id === id)!
+      const schema = schemas.get(schemaKey(n.kind, n.type))
+      return { id, label: nodeLabel(n, schema), icon: schema?.icon }
+    },
+    [schemas],
+  )
+
+  /** The card a dragged card was dropped on: the deepest other leaf card under its center (groups are placement). */
+  const dropTarget = useCallback(
+    (id: string) => {
+      if (children.has(id)) return undefined
+      const abs = flow.getInternalNode(id)?.internals.positionAbsolute
+      if (!abs) return undefined
+      const cx = abs.x + NODE_WIDTH / 2
+      const cy = abs.y + NODE_HEIGHT / 2
+      let best: string | undefined
+      for (const n of wfNodes) {
+        if (n.id === id || children.has(n.id)) continue
+        const r = rects.get(n.id)
+        if (!r || cx < r.x || cx > r.x + r.w || cy < r.y || cy > r.y + r.h) continue
+        if (!best || depthOf(n.id, parents) > depthOf(best, parents)) best = n.id
+      }
+      return best
+    },
+    [flow, children, wfNodes, rects, parents],
+  )
+
+  /**
+   * An identity dropped onto a resource asks "What can it do?" (the grant recipes of GET connections): the card goes
+   * back where it was and the connect dialog opens. Any other drop just moves the card.
+   */
+  const offerAccess = useCallback(
+    async (source: string, target: string, positions: Map<string, Position>) => {
+      let recipes: ConnectionRecipe[] = []
+      try {
+        await useWorkflowStore.getState().flush()
+        recipes = await api.connections(useWorkflowStore.getState().workflow!.id, source, target)
+      } catch {
+        recipes = []
+      }
+      if (!recipes.some((r) => r.group === "access")) {
+        savePositions(positions)
+        return
+      }
+      const original = builtNodes.find((n) => n.id === source)?.position
+      if (original) setNodes((ns) => ns.map((n) => (n.id === source ? { ...n, position: original } : n)))
+      setPending({ source: describeNode(source), target: describeNode(target), recipes })
+    },
+    [savePositions, builtNodes, setNodes, describeNode],
+  )
+
   const onNodeDragStop = useCallback(
     (_: unknown, __: ResourceFlowNode, dragged: ResourceFlowNode[]) => {
       const draggedIds = new Set(dragged.map((d) => d.id))
@@ -429,9 +482,11 @@ function CanvasInner() {
         }
         shift(d.id)
       }
-      savePositions(positions)
+      const target = dragged.length === 1 && positions.size > 0 ? dropTarget(dragged[0].id) : undefined
+      if (target) void offerAccess(dragged[0].id, target, positions)
+      else savePositions(positions)
     },
-    [flow, parents, rects, children, wfNodes, savePositions],
+    [flow, parents, rects, children, wfNodes, savePositions, dropTarget, offerAccess],
   )
 
   const onDragOver = useCallback((e: React.DragEvent) => {
@@ -491,14 +546,9 @@ function CanvasInner() {
         toast.error("Couldn't load connection options", { description: errorMessage(err) })
         return
       }
-      const describe = (id: string) => {
-        const n = current.nodes.find((x) => x.id === id)!
-        const schema = schemas.get(schemaKey(n.kind, n.type))
-        return { id, label: nodeLabel(n, schema), icon: schema?.icon }
-      }
       if (recipes.length === 0) {
         toast.info("No direct connection between these resources", {
-          description: `Nothing in ${describe(target).label} can point at ${describe(source).label}. Try connecting the other way round.`,
+          description: `Nothing in ${describeNode(target).label} can point at ${describeNode(source).label}. Try connecting the other way round.`,
         })
         return
       }
@@ -507,9 +557,9 @@ function CanvasInner() {
         await applyRecipe(source, target, curated[0])
         return
       }
-      setPending({ source: describe(source), target: describe(target), recipes })
+      setPending({ source: describeNode(source), target: describeNode(target), recipes })
     },
-    [schemas, applyRecipe],
+    [describeNode, applyRecipe],
   )
 
   const deleteNode = useCallback(

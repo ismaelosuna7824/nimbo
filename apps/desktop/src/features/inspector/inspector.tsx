@@ -40,6 +40,7 @@ import { openModuleView } from "../canvas/module-view-store"
 import { nodeAddress, nodeLabel, useNodeSchemas, useSchema } from "../canvas/catalog"
 import { DockerInspector, DockerOverviewHint } from "../docker/inspector/docker-inspector"
 import { KubeInspector, KubeOverviewHint, KubeSources } from "../kubernetes/inspector/kube-inspector"
+import { AccessSection } from "../access/access-section"
 import { NetworkSection } from "../network/network-section"
 import { useEndpoints } from "../panels/endpoints/use-endpoints"
 import { AttrField } from "./attr-field"
@@ -49,6 +50,7 @@ import { InspectorContext, type InspectorContextValue } from "./context"
 import { FileField } from "./file-field"
 import { LiveValues } from "./live-values"
 import { FreeformAttrs, META_ATTRS, MetaArguments } from "./meta-arguments"
+import { ProvidersSection } from "./providers-section"
 
 // Snippet highlighting (CodeMirror parsers) loads only for deployed resources.
 const CompactResourceCard = lazy(() =>
@@ -80,6 +82,8 @@ export function Inspector() {
     return !!graph && (graph.nodes.some((n) => n.id === s.selectedNodeId) || !!graph.charts?.some((c) => c.id === s.selectedNodeId))
   })
   const nodes = useWorkflowStore((s) => s.workflow?.nodes)
+  const variables = useWorkflowStore((s) => s.workflow?.variables)
+  const locals = useWorkflowStore((s) => s.workflow?.locals)
   const allDiagnostics = useWorkflowStore((s) => s.workflow?.diagnostics)
   const selectedNodeId = useWorkflowStore((s) => s.selectedNodeId)
   const mode = useWorkflowStore((s) => s.mode)
@@ -94,12 +98,14 @@ export function Inspector() {
             nodeId: node.id,
             mode,
             nodes,
+            variables: variables ?? [],
+            locals: locals ?? [],
             schemas,
             diagnostics: (allDiagnostics ?? []).filter((d) => d.nodeId === node.id),
             select,
           }
         : null,
-    [nodes, allDiagnostics, node, mode, schemas, select],
+    [nodes, variables, locals, allDiagnostics, node, mode, schemas, select],
   )
 
   if (!hasWorkflow) return null
@@ -177,6 +183,8 @@ function NodeInspector({ node }: { node: WorkflowNode }) {
           )}
 
           {node.kind === "resource" && <NetworkSection node={node} section={Section} />}
+
+          <AccessSection node={node} section={Section} />
 
           <Section title="Settings">
             {node.kind === "module" ? (
@@ -461,6 +469,7 @@ function WorkflowOverview() {
         />
       </div>
       {wf.kind === "kubernetes" && <KubeSources sources={wf.kubernetes?.sources ?? []} />}
+      {wf.kind !== "docker" && wf.kind !== "kubernetes" && <ProvidersSection />}
       {wf.kind === "docker" ? (
         <DockerOverviewHint />
       ) : wf.kind === "kubernetes" ? (

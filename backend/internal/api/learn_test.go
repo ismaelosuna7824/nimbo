@@ -36,6 +36,7 @@ func learnChallengeOp(id, provider, level, title, tags string) string {
       adaptations: ` + adaptations + `
       sources:
         - { title: Compose file reference, url: "https://docs.docker.com/reference/compose-file/" }
+      solvableWithoutCode: false
 `
 }
 

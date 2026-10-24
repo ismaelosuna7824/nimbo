@@ -1,0 +1,16 @@
+# OpenTelemetry Collector from the palette (it runs the image's default
+# config: OTLP on 4317/4318, debug exporter). web: the Command field (pro
+# mode) adds --otel-service-name, an Environment row points OTLP at the
+# collector's gRPC port (podinfo exports over gRPC; the palette's connect
+# recipe writes the HTTP port 4318), a podcli healthcheck and Logging's
+# "Rotate logs".
+steps:
+  - composeAddService: {catalogId: otel-collector}
+  - composePatch: {service: web, patch: {command: "./podinfo --port=9898 --otel-service-name=web"}}
+  - composeEnv: {service: web, set: {OTEL_EXPORTER_OTLP_ENDPOINT: "http://otel-collector:4317"}}
+  - composePatch:
+      service: web
+      patch:
+        healthcheck: {test: "podcli check http localhost:9898/healthz", interval: 10s, timeout: 3s, retries: 3, startPeriod: 5s}
+  - composePatch: {service: web, patch: {logging: {driver: json-file, maxSize: 10m, maxFile: "3"}}}
+  - composePatch: {service: web, patch: {dependsOn: [{service: otel-collector, condition: service_started}]}}

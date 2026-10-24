@@ -1,0 +1,55 @@
+# Cluster switches and selects, the default_node_pool / network_profile /
+# Entra RBAC / oms_agent blocks, a user node pool and a Log Analytics
+# workspace from the palette.
+steps:
+  - add: {type: azurerm_log_analytics_workspace, name: main}
+  - connect: {source: azurerm_resource_group.main, target: azurerm_log_analytics_workspace.main, recipe: azure-resource-group}
+  - set:
+      node: azurerm_log_analytics_workspace.main
+      attrs:
+        name: log-learn-dev-aks
+        sku: PerGB2018
+        retention_in_days: 30
+  - add: {type: azurerm_client_config, kind: data, name: current}
+  - set:
+      node: azurerm_kubernetes_cluster.main
+      attrs:
+        sku_tier: Standard
+        automatic_upgrade_channel: patch
+        node_os_upgrade_channel: NodeImage
+        local_account_disabled: true
+        workload_identity_enabled: true
+        oidc_issuer_enabled: true
+        azure_policy_enabled: true
+        private_cluster_enabled: true
+        default_node_pool[0].name: system
+        default_node_pool[0].vm_size: Standard_D4ds_v5
+        default_node_pool[0].node_count: {unset: true}
+        default_node_pool[0].auto_scaling_enabled: true
+        default_node_pool[0].min_count: 3
+        default_node_pool[0].max_count: 5
+        default_node_pool[0].zones: ["1", "2", "3"]
+        default_node_pool[0].only_critical_addons_enabled: true
+        default_node_pool[0].temporary_name_for_rotation: systemtmp
+        default_node_pool[0].upgrade_settings[0].max_surge: 33%
+        network_profile[0].network_plugin: azure
+        network_profile[0].network_plugin_mode: overlay
+        network_profile[0].network_data_plane: cilium
+        network_profile[0].network_policy: cilium
+        azure_active_directory_role_based_access_control[0].azure_rbac_enabled: true
+        azure_active_directory_role_based_access_control[0].tenant_id: {link: data.azurerm_client_config.current.tenant_id}
+        oms_agent[0].log_analytics_workspace_id: {link: azurerm_log_analytics_workspace.main.id}
+        oms_agent[0].msi_auth_for_monitoring_enabled: true
+  - add: {type: azurerm_kubernetes_cluster_node_pool, name: apps}
+  - set:
+      node: azurerm_kubernetes_cluster_node_pool.apps
+      attrs:
+        name: apps
+        kubernetes_cluster_id: {link: azurerm_kubernetes_cluster.main.id}
+        mode: User
+        vm_size: Standard_D4ds_v5
+        vnet_subnet_id: {link: azurerm_subnet.nodes.id}
+        auto_scaling_enabled: true
+        min_count: 2
+        max_count: 10
+        zones: ["1", "2", "3"]

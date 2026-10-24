@@ -1,0 +1,40 @@
+# Versioning select on the bucket; a palette lifecycle policy (Link to… the
+# namespace and the bucket name, two rules blocks); a palette IAM policy in
+# the tenancy (compartment typed as the tenancy OCID) whose sentence is
+# "Allow service objectstorage-us-ashburn-1 to manage object-family in
+# tenancy" (service subject typed in the sentence builder).
+steps:
+  - set:
+      node: oci_objectstorage_bucket.assets
+      attrs:
+        versioning: Enabled
+  - add: {type: oci_identity_policy, name: object_lifecycle}
+  - set:
+      node: oci_identity_policy.object_lifecycle
+      attrs:
+        compartment_id: ocid1.tenancy.oc1..flocilocaltenancy0000000000000000000000000000000000000000
+        name: nimbo-dev-object-lifecycle
+        description: Lets Object Storage archive and delete objects for lifecycle rules
+  - accessOCI:
+      node: oci_identity_policy.object_lifecycle
+      add:
+        - {subjectType: service, subjects: [objectstorage-us-ashburn-1], verb: manage, resourceType: object-family, location: tenancy}
+  - add: {type: oci_objectstorage_object_lifecycle_policy, name: assets}
+  - set:
+      node: oci_objectstorage_object_lifecycle_policy.assets
+      attrs:
+        namespace: {link: data.oci_objectstorage_namespace.ns.namespace}
+        bucket: {link: oci_objectstorage_bucket.assets.name}
+        rules[0].name: archive-after-90-days
+        rules[0].action: ARCHIVE
+        rules[0].target: objects
+        rules[0].is_enabled: true
+        rules[0].time_amount: "90"
+        rules[0].time_unit: DAYS
+        rules[1].name: delete-old-versions
+        rules[1].action: DELETE
+        rules[1].target: previous-object-versions
+        rules[1].is_enabled: true
+        rules[1].time_amount: "120"
+        rules[1].time_unit: DAYS
+        depends_on: [oci_identity_policy.object_lifecycle]

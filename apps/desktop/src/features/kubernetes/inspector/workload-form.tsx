@@ -20,6 +20,7 @@ import {
   PROBES,
   volumesPatch,
 } from "./paths"
+import { HardeningSection, RolloutSection, SpreadField } from "./workload-sections"
 
 const PORT_RE = /^\d{1,5}$/
 const CPU_RE = /^$|^\d+(\.\d+)?m?$/
@@ -46,16 +47,18 @@ export function WorkloadForm({ node }: { node: KubeNode }) {
         <Section title={node.kind} icon={<BoxIcon className="size-3.5" />}>
           <div className="grid grid-cols-2 gap-2">
             {SCALED[node.kind] && (
-              <KField path="spec.replicas" label="Replicas" htmlFor="k8s-replicas" display={String(w.replicas ?? 1)}>
+              <KField path="spec.replicas" label="Replicas" htmlFor="k8s-replicas" display={String(w.replicas ?? 1)} hint="Empty: 1, or what an autoscaler decides.">
                 <CommitInput
                   id="k8s-replicas"
                   inputMode="numeric"
-                  value={String(w.replicas ?? 1)}
-                  validate={(v) => (/^\d+$/.test(v) && Number(v) <= 100 ? undefined : "0–100")}
-                  onCommit={(v) => patch({ "spec.replicas": Number(v) })}
+                  value={w.replicas === undefined ? "" : String(w.replicas)}
+                  placeholder="1"
+                  validate={(v) => (/^$|^\d+$/.test(v) && Number(v) <= 100 ? undefined : "0–100")}
+                  onCommit={(v) => (v === "" ? patch(undefined, ["spec.replicas"]) : patch({ "spec.replicas": Number(v) }))}
                 />
               </KField>
             )}
+            {(node.kind === "Deployment" || node.kind === "StatefulSet") && <SpreadField node={node} />}
             {node.kind === "CronJob" && (
               <KField path="spec.schedule" label="Schedule" htmlFor="k8s-schedule" display={w.schedule}>
                 <CommitInput id="k8s-schedule" className="font-mono" value={w.schedule ?? ""} placeholder="*/5 * * * *" onCommit={(v) => patch({ "spec.schedule": v })} />
@@ -65,9 +68,13 @@ export function WorkloadForm({ node }: { node: KubeNode }) {
         </Section>
       )}
 
+      {node.kind === "Deployment" && <RolloutSection node={node} />}
+
       {w.containers.map((c) => (
         <ContainerSections key={c.name} node={node} container={c} patch={patch} configMaps={configMaps} secrets={secrets} volumes={(w.volumes ?? []).map((v) => v.name)} />
       ))}
+
+      <HardeningSection node={node} />
 
       {w.initContainers && w.initContainers.length > 0 && (
         <Section title="Init containers">

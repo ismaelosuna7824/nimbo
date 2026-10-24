@@ -1,0 +1,15 @@
+# Requests and limits in the container's Resources section, the HPA form's
+# min/max, and Replicas cleared in the workload form (the HPA owns them).
+steps:
+  - kubePatch:
+      node: Deployment/search/search
+      set:
+        spec.template.spec.containers[name=search].resources.requests.cpu: 100m
+        spec.template.spec.containers[name=search].resources.requests.memory: 64Mi
+        spec.template.spec.containers[name=search].resources.limits.memory: 128Mi
+      unset: [spec.replicas]
+  - kubePatch:
+      node: HorizontalPodAutoscaler/search/search
+      set:
+        spec.minReplicas: 2
+        spec.maxReplicas: 4

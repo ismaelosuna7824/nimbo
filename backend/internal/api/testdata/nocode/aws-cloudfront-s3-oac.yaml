@@ -1,0 +1,37 @@
+# The website configuration (and the output that reads it) is deleted, the
+# public-read statement removed in the AWS policy editor, Block Public
+# Access switched on and the Public tag cleared. A palette distribution gets
+# its cache behavior/restrictions/certificate blocks in the inspector, and
+# dragging it onto the bucket with "Serve the bucket through CloudFront
+# (OAC)" writes the origin access control, the S3 origin and the bucket
+# policy statement for cloudfront.amazonaws.com with AWS:SourceArn.
+steps:
+  - delete: {node: aws_s3_bucket_website_configuration.site}
+  - accessAWS:
+      node: aws_s3_bucket_policy.public_read
+      path: policy
+      removeWhere: {sid: PublicReadGetObject}
+  - set:
+      node: aws_s3_bucket_public_access_block.site
+      attrs:
+        block_public_acls: true
+        block_public_policy: true
+        ignore_public_acls: true
+        restrict_public_buckets: true
+  - set:
+      node: aws_s3_bucket.site
+      attrs:
+        tags: {unset: true}
+  - add: {type: aws_cloudfront_distribution, name: site}
+  - set:
+      node: aws_cloudfront_distribution.site
+      attrs:
+        enabled: true
+        default_root_object: index.html
+        default_cache_behavior[0].viewer_protocol_policy: redirect-to-https
+        default_cache_behavior[0].allowed_methods: [GET, HEAD]
+        default_cache_behavior[0].cached_methods: [GET, HEAD]
+        default_cache_behavior[0].cache_policy_id: 658327ea-f89d-4fab-a63d-7e88639e58f6
+        restrictions[0].geo_restriction[0].restriction_type: none
+        viewer_certificate[0].cloudfront_default_certificate: true
+  - connect: {source: aws_cloudfront_distribution.site, target: aws_s3_bucket.site, recipe: cloudfront-s3-oac}

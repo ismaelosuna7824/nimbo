@@ -1,0 +1,4 @@
+# Request coalescing is a knob of the api (documented in api/server.js):
+# one Environment row.
+steps:
+  - composeEnv: {service: api, set: {COALESCE_MISSES: "true"}}

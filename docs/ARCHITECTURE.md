@@ -400,14 +400,71 @@ Catalog notes:
   (default `floci-local`), oci `region`; OCI resources use
   `var.compartment_ocid` (default: local Floci tenancy).
 - Recipe IDs: curated (`sqs-lambda`, `apigwv2-lambda`, `sns-sqs`,
-  `lambda-uses-dynamodb_table`, `azure-resource-group`, …),
+  `lambda-uses-dynamodb_table`, `lambda-log-group`, `s3-require-tls`,
+  `cloudfront-s3-oac`, `azure-resource-group`, …), grant recipes
+  `access:read|write|manage` (group `access`, see [access](#access-permission-editors)),
   generic `ref:<target|source>:<attr>:<sourceAttr>` (the node holding the
-  attribute), and `depends_on` (target depends on source). Curated recipes
-  are also offered when dragging in the reverse direction.
+  attribute), and `depends_on` (target depends on source). Curated and grant
+  recipes are also offered when dragging in the reverse direction.
 - Validate codes: `unknown_type`, `unknown_attribute`, `unknown_block`,
   `readonly_attribute`, `missing_attribute`, `missing_block`,
   `too_many_blocks` (errors); `deprecated_attribute`, `floci_unsupported`
   (warnings).
+
+### access (permission editors)
+
+Visual editors for every provider's permission model, plus one shared grant
+interaction: drag an identity onto a resource (card onto card, or handle to
+handle) and answer **What can it do? Read / Write / Manage**; Nimbo writes
+least privilege in that provider's own model.
+
+```go
+// package access: structured views of a Terraform node's permissions.
+func View(wf *model.Workflow, n *model.Node) (*model.AccessView, error)   // ErrUnsupported → 404
+func Apply(wf *model.Workflow, n *model.Node, edit model.AccessEdit) error // EditError → 400
+func Catalog(provider string, q CatalogQuery) (*model.AccessCatalog, error)
+func Register(p Provider)                        // aws, azure, gcp, oci (one file each)
+func RegisterCatalog(provider string, fn CatalogFunc)
+// package catalog: grants as connect recipes "access:<level>".
+type accessGranter interface {
+    plans(c *Catalog, wf *model.Workflow, a, b *model.Node) []accessPlan // either orientation
+    apply(x *conn, p accessPlan) error
+}
+// package kube: RBAC views/edits and grants as kube connect recipes.
+func (p *Project) RBACView(o *Object) (*model.KubeAccessView, error)
+func (e *Editor) ApplyRBAC(o *Object, edit model.KubeAccessEdit) error
+```
+
+| Provider | Editor (inspector "Access" section) | Grant (identity → resource) writes | Warnings |
+|---|---|---|---|
+| AWS | Policy documents of `aws_iam_role_policy`/`aws_iam_policy`/user/group policies, `aws_iam_role` (trust policy, inline policies, related attachments), `data.aws_iam_policy_document`, S3/SQS/SNS resource policies: statement cards (effect, actions with a picker per service, resources via Link to… + ARN suffix `/*` `:*`, principals; Condition/Not* read-only) | A statement with the curated least-privilege actions for the level, scoped to the resource ARN (log groups `"${arn}:*"`, S3 objects `"${arn}/*"` + `ListBucket` on the bucket), merged into the role's first editable inline policy or a new `aws_iam_role_policy`. Identities: role, Lambda function (its role), ECS task definition (task role), IAM user/group. Other types: actions from the Service Authorization Reference for that resource type (never `service:*`) | `aws_admin`, `aws_wildcard_action`, `aws_wildcard_resource`, `aws_public_principal` |
+| Azure | `azurerm_role_assignment`: who (identities of the graph incl. `identity[0].principal_id`), role (built-in roles, suggested per scope type, privileged flagged), scope (Link to…) | A role assignment with the level's built-in role (e.g. Key Vault Secrets User / Officer / Administrator) at `scope = <resource>.id`; adds `identity { type = "SystemAssigned" }` when the workload has none | `azure_privileged_role`, `azure_broad_scope` |
+| GCP | `google_*_iam_member` / `_binding`: members (type + value or Link to…, service agents of the project), predefined role picker, resource; condition read-only | `google_<resource>_iam_member` with the level's predefined role and `member = "serviceAccount:${<sa>.email}"` (Cloud Run/Functions/VMs/GKE resolve their service account) | `gcp_basic_role`, `gcp_public_member`, `gcp_project_scope`, `gcp_service_account_user`/`_admin` (info) |
+| OCI | `oci_identity_policy` statements as sentences: Allow [subject] to [verb] [resource-type] in [tenancy \| compartment] [where …], with pickers and Link to… | A statement (read → read, write → use, manage → manage; buckets/objects, keys, vaults and secrets scoped with `where target.*.name/id = …`) appended to the compartment's editable policy, or a new `oci_identity_policy` | `oci_manage_all`, `oci_tenancy_scope`, `oci_any_user`, `oci_manage_verb` (info) |
+| Kubernetes | Role/ClusterRole rules (API group + resource pickers, resourceNames, verb toggles), bindings (roleRef, subjects), ServiceAccount (token automount), workload "Identity" section | Kube recipes `access:read|write|manage` (workload or ServiceAccount → object): ServiceAccount (when on `default`) + Role `<identity>-<level>-<object>` with `resourceNames: [name]` (read get/list/watch, write + update/patch, manage + delete) + RoleBinding + `serviceAccountName`; later grants extend the same Role. `access:bind` (→ Role/ClusterRole), `access:role` (its own empty Role) | `k8s_cluster_admin`, `k8s_wildcard`, `k8s_cluster_scope`, `k8s_secrets_access`, `k8s_default_sa`, `k8s_token_automount` (info) |
+| Docker | No IAM: the service form's **Hardening** section (non-root user, drop all capabilities, read-only filesystem + tmpfs, no-new-privileges, init, not privileged, secrets as files) through `PATCH …/compose/services/{name}` | — | the `dk_*` findings (`dk_root_user`, `dk_hardening`, `dk_privileged`, `dk_secret_env`) |
+
+Rules every editor follows:
+
+- **Round trip.** Editors parse what exists (`jsonencode({...})`, JSON
+  strings and heredocs, policy-document blocks, statement lists, YAML) and
+  write back only what changed: untouched statements, rules and attributes
+  stay byte-identical (each carries its `source`).
+- **Never destroy.** What an editor can't represent (for expressions,
+  `local`/function values, Condition blocks, Endorse/Admit statements, Helm
+  templates, Kustomize patches…) is shown read-only with **Edit in code** and
+  kept verbatim; `Apply` refuses edits to it (400).
+- **Least privilege by default.** Grants scope to the one resource;
+  "Manage" is still that resource only. Warnings are part of the view, not
+  lint rules, so challenge grading is unchanged.
+- **Pinned official reference data** (`GET /access/catalog/{provider}`), each
+  with source URL and retrieval date and a generator under
+  `backend/internal/access/gen/<provider>`: AWS Service Authorization Reference
+  (`servicereference.us-east-1.amazonaws.com`, all services and actions with
+  access level and resource types), Azure built-in roles (Microsoft Learn),
+  GCP predefined roles (Google Cloud IAM roles reference), OCI verbs and
+  resource types (OCI Policy Reference), Kubernetes resources and verbs
+  (Kubernetes API `swagger.json` and the RBAC docs).
 
 ### codeintel (code editor checks)
 
@@ -1298,6 +1355,24 @@ the workflow. Canvas positions are stored on the graph nodes
 (`PATCH …/compose/layout`, `null` = automatic), so the compose files never get
 layout noise.
 
+Service patches (`PATCH …/compose/services/{name}`, `compose.Editor.PatchService`)
+also take the **Hardening** keys behind the inspector's Hardening section:
+`readOnly`, `privileged`, `init` (true sets, false/null removes), `capDrop`,
+`capAdd`, `securityOpt`, `tmpfs` (absolute paths), `secrets` (declared
+secret names), and `secretFromEnv {key, secret?, fileEnv?}` (sent alone:
+writes the variable's value to `./secrets/<name>.txt`, declares and grants the
+secret, removes the variable and, with `fileEnv`, sets `<KEY>_FILE` — on by
+default only for images that document `*_FILE` support, `compose/hardening.go`);
+plus `resources.pids`, `logging` (driver, `max-size`, `max-file`), `labels` and
+`scope: "environment"` (write every key of the patch to the active
+environment's override file only). "Run as non-root" sets `user` to the
+image's documented unprivileged user (`compose/hardening.go`), else
+`1000:1000`. The service facts expose the same fields (`ServiceFacts`), and
+the Hardening section scores the seven settings and lists the related
+`dk_*` findings. A build stage's base image (`PATCH …/compose/stages/{nodeId}`)
+is edited by the "Base image (FROM)" field of the stage card and of
+single-stage build services.
+
 ### Docker best-practice rules
 
 Noise budget: on the 39 docker/awesome-compose projects (81 services) the
@@ -1630,6 +1705,33 @@ namespace?, valuesFiles?, environments?}`.
   objects,connect}`, the Code tab (YAML syntax gate, render problems,
   sources follow moves) and import scan (`kube.Detect`: charts, Kustomize
   base and overlays, manifest folders).
+- **Connect recipes** (`GET/POST /kubernetes/connect`, `kube.Project.Recipes`):
+  `expose`, `selects`, `route`, `ingress`, `envFrom`, `volume`, `env`,
+  `serviceaccount`, `scale`; network policies `allowTraffic` (workload →
+  workload: ingress rule on the target's own NetworkPolicy, egress rule on
+  the source's, created when missing) and `allowAll` (accept traffic from
+  anywhere on the workload's ports); RBAC grants of kind `access`
+  (`access:read|write|manage`, `access:bind`, `access:role`; see
+  [access](#access-permission-editors)). The palette adds "Default deny +
+  DNS" NetworkPolicies. Dropping a workload/ServiceAccount card onto an
+  object opens the grant dialog. Object grants are offered only when the
+  identity is the dragged end (an object dragged onto a workload, e.g. a
+  Service onto its Deployment, keeps just the wiring recipes, so a single
+  one still applies directly); `access:bind` works both ways.
+- **RBAC** (`kube/rbac.go`, `api/kube_access.go`): `GET/PUT
+  /kubernetes/access` read and write Role/ClusterRole rules, binding
+  `roleRef`/`subjects`, a ServiceAccount's token automount and a workload's
+  service account; unchanged rules stay byte-identical; Helm templates,
+  generated objects, aggregated ClusterRoles and Kustomize-patched fields are
+  read-only with a reason.
+- **Inspector forms** besides workloads/Services/Ingress/HPA/PVC: rollout
+  strategy (max unavailable/surge), "Spread replicas" (across nodes/zones
+  topologySpreadConstraints), a Hardening section (runAsNonRoot/user,
+  RuntimeDefault seccomp, no privilege escalation, read-only root
+  filesystem, drop ALL), HPA CPU and memory targets, Namespace (Pod Security
+  level + labels), PodDisruptionBudget, ConfigMap/Secret keys (Secret values
+  write-only under `stringData`), RBAC objects, and a header rename for
+  plain manifests (references are not rewritten).
 - **Vendored charts** (`KubeGraph.charts`, `KubeNode.chart`). A Helm
   dependency with a remote repository (https, oci, a repo name — not
   `file://` or empty) vendored in the chart's `charts/` is third-party:
@@ -2789,7 +2891,9 @@ Challenges are graded by `internal/challenge` (`api/challenge.go`).
     checked), prerequisites, roadmap steps and sources.
   - *Start challenge* (`POST /learn/challenges/{id}/start`, owned by
     `api/challenge.go`), which opens the new workflow on its Challenge
-    tab, plus *Continue* (the last workflow) and *Reset progress*.
+    tab, plus *Continue* (the last workflow) and *Reset progress*. A
+    challenge declared `solvableWithoutCode: false` shows a *Requires code*
+    badge; `true` shows *No code needed* on its header.
   - Markdown rendered by `components/markdown.tsx`: a small safe subset,
     never raw HTML.
 
@@ -2847,6 +2951,19 @@ func New(cfg Config) *Checker // Start / Cancel / Last / Close; one check per wo
 - `go test ./internal/challenge/ -run TestContentStaticChecks` grades every
   migration's static checks on its starter (must fail one when all checks
   are static) and on starter + solution (must pass all).
+- **No code needed** (`solvableWithoutCode`, required on every challenge of
+  the final content): `go test ./internal/api/ -run TestNoCode` replays, for
+  every challenge declared `true`, the script
+  `internal/api/testdata/nocode/<id>.yaml` — a list of UI gestures sent as
+  the exact requests the desktop app makes (palette drops, inspector values
+  limited to what its widgets produce: literals, Link to… references incl.
+  list appends, variables and nested attributes, object-list cards; connect
+  and grant recipes; the access editors; compose service/stage/environment
+  patches; Kubernetes form paths, connect recipes and RBAC edits) — starting
+  from `POST /learn/challenges/{id}/start`, then grades the static checks.
+  Raw expressions, file edits and app code are never allowed in a script.
+  Challenges declared `false` must have no script; the desktop shows them
+  with a **Requires code** badge (catalog card and challenge header).
 - Desktop: the Challenge tab (first tab, only when `workflow.challenge` is
   set): problem, requirements, progressive hints, *Show solution* (markdown
   + *Open the solution in a copy*), official docs, and the checks with live
@@ -2976,6 +3093,11 @@ Docker; the desktop onboarding wizard (`GET /setup`) and `nimbo doctor`
 | `DELETE /workflows/{id}/nodes/{nodeId}` | → `Workflow` (references to it become diagnostics) |
 | `GET /workflows/{id}/connections?source=&target=` | → `ConnectionRecipe[]` |
 | `POST /workflows/{id}/connections` | `{source, target, recipeId}` → `Workflow` (helper nodes are moved off other cards the same way) |
+| `GET /workflows/{id}/access?node=` | → `AccessView{nodeId, provider, aws?: AWSPolicyDocument[], azure?, gcp?, oci?, related?, warnings}` (404 for nodes without an access editor; Terraform only) |
+| `PUT /workflows/{id}/access` | `AccessEdit{nodeId, aws? \| azure? \| gcp? \| oci?}` → `Workflow` (AWS documents matched by `path`; 400 for edits to read-only parts) |
+| `GET /access/catalog/{provider}?service=&resourceType=&q=` | → `AccessCatalog{provider, source{title,url,retrieved}, services?, actions?, roles?, verbs?, resourceTypes?}` (`aws`, `azure`, `gcp`, `oci`, `kubernetes`) |
+| `GET /workflows/{id}/kubernetes/access?node=` | → `KubeAccessView{nodeId, kind, editable, reason?, rules?, roleRef?, subjects?, serviceAccount?, automountToken?, related?, warnings}` |
+| `PUT /workflows/{id}/kubernetes/access` | `KubeAccessEdit{nodeId, rules?, roleRef?, subjects?, serviceAccount?, automountToken?}` → `Workflow` (written where each field comes from; read-only objects → 400) |
 | `GET /workflows/{id}/terraform` | → `{files: {path: content}}`: the `.tf` files of the workflow's export layout (no variable files): root files, or `modules/<service>/*.tf` + `environments/<env>/*.tf` |
 | `PUT /workflows/{id}/terraform` | `{files}` or `{changes?, moves?, format?}` → `Workflow`. `files`: the complete code (GET's keys; a file left out is deleted): re-import, keep positions/ids/envs by address; an environments-layout tree is read back with `ImportEnvironments` + `MergeEnvironmentsTree`. `changes: {path: content|null}` / `moves: [{from, to}]` (moves first, in order) edit any files of the Code tab in one request, at their export paths: Terraform code of the layout (root `*.tf` Terraform loads in the single layout; `modules/<service>/*.tf` and `environments/<env>/*.tf` in the environments layout) is re-imported when it changed (a renamed file keeps its nodes; code without blocks is stored as a file, an emptied one dropped); every other path is stored as a workflow asset (`AssetPlacement` inverted: in the environments layout `modules/<service>/x` → asset `x`, `modules/<name>/…` as is, anything else 400); moves go through a staging folder (swaps work), emptied folders are removed. New/moved-to paths: clean relative, no hidden segments or state files (400); clash with a file or folder (409); generated non-code files (scaffold, tfvars, env), environment-root files that are read-only (`readOnlyReason`), creating/moving/deleting under `environments/` and lock-file copies → 409; unknown path → 404. `format: true` formats the HCL written (`hclcodec.Format`, terraform fmt). Syntax errors in any HCL written (module files too) → 400 + diagnostics located at the full path; nothing is written or saved on any error |
 | `GET /workflows/{id}/terraform/workspace` | → `CodeWorkspace{files: {path: content}, modules: DownloadedModule{key, source, version?, files}[]}`: every `.tf` file the Code tab lists (generated and assets such as local modules) and the registry/remote modules `terraform init` downloaded into the sandbox working directory (manifest keys; local ones come from `files`). The editor resolves names, module inputs and outputs from it |

@@ -19,6 +19,11 @@ type Challenge struct {
 	Tags          []string `json:"tags"`
 	Prerequisites []string `json:"prerequisites,omitempty"`
 	Runtime       string   `json:"runtime"`
+	// SolvableWithoutCode: every step can be done in the canvas and
+	// inspectors (no editing of code or files). Every challenge declares
+	// it (a pointer so migrations applied before the field existed stay
+	// valid; the final content check requires it).
+	SolvableWithoutCode *bool `json:"solvableWithoutCode,omitempty"`
 	// Problem is markdown: the story and its context.
 	Problem      string   `json:"problem"`
 	Requirements []string `json:"requirements"`

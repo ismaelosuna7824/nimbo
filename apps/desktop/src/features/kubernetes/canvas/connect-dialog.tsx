@@ -1,10 +1,12 @@
-import { ArrowRightIcon, ExpandIcon, HardDriveIcon, LinkIcon, RouteIcon, ShieldIcon, SplitIcon, VariableIcon } from "lucide-react"
+import { ArrowRightIcon, BrickWallIcon, ExpandIcon, GlobeIcon, HardDriveIcon, LinkIcon, RouteIcon, ShieldIcon, ShieldPlusIcon, SplitIcon, VariableIcon } from "lucide-react"
 import { useState } from "react"
 import { K8sIcon } from "@/components/k8s-icons/k8s-icon"
 import { Button } from "@/components/ui/button"
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
+import { AccessLevelPicker } from "@/features/access/access-level-picker"
+import { accessOptions } from "@/features/access/support"
 import type { KubeConnectRecipe } from "@/lib/api/types"
 import type { KubeRecipeInputs } from "../actions"
 
@@ -31,6 +33,18 @@ const KIND_ICON: Record<string, typeof LinkIcon> = {
   volume: HardDriveIcon,
   serviceaccount: ShieldIcon,
   scale: ExpandIcon,
+  access: ShieldPlusIcon,
+  allowTraffic: BrickWallIcon,
+  allowAll: GlobeIcon,
+}
+
+/** Kinds that run with an identity of their own (grants go to them). */
+const IDENTITY_KINDS: Record<string, true> = { Deployment: true, StatefulSet: true, DaemonSet: true, ReplicaSet: true, Job: true, CronJob: true, Pod: true, ServiceAccount: true }
+
+/** The identity and resource ends of a grant (the drag can go either way). */
+function grantEnds(p: PendingKubeConnection): { identity?: string; resource?: string } {
+  if (!p.to) return {}
+  return IDENTITY_KINDS[p.from.kind] || !IDENTITY_KINDS[p.to.kind] ? { identity: p.from.label, resource: p.to.label } : { identity: p.to.label, resource: p.from.label }
 }
 
 /** Recipes that ask for something before they run. */
@@ -49,6 +63,10 @@ export function KubeConnectDialog({
   onClose: () => void
 }) {
   const [asking, setAsking] = useState<KubeConnectRecipe | null>(null)
+  const all = pending?.recipes ?? []
+  // Read / Write / Manage grants: the shared "What can it do?" cards; bind, own Role and wiring recipes below.
+  const grants = accessOptions(all, (r) => r.kind === "access" && !!r.level)
+  const others = all.filter((r) => !grants.includes(r))
   const close = () => {
     setAsking(null)
     onClose()
@@ -82,8 +100,10 @@ export function KubeConnectDialog({
             }}
           />
         ) : (
-          <div className="flex max-h-[60vh] flex-col gap-2 overflow-y-auto">
-            {pending?.recipes.map((r) => {
+          <div className="flex max-h-[60vh] flex-col gap-3 overflow-y-auto">
+            {pending && grants.length > 0 && <AccessLevelPicker options={grants} onPick={(r) => onPick(r, {})} {...grantEnds(pending)} />}
+            {grants.length > 0 && others.length > 0 && <div className="text-xs font-medium text-muted-foreground">Or connect them</div>}
+            {others.map((r) => {
               const Icon = KIND_ICON[r.kind] ?? LinkIcon
               return (
                 <button

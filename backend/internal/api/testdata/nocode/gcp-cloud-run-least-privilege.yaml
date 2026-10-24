@@ -1,0 +1,23 @@
+# A dedicated service account from the palette, linked as the service's
+# template.service_account; the project-level Editor grant (flagged
+# gcp_basic_role in its Access section) is deleted; the service dragged onto
+# the secret with Read writes roles/secretmanager.secretAccessor on that
+# secret. Ingress select and the DB_PASSWORD env from the secret are nested
+# block fields with Link to….
+steps:
+  - add: {type: google_service_account, name: orders}
+  - set:
+      node: google_service_account.orders
+      attrs:
+        account_id: orders-api
+        display_name: Orders API runtime
+  - set:
+      node: google_cloud_run_v2_service.orders
+      attrs:
+        ingress: INGRESS_TRAFFIC_INTERNAL_LOAD_BALANCER
+        template[0].service_account: {link: google_service_account.orders.email}
+        template[0].containers[0].env[0].name: DB_PASSWORD
+        template[0].containers[0].env[0].value_source[0].secret_key_ref[0].secret: {link: google_secret_manager_secret.db_password.id}
+        template[0].containers[0].env[0].value_source[0].secret_key_ref[0].version: latest
+  - delete: {node: google_project_iam_member.runtime_editor}
+  - connect: {source: google_cloud_run_v2_service.orders, target: google_secret_manager_secret.db_password, recipe: "access:read"}

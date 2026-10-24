@@ -102,17 +102,20 @@ type ChallengeProgress struct {
 
 // ChallengeSummary is a challenge in a list, with the user's progress.
 type ChallengeSummary struct {
-	ID            string            `json:"id"`
-	Provider      string            `json:"provider"`
-	Level         string            `json:"level"`
-	Title         string            `json:"title"`
-	Summary       string            `json:"summary"`
-	Minutes       int               `json:"minutes"`
-	Tags          []string          `json:"tags"`
-	Runtime       string            `json:"runtime"`
-	Prerequisites []string          `json:"prerequisites"`
-	Checks        int               `json:"checks"`
-	Progress      ChallengeProgress `json:"progress"`
+	ID       string   `json:"id"`
+	Provider string   `json:"provider"`
+	Level    string   `json:"level"`
+	Title    string   `json:"title"`
+	Summary  string   `json:"summary"`
+	Minutes  int      `json:"minutes"`
+	Tags     []string `json:"tags"`
+	Runtime  string   `json:"runtime"`
+	// SolvableWithoutCode mirrors Challenge.SolvableWithoutCode (nil:
+	// undeclared).
+	SolvableWithoutCode *bool             `json:"solvableWithoutCode,omitempty"`
+	Prerequisites       []string          `json:"prerequisites"`
+	Checks              int               `json:"checks"`
+	Progress            ChallengeProgress `json:"progress"`
 }
 
 // ChallengeFilter narrows GET /learn/challenges; empty fields match all.

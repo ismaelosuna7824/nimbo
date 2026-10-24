@@ -1,0 +1,5 @@
+# Redis from the palette (Caches), then drag api onto it and pick
+# "Set connection settings" (REDIS_URL=redis://redis:6379).
+steps:
+  - composeAddService: {catalogId: redis}
+  - composeConnect: {from: api, to: redis, recipe: env}

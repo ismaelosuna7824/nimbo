@@ -1,0 +1,20 @@
+# A palette compartment under the tenancy (Link to… var.tenancy_ocid); the
+# tenancy-admin statement is deleted in the OCI sentence builder and three
+# sentences are added with the group and compartment dropdowns (they insert
+# the constant names app-developers and app-dev).
+steps:
+  - add: {type: oci_identity_compartment, name: app_dev}
+  - set:
+      node: oci_identity_compartment.app_dev
+      attrs:
+        compartment_id: {link: var.tenancy_ocid}
+        name: app-dev
+        description: Application development resources
+  - accessOCI:
+      node: oci_identity_policy.app_developers
+      remove: [0]
+      add:
+        - {subjectType: group, subjects: [app-developers], verb: manage, resourceType: instance-family, location: compartment, compartment: app-dev}
+        - {subjectType: group, subjects: [app-developers], verb: manage, resourceType: volume-family, location: compartment, compartment: app-dev}
+        - {subjectType: group, subjects: [app-developers], verb: manage, resourceType: object-family, location: compartment, compartment: app-dev}
+        - {subjectType: group, subjects: [app-developers], verb: use, resourceType: virtual-network-family, location: compartment, compartment: app-dev}

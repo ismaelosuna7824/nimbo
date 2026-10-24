@@ -1,7 +1,9 @@
-import { BookOpenIcon, ExternalLinkIcon } from "lucide-react"
+import { BookOpenIcon, CodeIcon, ExternalLinkIcon, MousePointerClickIcon } from "lucide-react"
 import { openExternal } from "@/components/open-external"
 import { Badge } from "@/components/ui/badge"
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip"
 import type { LearnLevel, LearnSource } from "@/lib/api/types"
+import { codeBadge } from "./code-badge"
 import { LEVEL_LABEL } from "./store"
 
 function ExternalLink({ source, className, icon }: { source: LearnSource; className: string; icon: React.ReactNode }) {
@@ -70,5 +72,27 @@ export function LevelBadge({ level }: { level: LearnLevel }) {
     <Badge variant="outline" className={LEVEL_TONE[level]}>
       {LEVEL_LABEL[level]}
     </Badge>
+  )
+}
+
+/** "Requires code" (cards and header) or "No code needed" (header only), with a tooltip; nothing when undeclared. */
+export function CodeBadge({ solvableWithoutCode, place }: { solvableWithoutCode?: boolean; place: "card" | "header" }) {
+  const info = codeBadge(solvableWithoutCode, place)
+  if (!info) return null
+  const requires = info.kind === "requires-code"
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <Badge
+          variant="outline"
+          data-testid={`challenge-${info.kind}`}
+          className={requires ? "border-amber-500/40 text-amber-700 dark:text-amber-400" : "text-muted-foreground"}
+        >
+          {requires ? <CodeIcon /> : <MousePointerClickIcon />}
+          {info.label}
+        </Badge>
+      </TooltipTrigger>
+      <TooltipContent>{info.hint}</TooltipContent>
+    </Tooltip>
   )
 }

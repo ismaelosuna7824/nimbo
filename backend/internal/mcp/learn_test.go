@@ -31,6 +31,7 @@ operations:
         - { id: valid, label: The project is valid, type: validate }
       sources:
         - { title: Compose file reference, url: "https://docs.docker.com/reference/compose-file/" }
+      solvableWithoutCode: false
   - op: upsert
     kind: roadmap
     id: docker-roadmap

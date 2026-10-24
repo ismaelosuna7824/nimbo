@@ -1,0 +1,3618 @@
+description: Marks which kubernetes challenges are solvable without code and rewrites their hints as UI steps
+operations:
+- op: upsert
+  kind: challenge
+  id: kubernetes-first-deployment
+  data:
+    provider: kubernetes
+    level: beginner
+    title: Your first Deployment and Service
+    summary: Run two replicas of a web app with a Deployment and reach them through a Service that actually selects them.
+    minutes: 20
+    tags: [deployment, service, labels, images]
+    runtime: local
+    problem: |
+      A teammate wrote the first manifests for **hello**, a small web app
+      (podinfo) the team wants to run on Kubernetes. They applied them and
+      nothing answers: the Service has no endpoints, and the Deployment runs
+      a single pod from an image tagged `latest`.
+
+      In Kubernetes you rarely create Pods yourself. A **Deployment**
+      declares the desired state (which image, how many replicas) and its
+      controller keeps that many identical Pods running, replacing any that
+      die. A **Service** gives those Pods one stable name and address; it
+      finds them through a **label selector**, so the selector must match
+      the labels of the Pod template, and its `targetPort` must name a port
+      the containers declare.
+
+      Fix `k8s/hello.yaml` so the app runs redundantly and the Service
+      routes to it.
+    requirements:
+    - The `hello` Deployment in namespace `hello` runs at least **2 replicas**.
+    - The image is pinned to a version tag (`ghcr.io/stefanprodan/podinfo:6.15.0`), not `latest`.
+    - The `hello` Service selects the Deployment's pods (its `selector` matches `spec.template.metadata.labels`).
+    - The Service's `targetPort` is a port the container declares (the named port `http`, container port 9898), exposed as Service port 80.
+    - The workflow deploys to the local cluster and `GET /` through the Service answers 200.
+    hints:
+    - 'Click the Service and look at its **Selector** section, then click the Deployment: do the selector labels match the labels its pods get?'
+    - 'You don''t have to type the labels: drag the `hello` Service onto the `hello` Deployment and pick **Route the Service to these pods**. Then, in the Service''s **Service** section, check the port row: the **Target port** must name a port the container declares (it is called `http`).'
+    - In the Deployment's inspector set **Replicas** to 2 and the container **Image** to `ghcr.io/stefanprodan/podinfo:6.15.0`. In the Service's port row use name `http`, **Port** 80 and **Target port** `http`.
+    solution: |
+      Three things were wrong:
+
+      1. **Replicas.** A Deployment with `replicas: 1` means every rollout,
+         crash or node drain is downtime. Set `spec.replicas: 2`; the
+         Deployment's ReplicaSet keeps two identical pods running and
+         replaces any that fail.
+      2. **Selector.** A Service sends traffic to the pods whose labels
+         match its `selector`. The Service selected `app: hello-web` while
+         the pods are labelled `app: hello`, so it had no endpoints. Use
+         `app: hello` in both the Deployment's `selector`/template labels and
+         the Service.
+      3. **Ports and image.** `targetPort: web` named a port no container
+         declares; use the declared name `http`. The `latest` tag can
+         point at different builds over time and turns the pull policy to
+         `Always`; pin `6.15.0` (the Kubernetes docs recommend avoiding
+         `latest` in production).
+
+      ```yaml
+      spec:
+        replicas: 2
+        selector:
+          matchLabels: {app: hello}
+        template:
+          metadata:
+            labels: {app: hello}
+          spec:
+            containers:
+              - name: podinfo
+                image: ghcr.io/stefanprodan/podinfo:6.15.0
+                ports:
+                  - {name: http, containerPort: 9898}
+      ---
+      kind: Service
+      spec:
+        selector: {app: hello}
+        ports:
+          - {name: http, port: 80, targetPort: http}
+      ```
+
+      Next steps: add probes and resource requests (they are the next
+      challenges of the roadmap).
+
+      **Without writing code in Nimbo**
+
+      1. Click the `hello` Deployment. In its **Deployment** section set **Replicas** to `2`; in the **Container** section set **Image** to `ghcr.io/stefanprodan/podinfo:6.15.0`.
+      2. Drag the `hello` Service onto the `hello` Deployment and pick **Route the Service to these pods**. This copies the pod labels into the Service's selector.
+      3. Click the Service. In the **Service** section, set the port row to **Port name** `http`, **Port** `80` and **Target port** `http`.
+      4. Deploy, then open the Service's address: `GET /` answers 200.
+    solutionFiles:
+      k8s/hello.yaml: |
+        apiVersion: v1
+        kind: Namespace
+        metadata:
+          name: hello
+        ---
+        apiVersion: apps/v1
+        kind: Deployment
+        metadata:
+          name: hello
+          namespace: hello
+          labels:
+            app.kubernetes.io/name: hello
+        spec:
+          # Two identical pods: one can restart or move while the other serves.
+          replicas: 2
+          selector:
+            matchLabels:
+              app: hello
+          template:
+            metadata:
+              labels:
+                app: hello
+            spec:
+              containers:
+                - name: podinfo
+                  # A pinned version: every node runs the same build.
+                  image: ghcr.io/stefanprodan/podinfo:6.15.0
+                  ports:
+                    - name: http
+                      containerPort: 9898
+        ---
+        apiVersion: v1
+        kind: Service
+        metadata:
+          name: hello
+          namespace: hello
+        spec:
+          # Must match the pod template labels above.
+          selector:
+            app: hello
+          ports:
+            - name: http
+              port: 80
+              targetPort: http
+    starter:
+      kind: kubernetes
+      kubernetes:
+        sources:
+        - {kind: manifests, path: k8s}
+      files:
+        k8s/hello.yaml: |
+          apiVersion: v1
+          kind: Namespace
+          metadata:
+            name: hello
+          ---
+          apiVersion: apps/v1
+          kind: Deployment
+          metadata:
+            name: hello
+            namespace: hello
+            labels:
+              app.kubernetes.io/name: hello
+          spec:
+            replicas: 1
+            selector:
+              matchLabels:
+                app: hello
+            template:
+              metadata:
+                labels:
+                  app: hello
+              spec:
+                containers:
+                  - name: podinfo
+                    image: ghcr.io/stefanprodan/podinfo:latest
+                    ports:
+                      - name: http
+                        containerPort: 9898
+          ---
+          apiVersion: v1
+          kind: Service
+          metadata:
+            name: hello
+            namespace: hello
+          spec:
+            selector:
+              app: hello-web
+            ports:
+              - name: http
+                port: 80
+                targetPort: web
+    checks:
+    - id: renders
+      label: The manifests are valid Kubernetes objects
+      type: validate
+    - id: wiring
+      label: The Service selects the pods and targets a declared port; the image is pinned
+      type: rules_clean
+      rules_clean:
+        codes: [k8s_selector_mismatch, k8s_service_port, k8s_latest_tag]
+        minSeverity: warning
+    - id: replicas
+      label: The Deployment runs at least 2 replicas
+      type: has
+      has:
+        kubernetes:
+          kind: Deployment
+          name: hello
+          namespace: hello
+          where:
+            spec.replicas: {min: 2}
+    - id: deploys
+      label: The workflow deploys to the local cluster
+      type: deploy
+    - id: serves
+      label: GET / through the Service answers 200
+      type: http
+      http:
+        service: hello
+        port: 80
+        path: /
+        status: 200
+    sources:
+    - title: Kubernetes docs — Deployments
+      url: https://kubernetes.io/docs/concepts/workloads/controllers/deployment/
+    - title: Kubernetes docs — Service
+      url: https://kubernetes.io/docs/concepts/services-networking/service/
+    - title: Kubernetes docs — Labels and Selectors
+      url: https://kubernetes.io/docs/concepts/overview/working-with-objects/labels/
+    - title: Kubernetes docs — Images (image names and pull policy)
+      url: https://kubernetes.io/docs/concepts/containers/images/
+    - title: Kubernetes docs — Configuration Best Practices
+      url: https://kubernetes.io/docs/concepts/configuration/overview/
+    - title: CNCF CKAD curriculum (Application Deployment; Services and Networking)
+      url: https://github.com/cncf/curriculum/blob/master/CKAD_Curriculum_v1.37.pdf
+    solvableWithoutCode: true
+- op: upsert
+  kind: challenge
+  id: kubernetes-config-and-secrets
+  data:
+    provider: kubernetes
+    level: beginner
+    title: Configuration in ConfigMaps, credentials in Secrets
+    summary: Move a database password and an API token out of plain manifests and ConfigMaps into a Secret the pod reads by reference.
+    minutes: 25
+    tags: [configmap, secret, configuration, security]
+    prerequisites: [kubernetes-first-deployment]
+    runtime: local
+    problem: |
+      The **orders** service reads its settings from environment
+      variables. Whoever wrote `k8s/orders.yaml` put everything where it
+      was quickest: the database password is a literal `value` in the
+      Deployment and the payments API token sits in the `orders-config`
+      ConfigMap next to the log level.
+
+      Kubernetes separates the two on purpose. A **ConfigMap** holds
+      non-confidential configuration. A **Secret** holds small amounts of
+      sensitive data and can be protected separately: its own RBAC rules,
+      encryption at rest in etcd, and it is only sent to nodes that run a
+      pod using it. Anyone who can read the Deployment or the ConfigMap can
+      currently read both credentials.
+
+      Keep the plain settings in the ConfigMap, move the credentials into
+      a Secret, and have the container read them by reference.
+    requirements:
+    - A Secret named `orders-credentials` in namespace `orders` holds `DB_PASSWORD` and `PAYMENTS_API_TOKEN`.
+    - The `orders-config` ConfigMap keeps only non-sensitive settings (`LOG_LEVEL`, `PAYMENTS_URL`); it no longer contains `PAYMENTS_API_TOKEN`.
+    - The container reads `DB_PASSWORD` with `valueFrom.secretKeyRef` (Secret `orders-credentials`), and no env entry carries a literal credential.
+    - Every ConfigMap and Secret the pod references exists in the workflow.
+    hints:
+    - A ConfigMap is for settings anyone may read. Which values in `orders-config` and in the container's **Environment** section are really credentials?
+    - Add a **Secret** from the palette and rename it `orders-credentials` by clicking its name at the top of the inspector. In its **Secret keys** section, remove the sample keys and add `DB_PASSWORD` and `PAYMENTS_API_TOKEN`. Values you type here are saved as plain text, and the API server stores them encoded.
+    - In the `orders-config` **Keys** section, remove `PAYMENTS_API_TOKEN`. In the Deployment's **Environment** section, switch the source of `DB_PASSWORD` from **Value** to **Secret key**, then pick `orders-credentials` and key `DB_PASSWORD`.
+    solution: |
+      **Why:** ConfigMaps are for configuration that is safe to read; the
+      Kubernetes docs state they provide no secrecy or encryption. Secrets
+      are a separate API kind so that access can be limited with RBAC,
+      encrypted at rest and only delivered to the nodes whose pods use them.
+      A literal `value` in the pod spec is visible to everyone who can read
+      the Deployment (and ends up in the repository history).
+
+      **Steps:**
+
+      1. Create the Secret with `stringData`:
+         ```yaml
+         apiVersion: v1
+         kind: Secret
+         metadata: {name: orders-credentials, namespace: orders}
+         type: Opaque
+         stringData:
+           DB_PASSWORD: change-me-locally
+           PAYMENTS_API_TOKEN: change-me-locally
+         ```
+      2. Keep only `LOG_LEVEL` and `PAYMENTS_URL` in `orders-config`.
+      3. In the container, read the password with `secretKeyRef`, import
+         the token with `envFrom.secretRef`, and keep
+         `envFrom.configMapRef` for the settings.
+
+      **Beyond this challenge:** Secret manifests are only base64-encoded,
+      so real credentials should not be committed. The Kubernetes "Good
+      practices for Kubernetes Secrets" page recommends enabling encryption
+      at rest, least-privilege RBAC on Secrets and, where possible, an
+      external secret store; locally a placeholder value is fine.
+
+      **Without writing code in Nimbo**
+
+      1. From the palette, add a **Secret**. Click its name at the top of the inspector and rename it `orders-credentials`.
+      2. In its **Secret keys** section, remove `USERNAME` and `PASSWORD`. Add `DB_PASSWORD` and `PAYMENTS_API_TOKEN`, with the values the app used before.
+      3. Click the `orders-config` ConfigMap. In its **Keys** section, remove `PAYMENTS_API_TOKEN`.
+      4. Click the `orders` Deployment. In its **Environment** section, change the source of `DB_PASSWORD` from **Value** to **Secret key**, then pick `orders-credentials` and key `DB_PASSWORD`.
+      5. Optional: so the app still gets the token, add a row under **All keys of** (**Load a ConfigMap or Secret**) with **Secret** `orders-credentials`. Keep the `orders-config` row.
+    solutionFiles:
+      k8s/orders.yaml: |
+        apiVersion: v1
+        kind: Namespace
+        metadata:
+          name: orders
+        ---
+        # Non-confidential settings only.
+        apiVersion: v1
+        kind: ConfigMap
+        metadata:
+          name: orders-config
+          namespace: orders
+        data:
+          LOG_LEVEL: info
+          PAYMENTS_URL: http://payments.orders.svc.cluster.local:8080
+        ---
+        # Credentials live in a Secret: separate RBAC, encryption at rest,
+        # only sent to nodes running a pod that uses it. Placeholder values:
+        # never commit real credentials.
+        apiVersion: v1
+        kind: Secret
+        metadata:
+          name: orders-credentials
+          namespace: orders
+        type: Opaque
+        stringData:
+          DB_PASSWORD: change-me-locally
+          PAYMENTS_API_TOKEN: change-me-locally
+        ---
+        apiVersion: apps/v1
+        kind: Deployment
+        metadata:
+          name: orders
+          namespace: orders
+        spec:
+          replicas: 1
+          selector:
+            matchLabels:
+              app: orders
+          template:
+            metadata:
+              labels:
+                app: orders
+            spec:
+              containers:
+                - name: orders
+                  image: ghcr.io/stefanprodan/podinfo:6.15.0
+                  ports:
+                    - name: http
+                      containerPort: 9898
+                  env:
+                    - name: DB_HOST
+                      value: postgres.orders.svc.cluster.local
+                    - name: DB_PASSWORD
+                      valueFrom:
+                        secretKeyRef:
+                          name: orders-credentials
+                          key: DB_PASSWORD
+                  envFrom:
+                    - configMapRef:
+                        name: orders-config
+                    - secretRef:
+                        name: orders-credentials
+    starter:
+      kind: kubernetes
+      kubernetes:
+        sources:
+        - {kind: manifests, path: k8s}
+      files:
+        k8s/orders.yaml: |
+          apiVersion: v1
+          kind: Namespace
+          metadata:
+            name: orders
+          ---
+          apiVersion: v1
+          kind: ConfigMap
+          metadata:
+            name: orders-config
+            namespace: orders
+          data:
+            LOG_LEVEL: info
+            PAYMENTS_URL: http://payments.orders.svc.cluster.local:8080
+            PAYMENTS_API_TOKEN: tok_live_9f8a7c6b5e4d3c2b1a
+          ---
+          apiVersion: apps/v1
+          kind: Deployment
+          metadata:
+            name: orders
+            namespace: orders
+          spec:
+            replicas: 1
+            selector:
+              matchLabels:
+                app: orders
+            template:
+              metadata:
+                labels:
+                  app: orders
+              spec:
+                containers:
+                  - name: orders
+                    image: ghcr.io/stefanprodan/podinfo:6.15.0
+                    ports:
+                      - name: http
+                        containerPort: 9898
+                    env:
+                      - name: DB_HOST
+                        value: postgres.orders.svc.cluster.local
+                      - name: DB_PASSWORD
+                        value: Sup3r-S3cret-2026
+                    envFrom:
+                      - configMapRef:
+                          name: orders-config
+    checks:
+    - id: renders
+      label: The manifests are valid Kubernetes objects
+      type: validate
+    - id: no-plain-credentials
+      label: No credential is written in env or in a ConfigMap, and every reference resolves
+      type: rules_clean
+      rules_clean:
+        codes: [k8s_secret_env, k8s_secret_in_configmap, k8s_unknown_ref]
+        minSeverity: warning
+    - id: secret
+      label: The orders-credentials Secret exists in namespace orders
+      type: has
+      has:
+        kubernetes:
+          kind: Secret
+          name: orders-credentials
+          namespace: orders
+    - id: configmap-clean
+      label: The ConfigMap keeps only non-sensitive settings
+      type: has
+      has:
+        kubernetes:
+          kind: ConfigMap
+          name: orders-config
+          namespace: orders
+          where:
+            data.LOG_LEVEL: {exists: true}
+            data.PAYMENTS_API_TOKEN: {exists: false}
+    - id: secret-ref
+      label: DB_PASSWORD is read from the Secret with secretKeyRef
+      type: has
+      has:
+        kubernetes:
+          kind: Deployment
+          name: orders
+          namespace: orders
+          where:
+            spec.template.spec.containers[*].env.DB_PASSWORD.valueFrom.secretKeyRef.name: orders-credentials
+    sources:
+    - title: Kubernetes docs — ConfigMaps
+      url: https://kubernetes.io/docs/concepts/configuration/configmap/
+    - title: Kubernetes docs — Secrets
+      url: https://kubernetes.io/docs/concepts/configuration/secret/
+    - title: Kubernetes docs — Good practices for Kubernetes Secrets
+      url: https://kubernetes.io/docs/concepts/security/secrets-good-practices/
+    - title: Kubernetes docs — Configure a Pod to Use a ConfigMap
+      url: https://kubernetes.io/docs/tasks/configure-pod-container/configure-pod-configmap/
+    - title: Kubernetes docs — Distribute Credentials Securely Using Secrets
+      url: https://kubernetes.io/docs/tasks/inject-data-application/distribute-credentials-secure/
+    - title: CNCF CKAD curriculum (Application Environment, Configuration and Security)
+      url: https://github.com/cncf/curriculum/blob/master/CKAD_Curriculum_v1.37.pdf
+    solvableWithoutCode: true
+- op: upsert
+  kind: challenge
+  id: kubernetes-ingress-routing
+  data:
+    provider: kubernetes
+    level: beginner
+    title: Route a website and its API through one Ingress
+    summary: Expose a web frontend and an API on one host with path-based Ingress rules that point at the right Services.
+    minutes: 25
+    tags: [ingress, service, networking, http]
+    prerequisites: [kubernetes-first-deployment]
+    runtime: local
+    problem: |
+      The **shop** has two parts: a static website (NGINX) and a JSON API
+      (podinfo). Both run in the cluster behind ClusterIP Services, which
+      are only reachable from inside the cluster. The team wants them on a
+      single host, `shop.localhost`: the API under `/api`, everything else
+      on the website.
+
+      An **Ingress** describes HTTP routing rules (host and path → Service
+      and port) that an Ingress controller implements; the local k3s
+      cluster runs Traefik as its controller. The draft Ingress in
+      `k8s/ingress.yaml` does not render, and its API route points at a
+      Service that does not exist.
+    requirements:
+    - The `shop` Ingress (namespace `shop`) has a rule for host `shop.localhost`.
+    - Requests under `/api` go to the `api` Service on its `http` port; everything else goes to the `web` Service on its `http` port.
+    - Every path declares a `pathType` (`Prefix` for both routes).
+    - Through the Ingress, `GET /` answers 200 from NGINX and `GET /api/info` answers 200 from the API.
+    hints:
+    - Click the `shop` Ingress and read its **Rules**. Do the Services they name exist? Compare them with the Services on the canvas.
+    - 'Each rule row has a **Host**, a **Path**, a **Service** and a **Service port**. Port names work: the Services here call their port `http`. Nimbo writes every path as a `Prefix` match, so `/api` also covers `/api/info`.'
+    - 'You need two rows, both with host `shop.localhost`: path `/api` → Service `api`, port `http`; and path `/` → Service `web`, port `http`. The longest matching path wins, so both can live together.'
+    solution: |
+      The Ingress needed two fixes:
+
+      1. **`pathType` on every path.** In the `networking.k8s.io/v1` API
+         each path must say how it is matched. `Prefix` splits the path by
+         `/` and matches element by element, so `/api` also routes
+         `/api/info`.
+      2. **Backends that exist.** The API route pointed at `api-v1:8080`,
+         but the Service is called `api` and exposes port 80 named `http`.
+         An Ingress backend that names a missing Service answers errors
+         for every request on that route.
+
+      ```yaml
+      spec:
+        rules:
+          - host: shop.localhost
+            http:
+              paths:
+                - path: /api
+                  pathType: Prefix
+                  backend:
+                    service: {name: api, port: {name: http}}
+                - path: /
+                  pathType: Prefix
+                  backend:
+                    service: {name: web, port: {name: http}}
+      ```
+
+      When several paths match, the longest one takes precedence, so
+      `/api/info` goes to the API and `/` to the website. For new designs
+      the Kubernetes project also offers the Gateway API, which splits
+      the infrastructure (Gateway) from the routes (HTTPRoute).
+
+      **Without writing code in Nimbo**
+
+      1. Click the `shop` Ingress. In its **Ingress** section, find **Rules**.
+      2. Fix or add a row (**Add rule**): **Host** `shop.localhost`, **Path** `/api`, **Service** `api`, **Service port** `http`.
+      3. Fix or add a second row: **Host** `shop.localhost`, **Path** `/`, **Service** `web`, **Service port** `http`. Remove any row that points to a Service that doesn't exist.
+      4. Deploy and open both routes through the Ingress: `/` and `/api/info` answer 200.
+    solutionFiles:
+      k8s/ingress.yaml: |
+        apiVersion: networking.k8s.io/v1
+        kind: Ingress
+        metadata:
+          name: shop
+          namespace: shop
+        spec:
+          rules:
+            - host: shop.localhost
+              http:
+                paths:
+                  # The longest matching path wins: /api/* goes to the API.
+                  - path: /api
+                    pathType: Prefix
+                    backend:
+                      service:
+                        name: api
+                        port:
+                          name: http
+                  - path: /
+                    pathType: Prefix
+                    backend:
+                      service:
+                        name: web
+                        port:
+                          name: http
+    starter:
+      kind: kubernetes
+      kubernetes:
+        sources:
+        - {kind: manifests, path: k8s}
+      files:
+        k8s/apps.yaml: |
+          apiVersion: v1
+          kind: Namespace
+          metadata:
+            name: shop
+          ---
+          # The website: NGINX (unprivileged image, listens on 8080).
+          apiVersion: apps/v1
+          kind: Deployment
+          metadata:
+            name: web
+            namespace: shop
+          spec:
+            replicas: 1
+            selector:
+              matchLabels:
+                app: web
+            template:
+              metadata:
+                labels:
+                  app: web
+              spec:
+                containers:
+                  - name: nginx
+                    image: nginxinc/nginx-unprivileged:1.30-alpine
+                    ports:
+                      - name: http
+                        containerPort: 8080
+          ---
+          apiVersion: v1
+          kind: Service
+          metadata:
+            name: web
+            namespace: shop
+          spec:
+            selector:
+              app: web
+            ports:
+              - name: http
+                port: 80
+                targetPort: http
+          ---
+          # The API: podinfo answers JSON on /api/info.
+          apiVersion: apps/v1
+          kind: Deployment
+          metadata:
+            name: api
+            namespace: shop
+          spec:
+            replicas: 1
+            selector:
+              matchLabels:
+                app: api
+            template:
+              metadata:
+                labels:
+                  app: api
+              spec:
+                containers:
+                  - name: podinfo
+                    image: ghcr.io/stefanprodan/podinfo:6.15.0
+                    ports:
+                      - name: http
+                        containerPort: 9898
+          ---
+          apiVersion: v1
+          kind: Service
+          metadata:
+            name: api
+            namespace: shop
+          spec:
+            selector:
+              app: api
+            ports:
+              - name: http
+                port: 80
+                targetPort: http
+        k8s/ingress.yaml: |
+          apiVersion: networking.k8s.io/v1
+          kind: Ingress
+          metadata:
+            name: shop
+            namespace: shop
+          spec:
+            rules:
+              - host: shop.localhost
+                http:
+                  paths:
+                    - path: /api
+                      backend:
+                        service:
+                          name: api-v1
+                          port:
+                            number: 8080
+                    - path: /
+                      backend:
+                        service:
+                          name: web
+                          port:
+                            name: http
+    checks:
+    - id: renders
+      label: The manifests are valid Kubernetes objects (every path has a pathType)
+      type: validate
+    - id: backends
+      label: Every Ingress backend names an existing Service and port
+      type: rules_clean
+      rules_clean:
+        codes: [k8s_ingress_backend, k8s_service_port, k8s_selector_mismatch]
+        minSeverity: warning
+    - id: host
+      label: The shop Ingress serves shop.localhost
+      type: has
+      has:
+        kubernetes:
+          kind: Ingress
+          name: shop
+          namespace: shop
+          where:
+            spec.rules[*].host: shop.localhost
+    - id: api-route
+      label: /api is routed to the api Service
+      type: has
+      has:
+        kubernetes:
+          kind: Ingress
+          name: shop
+          namespace: shop
+          where:
+            spec.rules[*].http.paths[*].backend.service.name: api
+    - id: deploys
+      label: The workflow deploys to the local cluster
+      type: deploy
+    - id: web-served
+      label: GET / through the Ingress answers 200 (website)
+      type: http
+      http:
+        service: web
+        ingress: true
+        path: /
+        status: 200
+    - id: api-served
+      label: GET /api/info through the Ingress answers 200 (API)
+      type: http
+      http:
+        service: api
+        ingress: true
+        path: /api/info
+        status: 200
+    sources:
+    - title: Kubernetes docs — Ingress
+      url: https://kubernetes.io/docs/concepts/services-networking/ingress/
+    - title: Kubernetes docs — Service
+      url: https://kubernetes.io/docs/concepts/services-networking/service/
+    - title: Kubernetes docs — Gateway API
+      url: https://kubernetes.io/docs/concepts/services-networking/gateway/
+    - title: CNCF CKAD curriculum (Services and Networking — use Ingress rules to expose applications)
+      url: https://github.com/cncf/curriculum/blob/master/CKAD_Curriculum_v1.37.pdf
+    solvableWithoutCode: true
+- op: upsert
+  kind: challenge
+  id: kubernetes-health-probes
+  data:
+    provider: kubernetes
+    level: intermediate
+    title: Liveness, readiness and startup probes
+    summary: Tell the kubelet when a container has started, when it can take traffic and when it is stuck and must be restarted.
+    minutes: 30
+    tags: [probes, health-checks, reliability, deployment]
+    prerequisites: [kubernetes-first-deployment]
+    runtime: local
+    problem: |
+      The **catalog** API loads its data when it starts, which can take
+      up to a minute, and once in a while it deadlocks: the process keeps
+      running but never answers again. Right now Kubernetes only knows
+      whether the process is running.
+
+      The kubelet can run three kinds of **probes** against a container:
+
+      - a **startup probe** tells it when the app has finished starting;
+        liveness and readiness probes only begin after it succeeds;
+      - a **liveness probe** detects a container that is running but
+        stuck, and restarts it;
+      - a **readiness probe** decides whether the pod receives traffic
+        from Services; a failing pod is removed from the endpoints without
+        being restarted.
+
+      The current `k8s/catalog.yaml` has a single readiness probe and it
+      targets a port the container does not declare, so the pod can never
+      become ready. The app answers `GET /healthz` (process is alive) and
+      `GET /readyz` (ready to serve) on its `http` port.
+    requirements:
+    - 'The `catalog` container has a **readinessProbe**: `httpGet` on `/readyz`, port `http`.'
+    - 'It has a **livenessProbe**: `httpGet` on `/healthz`, port `http`.'
+    - 'It has a **startupProbe** on `/healthz`, port `http`, that allows at least 60 s to start: set `periodSeconds` to at least 5 and `failureThreshold` to at least 12.'
+    - Every probe targets a port the container declares.
+    - The workflow deploys and `GET /readyz` through the `catalog` Service answers 200.
+    hints:
+    - Open the `catalog` Deployment's **Health probes** section. A probe's port can be a number or a port name. Which port names does the container declare in its **Ports** section?
+    - 'Use **Add readiness probe**, **Add liveness probe** and **Add startup probe**. Make each one **HTTP** on port `http`: readiness on `/readyz`, liveness and startup on `/healthz`.'
+    - 'The startup budget is **Failures** × **Every s**. On the startup probe, set **Every s** to 5 and **Failures** to 12: that gives the app 60 s to start before it is restarted.'
+    solution: |
+      **Startup probe** first: it protects slow starters. Until it
+      succeeds, the kubelet does not run the liveness probe, so a long
+      initial load is not mistaken for a deadlock. The Kubernetes docs
+      suggest a startup probe on the same endpoint as liveness with a
+      `failureThreshold` high enough to cover the worst-case start
+      instead of stretching the liveness timings.
+
+      ```yaml
+      startupProbe:
+        httpGet: {path: /healthz, port: http}
+        periodSeconds: 5
+        failureThreshold: 12   # 12 × 5 s = 60 s to start
+      livenessProbe:
+        httpGet: {path: /healthz, port: http}
+        periodSeconds: 10
+        failureThreshold: 3    # stuck for ~30 s → restart
+      readinessProbe:
+        httpGet: {path: /readyz, port: http}
+        periodSeconds: 5
+      ```
+
+      **Liveness** restarts a container that stopped making progress.
+      Keep it cheap and independent of downstream dependencies, or an
+      outage of a database would restart every pod.
+
+      **Readiness** controls traffic only: a pod that fails it is taken
+      out of the Service endpoints and comes back when it passes again.
+
+      The original probe targeted `port: metrics`, which the container
+      does not declare, so it always failed and the pod never became
+      ready. Use the declared port name `http`.
+
+      To see readiness protect real traffic during a pod loss, continue
+      with the **kubernetes-readiness-probe** challenge.
+
+      **Without writing code in Nimbo**
+
+      1. Click the `catalog` Deployment and open its **Health probes** section.
+      2. Readiness (**Add readiness probe** if it's missing): **HTTP**, path `/readyz`, port `http`, **Every s** `5`. If a probe points at port `metrics`, change it to `http`.
+      3. Liveness: **HTTP**, path `/healthz`, port `http`.
+      4. Startup: **HTTP**, path `/healthz`, port `http`, **Every s** `5`, **Failures** `12`.
+      5. Deploy: `GET /readyz` through the `catalog` Service answers 200.
+    solutionFiles:
+      k8s/catalog.yaml: |
+        apiVersion: v1
+        kind: Namespace
+        metadata:
+          name: catalog
+        ---
+        apiVersion: apps/v1
+        kind: Deployment
+        metadata:
+          name: catalog
+          namespace: catalog
+        spec:
+          replicas: 2
+          selector:
+            matchLabels:
+              app: catalog
+          template:
+            metadata:
+              labels:
+                app: catalog
+            spec:
+              containers:
+                - name: catalog
+                  image: ghcr.io/stefanprodan/podinfo:6.15.0
+                  ports:
+                    - name: http
+                      containerPort: 9898
+                  # Liveness and readiness wait until this passes:
+                  # 12 × 5 s = 60 s to finish starting.
+                  startupProbe:
+                    httpGet:
+                      path: /healthz
+                      port: http
+                    periodSeconds: 5
+                    failureThreshold: 12
+                  # Restart the container when it is stuck (~30 s).
+                  livenessProbe:
+                    httpGet:
+                      path: /healthz
+                      port: http
+                    periodSeconds: 10
+                    failureThreshold: 3
+                  # Only receive traffic while ready.
+                  readinessProbe:
+                    httpGet:
+                      path: /readyz
+                      port: http
+                    periodSeconds: 5
+        ---
+        apiVersion: v1
+        kind: Service
+        metadata:
+          name: catalog
+          namespace: catalog
+        spec:
+          selector:
+            app: catalog
+          ports:
+            - name: http
+              port: 80
+              targetPort: http
+    starter:
+      kind: kubernetes
+      kubernetes:
+        sources:
+        - {kind: manifests, path: k8s}
+      files:
+        k8s/catalog.yaml: |
+          apiVersion: v1
+          kind: Namespace
+          metadata:
+            name: catalog
+          ---
+          apiVersion: apps/v1
+          kind: Deployment
+          metadata:
+            name: catalog
+            namespace: catalog
+          spec:
+            replicas: 2
+            selector:
+              matchLabels:
+                app: catalog
+            template:
+              metadata:
+                labels:
+                  app: catalog
+              spec:
+                containers:
+                  - name: catalog
+                    image: ghcr.io/stefanprodan/podinfo:6.15.0
+                    ports:
+                      - name: http
+                        containerPort: 9898
+                    readinessProbe:
+                      httpGet:
+                        path: /readyz
+                        port: metrics
+                      periodSeconds: 5
+          ---
+          apiVersion: v1
+          kind: Service
+          metadata:
+            name: catalog
+            namespace: catalog
+          spec:
+            selector:
+              app: catalog
+            ports:
+              - name: http
+                port: 80
+                targetPort: http
+    checks:
+    - id: renders
+      label: The manifests are valid Kubernetes objects
+      type: validate
+    - id: probes-present
+      label: Readiness and liveness probes exist and target declared ports
+      type: rules_clean
+      rules_clean:
+        codes: [k8s_no_readiness_probe, k8s_no_liveness_probe, k8s_probe_port]
+        minSeverity: info
+    - id: startup-probe
+      label: A startup probe on /healthz allows at least 60 s to start
+      type: has
+      has:
+        kubernetes:
+          kind: Deployment
+          name: catalog
+          namespace: catalog
+          where:
+            spec.template.spec.containers.catalog.startupProbe.httpGet.path: /healthz
+            spec.template.spec.containers.catalog.startupProbe.periodSeconds: {min: 5}
+            spec.template.spec.containers.catalog.startupProbe.failureThreshold: {min: 12}
+    - id: liveness-endpoint
+      label: The liveness probe checks /healthz
+      type: has
+      has:
+        kubernetes:
+          kind: Deployment
+          name: catalog
+          namespace: catalog
+          where:
+            spec.template.spec.containers.catalog.livenessProbe.httpGet.path: /healthz
+    - id: readiness-endpoint
+      label: The readiness probe checks /readyz
+      type: has
+      has:
+        kubernetes:
+          kind: Deployment
+          name: catalog
+          namespace: catalog
+          where:
+            spec.template.spec.containers.catalog.readinessProbe.httpGet.path: /readyz
+    - id: deploys
+      label: The pods become ready on the local cluster
+      type: deploy
+    - id: ready
+      label: GET /readyz through the Service answers 200
+      type: http
+      http:
+        service: catalog
+        port: 80
+        path: /readyz
+        status: 200
+    sources:
+    - title: Kubernetes docs — Liveness, Readiness, and Startup Probes
+      url: https://kubernetes.io/docs/concepts/workloads/pods/probes/
+    - title: Kubernetes docs — Configure Liveness, Readiness and Startup Probes
+      url: https://kubernetes.io/docs/tasks/configure-pod-container/configure-liveness-readiness-startup-probes/
+    - title: Kubernetes docs — Pod Lifecycle (container probes)
+      url: https://kubernetes.io/docs/concepts/workloads/pods/pod-lifecycle/
+    - title: CNCF CKAD curriculum (Application Observability and Maintenance — implement probes and health checks)
+      url: https://github.com/cncf/curriculum/blob/master/CKAD_Curriculum_v1.37.pdf
+    solvableWithoutCode: true
+- op: upsert
+  kind: challenge
+  id: kubernetes-resources-and-hpa
+  data:
+    provider: kubernetes
+    level: intermediate
+    title: Requests, limits and a HorizontalPodAutoscaler
+    summary: Give every container CPU and memory requests and a memory limit, and let a HorizontalPodAutoscaler own the replica count.
+    minutes: 30
+    tags: [resources, requests, limits, autoscaling, hpa]
+    prerequisites: [kubernetes-health-probes]
+    runtime: local
+    problem: |
+      The **search** service was given a HorizontalPodAutoscaler (HPA)
+      that should keep average CPU utilization around 70%. It never
+      scales: `kubectl describe hpa` reports that the CPU utilization
+      cannot be computed.
+
+      An HPA on a `Utilization` target divides the pods' measured usage by
+      their **resource requests**. Without a CPU request there is nothing
+      to divide by, so the HPA takes no action. Requests matter beyond
+      autoscaling: the scheduler places pods by their requests, and a pod
+      with no requests at all gets the `BestEffort` QoS class, the first
+      to be evicted when a node runs short of memory. A **memory limit**
+      caps a container that leaks: it is OOM-killed and restarted instead
+      of starving its neighbours.
+
+      The Deployment also still sets `spec.replicas`, which fights the
+      HPA on every apply.
+    requirements:
+    - The `search` container requests CPU and memory (`resources.requests.cpu` and `resources.requests.memory`) and sets a memory limit (`resources.limits.memory`).
+    - 'The `search` HPA (`autoscaling/v2`) targets the `search` Deployment, scales on CPU `Utilization` with `averageUtilization: 70`, with `minReplicas` at least 2 and `maxReplicas` at least 4.'
+    - The Deployment no longer sets `spec.replicas`; the HPA owns the replica count.
+    hints:
+    - 'An autoscaler measures CPU as a percentage of what the container *requests*. Open the `search` Deployment''s **Resources** section: is anything requested?'
+    - 'Start small and measurable: **CPU request** `100m` (a tenth of a CPU), **Memory request** `64Mi`, **Memory limit** `128Mi`. Then click the `search` HPA and check its **Autoscaling** section: **Min**, **Max** and the **CPU target %**.'
+    - Set the HPA's **Min** to 2 and **Max** to 4 (or more), with **CPU target %** at 70. Then clear the Deployment's **Replicas** field. When it is empty, the HPA decides the count, and re-applying won't reset it.
+    solution: |
+      **Requests and limits.** The HPA computes utilization as usage ÷
+      request, per container, averaged over the pods. Add requests for
+      both CPU and memory; memory requests also matter to the scheduler
+      and decide the pod's QoS class. Add a memory limit so a leak only
+      restarts this container. (A CPU limit is optional: CPU is
+      compressible, a container over its CPU limit is throttled, not
+      killed.)
+
+      ```yaml
+      resources:
+        requests: {cpu: 100m, memory: 64Mi}
+        limits: {memory: 128Mi}
+      ```
+
+      **The HPA.** Scale between 2 and 5 pods on 70% average CPU of the
+      requests:
+
+      ```yaml
+      apiVersion: autoscaling/v2
+      kind: HorizontalPodAutoscaler
+      spec:
+        scaleTargetRef: {apiVersion: apps/v1, kind: Deployment, name: search}
+        minReplicas: 2
+        maxReplicas: 5
+        metrics:
+          - type: Resource
+            resource:
+              name: cpu
+              target: {type: Utilization, averageUtilization: 70}
+      ```
+
+      **Who owns replicas.** Remove `spec.replicas` from the Deployment
+      so applies don't reset the count the HPA chose. On a live cluster,
+      the HPA docs describe removing it from the last-applied
+      configuration first to avoid a one-time drop to 1 replica.
+
+      Resource metrics come from the Metrics Server add-on; k3s ships it.
+      To prove the autoscaler reacts to real traffic, continue with
+      **kubernetes-autoscale-signal**.
+
+      **Without writing code in Nimbo**
+
+      1. Click the `search` Deployment. In **Resources**, set **CPU request** `100m`, **Memory request** `64Mi` and **Memory limit** `128Mi`.
+      2. In its **Deployment** section, empty the **Replicas** field. Empty means the autoscaler decides.
+      3. Click the `search` HorizontalPodAutoscaler. In **Autoscaling**, set **Min** `2` and **Max** `4`. Check that **CPU target %** is `70`.
+    solutionFiles:
+      k8s/search.yaml: |
+        apiVersion: v1
+        kind: Namespace
+        metadata:
+          name: search
+        ---
+        apiVersion: apps/v1
+        kind: Deployment
+        metadata:
+          name: search
+          namespace: search
+        spec:
+          # No spec.replicas: the HorizontalPodAutoscaler below owns it.
+          selector:
+            matchLabels:
+              app: search
+          template:
+            metadata:
+              labels:
+                app: search
+            spec:
+              containers:
+                - name: search
+                  image: ghcr.io/stefanprodan/podinfo:6.15.0
+                  ports:
+                    - name: http
+                      containerPort: 9898
+                  readinessProbe:
+                    httpGet:
+                      path: /readyz
+                      port: http
+                  livenessProbe:
+                    httpGet:
+                      path: /healthz
+                      port: http
+                  # Requests: what the scheduler reserves and what HPA
+                  # utilization is measured against. Memory limit: a leak
+                  # restarts this container only.
+                  resources:
+                    requests:
+                      cpu: 100m
+                      memory: 64Mi
+                    limits:
+                      memory: 128Mi
+        ---
+        apiVersion: v1
+        kind: Service
+        metadata:
+          name: search
+          namespace: search
+        spec:
+          selector:
+            app: search
+          ports:
+            - name: http
+              port: 80
+              targetPort: http
+        ---
+        apiVersion: autoscaling/v2
+        kind: HorizontalPodAutoscaler
+        metadata:
+          name: search
+          namespace: search
+        spec:
+          scaleTargetRef:
+            apiVersion: apps/v1
+            kind: Deployment
+            name: search
+          minReplicas: 2
+          maxReplicas: 5
+          metrics:
+            - type: Resource
+              resource:
+                name: cpu
+                target:
+                  type: Utilization
+                  averageUtilization: 70
+    starter:
+      kind: kubernetes
+      kubernetes:
+        sources:
+        - {kind: manifests, path: k8s}
+      files:
+        k8s/search.yaml: |
+          apiVersion: v1
+          kind: Namespace
+          metadata:
+            name: search
+          ---
+          apiVersion: apps/v1
+          kind: Deployment
+          metadata:
+            name: search
+            namespace: search
+          spec:
+            replicas: 3
+            selector:
+              matchLabels:
+                app: search
+            template:
+              metadata:
+                labels:
+                  app: search
+              spec:
+                containers:
+                  - name: search
+                    image: ghcr.io/stefanprodan/podinfo:6.15.0
+                    ports:
+                      - name: http
+                        containerPort: 9898
+                    readinessProbe:
+                      httpGet:
+                        path: /readyz
+                        port: http
+                    livenessProbe:
+                      httpGet:
+                        path: /healthz
+                        port: http
+          ---
+          apiVersion: v1
+          kind: Service
+          metadata:
+            name: search
+            namespace: search
+          spec:
+            selector:
+              app: search
+            ports:
+              - name: http
+                port: 80
+                targetPort: http
+          ---
+          apiVersion: autoscaling/v2
+          kind: HorizontalPodAutoscaler
+          metadata:
+            name: search
+            namespace: search
+          spec:
+            scaleTargetRef:
+              apiVersion: apps/v1
+              kind: Deployment
+              name: search
+            minReplicas: 1
+            maxReplicas: 3
+            metrics:
+              - type: Resource
+                resource:
+                  name: cpu
+                  target:
+                    type: Utilization
+                    averageUtilization: 70
+    checks:
+    - id: renders
+      label: The manifests are valid Kubernetes objects
+      type: validate
+    - id: resources
+      label: Requests and a memory limit are set, so the HPA can compute utilization
+      type: rules_clean
+      rules_clean:
+        codes: [k8s_no_requests, k8s_no_memory_limit, k8s_hpa_no_requests, k8s_unknown_ref]
+        minSeverity: info
+    - id: hpa-range
+      label: The HPA keeps 2 to at least 4 replicas
+      type: has
+      has:
+        kubernetes:
+          kind: HorizontalPodAutoscaler
+          name: search
+          namespace: search
+          where:
+            spec.scaleTargetRef.name: search
+            spec.minReplicas: {min: 2}
+            spec.maxReplicas: {min: 4}
+    - id: hpa-cpu
+      label: The HPA scales on 70% average CPU utilization
+      type: has
+      has:
+        kubernetes:
+          kind: HorizontalPodAutoscaler
+          name: search
+          namespace: search
+          where:
+            spec.metrics[*].resource.name: cpu
+            spec.metrics[*].resource.target.averageUtilization: 70
+    - id: hpa-owns-replicas
+      label: The Deployment leaves spec.replicas to the HPA
+      type: has
+      has:
+        kubernetes:
+          kind: Deployment
+          name: search
+          namespace: search
+          where:
+            spec.replicas: {exists: false}
+    sources:
+    - title: Kubernetes docs — Resource Management for Pods and Containers
+      url: https://kubernetes.io/docs/concepts/configuration/manage-resources-containers/
+    - title: Kubernetes docs — Pod Quality of Service Classes
+      url: https://kubernetes.io/docs/concepts/workloads/pods/pod-qos/
+    - title: Kubernetes docs — Horizontal Pod Autoscaling
+      url: https://kubernetes.io/docs/tasks/run-application/horizontal-pod-autoscale/
+    - title: Kubernetes docs — HorizontalPodAutoscaler Walkthrough
+      url: https://kubernetes.io/docs/tasks/run-application/horizontal-pod-autoscale-walkthrough/
+    - title: CNCF CKA curriculum (Workloads and Scheduling — configure workload autoscaling)
+      url: https://github.com/cncf/curriculum/blob/master/CKA_Curriculum_v1.37.pdf
+    solvableWithoutCode: true
+- op: upsert
+  kind: challenge
+  id: kubernetes-kustomize-overlays
+  data:
+    provider: kubernetes
+    level: intermediate
+    title: One base, dev and prod overlays with Kustomize
+    summary: Keep the shared manifests in a base and express what differs in production as a Kustomize overlay.
+    minutes: 35
+    tags: [kustomize, environments, overlays, configuration]
+    prerequisites: [kubernetes-resources-and-hpa]
+    runtime: local
+    problem: |
+      The **storefront** team copied its manifests once per environment
+      and the copies drifted apart. They switched to **Kustomize**, which
+      is built into `kubectl` (`kubectl apply -k`): a **base** holds the
+      manifests every environment shares and each **overlay** refers to
+      the base and lists only what is different.
+
+      `base/` and `overlays/dev/` are done. `overlays/prod/` exists but
+      only points at the base, so production would run in the wrong
+      namespace with one replica and development-sized memory. Switch the
+      workflow's environment to **prod** in Nimbo to see what it renders.
+    requirements:
+    - The **prod** overlay places everything in namespace `storefront-prod` and adds that Namespace object.
+    - The prod overlay runs the `storefront` Deployment with **3 replicas**.
+    - The prod overlay raises the container's memory limit to `256Mi` with a patch; the base keeps `128Mi`.
+    - 'The **dev** environment still renders in `storefront-dev` with 1 replica: the base is not edited for production.'
+    hints:
+    - Open the **Environments** tab and compare dev and prod. What does dev set up that prod is missing?
+    - dev already puts everything in its own namespace. If you duplicate dev as prod, Nimbo renames everything that mentions dev (namespaces, hosts) to prod, including the Namespace object.
+    - 'Delete the current prod environment (**Delete…** in its actions menu), then create it again with **New environment**: name `prod`, **Start from** `dev`. In the **Edit** tab for prod, set **Replicas** to 3 and the storefront **Memory limit** to `256Mi`, then **Save**. Only the prod overlay changes.'
+    solution: |
+      An overlay is a kustomization whose `resources` include the base.
+      Everything else in it is a transformation applied on top:
+
+      ```yaml
+      # overlays/prod/kustomization.yaml
+      apiVersion: kustomize.config.k8s.io/v1beta1
+      kind: Kustomization
+      namespace: storefront-prod
+      resources:
+        - ../../base
+        - namespace.yaml
+      replicas:
+        - name: storefront
+          count: 3
+      patches:
+        - path: memory.yaml
+      ```
+
+      ```yaml
+      # overlays/prod/memory.yaml — a strategic-merge patch
+      apiVersion: apps/v1
+      kind: Deployment
+      metadata:
+        name: storefront
+      spec:
+        template:
+          spec:
+            containers:
+              - name: storefront
+                resources:
+                  limits:
+                    memory: 256Mi
+      ```
+
+      The Kubernetes docs recommend small patches that each do one
+      thing, and keeping the base free of environment-specific values so
+      it can be reused by any number of overlays. Render either
+      environment with `kubectl kustomize overlays/prod` to review the
+      result before applying it.
+
+      Production still lacks disruption budgets, spreading and a safe
+      rollout strategy: that is the **kubernetes-zero-downtime-prod**
+      challenge.
+
+      **Without writing code in Nimbo**
+
+      1. Open the **Environments** tab. In prod's actions menu (**…**), pick **Delete…** and confirm.
+      2. Click **New environment**: **Name** `prod`, **Start from** `dev`. The copy renames `storefront-dev` to `storefront-prod`, both the namespace setting and the Namespace object.
+      3. Select prod and open the **Edit** tab. For the `storefront` Deployment set **Replicas** to `3` and **Memory limit** to `256Mi`, then click **Save**. This writes only to the prod overlay, so the base keeps `128Mi` and dev keeps 1 replica.
+    solutionFiles:
+      overlays/prod/kustomization.yaml: |
+        # Production: own namespace, 3 replicas, more memory.
+        apiVersion: kustomize.config.k8s.io/v1beta1
+        kind: Kustomization
+        namespace: storefront-prod
+        resources:
+          - ../../base
+          - namespace.yaml
+        replicas:
+          - name: storefront
+            count: 3
+        patches:
+          - path: memory.yaml
+      overlays/prod/namespace.yaml: |
+        apiVersion: v1
+        kind: Namespace
+        metadata:
+          name: storefront-prod
+      overlays/prod/memory.yaml: |
+        # Strategic-merge patch: only the fields that change in prod.
+        apiVersion: apps/v1
+        kind: Deployment
+        metadata:
+          name: storefront
+        spec:
+          template:
+            spec:
+              containers:
+                - name: storefront
+                  resources:
+                    limits:
+                      memory: 256Mi
+    starter:
+      kind: kubernetes
+      files:
+        base/kustomization.yaml: |
+          # What every environment shares.
+          apiVersion: kustomize.config.k8s.io/v1beta1
+          kind: Kustomization
+          labels:
+            - pairs:
+                app.kubernetes.io/name: storefront
+              includeSelectors: true
+          resources:
+            - deployment.yaml
+            - service.yaml
+        base/deployment.yaml: |
+          apiVersion: apps/v1
+          kind: Deployment
+          metadata:
+            name: storefront
+          spec:
+            replicas: 1
+            selector:
+              matchLabels:
+                app: storefront
+            template:
+              metadata:
+                labels:
+                  app: storefront
+              spec:
+                containers:
+                  - name: storefront
+                    image: ghcr.io/stefanprodan/podinfo:6.15.0
+                    ports:
+                      - name: http
+                        containerPort: 9898
+                    readinessProbe:
+                      httpGet:
+                        path: /readyz
+                        port: http
+                    livenessProbe:
+                      httpGet:
+                        path: /healthz
+                        port: http
+                    resources:
+                      requests:
+                        cpu: 50m
+                        memory: 64Mi
+                      limits:
+                        memory: 128Mi
+        base/service.yaml: |
+          apiVersion: v1
+          kind: Service
+          metadata:
+            name: storefront
+          spec:
+            selector:
+              app: storefront
+            ports:
+              - name: http
+                port: 80
+                targetPort: http
+        overlays/dev/kustomization.yaml: |
+          # Development: own namespace, base sizes.
+          apiVersion: kustomize.config.k8s.io/v1beta1
+          kind: Kustomization
+          namespace: storefront-dev
+          resources:
+            - ../../base
+            - namespace.yaml
+        overlays/dev/namespace.yaml: |
+          apiVersion: v1
+          kind: Namespace
+          metadata:
+            name: storefront-dev
+        overlays/prod/kustomization.yaml: |
+          # Production: for now only the shared base.
+          apiVersion: kustomize.config.k8s.io/v1beta1
+          kind: Kustomization
+          resources:
+            - ../../base
+    checks:
+    - id: dev-renders
+      label: The dev environment renders
+      type: validate
+      environment: dev
+    - id: prod-renders
+      label: The prod environment renders
+      type: validate
+      environment: prod
+    - id: prod-namespace
+      label: Prod creates and uses namespace storefront-prod
+      type: has
+      environment: prod
+      has:
+        kubernetes:
+          kind: Namespace
+          name: storefront-prod
+    - id: prod-replicas
+      label: Prod runs 3 replicas in storefront-prod
+      type: has
+      environment: prod
+      has:
+        kubernetes:
+          kind: Deployment
+          name: storefront
+          namespace: storefront-prod
+          where:
+            spec.replicas: {min: 3}
+    - id: prod-memory
+      label: Prod raises the memory limit to 256Mi
+      type: has
+      environment: prod
+      has:
+        kubernetes:
+          kind: Deployment
+          name: storefront
+          where:
+            spec.template.spec.containers.storefront.resources.limits.memory: 256Mi
+    - id: dev-unchanged
+      label: Dev still runs 1 replica with 128Mi in storefront-dev
+      type: has
+      environment: dev
+      has:
+        kubernetes:
+          kind: Deployment
+          name: storefront
+          namespace: storefront-dev
+          where:
+            spec.replicas: {max: 1}
+            spec.template.spec.containers.storefront.resources.limits.memory: 128Mi
+    sources:
+    - title: Kubernetes docs — Declarative Management of Kubernetes Objects Using Kustomize
+      url: https://kubernetes.io/docs/tasks/manage-kubernetes-objects/kustomization/
+    - title: Kustomize reference (kubectl.docs.kubernetes.io)
+      url: https://kubectl.docs.kubernetes.io/references/kustomize/
+    - title: CNCF CKAD curriculum (Application Deployment — Kustomize)
+      url: https://github.com/cncf/curriculum/blob/master/CKAD_Curriculum_v1.37.pdf
+    solvableWithoutCode: true
+- op: upsert
+  kind: challenge
+  id: kubernetes-readiness-probe
+  data:
+    provider: kubernetes
+    level: advanced
+    title: New pods get traffic before they're ready
+    summary: When a catalog pod dies, its replacement gets requests as soon as its container starts, while it still answers 503; tell Kubernetes when a pod is really ready.
+    minutes: 20
+    tags:
+    - probes
+    - ingress
+    - resilience
+    - deployments
+    runtime: local
+    problem: |
+      The catalog runs as two pods behind a Service and an Ingress. When a pod dies,
+      its Deployment replaces it within seconds. The new container starts quickly, but
+      the app needs 15 seconds of warm-up before it can serve, and until then it
+      answers 503. Without a readiness probe, Kubernetes treats a running container as
+      a ready pod, so the Ingress sends it half of the traffic straight away.
+
+      **Check my solution** deletes one pod in the middle of steady traffic (40
+      requests per second through the Ingress). Make sure a pod only receives requests
+      once it can answer them.
+    requirements:
+    - The catalog container has a readiness probe.
+    - Losing a pod under load causes fewer than 1% errors, and the catalog recovers on its own (verdict degraded or better).
+    hints:
+    - The app answers `GET /health` with 503 while it warms up and 200 once it can serve. Kubernetes can ask that question for you before it sends traffic to a pod.
+    - A readiness probe keeps a pod out of the Service's endpoints (and so out of the Ingress) until it passes. Add one in the `catalog` Deployment's **Health probes** section with **Add readiness probe**.
+    - 'Make it **HTTP** on path `/health`, port `http`, and check often: **Every s** 1–2, with a low **Failures** count such as 2.'
+    solution: |
+      **Why.** Readiness decides whether a pod is an endpoint of its Services. A
+      container that has started is not necessarily able to serve; a readiness probe
+      that checks the app's own health endpoint keeps a warming pod out of rotation,
+      and takes a failing one out, without restarting it (that is what liveness
+      probes do).
+
+      **Steps.** In `k8s/catalog.yaml`, add to the catalog container:
+      `readinessProbe: {httpGet: {path: /health, port: http}, periodSeconds: 1,
+      failureThreshold: 2}`.
+
+      **Without writing code in Nimbo**
+
+      1. Click the `catalog` Deployment and open **Health probes**.
+      2. Click **Add readiness probe**. Set **HTTP**, path `/health`, port `http`, **Every s** `2` (or `1` with **Failures** `2` to react even faster).
+      3. Deploy and run the load test with the pod-loss scenario.
+    solutionFiles:
+      k8s/catalog.yaml: |
+        # The catalog: two replicas built from catalog/ (Nimbo builds catalog:dev
+        # and loads it into the local cluster), a Service, and an Ingress that
+        # Traefik serves at http://catalog.localhost. Traefik sends each request
+        # to one of the Service's ready pods.
+        apiVersion: apps/v1
+        kind: Deployment
+        metadata:
+          name: catalog
+          namespace: catalog
+          labels:
+            app.kubernetes.io/name: catalog
+            app.kubernetes.io/part-of: catalog
+        spec:
+          replicas: 2
+          selector:
+            matchLabels:
+              app: catalog
+          template:
+            metadata:
+              labels:
+                app: catalog
+            spec:
+              securityContext:
+                runAsNonRoot: true
+                runAsUser: 1000
+                seccompProfile:
+                  type: RuntimeDefault
+              automountServiceAccountToken: false
+              terminationGracePeriodSeconds: 15
+              containers:
+                - name: catalog
+                  image: catalog:dev
+                  imagePullPolicy: IfNotPresent
+                  env:
+                    - name: WARMUP_SEC
+                      value: "15"
+                  ports:
+                    - name: http
+                      containerPort: 3000
+                  # Only Ready pods are Service (and Ingress) endpoints: a new pod
+                  # gets traffic once /health answers 200, after its warm-up.
+                  readinessProbe:
+                    httpGet:
+                      path: /health
+                      port: http
+                    periodSeconds: 1
+                    failureThreshold: 2
+                  resources:
+                    requests:
+                      cpu: 50m
+                      memory: 64Mi
+                    limits:
+                      memory: 128Mi
+                  securityContext:
+                    allowPrivilegeEscalation: false
+                    readOnlyRootFilesystem: true
+                    capabilities:
+                      drop: ["ALL"]
+        ---
+        apiVersion: v1
+        kind: Service
+        metadata:
+          name: catalog
+          namespace: catalog
+        spec:
+          selector:
+            app: catalog
+          ports:
+            - name: http
+              port: 80
+              targetPort: http
+        ---
+        apiVersion: networking.k8s.io/v1
+        kind: Ingress
+        metadata:
+          name: catalog
+          namespace: catalog
+        spec:
+          ingressClassName: traefik
+          rules:
+            - host: catalog.localhost
+              http:
+                paths:
+                  - path: /
+                    pathType: Prefix
+                    backend:
+                      service:
+                        name: catalog
+                        port:
+                          name: http
+    starter:
+      templateId: starter-kubernetes-readiness-probe
+    checks:
+    - id: has-readiness
+      label: The catalog container has a readiness probe
+      type: has
+      has:
+        kubernetes:
+          kind: Deployment
+          name: catalog
+          where:
+            spec.template.spec.containers.catalog.readinessProbe:
+              exists: true
+    - id: survive-pod-loss
+      label: Losing a pod causes no errors
+      type: scenario
+      scenario:
+        target:
+          service: catalog
+          ingress: true
+          path: /catalog/{{rand}}
+        spec:
+          stages:
+          - durationSec: 0
+            target: 40
+          - durationSec: 60
+            target: 40
+          timeoutMs: 2000
+        scenario:
+          id: kill_replica
+          target: catalog
+          atSec: 20
+          durationSec: 20
+        expect:
+          verdict: degraded
+          metrics:
+          - metric: error_rate
+            op: lt
+            value: 0.01
+    sources:
+    - title: Configure Liveness, Readiness and Startup Probes
+      url: https://kubernetes.io/docs/tasks/configure-pod-container/configure-liveness-readiness-startup-probes/
+    - title: 'Pod lifecycle: container probes'
+      url: https://kubernetes.io/docs/concepts/workloads/pods/pod-lifecycle/#container-probes
+    solvableWithoutCode: true
+- op: upsert
+  kind: challenge
+  id: kubernetes-autoscale-signal
+  data:
+    provider: kubernetes
+    level: expert
+    title: Scale on the right signal
+    summary: The recommendations API has an autoscaler, yet it never adds pods during a traffic spike because it watches memory; make it scale on the signal that actually grows.
+    minutes: 30
+    tags:
+    - hpa
+    - autoscaling
+    - resources
+    - performance
+    prerequisites:
+    - kubernetes-resources-and-hpa
+    runtime: local
+    problem: |
+      Recommendations are scored per request: a few milliseconds of CPU and almost no
+      memory. The API runs one pod capped at a quarter of a CPU, with a
+      HorizontalPodAutoscaler that adds pods when memory use passes 80% of the
+      request. Under a spike, the pod's CPU is pinned at its limit, latency explodes,
+      and memory never moves, so the autoscaler never reacts.
+
+      **Check my solution** sends 30 requests per second through the Ingress and,
+      after 90 seconds, triples it for a minute. Make the autoscaler add pods in
+      time.
+    requirements:
+    - The HorizontalPodAutoscaler scales on CPU utilization.
+    - The api container requests CPU, so utilization has a base.
+    - Under the spike, at least two pods are Ready, errors stay under 5%, and the API recovers (verdict degraded or better).
+    hints:
+    - 'Look at the Load test results: what grows with the traffic, CPU or memory? Then look at what the HPA scales on.'
+    - A utilization target is a percentage of the containers' requests. In the `api` Deployment's **Resources** section, set a **CPU request** such as `100m`.
+    - Click the HPA. In **Autoscaling**, clear **Memory target %** and set **CPU target %**, for example to 50.
+    solution: |
+      **Why.** The HPA computes utilization as a percentage of the pods' resource
+      requests and scales on the metrics you list. Scale on the resource the work
+      actually consumes: here CPU. With `requests.cpu: 100m` and a 50% target, the
+      baseline load already asks for more pods, and the spike adds more before the
+      pods saturate.
+
+      **Steps.**
+      1. `k8s/api.yaml`: add `cpu: 100m` under `resources.requests`.
+      2. `k8s/hpa.yaml`: metric `cpu`, `averageUtilization: 50`.
+
+      **Without writing code in Nimbo**
+
+      1. Click the `api` Deployment. In **Resources**, set **CPU request** to `100m`.
+      2. Click the `api` HorizontalPodAutoscaler. In **Autoscaling**, empty **Memory target %** and set **CPU target %** to `50` (anything from 50 to 70 works for the checks).
+      3. Deploy and run the load test with the spike scenario.
+    solutionFiles:
+      k8s/api.yaml: |
+        # The recommendations API, built from api/ (Nimbo builds api:dev and loads
+        # it into the local cluster), behind a Service and an Ingress that Traefik
+        # serves at http://recs.localhost.
+        apiVersion: apps/v1
+        kind: Deployment
+        metadata:
+          name: api
+          namespace: recs
+          labels:
+            app.kubernetes.io/name: api
+            app.kubernetes.io/part-of: recs
+        spec:
+          replicas: 1
+          selector:
+            matchLabels:
+              app: api
+          template:
+            metadata:
+              labels:
+                app: api
+            spec:
+              securityContext:
+                runAsNonRoot: true
+                runAsUser: 1000
+                seccompProfile:
+                  type: RuntimeDefault
+              automountServiceAccountToken: false
+              containers:
+                - name: api
+                  image: api:dev
+                  imagePullPolicy: IfNotPresent
+                  ports:
+                    - name: http
+                      containerPort: 3000
+                  readinessProbe:
+                    httpGet:
+                      path: /health
+                      port: http
+                    periodSeconds: 2
+                  resources:
+                    requests:
+                      # The HPA's CPU utilization is a percentage of this request.
+                      cpu: 100m
+                      memory: 128Mi
+                    limits:
+                      cpu: 250m
+                      memory: 192Mi
+                  securityContext:
+                    allowPrivilegeEscalation: false
+                    readOnlyRootFilesystem: true
+                    capabilities:
+                      drop: ["ALL"]
+        ---
+        apiVersion: v1
+        kind: Service
+        metadata:
+          name: api
+          namespace: recs
+        spec:
+          selector:
+            app: api
+          ports:
+            - name: http
+              port: 80
+              targetPort: http
+        ---
+        apiVersion: networking.k8s.io/v1
+        kind: Ingress
+        metadata:
+          name: api
+          namespace: recs
+        spec:
+          ingressClassName: traefik
+          rules:
+            - host: recs.localhost
+              http:
+                paths:
+                  - path: /
+                    pathType: Prefix
+                    backend:
+                      service:
+                        name: api
+                        port:
+                          name: http
+      k8s/hpa.yaml: |
+        # Adds pods when the api is busy: scoring is CPU work, so scale on CPU.
+        apiVersion: autoscaling/v2
+        kind: HorizontalPodAutoscaler
+        metadata:
+          name: api
+          namespace: recs
+        spec:
+          scaleTargetRef:
+            apiVersion: apps/v1
+            kind: Deployment
+            name: api
+          minReplicas: 1
+          maxReplicas: 5
+          metrics:
+            - type: Resource
+              resource:
+                name: cpu
+                target:
+                  type: Utilization
+                  averageUtilization: 50
+    starter:
+      templateId: starter-kubernetes-autoscale-signal
+    checks:
+    - id: hpa-on-cpu
+      label: The autoscaler watches CPU
+      type: has
+      has:
+        kubernetes:
+          kind: HorizontalPodAutoscaler
+          name: api
+          where:
+            spec.metrics.*.resource.name: cpu
+    - id: cpu-request
+      label: The api requests CPU
+      type: has
+      has:
+        kubernetes:
+          kind: Deployment
+          name: api
+          where:
+            spec.template.spec.containers.api.resources.requests.cpu:
+              exists: true
+    - id: scale-under-spike
+      label: Pods are added under a traffic spike
+      type: scenario
+      scenario:
+        target:
+          service: api
+          ingress: true
+          path: /recommendations/{{rand}}
+        spec:
+          stages:
+          - durationSec: 20
+            target: 30
+          - durationSec: 160
+            target: 30
+          timeoutMs: 2000
+        scenario:
+          id: traffic_spike
+          atSec: 90
+          durationSec: 60
+          params:
+            factor: '3'
+        expect:
+          verdict: degraded
+          metrics:
+          - metric: replicas_max
+            op: gte
+            value: 2
+            workload: api
+          - metric: error_rate
+            op: lt
+            value: 0.05
+    sources:
+    - title: Horizontal Pod Autoscaling
+      url: https://kubernetes.io/docs/tasks/run-application/horizontal-pod-autoscale/
+    - title: HorizontalPodAutoscaler Walkthrough
+      url: https://kubernetes.io/docs/tasks/run-application/horizontal-pod-autoscale-walkthrough/
+    - title: Resource Management for Pods and Containers
+      url: https://kubernetes.io/docs/concepts/configuration/manage-resources-containers/
+    solvableWithoutCode: true
+- op: upsert
+  kind: challenge
+  id: kubernetes-zero-downtime-prod
+  data:
+    provider: kubernetes
+    level: advanced
+    title: Survive rollouts and node drains in production
+    summary: Roll out without dropping capacity, spread replicas over nodes and set a PodDisruptionBudget that protects the app without blocking drains.
+    minutes: 40
+    tags: [pdb, topology-spread, rolling-update, availability, kustomize]
+    prerequisites: [kubernetes-kustomize-overlays, kubernetes-health-probes]
+    runtime: local
+    problem: |
+      **checkout** runs three replicas in production, yet every deploy
+      causes a short outage, and the last cluster upgrade stalled for an
+      hour because `kubectl drain` could not evict a single checkout pod.
+
+      Three settings decide how a replicated app behaves when pods are
+      replaced on purpose:
+
+      - the Deployment **strategy**: `Recreate` stops every old pod before
+        starting new ones; `RollingUpdate` replaces them gradually, bounded
+        by `maxUnavailable` and `maxSurge`;
+      - a **PodDisruptionBudget** (PDB) limits how many pods voluntary
+        disruptions (drains, upgrades, autoscaler scale-downs) may evict at
+        once; a budget that allows zero evictions makes drains hang;
+      - **topology spread constraints** ask the scheduler to spread
+        replicas over nodes or zones so one node failure does not take
+        them all.
+
+      The project uses Kustomize: `base/` plus `overlays/dev` and
+      `overlays/prod`. Fix the **prod** environment (switch the workflow
+      to it to see the findings) without breaking dev.
+    requirements:
+    - 'In prod the `checkout` Deployment uses `RollingUpdate` with `maxUnavailable: 0` and `maxSurge: 1` (new pods start before old ones stop).'
+    - 'Prod has a PodDisruptionBudget selecting the checkout pods that still allows one voluntary eviction at a time (for example `maxUnavailable: 1`).'
+    - 'In prod the pods spread over nodes: a `topologySpreadConstraints` entry on `kubernetes.io/hostname` (or `topology.kubernetes.io/zone`) with `maxSkew: 1` and a `labelSelector` matching the pods.'
+    - The dev environment still renders.
+    hints:
+    - 'Three things can drop traffic in prod: the rollout stopping pods too early, a node drain the budget can''t allow, and all pods landing on the same node. Look at the `checkout` Deployment''s **Rollout** section and at the prod PodDisruptionBudget.'
+    - In **Rollout**, a **RollingUpdate** with **Max unavailable** 0 and **Max surge** 1 starts each new pod before stopping an old one. **Spread replicas** → **Across nodes** spreads the pods, and on a one-node cluster it never leaves a pod Pending.
+    - Switch to prod and click the `checkout` PodDisruptionBudget. In **Disruption budget**, change the **Rule** from **Min available** 3 (which allows no evictions with 3 replicas) to **Max unavailable** with value 1.
+    solution: |
+      **Rollout strategy.** `Recreate` is meant for apps that cannot run
+      two versions side by side; for a stateless service it means an outage
+      per deploy. With `RollingUpdate`, `maxUnavailable: 0` and
+      `maxSurge: 1`, the Deployment creates one extra pod, waits for it to
+      be ready, then removes an old one, so capacity never drops.
+
+      **Disruption budget.** A PDB only governs *voluntary* disruptions
+      that use the eviction API (drain, upgrades). With
+      `minAvailable: 3` and 3 replicas nothing can ever be evicted, which
+      the Kubernetes docs call out as a configuration that blocks node
+      drains. Allow one pod at a time:
+
+      ```yaml
+      apiVersion: policy/v1
+      kind: PodDisruptionBudget
+      metadata: {name: checkout}
+      spec:
+        maxUnavailable: 1
+        selector:
+          matchLabels: {app: checkout}
+      ```
+
+      **Spreading.** Without a constraint the scheduler may place all
+      replicas on one node. Add to the pod template (in a prod patch):
+
+      ```yaml
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: kubernetes.io/hostname
+          whenUnsatisfiable: ScheduleAnyway
+          labelSelector:
+            matchLabels: {app: checkout}
+      ```
+
+      Use `topology.kubernetes.io/zone` when nodes span zones, and
+      `DoNotSchedule` when spreading is a hard requirement. Together with
+      readiness probes, these three settings let rollouts, drains and
+      upgrades proceed while the service keeps answering.
+
+      **Without writing code in Nimbo**
+
+      1. With the base active, click the `checkout` Deployment. In **Rollout**, set **Strategy** to **RollingUpdate**, **Max unavailable** to `0` and **Max surge** to `1`.
+      2. In the same form, set **Spread replicas** to **Across nodes**. Changing the base is fine: dev benefits too.
+      3. In the **Environments** tab, use prod's actions menu → **Switch to**.
+      4. Click the `checkout` PodDisruptionBudget. In **Disruption budget**, set **Rule** to **Max unavailable** and the value to `1`.
+    solutionFiles:
+      base/deployment.yaml: |
+        apiVersion: apps/v1
+        kind: Deployment
+        metadata:
+          name: checkout
+        spec:
+          replicas: 1
+          # Replace pods gradually: start one new pod, wait for it to be
+          # ready, then stop an old one. Capacity never drops.
+          strategy:
+            type: RollingUpdate
+            rollingUpdate:
+              maxUnavailable: 0
+              maxSurge: 1
+          selector:
+            matchLabels:
+              app: checkout
+          template:
+            metadata:
+              labels:
+                app: checkout
+            spec:
+              containers:
+                - name: checkout
+                  image: ghcr.io/stefanprodan/podinfo:6.15.0
+                  ports:
+                    - name: http
+                      containerPort: 9898
+                  readinessProbe:
+                    httpGet:
+                      path: /readyz
+                      port: http
+                  livenessProbe:
+                    httpGet:
+                      path: /healthz
+                      port: http
+                  resources:
+                    requests:
+                      cpu: 50m
+                      memory: 64Mi
+                    limits:
+                      memory: 128Mi
+      overlays/prod/kustomization.yaml: |
+        apiVersion: kustomize.config.k8s.io/v1beta1
+        kind: Kustomization
+        namespace: checkout-prod
+        resources:
+          - ../../base
+          - namespace.yaml
+          - pdb.yaml
+        replicas:
+          - name: checkout
+            count: 3
+        patches:
+          - path: spread.yaml
+      overlays/prod/pdb.yaml: |
+        # Voluntary disruptions (drains, upgrades) may evict one pod at a
+        # time; maxUnavailable follows the replica count when it changes.
+        apiVersion: policy/v1
+        kind: PodDisruptionBudget
+        metadata:
+          name: checkout
+        spec:
+          maxUnavailable: 1
+          selector:
+            matchLabels:
+              app: checkout
+      overlays/prod/spread.yaml: |
+        # Prefer one replica per node; ScheduleAnyway never leaves a pod
+        # Pending on a small cluster.
+        apiVersion: apps/v1
+        kind: Deployment
+        metadata:
+          name: checkout
+        spec:
+          template:
+            spec:
+              topologySpreadConstraints:
+                - maxSkew: 1
+                  topologyKey: kubernetes.io/hostname
+                  whenUnsatisfiable: ScheduleAnyway
+                  labelSelector:
+                    matchLabels:
+                      app: checkout
+    starter:
+      kind: kubernetes
+      files:
+        base/kustomization.yaml: |
+          apiVersion: kustomize.config.k8s.io/v1beta1
+          kind: Kustomization
+          resources:
+            - deployment.yaml
+            - service.yaml
+        base/deployment.yaml: |
+          apiVersion: apps/v1
+          kind: Deployment
+          metadata:
+            name: checkout
+          spec:
+            replicas: 1
+            strategy:
+              type: Recreate
+            selector:
+              matchLabels:
+                app: checkout
+            template:
+              metadata:
+                labels:
+                  app: checkout
+              spec:
+                containers:
+                  - name: checkout
+                    image: ghcr.io/stefanprodan/podinfo:6.15.0
+                    ports:
+                      - name: http
+                        containerPort: 9898
+                    readinessProbe:
+                      httpGet:
+                        path: /readyz
+                        port: http
+                    livenessProbe:
+                      httpGet:
+                        path: /healthz
+                        port: http
+                    resources:
+                      requests:
+                        cpu: 50m
+                        memory: 64Mi
+                      limits:
+                        memory: 128Mi
+        base/service.yaml: |
+          apiVersion: v1
+          kind: Service
+          metadata:
+            name: checkout
+          spec:
+            selector:
+              app: checkout
+            ports:
+              - name: http
+                port: 80
+                targetPort: http
+        overlays/dev/kustomization.yaml: |
+          apiVersion: kustomize.config.k8s.io/v1beta1
+          kind: Kustomization
+          namespace: checkout-dev
+          resources:
+            - ../../base
+            - namespace.yaml
+        overlays/dev/namespace.yaml: |
+          apiVersion: v1
+          kind: Namespace
+          metadata:
+            name: checkout-dev
+        overlays/prod/kustomization.yaml: |
+          apiVersion: kustomize.config.k8s.io/v1beta1
+          kind: Kustomization
+          namespace: checkout-prod
+          resources:
+            - ../../base
+            - namespace.yaml
+            - pdb.yaml
+          replicas:
+            - name: checkout
+              count: 3
+        overlays/prod/namespace.yaml: |
+          apiVersion: v1
+          kind: Namespace
+          metadata:
+            name: checkout-prod
+        overlays/prod/pdb.yaml: |
+          apiVersion: policy/v1
+          kind: PodDisruptionBudget
+          metadata:
+            name: checkout
+          spec:
+            minAvailable: 3
+            selector:
+              matchLabels:
+                app: checkout
+    checks:
+    - id: prod-renders
+      label: The prod environment renders
+      type: validate
+      environment: prod
+    - id: dev-renders
+      label: The dev environment renders
+      type: validate
+      environment: dev
+    - id: prod-availability-rules
+      label: 'Prod: rolling updates keep serving, the PDB allows evictions, replicas spread over nodes'
+      type: rules_clean
+      environment: prod
+      rules_clean:
+        codes: [k8s_rollout_strategy, k8s_pdb, k8s_single_replica, k8s_topology_spread, k8s_selector_mismatch]
+        minSeverity: warning
+    - id: surge-first
+      label: 'Prod rolls out with maxUnavailable: 0 and maxSurge: 1'
+      type: has
+      environment: prod
+      has:
+        kubernetes:
+          kind: Deployment
+          name: checkout
+          namespace: checkout-prod
+          where:
+            spec.strategy.type: RollingUpdate
+            spec.strategy.rollingUpdate.maxUnavailable: 0
+            spec.strategy.rollingUpdate.maxSurge: 1
+    - id: pdb
+      label: Prod has a PodDisruptionBudget for checkout
+      type: has
+      environment: prod
+      has:
+        kubernetes:
+          kind: PodDisruptionBudget
+          namespace: checkout-prod
+          where:
+            spec.selector.matchLabels.app: checkout
+    - id: spread
+      label: Prod spreads replicas over nodes or zones with maxSkew 1
+      type: has
+      environment: prod
+      has:
+        kubernetes:
+          kind: Deployment
+          name: checkout
+          namespace: checkout-prod
+          where:
+            spec.template.spec.topologySpreadConstraints[*].topologyKey: {in: [kubernetes.io/hostname, topology.kubernetes.io/zone]}
+            spec.template.spec.topologySpreadConstraints[*].maxSkew: 1
+    sources:
+    - title: Kubernetes docs — Deployments (strategy, rolling update)
+      url: https://kubernetes.io/docs/concepts/workloads/controllers/deployment/
+    - title: Kubernetes docs — Disruptions
+      url: https://kubernetes.io/docs/concepts/workloads/pods/disruptions/
+    - title: Kubernetes docs — Specifying a Disruption Budget for your Application
+      url: https://kubernetes.io/docs/tasks/run-application/configure-pdb/
+    - title: Kubernetes docs — Pod Topology Spread Constraints
+      url: https://kubernetes.io/docs/concepts/scheduling-eviction/topology-spread-constraints/
+    - title: Kubernetes docs — Safely Drain a Node
+      url: https://kubernetes.io/docs/tasks/administer-cluster/safely-drain-node/
+    - title: CNCF CKA curriculum (Workloads and Scheduling — robust, self-healing deployments)
+      url: https://github.com/cncf/curriculum/blob/master/CKA_Curriculum_v1.37.pdf
+    solvableWithoutCode: true
+- op: upsert
+  kind: challenge
+  id: kubernetes-network-policy-default-deny
+  data:
+    provider: kubernetes
+    level: advanced
+    title: Default-deny NetworkPolicies with explicit allows
+    summary: Isolate every pod of a namespace, then allow only DNS and the web → api → cache paths the app needs.
+    minutes: 45
+    tags: [networkpolicy, network-segmentation, security, zero-trust]
+    prerequisites: [kubernetes-ingress-routing]
+    runtime: local
+    problem: |
+      The **bank** namespace runs three tiers: `web` (the public
+      frontend), `api` and `cache` (Redis). By default Kubernetes pods are
+      **non-isolated**: any pod in the cluster can open a connection to
+      the cache, and the cache can reach anything on the internet.
+
+      A **NetworkPolicy** selects pods and lists the traffic allowed to
+      them (ingress) and from them (egress). Once any policy selects a pod
+      for a direction, only what some policy allows in that direction is
+      permitted, and policies add up. The recommended pattern is a
+      namespace-wide **default deny** followed by narrow allow rules. The
+      cluster's network plugin enforces them (k3s ships a NetworkPolicy
+      controller).
+
+      Write the policies in `k8s/network-policies.yaml`.
+    requirements:
+    - 'A default-deny policy selects every pod of `bank` (`podSelector: {}`) with `policyTypes` Ingress **and** Egress and no allow rules.'
+    - 'Every pod may resolve DNS: egress to the cluster DNS (namespace `kube-system`, pods `k8s-app: kube-dns`) on port 53, UDP and TCP.'
+    - '`web` accepts connections on 8080 from anywhere and may connect only to `api` on 9898.'
+    - '`api` accepts connections only from `web` (port 9898) and may connect only to `cache` on 6379.'
+    - '`cache` accepts connections only from `api` on 6379.'
+    hints:
+    - 'Start by closing everything, then open only the paths the app needs: web from anywhere, web → api, api → cache. Don''t forget that blocking all egress also blocks DNS lookups.'
+    - 'The palette''s **Default deny + DNS** item adds both pieces: a policy that denies all traffic in and out for every pod of `bank`, and one that still allows DNS to the cluster DNS on port 53 (UDP and TCP).'
+    - Drag `web` onto `api` and pick **Allow web → api traffic**, then drag `api` onto `cache` and pick **Allow api → cache traffic**. Each one opens ingress on the target and egress on the source. Finally right-click `web` and pick **Accept traffic from anywhere**.
+    solution: |
+      Start from zero trust, then open exactly the paths the app uses.
+
+      1. **Default deny** both directions:
+         ```yaml
+         spec:
+           podSelector: {}
+           policyTypes: [Ingress, Egress]
+         ```
+      2. **DNS.** Egress isolation blocks name resolution too, so allow
+         UDP and TCP 53 to the DNS pods in `kube-system`. Putting
+         `namespaceSelector` and `podSelector` in the same `to` entry means
+         "pods with this label **in** namespaces with that label"; as two
+         entries they would mean "or".
+      3. **Tier rules.** For each tier, allow ingress only from its
+         client and egress only to its dependency:
+         - `web`: ingress on 8080 from anywhere (an empty `from`),
+           egress to `api:9898`;
+         - `api`: ingress from `web` on 9898, egress to `cache:6379`;
+         - `cache`: ingress from `api` on 6379, no egress beyond DNS.
+
+      Policies are additive and only allow traffic, so ordering doesn't
+      matter. Allowed connections get their reply traffic automatically.
+      Labels become security boundaries here: restrict who can change pod
+      and namespace labels with RBAC.
+
+      **Without writing code in Nimbo**
+
+      1. From the palette, add **Default deny + DNS** to the `bank` namespace.
+      2. Drag `web` onto `api` and pick **Allow web → api traffic**.
+      3. Drag `api` onto `cache` and pick **Allow api → cache traffic**.
+      4. Right-click `web` and pick **Accept traffic from anywhere**.
+      5. Each workload's rules go into its own NetworkPolicy, which Nimbo creates and names after the workload when it doesn't exist yet.
+    solutionFiles:
+      k8s/network-policies.yaml: |
+        # 1. Isolate every pod of the namespace in both directions.
+        apiVersion: networking.k8s.io/v1
+        kind: NetworkPolicy
+        metadata:
+          name: default-deny
+          namespace: bank
+        spec:
+          podSelector: {}
+          policyTypes:
+            - Ingress
+            - Egress
+        ---
+        # 2. Every pod may resolve names through the cluster DNS.
+        apiVersion: networking.k8s.io/v1
+        kind: NetworkPolicy
+        metadata:
+          name: allow-dns
+          namespace: bank
+        spec:
+          podSelector: {}
+          policyTypes:
+            - Egress
+          egress:
+            - to:
+                - namespaceSelector:
+                    matchLabels:
+                      kubernetes.io/metadata.name: kube-system
+                  podSelector:
+                    matchLabels:
+                      k8s-app: kube-dns
+              ports:
+                - protocol: UDP
+                  port: 53
+                - protocol: TCP
+                  port: 53
+        ---
+        # 3. web: public on 8080, talks only to api.
+        apiVersion: networking.k8s.io/v1
+        kind: NetworkPolicy
+        metadata:
+          name: web
+          namespace: bank
+        spec:
+          podSelector:
+            matchLabels:
+              app: web
+          policyTypes:
+            - Ingress
+            - Egress
+          ingress:
+            - ports:
+                - protocol: TCP
+                  port: 8080
+          egress:
+            - to:
+                - podSelector:
+                    matchLabels:
+                      app: api
+              ports:
+                - protocol: TCP
+                  port: 9898
+        ---
+        # 4. api: only from web, only to cache.
+        apiVersion: networking.k8s.io/v1
+        kind: NetworkPolicy
+        metadata:
+          name: api
+          namespace: bank
+        spec:
+          podSelector:
+            matchLabels:
+              app: api
+          policyTypes:
+            - Ingress
+            - Egress
+          ingress:
+            - from:
+                - podSelector:
+                    matchLabels:
+                      app: web
+              ports:
+                - protocol: TCP
+                  port: 9898
+          egress:
+            - to:
+                - podSelector:
+                    matchLabels:
+                      app: cache
+              ports:
+                - protocol: TCP
+                  port: 6379
+        ---
+        # 5. cache: only from api.
+        apiVersion: networking.k8s.io/v1
+        kind: NetworkPolicy
+        metadata:
+          name: cache
+          namespace: bank
+        spec:
+          podSelector:
+            matchLabels:
+              app: cache
+          policyTypes:
+            - Ingress
+          ingress:
+            - from:
+                - podSelector:
+                    matchLabels:
+                      app: api
+              ports:
+                - protocol: TCP
+                  port: 6379
+    starter:
+      kind: kubernetes
+      kubernetes:
+        sources:
+        - {kind: manifests, path: k8s}
+      files:
+        k8s/apps.yaml: |
+          apiVersion: v1
+          kind: Namespace
+          metadata:
+            name: bank
+          ---
+          apiVersion: apps/v1
+          kind: Deployment
+          metadata:
+            name: web
+            namespace: bank
+          spec:
+            replicas: 1
+            selector:
+              matchLabels:
+                app: web
+            template:
+              metadata:
+                labels:
+                  app: web
+              spec:
+                containers:
+                  - name: nginx
+                    image: nginxinc/nginx-unprivileged:1.30-alpine
+                    ports:
+                      - name: http
+                        containerPort: 8080
+          ---
+          apiVersion: v1
+          kind: Service
+          metadata:
+            name: web
+            namespace: bank
+          spec:
+            selector:
+              app: web
+            ports:
+              - name: http
+                port: 80
+                targetPort: http
+          ---
+          apiVersion: apps/v1
+          kind: Deployment
+          metadata:
+            name: api
+            namespace: bank
+          spec:
+            replicas: 1
+            selector:
+              matchLabels:
+                app: api
+            template:
+              metadata:
+                labels:
+                  app: api
+              spec:
+                containers:
+                  - name: podinfo
+                    image: ghcr.io/stefanprodan/podinfo:6.15.0
+                    args: ["./podinfo", "--port=9898", "--cache-server=tcp://cache:6379"]
+                    ports:
+                      - name: http
+                        containerPort: 9898
+          ---
+          apiVersion: v1
+          kind: Service
+          metadata:
+            name: api
+            namespace: bank
+          spec:
+            selector:
+              app: api
+            ports:
+              - name: http
+                port: 9898
+                targetPort: http
+          ---
+          apiVersion: apps/v1
+          kind: Deployment
+          metadata:
+            name: cache
+            namespace: bank
+          spec:
+            replicas: 1
+            selector:
+              matchLabels:
+                app: cache
+            template:
+              metadata:
+                labels:
+                  app: cache
+              spec:
+                containers:
+                  - name: redis
+                    image: redis:7.4-alpine
+                    ports:
+                      - name: redis
+                        containerPort: 6379
+          ---
+          apiVersion: v1
+          kind: Service
+          metadata:
+            name: cache
+            namespace: bank
+          spec:
+            selector:
+              app: cache
+            ports:
+              - name: redis
+                port: 6379
+                targetPort: redis
+        k8s/network-policies.yaml: |
+          # No NetworkPolicy yet: every pod accepts traffic from every pod
+          # of the cluster and may connect anywhere.
+          apiVersion: v1
+          kind: ConfigMap
+          metadata:
+            name: network-notes
+            namespace: bank
+          data:
+            tiers: web -> api:9898 -> cache:6379
+    checks:
+    - id: renders
+      label: The manifests are valid Kubernetes objects
+      type: validate
+    - id: every-pod-selected
+      label: Every workload is selected by a NetworkPolicy
+      type: rules_clean
+      rules_clean:
+        codes: [k8s_network_policy]
+        minSeverity: info
+    - id: deny-ingress
+      label: A default-deny policy isolates all pods for ingress
+      type: has
+      has:
+        kubernetes:
+          kind: NetworkPolicy
+          namespace: bank
+          where:
+            spec.podSelector.matchLabels: {exists: false}
+            spec.podSelector.matchExpressions: {exists: false}
+            spec.policyTypes[*]: Ingress
+            spec.ingress: {exists: false}
+    - id: deny-egress
+      label: A default-deny policy isolates all pods for egress
+      type: has
+      has:
+        kubernetes:
+          kind: NetworkPolicy
+          namespace: bank
+          where:
+            spec.podSelector.matchLabels: {exists: false}
+            spec.podSelector.matchExpressions: {exists: false}
+            spec.policyTypes[*]: Egress
+            spec.egress: {exists: false}
+    - id: dns
+      label: DNS egress (port 53) to kube-dns is allowed
+      type: has
+      has:
+        kubernetes:
+          kind: NetworkPolicy
+          namespace: bank
+          where:
+            spec.egress[*].ports[*].port: 53
+            spec.egress[*].to[*].podSelector.matchLabels.k8s-app: kube-dns
+    - id: web-to-api
+      label: web may only connect to api
+      type: has
+      has:
+        kubernetes:
+          kind: NetworkPolicy
+          namespace: bank
+          where:
+            spec.podSelector.matchLabels.app: web
+            spec.egress[*].to[*].podSelector.matchLabels.app: api
+    - id: api-from-web
+      label: api accepts traffic only from web and connects to cache
+      type: has
+      has:
+        kubernetes:
+          kind: NetworkPolicy
+          namespace: bank
+          where:
+            spec.podSelector.matchLabels.app: api
+            spec.ingress[*].from[*].podSelector.matchLabels.app: web
+            spec.egress[*].to[*].podSelector.matchLabels.app: cache
+    - id: cache-from-api
+      label: cache accepts traffic only from api
+      type: has
+      has:
+        kubernetes:
+          kind: NetworkPolicy
+          namespace: bank
+          where:
+            spec.podSelector.matchLabels.app: cache
+            spec.ingress[*].from[*].podSelector.matchLabels.app: api
+    sources:
+    - title: Kubernetes docs — Network Policies
+      url: https://kubernetes.io/docs/concepts/services-networking/network-policies/
+    - title: Kubernetes docs — Declare Network Policy
+      url: https://kubernetes.io/docs/tasks/administer-cluster/declare-network-policy/
+    - title: Kubernetes docs — DNS for Services and Pods
+      url: https://kubernetes.io/docs/concepts/services-networking/dns-pod-service/
+    - title: Kubernetes docs — Security Checklist (network security)
+      url: https://kubernetes.io/docs/concepts/security/security-checklist/
+    - title: CNCF CKA curriculum (Services and Networking — define and enforce Network Policies)
+      url: https://github.com/cncf/curriculum/blob/master/CKA_Curriculum_v1.37.pdf
+    - title: CNCF CKS curriculum (Cluster Setup — network security policies)
+      url: https://github.com/cncf/curriculum/blob/master/CKS_Curriculum%20v1.34.pdf
+    solvableWithoutCode: true
+- op: upsert
+  kind: challenge
+  id: kubernetes-helm-values-per-environment
+  data:
+    provider: kubernetes
+    level: advanced
+    title: One Helm chart, values per environment
+    summary: Make a chart's templates read its values, then size production with values-prod.yaml while dev stays small.
+    minutes: 40
+    tags: [helm, environments, values, templates, pdb]
+    prerequisites: [kubernetes-kustomize-overlays]
+    runtime: local
+    problem: |
+      **ledger** is packaged as a Helm chart in `chart/`. Each environment
+      installs it with its own values file (`helm install -f
+      values-prod.yaml …`): Helm merges the chart's `values.yaml` defaults
+      with the file passed on the command line, and the templates read the
+      result through `.Values`.
+
+      Production was configured for three replicas, yet it runs one: the
+      Deployment template hard-codes `replicas` and the image, so the
+      values files have no effect. Production also has no
+      PodDisruptionBudget, although the chart already contains an optional
+      one, and still uses development memory.
+
+      Switch the workflow between the **dev** and **prod** environments in
+      Nimbo to render the chart with each values file.
+    requirements:
+    - '`templates/deployment.yaml` reads the replica count from `.Values.replicaCount` and the image from `.Values.image.repository` and `.Values.image.tag`.'
+    - '`values-prod.yaml` sets 3 replicas, enables the PodDisruptionBudget (`podDisruptionBudget.enabled: true`) and raises `resources.limits.memory` to `256Mi`.'
+    - The **dev** environment still renders 1 replica and no PodDisruptionBudget.
+    - In prod, the production availability rules (replicas protected by a budget that allows evictions) pass.
+    hints:
+    - 'Template a field with `{{ .Values.replicaCount }}`; quote strings that could look like numbers or booleans: `image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"`.'
+    - 'Values files override the defaults key by key: `values-prod.yaml` only needs the keys that differ from `values.yaml`. Nested maps merge, so setting `resources.limits.memory` keeps the requests from the defaults.'
+    - '`templates/pdb.yaml` renders only when `.Values.podDisruptionBudget.enabled` is true; check its default `maxUnavailable` in `values.yaml`.'
+    solution: |
+      **Templates read values.** The Helm docs describe values precedence
+      as: the chart's `values.yaml`, then a parent chart's values, then
+      files passed with `-f`, then `--set`. None of it matters if a
+      template hard-codes the field:
+
+      ```yaml
+      spec:
+        replicas: {{ .Values.replicaCount }}
+        ...
+            image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+      ```
+
+      **Per-environment values.** Keep defaults (development-sized) in
+      `values.yaml` and only overrides in `values-prod.yaml`:
+
+      ```yaml
+      replicaCount: 3
+      resources:
+        limits:
+          memory: 256Mi
+      podDisruptionBudget:
+        enabled: true
+      ```
+
+      Nested maps are merged, so `resources.requests` from the defaults
+      stays. The Helm best-practices guide recommends this flat, documented
+      layout and camelCase names. Render both with
+      `helm template ledger chart -f chart/values-prod.yaml` before
+      installing.
+
+      **Without writing code in Nimbo**
+
+      The 256Mi memory limit can be set in the UI: in the **Environments** tab, select prod, open **Edit**, set the **Memory limit** and click **Save**. Nimbo writes it to `values-prod.yaml`. The other two changes need code. `templates/deployment.yaml` must read `{{ .Values.replicaCount }}` (and the image values) instead of the fixed `replicas: 1`. `podDisruptionBudget.enabled: true` is a values key that no rendered field maps to, so you add it to `values-prod.yaml` in the editor.
+    solutionFiles:
+      chart/templates/deployment.yaml: |
+        apiVersion: apps/v1
+        kind: Deployment
+        metadata:
+          name: {{ include "ledger.fullname" . }}
+          labels:
+            {{- include "ledger.labels" . | nindent 4 }}
+        spec:
+          replicas: {{ .Values.replicaCount }}
+          strategy:
+            type: RollingUpdate
+            rollingUpdate:
+              maxUnavailable: 0
+              maxSurge: 1
+          selector:
+            matchLabels:
+              {{- include "ledger.selectorLabels" . | nindent 6 }}
+          template:
+            metadata:
+              labels:
+                {{- include "ledger.selectorLabels" . | nindent 8 }}
+            spec:
+              topologySpreadConstraints:
+                - maxSkew: 1
+                  topologyKey: kubernetes.io/hostname
+                  whenUnsatisfiable: ScheduleAnyway
+                  labelSelector:
+                    matchLabels:
+                      {{- include "ledger.selectorLabels" . | nindent 14 }}
+              containers:
+                - name: ledger
+                  image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+                  imagePullPolicy: {{ .Values.image.pullPolicy }}
+                  ports:
+                    - name: http
+                      containerPort: 9898
+                  readinessProbe:
+                    httpGet:
+                      path: /readyz
+                      port: http
+                  livenessProbe:
+                    httpGet:
+                      path: /healthz
+                      port: http
+                  resources:
+                    {{- toYaml .Values.resources | nindent 12 }}
+      chart/values-prod.yaml: |
+        # Production: only what differs from values.yaml.
+        replicaCount: 3
+        resources:
+          limits:
+            memory: 256Mi
+        podDisruptionBudget:
+          enabled: true
+    starter:
+      kind: kubernetes
+      kubernetes:
+        sources:
+        - kind: helm
+          path: chart
+          release: ledger
+          namespace: ledger
+          environments:
+            dev: chart/values-dev.yaml
+            prod: chart/values-prod.yaml
+      files:
+        chart/Chart.yaml: |
+          apiVersion: v2
+          name: ledger
+          description: The ledger service (podinfo) with dev and prod values
+          type: application
+          version: 0.1.0
+          appVersion: "6.15.0"
+        chart/values.yaml: |
+          # Defaults (development-sized). values-dev.yaml and
+          # values-prod.yaml override them per environment.
+          replicaCount: 1
+
+          image:
+            repository: ghcr.io/stefanprodan/podinfo
+            tag: "6.15.0"
+            pullPolicy: IfNotPresent
+
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              memory: 128Mi
+
+          podDisruptionBudget:
+            enabled: false
+            maxUnavailable: 1
+        chart/values-dev.yaml: |
+          # Development: the defaults.
+          replicaCount: 1
+        chart/values-prod.yaml: |
+          # Production.
+          replicaCount: 3
+        chart/templates/_helpers.tpl: |
+          {{/* Name of the chart's objects: the release name. */}}
+          {{- define "ledger.fullname" -}}
+          {{- .Release.Name | trunc 63 | trimSuffix "-" -}}
+          {{- end -}}
+
+          {{/* Labels selecting the pods. */}}
+          {{- define "ledger.selectorLabels" -}}
+          app.kubernetes.io/name: {{ .Chart.Name }}
+          app.kubernetes.io/instance: {{ .Release.Name }}
+          {{- end -}}
+
+          {{/* Labels of every object. */}}
+          {{- define "ledger.labels" -}}
+          {{ include "ledger.selectorLabels" . }}
+          app.kubernetes.io/version: {{ .Chart.AppVersion | quote }}
+          app.kubernetes.io/managed-by: {{ .Release.Service }}
+          helm.sh/chart: {{ .Chart.Name }}-{{ .Chart.Version }}
+          {{- end -}}
+        chart/templates/deployment.yaml: |
+          apiVersion: apps/v1
+          kind: Deployment
+          metadata:
+            name: {{ include "ledger.fullname" . }}
+            labels:
+              {{- include "ledger.labels" . | nindent 4 }}
+          spec:
+            replicas: 1
+            strategy:
+              type: RollingUpdate
+              rollingUpdate:
+                maxUnavailable: 0
+                maxSurge: 1
+            selector:
+              matchLabels:
+                {{- include "ledger.selectorLabels" . | nindent 6 }}
+            template:
+              metadata:
+                labels:
+                  {{- include "ledger.selectorLabels" . | nindent 8 }}
+              spec:
+                topologySpreadConstraints:
+                  - maxSkew: 1
+                    topologyKey: kubernetes.io/hostname
+                    whenUnsatisfiable: ScheduleAnyway
+                    labelSelector:
+                      matchLabels:
+                        {{- include "ledger.selectorLabels" . | nindent 14 }}
+                containers:
+                  - name: ledger
+                    image: ghcr.io/stefanprodan/podinfo:6.15.0
+                    imagePullPolicy: {{ .Values.image.pullPolicy }}
+                    ports:
+                      - name: http
+                        containerPort: 9898
+                    readinessProbe:
+                      httpGet:
+                        path: /readyz
+                        port: http
+                    livenessProbe:
+                      httpGet:
+                        path: /healthz
+                        port: http
+                    resources:
+                      {{- toYaml .Values.resources | nindent 12 }}
+        chart/templates/service.yaml: |
+          apiVersion: v1
+          kind: Service
+          metadata:
+            name: {{ include "ledger.fullname" . }}
+            labels:
+              {{- include "ledger.labels" . | nindent 4 }}
+          spec:
+            selector:
+              {{- include "ledger.selectorLabels" . | nindent 4 }}
+            ports:
+              - name: http
+                port: 80
+                targetPort: http
+        chart/templates/pdb.yaml: |
+          {{- if .Values.podDisruptionBudget.enabled }}
+          apiVersion: policy/v1
+          kind: PodDisruptionBudget
+          metadata:
+            name: {{ include "ledger.fullname" . }}
+            labels:
+              {{- include "ledger.labels" . | nindent 4 }}
+          spec:
+            maxUnavailable: {{ .Values.podDisruptionBudget.maxUnavailable }}
+            selector:
+              matchLabels:
+                {{- include "ledger.selectorLabels" . | nindent 6 }}
+          {{- end }}
+    checks:
+    - id: prod-renders
+      label: The chart renders with values-prod.yaml
+      type: validate
+      environment: prod
+    - id: dev-renders
+      label: The chart renders with values-dev.yaml
+      type: validate
+      environment: dev
+    - id: prod-replicas
+      label: Prod runs 3 replicas
+      type: has
+      environment: prod
+      has:
+        kubernetes:
+          kind: Deployment
+          where:
+            spec.replicas: {min: 3}
+    - id: image-from-values
+      label: The image comes from .Values.image
+      type: has
+      environment: prod
+      has:
+        kubernetes:
+          kind: Deployment
+          where:
+            spec.template.spec.containers.ledger.image: ghcr.io/stefanprodan/podinfo:6.15.0
+            spec.template.spec.containers.ledger.resources.limits.memory: 256Mi
+    - id: prod-pdb
+      label: Prod renders the PodDisruptionBudget
+      type: has
+      environment: prod
+      has:
+        kubernetes:
+          kind: PodDisruptionBudget
+    - id: prod-availability-rules
+      label: 'Prod: replicas are protected by a budget that still allows evictions'
+      type: rules_clean
+      environment: prod
+      rules_clean:
+        codes: [k8s_single_replica, k8s_pdb, k8s_rollout_strategy, k8s_topology_spread]
+        minSeverity: warning
+    - id: dev-small
+      label: Dev keeps 1 replica and no PodDisruptionBudget
+      type: has
+      environment: dev
+      has:
+        kubernetes:
+          kind: Deployment
+          where:
+            spec.replicas: {max: 1}
+    - id: dev-no-pdb
+      label: Dev renders no PodDisruptionBudget
+      type: has
+      environment: dev
+      has:
+        kubernetes:
+          kind: PodDisruptionBudget
+          count: {max: 0}
+    sources:
+    - title: Helm docs — Values Files
+      url: https://helm.sh/docs/chart_template_guide/values_files/
+    - title: Helm docs — Best Practices — Values
+      url: https://helm.sh/docs/chart_best_practices/values/
+    - title: Helm docs — Charts
+      url: https://helm.sh/docs/topics/charts/
+    - title: Helm docs — helm install
+      url: https://helm.sh/docs/helm/helm_install/
+    - title: Kubernetes docs — Specifying a Disruption Budget for your Application
+      url: https://kubernetes.io/docs/tasks/run-application/configure-pdb/
+    - title: CNCF CKAD curriculum (Application Deployment — use the Helm package manager)
+      url: https://github.com/cncf/curriculum/blob/master/CKAD_Curriculum_v1.37.pdf
+    solvableWithoutCode: false
+- op: upsert
+  kind: challenge
+  id: kubernetes-pod-security-restricted
+  data:
+    provider: kubernetes
+    level: expert
+    title: Enforce the restricted Pod Security Standard
+    summary: Label a namespace to enforce the restricted profile and harden the workload so the admission controller still admits it.
+    minutes: 45
+    tags: [pod-security, security-context, hardening, admission]
+    prerequisites: [kubernetes-health-probes]
+    runtime: local
+    problem: |
+      A security review of the **payments** namespace found a container
+      that runs as root, is `privileged`, adds the `NET_ADMIN` capability
+      and mounts the node's `/var/log` through a `hostPath` volume. Any
+      bug in that app is a path to root on the node.
+
+      Kubernetes defines three **Pod Security Standards**: `privileged`
+      (unrestricted), `baseline` (blocks known privilege escalations) and
+      `restricted` (current hardening best practice). The built-in **Pod
+      Security Admission** controller enforces them per namespace through
+      labels such as `pod-security.kubernetes.io/enforce: restricted`;
+      pods that violate the level are rejected.
+
+      Turn on enforcement for `payments` and fix the workload so it is
+      admitted and keeps serving.
+    requirements:
+    - 'Namespace `payments` carries `pod-security.kubernetes.io/enforce: restricted` (add `warn` and `audit` at `restricted` too).'
+    - 'The pod runs as a non-root user (`runAsNonRoot: true`, a non-zero `runAsUser`) with `seccompProfile.type: RuntimeDefault`.'
+    - 'The container sets `allowPrivilegeEscalation: false`, drops `ALL` capabilities, is not privileged and uses `readOnlyRootFilesystem: true`.'
+    - 'No `hostPath` volume: use an `emptyDir` where the app needs scratch space. The pod does not mount a service account token it does not use.'
+    - The workflow deploys under enforcement and `GET /healthz` through the `payments` Service answers 200.
+    hints:
+    - 'Two sides must agree: the namespace has to enforce the restricted profile, and the pod has to meet it. Look at the `payments` Deployment''s **Hardening** score: how many protections are off?'
+    - 'Click the `payments` Namespace and set **Pod Security (enforce)** to **restricted**. You can add `warn` and `audit` labels in the same form. The restricted profile doesn''t allow `hostPath` volumes: remove that volume from **Volumes** and its row from **Mounts**.'
+    - 'In the Deployment''s **Hardening** section, turn on every switch: **Runs as a non-root user** (with **User ID** 10001), **Default seccomp profile (RuntimeDefault)**, **Not privileged**, **No privilege escalation**, **Read-only root filesystem** and **Drops all Linux capabilities** (remove any added capability chips). Then turn off **Mount API token** in **Identity**.'
+    solution: |
+      **1. Enforce the level on the namespace.** Pod Security Admission
+      reads three modes from namespace labels: `enforce` rejects violating
+      pods, `audit` records them in the audit log, `warn` returns a warning
+      to the client. Set all three to `restricted`:
+
+      ```yaml
+      metadata:
+        name: payments
+        labels:
+          pod-security.kubernetes.io/enforce: restricted
+          pod-security.kubernetes.io/audit: restricted
+          pod-security.kubernetes.io/warn: restricted
+      ```
+
+      Admission is checked when pods are created, so a Deployment that
+      violates the level is accepted but its ReplicaSet cannot create
+      pods. Fix the template:
+
+      **2. Pod level.**
+      ```yaml
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        seccompProfile: {type: RuntimeDefault}
+      ```
+
+      **3. Container level.**
+      ```yaml
+      securityContext:
+        allowPrivilegeEscalation: false
+        readOnlyRootFilesystem: true
+        capabilities: {drop: [ALL]}
+      ```
+      and remove `privileged: true` and the added capability.
+
+      **4. Volumes.** `hostPath` is not allowed at any level above
+      privileged. Use an `emptyDir` for scratch space (the read-only root
+      filesystem makes it necessary for apps that write temporary files);
+      ship logs to stdout instead of the node's `/var/log`.
+
+      `readOnlyRootFilesystem` and the disabled token go beyond the
+      restricted profile; the Kubernetes security checklist and RBAC good
+      practices recommend both.
+
+      **Without writing code in Nimbo**
+
+      1. Click the `payments` Namespace and set **Pod Security (enforce)** to **restricted**. Optional: use its labels editor to also add `pod-security.kubernetes.io/warn` and `pod-security.kubernetes.io/audit` = `restricted`.
+      2. Click the `payments` Deployment. In **Mounts**, remove the row that mounts the `node-logs` volume. In **Volumes**, remove `node-logs` (the hostPath). If the app needs scratch space, add an **emptyDir** volume and mount it at `/tmp`.
+      3. In **Hardening**, turn on **Runs as a non-root user** and type **User ID** `10001`. Then turn on **Default seccomp profile (RuntimeDefault)**, **Not privileged**, **No privilege escalation**, **Read-only root filesystem** and **Drops all Linux capabilities**. Remove any chip under the added capabilities.
+      4. In the **Identity** section, turn off **Mount API token**.
+      5. Deploy: `GET /healthz` through the `payments` Service answers 200.
+    solutionFiles:
+      k8s/payments.yaml: |
+        # Pod Security Admission: reject, audit and warn on anything that
+        # violates the restricted Pod Security Standard.
+        apiVersion: v1
+        kind: Namespace
+        metadata:
+          name: payments
+          labels:
+            pod-security.kubernetes.io/enforce: restricted
+            pod-security.kubernetes.io/audit: restricted
+            pod-security.kubernetes.io/warn: restricted
+        ---
+        apiVersion: apps/v1
+        kind: Deployment
+        metadata:
+          name: payments
+          namespace: payments
+        spec:
+          replicas: 1
+          selector:
+            matchLabels:
+              app: payments
+          template:
+            metadata:
+              labels:
+                app: payments
+            spec:
+              # The app never calls the Kubernetes API.
+              automountServiceAccountToken: false
+              securityContext:
+                runAsNonRoot: true
+                runAsUser: 10001
+                runAsGroup: 10001
+                seccompProfile:
+                  type: RuntimeDefault
+              containers:
+                - name: payments
+                  image: ghcr.io/stefanprodan/podinfo:6.15.0
+                  ports:
+                    - name: http
+                      containerPort: 9898
+                  readinessProbe:
+                    httpGet:
+                      path: /readyz
+                      port: http
+                  livenessProbe:
+                    httpGet:
+                      path: /healthz
+                      port: http
+                  resources:
+                    requests:
+                      cpu: 50m
+                      memory: 64Mi
+                    limits:
+                      memory: 128Mi
+                  securityContext:
+                    allowPrivilegeEscalation: false
+                    readOnlyRootFilesystem: true
+                    capabilities:
+                      drop: ["ALL"]
+                  volumeMounts:
+                    - name: tmp
+                      mountPath: /tmp
+              volumes:
+                # Scratch space instead of the node's filesystem.
+                - name: tmp
+                  emptyDir: {}
+        ---
+        apiVersion: v1
+        kind: Service
+        metadata:
+          name: payments
+          namespace: payments
+        spec:
+          selector:
+            app: payments
+          ports:
+            - name: http
+              port: 80
+              targetPort: http
+    starter:
+      kind: kubernetes
+      kubernetes:
+        sources:
+        - {kind: manifests, path: k8s}
+      files:
+        k8s/payments.yaml: |
+          apiVersion: v1
+          kind: Namespace
+          metadata:
+            name: payments
+          ---
+          apiVersion: apps/v1
+          kind: Deployment
+          metadata:
+            name: payments
+            namespace: payments
+          spec:
+            replicas: 1
+            selector:
+              matchLabels:
+                app: payments
+            template:
+              metadata:
+                labels:
+                  app: payments
+              spec:
+                securityContext:
+                  runAsUser: 0
+                containers:
+                  - name: payments
+                    image: ghcr.io/stefanprodan/podinfo:6.15.0
+                    ports:
+                      - name: http
+                        containerPort: 9898
+                    readinessProbe:
+                      httpGet:
+                        path: /readyz
+                        port: http
+                    livenessProbe:
+                      httpGet:
+                        path: /healthz
+                        port: http
+                    resources:
+                      requests:
+                        cpu: 50m
+                        memory: 64Mi
+                      limits:
+                        memory: 128Mi
+                    securityContext:
+                      privileged: true
+                      capabilities:
+                        add: ["NET_ADMIN"]
+                    volumeMounts:
+                      - name: node-logs
+                        mountPath: /host-logs
+                volumes:
+                  - name: node-logs
+                    hostPath:
+                      path: /var/log
+          ---
+          apiVersion: v1
+          kind: Service
+          metadata:
+            name: payments
+            namespace: payments
+          spec:
+            selector:
+              app: payments
+            ports:
+              - name: http
+                port: 80
+                targetPort: http
+    checks:
+    - id: renders
+      label: The manifests are valid Kubernetes objects
+      type: validate
+    - id: enforce-restricted
+      label: Namespace payments enforces the restricted Pod Security Standard
+      type: has
+      has:
+        kubernetes:
+          kind: Namespace
+          name: payments
+          where:
+            metadata.labels."pod-security.kubernetes.io/enforce": restricted
+    - id: hardened
+      label: No privileged settings, host access or root; containers are hardened
+      type: rules_clean
+      rules_clean:
+        codes: [k8s_privileged, k8s_host_path, k8s_host_namespaces, k8s_run_as_root, k8s_hardening]
+        minSeverity: info
+    - id: no-host-path
+      label: The pod uses no hostPath volume
+      type: has
+      has:
+        kubernetes:
+          kind: Deployment
+          name: payments
+          namespace: payments
+          where:
+            spec.template.spec.volumes[*].hostPath: {exists: false}
+    - id: deploys
+      label: The pods are admitted and become ready under enforcement
+      type: deploy
+    - id: serves
+      label: GET /healthz through the Service answers 200
+      type: http
+      http:
+        service: payments
+        port: 80
+        path: /healthz
+        status: 200
+    sources:
+    - title: Kubernetes docs — Pod Security Standards
+      url: https://kubernetes.io/docs/concepts/security/pod-security-standards/
+    - title: Kubernetes docs — Pod Security Admission
+      url: https://kubernetes.io/docs/concepts/security/pod-security-admission/
+    - title: Kubernetes docs — Enforce Pod Security Standards with Namespace Labels
+      url: https://kubernetes.io/docs/tasks/configure-pod-container/enforce-standards-namespace-labels/
+    - title: Kubernetes docs — Configure a Security Context for a Pod or Container
+      url: https://kubernetes.io/docs/tasks/configure-pod-container/security-context/
+    - title: Kubernetes docs — Security Checklist
+      url: https://kubernetes.io/docs/concepts/security/security-checklist/
+    - title: CNCF CKS curriculum (Minimize Microservice Vulnerabilities — pod security standards)
+      url: https://github.com/cncf/curriculum/blob/master/CKS_Curriculum%20v1.34.pdf
+    solvableWithoutCode: true
+- op: upsert
+  kind: challenge
+  id: kubernetes-rbac-least-privilege
+  data:
+    provider: kubernetes
+    level: expert
+    title: Least-privilege RBAC for a workload
+    summary: Replace a cluster-admin binding with a namespaced, read-only Role and stop mounting API tokens where they are not needed.
+    minutes: 40
+    tags: [rbac, service-accounts, least-privilege, security]
+    prerequisites: [kubernetes-config-and-secrets]
+    runtime: local
+    problem: |
+      A nightly **config report** runs as a CronJob in namespace
+      `reports`; it lists the namespace's ConfigMaps with `kubectl`. To
+      "make it work", its ServiceAccount `config-reader` was bound to the
+      built-in `cluster-admin` ClusterRole with a ClusterRoleBinding. That
+      token can read every Secret and delete anything in the whole
+      cluster, and every pod of the namespace, including the `web`
+      frontend, also gets an API token mounted it never uses.
+
+      Kubernetes **RBAC** grants permissions through a Role (rules inside
+      one namespace) or ClusterRole (cluster-wide rules), attached to users
+      or ServiceAccounts by a RoleBinding (within a namespace) or a
+      ClusterRoleBinding (everywhere). Permissions are purely additive:
+      there are no deny rules, so least privilege means granting only what
+      is needed, where it is needed.
+    requirements:
+    - No ClusterRoleBinding remains.
+    - A Role `config-reader` in namespace `reports` allows only `get`, `list` and `watch` on `configmaps` (core API group, no wildcards).
+    - A RoleBinding in `reports` binds that Role to the ServiceAccount `config-reader`.
+    - 'The CronJob keeps running as `config-reader`; the `web` Deployment sets `automountServiceAccountToken: false`.'
+    hints:
+    - Who is `config-reader` bound to right now, and in what scope? A ClusterRoleBinding to cluster-admin lets it do anything, anywhere.
+    - 'Delete the ClusterRoleBinding (select it, then the trash button in the inspector). Then click the `config-reader` ServiceAccount and use **Give it its own Role**: Nimbo creates an empty Role in `reports` and binds it to the ServiceAccount.'
+    - In the new Role's **Access** section, the rule should cover **API group** core and **On what** `configmaps`, and **Can do** only the **Read** verbs (`get`, `list`, `watch`). Then click the `web` Deployment and turn off **Mount API token** in **Identity**.
+    solution: |
+      Follow the RBAC good practices from the Kubernetes docs: assign
+      permissions at namespace level with RoleBindings rather than
+      ClusterRoleBindings, avoid wildcards, and don't use `cluster-admin`
+      unless specifically needed.
+
+      1. **Delete the ClusterRoleBinding.**
+      2. **A namespaced, read-only Role:**
+         ```yaml
+         apiVersion: rbac.authorization.k8s.io/v1
+         kind: Role
+         metadata: {name: config-reader, namespace: reports}
+         rules:
+           - apiGroups: [""]
+             resources: [configmaps]
+             verbs: [get, list, watch]
+         ```
+      3. **Bind it** to the ServiceAccount with a RoleBinding in the same
+         namespace.
+      4. **Tokens only where needed.** Set
+         `automountServiceAccountToken: false` on the `web` pod template;
+         the CronJob's pods still mount the `config-reader` token because
+         they call the API.
+
+      Why not a ClusterRole? A ClusterRoleBinding grants its rules in
+      every namespace, including access to future resource types when
+      wildcards are used. Even `list` on Secrets reveals their contents,
+      which is why this Role names ConfigMaps only.
+
+      **Without writing code in Nimbo**
+
+      1. Select the `config-reader-admin` ClusterRoleBinding and delete it (trash button in the inspector header).
+      2. Click the `config-reader` ServiceAccount and click **Give it its own Role**. Nimbo creates the Role `config-reader` with a RoleBinding to the ServiceAccount.
+      3. In the Role's **Access** section, use **Add rule** if there is no rule yet: **API group** core (the empty group), **On what** `configmaps`, **Can do** the **Read** verbs `get`, `list`, `watch`.
+      4. Click the `web` Deployment and turn off **Mount API token** in its **Identity** section.
+    solutionFiles:
+      k8s/rbac.yaml: |
+        apiVersion: v1
+        kind: ServiceAccount
+        metadata:
+          name: config-reader
+          namespace: reports
+        ---
+        # Read-only access to ConfigMaps in this namespace only.
+        apiVersion: rbac.authorization.k8s.io/v1
+        kind: Role
+        metadata:
+          name: config-reader
+          namespace: reports
+        rules:
+          - apiGroups: [""]
+            resources: ["configmaps"]
+            verbs: ["get", "list", "watch"]
+        ---
+        apiVersion: rbac.authorization.k8s.io/v1
+        kind: RoleBinding
+        metadata:
+          name: config-reader
+          namespace: reports
+        roleRef:
+          apiGroup: rbac.authorization.k8s.io
+          kind: Role
+          name: config-reader
+        subjects:
+          - kind: ServiceAccount
+            name: config-reader
+            namespace: reports
+      k8s/apps.yaml: |
+        apiVersion: v1
+        kind: Namespace
+        metadata:
+          name: reports
+        ---
+        apiVersion: batch/v1
+        kind: CronJob
+        metadata:
+          name: config-report
+          namespace: reports
+        spec:
+          schedule: "0 2 * * *"
+          jobTemplate:
+            spec:
+              template:
+                spec:
+                  # Calls the API: keeps the config-reader token.
+                  serviceAccountName: config-reader
+                  restartPolicy: OnFailure
+                  containers:
+                    - name: report
+                      image: registry.k8s.io/kubectl:v1.36.5
+                      args: ["get", "configmaps", "--namespace", "reports"]
+        ---
+        apiVersion: apps/v1
+        kind: Deployment
+        metadata:
+          name: web
+          namespace: reports
+        spec:
+          replicas: 1
+          selector:
+            matchLabels:
+              app: web
+          template:
+            metadata:
+              labels:
+                app: web
+            spec:
+              # Never calls the API: no token in the pod.
+              automountServiceAccountToken: false
+              containers:
+                - name: nginx
+                  image: nginxinc/nginx-unprivileged:1.30-alpine
+                  ports:
+                    - name: http
+                      containerPort: 8080
+    starter:
+      kind: kubernetes
+      kubernetes:
+        sources:
+        - {kind: manifests, path: k8s}
+      files:
+        k8s/rbac.yaml: |
+          apiVersion: v1
+          kind: ServiceAccount
+          metadata:
+            name: config-reader
+            namespace: reports
+          ---
+          apiVersion: rbac.authorization.k8s.io/v1
+          kind: ClusterRoleBinding
+          metadata:
+            name: config-reader-admin
+          roleRef:
+            apiGroup: rbac.authorization.k8s.io
+            kind: ClusterRole
+            name: cluster-admin
+          subjects:
+            - kind: ServiceAccount
+              name: config-reader
+              namespace: reports
+        k8s/apps.yaml: |
+          apiVersion: v1
+          kind: Namespace
+          metadata:
+            name: reports
+          ---
+          apiVersion: batch/v1
+          kind: CronJob
+          metadata:
+            name: config-report
+            namespace: reports
+          spec:
+            schedule: "0 2 * * *"
+            jobTemplate:
+              spec:
+                template:
+                  spec:
+                    serviceAccountName: config-reader
+                    restartPolicy: OnFailure
+                    containers:
+                      - name: report
+                        image: registry.k8s.io/kubectl:v1.36.5
+                        args: ["get", "configmaps", "--namespace", "reports"]
+          ---
+          apiVersion: apps/v1
+          kind: Deployment
+          metadata:
+            name: web
+            namespace: reports
+          spec:
+            replicas: 1
+            selector:
+              matchLabels:
+                app: web
+            template:
+              metadata:
+                labels:
+                  app: web
+              spec:
+                containers:
+                  - name: nginx
+                    image: nginxinc/nginx-unprivileged:1.30-alpine
+                    ports:
+                      - name: http
+                        containerPort: 8080
+    checks:
+    - id: renders
+      label: The manifests are valid Kubernetes objects
+      type: validate
+    - id: no-cluster-binding
+      label: No ClusterRoleBinding grants cluster-wide rights
+      type: has
+      has:
+        kubernetes:
+          kind: ClusterRoleBinding
+          count: {max: 0}
+    - id: role
+      label: Role config-reader covers configmaps in reports
+      type: has
+      has:
+        kubernetes:
+          kind: Role
+          name: config-reader
+          namespace: reports
+          where:
+            rules[*].resources[*]: configmaps
+            rules[*].apiGroups[*]: ''
+    - id: read-only
+      label: No Role grants verbs beyond get, list and watch
+      type: has
+      has:
+        kubernetes:
+          kind: Role
+          where:
+            rules[*].verbs[*]: {notIn: [get, list, watch]}
+          count: {max: 0}
+    - id: no-wildcard-resources
+      label: No Role uses a wildcard resource
+      type: has
+      has:
+        kubernetes:
+          kind: Role
+          where:
+            rules[*].resources[*]: '*'
+          count: {max: 0}
+    - id: binding
+      label: A RoleBinding gives the Role to the config-reader ServiceAccount
+      type: has
+      has:
+        kubernetes:
+          kind: RoleBinding
+          namespace: reports
+          where:
+            roleRef.kind: Role
+            roleRef.name: config-reader
+            subjects[*].kind: ServiceAccount
+            subjects[*].name: config-reader
+    - id: job-identity
+      label: The CronJob runs as config-reader
+      type: has
+      has:
+        kubernetes:
+          kind: CronJob
+          name: config-report
+          namespace: reports
+          where:
+            spec.jobTemplate.spec.template.spec.serviceAccountName: config-reader
+    - id: web-no-token
+      label: The web pods do not mount an API token
+      type: has
+      has:
+        kubernetes:
+          kind: Deployment
+          name: web
+          namespace: reports
+          where:
+            spec.template.spec.automountServiceAccountToken: false
+    sources:
+    - title: Kubernetes docs — Using RBAC Authorization
+      url: https://kubernetes.io/docs/reference/access-authn-authz/rbac/
+    - title: Kubernetes docs — Role Based Access Control Good Practices
+      url: https://kubernetes.io/docs/concepts/security/rbac-good-practices/
+    - title: Kubernetes docs — Service Accounts
+      url: https://kubernetes.io/docs/concepts/security/service-accounts/
+    - title: Kubernetes docs — Configure Service Accounts for Pods
+      url: https://kubernetes.io/docs/tasks/configure-pod-container/configure-service-account/
+    - title: CNCF CKA curriculum (Cluster Architecture — manage role based access control)
+      url: https://github.com/cncf/curriculum/blob/master/CKA_Curriculum_v1.37.pdf
+    - title: CNCF CKS curriculum (Cluster Hardening — RBAC and service accounts)
+      url: https://github.com/cncf/curriculum/blob/master/CKS_Curriculum%20v1.34.pdf
+    solvableWithoutCode: true

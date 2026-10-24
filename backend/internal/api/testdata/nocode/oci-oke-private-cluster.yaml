@@ -1,0 +1,65 @@
+# Three palette private subnets (API endpoint, workers, pods; the starter
+# public subnet is left to the service load balancers), an NSG for the API
+# endpoint, a vault + key. The cluster and node pool switch to VCN-native
+# pod networking with selects, Link to… the new subnets/NSG (appended to the
+# nsg_ids / pod_subnet_ids lists) and the key. The key policy sentence is
+# typed in the where field, with the key's id appended by its Link to…:
+# "Allow any-user to use keys in tenancy where ALL {request.principal.type
+# = 'cluster', target.key.id = '${oci_kms_key.oke.id}'}".
+steps:
+  - add: {type: oci_core_subnet, name: api}
+  - set:
+      node: oci_core_subnet.api
+      attrs: {compartment_id: &comp ocid1.tenancy.oc1..flocilocaltenancy0000000000000000000000000000000000000000, vcn_id: {link: oci_core_vcn.main.id}, display_name: learn-dev-api, cidr_block: 10.0.1.0/24, prohibit_public_ip_on_vnic: true}
+  - add: {type: oci_core_subnet, name: workers}
+  - set:
+      node: oci_core_subnet.workers
+      attrs: {compartment_id: *comp, vcn_id: {link: oci_core_vcn.main.id}, display_name: learn-dev-workers, cidr_block: 10.0.2.0/24, prohibit_public_ip_on_vnic: true}
+  - add: {type: oci_core_subnet, name: pods}
+  - set:
+      node: oci_core_subnet.pods
+      attrs: {compartment_id: *comp, vcn_id: {link: oci_core_vcn.main.id}, display_name: learn-dev-pods, cidr_block: 10.0.32.0/19, prohibit_public_ip_on_vnic: true}
+  - add: {type: oci_core_network_security_group, name: api}
+  - set:
+      node: oci_core_network_security_group.api
+      attrs: {compartment_id: *comp, vcn_id: {link: oci_core_vcn.main.id}, display_name: learn-dev-api}
+  - add: {type: oci_kms_vault, name: oke}
+  - set:
+      node: oci_kms_vault.oke
+      attrs: {compartment_id: *comp, display_name: learn-dev-oke, vault_type: DEFAULT}
+  - add: {type: oci_kms_key, name: oke}
+  - set:
+      node: oci_kms_key.oke
+      attrs:
+        compartment_id: *comp
+        display_name: learn-dev-oke-secrets
+        management_endpoint: {link: oci_kms_vault.oke.management_endpoint}
+        key_shape[0].algorithm: AES
+        key_shape[0].length: 32
+  - set:
+      node: oci_containerengine_cluster.main
+      attrs:
+        kms_key_id: {link: oci_kms_key.oke.id}
+        cluster_pod_network_options[0].cni_type: OCI_VCN_IP_NATIVE
+        endpoint_config[0].is_public_ip_enabled: false
+        endpoint_config[0].subnet_id: {link: oci_core_subnet.api.id}
+        endpoint_config[0].nsg_ids: {link: oci_core_network_security_group.api.id, append: true}
+  - set:
+      node: oci_containerengine_node_pool.workers
+      attrs:
+        node_config_details[0].size: 3
+        node_config_details[0].placement_configs[0].subnet_id: {link: oci_core_subnet.workers.id}
+        node_config_details[0].node_pool_pod_network_option_details[0].cni_type: OCI_VCN_IP_NATIVE
+        node_config_details[0].node_pool_pod_network_option_details[0].pod_subnet_ids: {link: oci_core_subnet.pods.id, append: true}
+  - add: {type: oci_identity_policy, name: oke_key}
+  - set:
+      node: oci_identity_policy.oke_key
+      attrs: {compartment_id: *comp, name: learn-dev-oke-key, description: Lets OKE clusters use the secrets key}
+  - accessOCI:
+      node: oci_identity_policy.oke_key
+      add:
+        - subjectType: any-user
+          verb: use
+          resourceType: keys
+          location: tenancy
+          condition: "ALL {request.principal.type = 'cluster', target.key.id = '${oci_kms_key.oke.id}'}"

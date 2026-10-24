@@ -1,0 +1,81 @@
+# The certificate's domains get var.domain and the HTTPS proxy's
+# ssl_certificates the certificate, both with Link to… appending to the
+# list. The WAF rules' expressions are the preconfigured-rule calls the
+# challenge names, typed in the rule's text field.
+steps:
+  - add: {type: google_compute_security_policy, name: web}
+  - set:
+      node: google_compute_security_policy.web
+      attrs:
+        name: web-armor
+        rule[0].action: deny(403)
+        rule[0].priority: 1000
+        rule[0].description: Block SQL injection
+        rule[0].match[0].expr[0].expression: evaluatePreconfiguredWaf('sqli-v33-stable')
+        rule[1].action: deny(403)
+        rule[1].priority: 1001
+        rule[1].description: Block cross-site scripting
+        rule[1].match[0].expr[0].expression: evaluatePreconfiguredWaf('xss-v33-stable')
+        rule[2].action: throttle
+        rule[2].priority: 2000
+        rule[2].description: Throttle abusive clients
+        rule[2].match[0].versioned_expr: SRC_IPS_V1
+        rule[2].match[0].config[0].src_ip_ranges: ["*"]
+        rule[2].rate_limit_options[0].conform_action: allow
+        rule[2].rate_limit_options[0].exceed_action: deny(429)
+        rule[2].rate_limit_options[0].enforce_on_key: IP
+        rule[2].rate_limit_options[0].rate_limit_threshold[0].count: 100
+        rule[2].rate_limit_options[0].rate_limit_threshold[0].interval_sec: 60
+        rule[3].action: allow
+        rule[3].priority: 2147483647
+        rule[3].description: Default rule
+        rule[3].match[0].versioned_expr: SRC_IPS_V1
+        rule[3].match[0].config[0].src_ip_ranges: ["*"]
+  - set:
+      node: google_compute_backend_service.web
+      attrs:
+        security_policy: {link: google_compute_security_policy.web.id}
+        log_config[0].enable: true
+        log_config[0].sample_rate: 1
+  - add: {type: google_compute_managed_ssl_certificate, name: web}
+  - set:
+      node: google_compute_managed_ssl_certificate.web
+      attrs:
+        name: web-cert
+        managed[0].domains: {link: var.domain, append: true}
+  - add: {type: google_compute_target_https_proxy, name: web}
+  - set:
+      node: google_compute_target_https_proxy.web
+      attrs:
+        name: web-https-proxy
+        url_map: {link: google_compute_url_map.web.id}
+        ssl_certificates: {link: google_compute_managed_ssl_certificate.web.id, append: true}
+  - add: {type: google_compute_global_address, name: web}
+  - set:
+      node: google_compute_global_address.web
+      attrs:
+        name: web-ip
+  - add: {type: google_compute_global_forwarding_rule, name: https}
+  - set:
+      node: google_compute_global_forwarding_rule.https
+      attrs:
+        name: web-https
+        load_balancing_scheme: EXTERNAL_MANAGED
+        target: {link: google_compute_target_https_proxy.web.id}
+        port_range: "443"
+        ip_address: {link: google_compute_global_address.web.id}
+  - add: {type: google_compute_url_map, name: redirect}
+  - set:
+      node: google_compute_url_map.redirect
+      attrs:
+        name: web-http-redirect
+        default_url_redirect[0].https_redirect: true
+        default_url_redirect[0].strip_query: false
+  - set:
+      node: google_compute_target_http_proxy.web
+      attrs:
+        url_map: {link: google_compute_url_map.redirect.id}
+  - set:
+      node: google_compute_global_forwarding_rule.web
+      attrs:
+        ip_address: {link: google_compute_global_address.web.id}

@@ -23,7 +23,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { api } from "@/lib/api/client"
 import type { Challenge, ChallengeCheckType, ChallengeDetail, LearnProviderId } from "@/lib/api/types"
 import { useWorkflowStore } from "@/state/workflow-store"
-import { LevelBadge, Sources } from "./parts"
+import { CodeBadge, LevelBadge, Sources } from "./parts"
 import { ProgressBadge, ProviderDot } from "./meta"
 import { learnKeys, PROVIDER_META, RUNTIME_LABEL, useLearnStore } from "./store"
 
@@ -160,6 +160,7 @@ function ChallengeHeader({ detail }: { detail: ChallengeDetail }) {
         <Badge variant="outline" title={RUNTIME_LABEL[c.runtime].hint}>
           {RUNTIME_LABEL[c.runtime].label}
         </Badge>
+        <CodeBadge solvableWithoutCode={c.solvableWithoutCode} place="header" />
         <span className="inline-flex items-center gap-1 text-xs text-muted-foreground">
           <ClockIcon className="size-3" />~{c.minutes} min
         </span>

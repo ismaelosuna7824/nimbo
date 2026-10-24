@@ -1,0 +1,3110 @@
+description: Marks which azure challenges are solvable without code and rewrites their hints as UI steps
+operations:
+- op: upsert
+  kind: challenge
+  id: azure-storage-secure-defaults
+  data:
+    provider: azure
+    level: beginner
+    title: Lock down a storage account
+    summary: Fix a storage account that accepts plain HTTP, old TLS and anonymous blob reads.
+    minutes: 25
+    tags: [storage, security, encryption, tls]
+    runtime: design
+    problem: |
+      Your team created a storage account for user uploads by copying an old snippet. A review found three problems:
+      the account accepts unencrypted HTTP requests, still negotiates TLS 1.0, and lets anyone on the internet read
+      the `uploads` container without credentials.
+
+      Microsoft's storage security recommendations treat all three as baseline controls: require secure transfer,
+      set a minimum TLS version, and disallow anonymous read access unless you really serve public content.
+      Nothing here needs to be public, so fix the Terraform before it reaches a subscription.
+    requirements:
+    - '`azurerm_storage_account` sets `min_tls_version = "TLS1_2"`.'
+    - '`azurerm_storage_account` sets `https_traffic_only_enabled = true` (secure transfer required).'
+    - '`azurerm_storage_account` sets `allow_nested_items_to_be_public = false`, and no container allows anonymous access (`container_access_type = "private"`).'
+    - The workflow validates and Nimbo's `bp_public_bucket` rule reports nothing.
+    hints:
+    - 'Click the storage account on the canvas and read its inspector fields one by one: each of the three problems is a single field.'
+    - 'Anonymous access has two layers: the account switch `allow_nested_items_to_be_public` and each container''s `container_access_type`. Close both: the second one is on the container node.'
+    - On the account pick `TLS1_2` in the `min_tls_version` select and turn `https_traffic_only_enabled` on; on the container pick `private` in `container_access_type`.
+    solution: |
+      Set the three account-level controls and make the container private:
+
+      ```hcl
+      resource "azurerm_storage_account" "uploads" {
+        # ...
+        min_tls_version                 = "TLS1_2"
+        https_traffic_only_enabled      = true
+        allow_nested_items_to_be_public = false
+      }
+
+      resource "azurerm_storage_container" "uploads" {
+        name                  = "uploads"
+        storage_account_id    = azurerm_storage_account.uploads.id
+        container_access_type = "private"
+      }
+      ```
+
+      **Why:** with secure transfer required, Azure Storage rejects requests over HTTP. TLS 1.0 and 1.1 lack modern
+      cipher suites, so the Well-Architected guide for Blob Storage recommends TLS 1.2 as the minimum. Disallowing
+      anonymous access at the account level means nobody can later flip a container to public by mistake; clients
+      authenticate with Microsoft Entra ID (or, if unavoidable, short-lived SAS tokens). Writing these values
+      explicitly keeps the intent visible in code even where newer accounts already default to them.
+
+      **Without writing code in Nimbo**
+
+      1. Click the storage account `uploads`. In the inspector pick `TLS1_2` in **min_tls_version**, turn **https_traffic_only_enabled** on and turn **allow_nested_items_to_be_public** off.
+      2. Click the container `uploads` and pick `private` in **container_access_type**.
+    solutionFiles:
+      main.tf: |
+        resource "azurerm_resource_group" "main" {
+          name     = "rg-${local.name_prefix}"
+          location = var.location
+          tags     = local.common_tags
+        }
+
+        resource "azurerm_storage_account" "uploads" {
+          # Storage account names are 3-24 lowercase letters and digits.
+          name                            = substr("st${replace(local.name_prefix, "-", "")}uploads", 0, 24)
+          resource_group_name             = azurerm_resource_group.main.name
+          location                        = azurerm_resource_group.main.location
+          account_tier                    = "Standard"
+          account_replication_type        = "LRS"
+          min_tls_version                 = "TLS1_2"
+          https_traffic_only_enabled      = true
+          allow_nested_items_to_be_public = false
+          tags                            = local.common_tags
+        }
+
+        resource "azurerm_storage_container" "uploads" {
+          name                  = "uploads"
+          storage_account_id    = azurerm_storage_account.uploads.id
+          container_access_type = "private"
+        }
+    starter:
+      kind: terraform
+      cloud: azure
+      files:
+        versions.tf: |
+          terraform {
+            required_version = ">= 1.6"
+
+            required_providers {
+              azurerm = {
+                source  = "hashicorp/azurerm"
+                version = "~> 4.0"
+              }
+            }
+          }
+        providers.tf: |
+          provider "azurerm" {
+            features {}
+          }
+        variables.tf: |
+          variable "project" {
+            type        = string
+            default     = "nimbolearn"
+            description = "Project name: part of every resource name and the Project tag."
+          }
+
+          variable "environment" {
+            type        = string
+            default     = "dev"
+            description = "Deployment environment (dev, staging, prod): part of every resource name and the Environment tag."
+          }
+
+          variable "location" {
+            type        = string
+            default     = "eastus"
+            description = "Azure region of the resource group and its resources."
+          }
+        locals.tf: |
+          locals {
+            name_prefix = "${var.project}-${var.environment}"
+            common_tags = {
+              Project     = var.project
+              Environment = var.environment
+              ManagedBy   = "nimbo"
+            }
+          }
+        main.tf: |
+          resource "azurerm_resource_group" "main" {
+            name     = "rg-${local.name_prefix}"
+            location = var.location
+            tags     = local.common_tags
+          }
+
+          resource "azurerm_storage_account" "uploads" {
+            # Storage account names are 3-24 lowercase letters and digits.
+            name                            = substr("st${replace(local.name_prefix, "-", "")}uploads", 0, 24)
+            resource_group_name             = azurerm_resource_group.main.name
+            location                        = azurerm_resource_group.main.location
+            account_tier                    = "Standard"
+            account_replication_type        = "LRS"
+            min_tls_version                 = "TLS1_0"
+            https_traffic_only_enabled      = false
+            allow_nested_items_to_be_public = true
+            tags                            = local.common_tags
+          }
+
+          resource "azurerm_storage_container" "uploads" {
+            name                  = "uploads"
+            storage_account_id    = azurerm_storage_account.uploads.id
+            container_access_type = "blob"
+          }
+        outputs.tf: |
+          output "storage_account_name" {
+            value       = azurerm_storage_account.uploads.name
+            description = "Name of the uploads storage account."
+          }
+    checks:
+    - id: validate
+      label: The workflow validates
+      type: validate
+    - id: tls
+      label: Minimum TLS version is 1.2
+      type: has
+      has:
+        terraform:
+          type: azurerm_storage_account
+          where:
+            min_tls_version: TLS1_2
+    - id: https
+      label: Secure transfer (HTTPS only) is required
+      type: has
+      has:
+        terraform:
+          type: azurerm_storage_account
+          where:
+            https_traffic_only_enabled: true
+    - id: no-anonymous-account
+      label: The account disallows anonymous (public) blob access
+      type: has
+      has:
+        terraform:
+          type: azurerm_storage_account
+          where:
+            allow_nested_items_to_be_public: false
+    - id: no-public-containers
+      label: No container or account is publicly readable (bp_public_bucket)
+      type: rules_clean
+      rules_clean:
+        codes: [bp_public_bucket]
+        minSeverity: info
+    sources:
+    - title: Security recommendations for Blob Storage
+      url: https://learn.microsoft.com/en-us/azure/storage/blobs/security-recommendations
+    - title: Well-Architected Framework service guide — Azure Blob Storage
+      url: https://learn.microsoft.com/en-us/azure/well-architected/service-guides/azure-blob-storage
+    - title: azurerm_storage_account (azurerm 4.x)
+      url: https://registry.terraform.io/providers/hashicorp/azurerm/4.81.0/docs/resources/storage_account
+    - title: azurerm_storage_container (azurerm 4.x)
+      url: https://registry.terraform.io/providers/hashicorp/azurerm/4.81.0/docs/resources/storage_container
+    solvableWithoutCode: true
+- op: upsert
+  kind: challenge
+  id: azure-naming-tagging
+  data:
+    provider: azure
+    level: beginner
+    title: Name and tag resources the Cloud Adoption Framework way
+    summary: Replace ad-hoc names, hardcoded regions and missing tags with a CAF naming and tagging convention.
+    minutes: 20
+    tags: [governance, naming, tagging, cost]
+    runtime: design
+    problem: |
+      Finance can't tell which team owns half of the subscription's bill, and nobody dares to delete
+      `myvnet` or `storage1234` because nobody knows what they belong to. On top of that, every resource has
+      `"eastus"` typed in by hand, so creating a second environment in another region means editing every file.
+
+      The Cloud Adoption Framework (CAF) recommends a naming convention built from a resource-type abbreviation,
+      the workload, the environment and the region, plus a tagging strategy so cost and ownership show up
+      in reports. Refactor this small workload to follow it.
+    requirements:
+    - The resource group name starts with the CAF abbreviation `rg-` and the virtual network name with `vnet-`, followed by the workload and environment (for example `rg-${local.name_prefix}`).
+    - Every taggable resource sets `tags` (for example `local.common_tags` with the project, environment and owner).
+    - No resource hardcodes a region literal in `location`; use `var.location` or the resource group's location.
+    - The workflow validates.
+    hints:
+    - Names follow the Cloud Adoption Framework pattern `<abbreviation>-<workload>-<environment>`; tags carry the project, environment and owner. Everything you need is in the inspector of the three resources.
+    - To stop hardcoding the region, open the Variables panel and add a `location` variable (type string, default your region). Then use Link to… on each `location` field and pick that variable.
+    - Type the names `rg-shop-dev`, `vnet-shop-dev` and `stshopdev001` (storage names can't contain hyphens), and add the same `project`, `environment` and `owner` keys in each resource's `tags` editor.
+    solution: |
+      Introduce one place that builds names and tags, and derive every name and location from it:
+
+      ```hcl
+      locals {
+        name_prefix = "${var.project}-${var.environment}"
+        common_tags = {
+          project     = var.project
+          environment = var.environment
+          owner       = var.owner
+          managedby   = "terraform"
+        }
+      }
+
+      resource "azurerm_resource_group" "main" {
+        name     = "rg-${local.name_prefix}"
+        location = var.location
+        tags     = local.common_tags
+      }
+      ```
+
+      **Why:** most Azure resource names can't be changed after creation, so CAF suggests names that only hold
+      stable facts (type abbreviation such as `rg`, `vnet`, `st`; workload; environment; region; instance) and
+      puts everything else (owner, cost center, criticality) in tags. Tags feed cost reports and governance;
+      later you can enforce them with Azure Policy (see the expert landing-zone challenge). Taking the region
+      from a variable lets the same code deploy a second environment or region without edits.
+
+      **Without writing code in Nimbo**
+
+      1. Open the **Variables** panel and add a variable `location` of type string with default `eastus` and a short description.
+      2. Click the resource group: set **name** to `rg-shop-dev`, open **Link to…** on **location** and pick `var.location`, and add the tags `project = shop`, `environment = dev`, `owner = platform` in the **tags** editor.
+      3. Do the same on the virtual network (name `vnet-shop-dev`) and on the storage account (name `stshopdev001`): location linked to `var.location`, same three tags.
+    solutionFiles:
+      variables.tf: |
+        variable "project" {
+          type        = string
+          default     = "shop"
+          description = "Workload name: part of every resource name and the project tag."
+        }
+
+        variable "environment" {
+          type        = string
+          default     = "dev"
+          description = "Deployment environment (dev, test, prod): part of every resource name and the environment tag."
+        }
+
+        variable "location" {
+          type        = string
+          default     = "eastus"
+          description = "Azure region of the resource group and its resources."
+        }
+
+        variable "owner" {
+          type        = string
+          default     = "platform-team"
+          description = "Team that owns the workload (owner tag)."
+        }
+      locals.tf: |
+        locals {
+          name_prefix = "${var.project}-${var.environment}"
+          common_tags = {
+            project     = var.project
+            environment = var.environment
+            owner       = var.owner
+            managedby   = "terraform"
+          }
+        }
+      main.tf: |
+        resource "azurerm_resource_group" "main" {
+          name     = "rg-${local.name_prefix}"
+          location = var.location
+          tags     = local.common_tags
+        }
+
+        resource "azurerm_virtual_network" "main" {
+          name                = "vnet-${local.name_prefix}-${var.location}"
+          resource_group_name = azurerm_resource_group.main.name
+          location            = azurerm_resource_group.main.location
+          address_space       = ["10.10.0.0/16"]
+          tags                = local.common_tags
+        }
+
+        resource "azurerm_storage_account" "data" {
+          name                            = substr("st${replace(local.name_prefix, "-", "")}data", 0, 24)
+          resource_group_name             = azurerm_resource_group.main.name
+          location                        = azurerm_resource_group.main.location
+          account_tier                    = "Standard"
+          account_replication_type        = "LRS"
+          min_tls_version                 = "TLS1_2"
+          allow_nested_items_to_be_public = false
+          tags                            = local.common_tags
+        }
+    starter:
+      kind: terraform
+      cloud: azure
+      files:
+        versions.tf: |
+          terraform {
+            required_version = ">= 1.6"
+
+            required_providers {
+              azurerm = {
+                source  = "hashicorp/azurerm"
+                version = "~> 4.0"
+              }
+            }
+          }
+        providers.tf: |
+          provider "azurerm" {
+            features {}
+          }
+        variables.tf: |
+          variable "project" {
+            type        = string
+            default     = "shop"
+            description = "Workload name."
+          }
+
+          variable "environment" {
+            type        = string
+            default     = "dev"
+            description = "Deployment environment (dev, test, prod)."
+          }
+        main.tf: |
+          resource "azurerm_resource_group" "main" {
+            name     = "myresourcegroup"
+            location = "eastus"
+          }
+
+          resource "azurerm_virtual_network" "main" {
+            name                = "myvnet"
+            resource_group_name = azurerm_resource_group.main.name
+            location            = "eastus"
+            address_space       = ["10.10.0.0/16"]
+          }
+
+          resource "azurerm_storage_account" "data" {
+            name                            = "storage1234"
+            resource_group_name             = azurerm_resource_group.main.name
+            location                        = "eastus"
+            account_tier                    = "Standard"
+            account_replication_type        = "LRS"
+            min_tls_version                 = "TLS1_2"
+            allow_nested_items_to_be_public = false
+          }
+    checks:
+    - id: validate
+      label: The workflow validates
+      type: validate
+    - id: rg-name
+      label: The resource group name starts with the CAF abbreviation rg-
+      type: has
+      has:
+        terraform:
+          type: azurerm_resource_group
+          where:
+            name:
+              contains: rg-
+    - id: vnet-name
+      label: The virtual network name starts with the CAF abbreviation vnet-
+      type: has
+      has:
+        terraform:
+          type: azurerm_virtual_network
+          where:
+            name:
+              contains: vnet-
+    - id: tags
+      label: Every resource is tagged (bp_missing_tags)
+      type: rules_clean
+      rules_clean:
+        codes: [bp_missing_tags]
+        minSeverity: info
+    - id: no-hardcoded-region
+      label: No hardcoded region (bp_hardcoded_region)
+      type: rules_clean
+      rules_clean:
+        codes: [bp_hardcoded_region]
+        minSeverity: info
+    sources:
+    - title: CAF — Define your naming convention
+      url: https://learn.microsoft.com/en-us/azure/cloud-adoption-framework/ready/azure-best-practices/resource-naming
+    - title: CAF — Abbreviation recommendations for Azure resources
+      url: https://learn.microsoft.com/en-us/azure/cloud-adoption-framework/ready/azure-best-practices/resource-abbreviations
+    - title: CAF — Define your tagging strategy
+      url: https://learn.microsoft.com/en-us/azure/cloud-adoption-framework/ready/azure-best-practices/resource-tagging
+    - title: Study guide for Exam AZ-900 (management and governance, purpose of tags)
+      url: https://learn.microsoft.com/en-us/credentials/certifications/resources/study-guides/az-900
+    solvableWithoutCode: true
+- op: upsert
+  kind: challenge
+  id: azure-vnet-nsg
+  data:
+    provider: azure
+    level: beginner
+    title: Segment a virtual network and close SSH to the internet
+    summary: Split a VNet into subnets, attach an NSG to the workload subnet and replace public SSH with Azure Bastion.
+    minutes: 35
+    tags: [networking, security, nsg, bastion, segmentation]
+    prerequisites: [azure-naming-tagging]
+    runtime: design
+    problem: |
+      A small team runs its VMs in a virtual network with a single subnet. To make administration easy they
+      created a network security group (NSG) rule that allows SSH (port 22) from any source — and then forgot
+      to associate the NSG with the subnet at all, so it doesn't even filter anything.
+
+      Microsoft recommends associating NSGs with subnets, never exposing management ports to the internet,
+      and connecting to VMs through Azure Bastion, which needs its own dedicated subnet. Redesign the network.
+    requirements:
+    - The virtual network has at least two subnets, including one named exactly `AzureBastionSubnet`.
+    - An `azurerm_subnet_network_security_group_association` attaches the NSG to the workload subnet.
+    - No NSG rule allows SSH/RDP or database ports from `*`, `Internet` or `0.0.0.0/0` (Nimbo's `bp_open_ingress` reports nothing).
+    - An `azurerm_bastion_host` uses the `AzureBastionSubnet` and a Standard-SKU public IP.
+    - The workflow validates.
+    hints:
+    - 'Start with the NSG: its rule card in the inspector shows where SSH is allowed from. Then think about what Bastion needs in the network.'
+    - On the NSG's `security_rule` card, change the source to the `VirtualNetwork` service tag instead of `*`. Attach the NSG to the app subnet with a subnet NSG association from the palette (Link to… the subnet and the NSG).
+    - Bastion needs a subnet named exactly `AzureBastionSubnet` (/26 or larger) and a public IP with SKU `Standard` and allocation `Static`. Add both from the palette, drag the resource group onto them (Place in the resource group), then add a Bastion host whose `ip_configuration` links to them.
+    solution: |
+      1. Keep the workload subnet (`snet-app`) and add `AzureBastionSubnet` (10.20.255.0/26).
+      2. Remove the inbound `Allow` rule for port 22 from `*`; if you need SSH inside the network, allow it only from
+         the `VirtualNetwork` service tag (Bastion connects from inside the VNet).
+      3. Associate the NSG with `snet-app` using `azurerm_subnet_network_security_group_association`.
+      4. Add an `azurerm_public_ip` (Standard, Static) and an `azurerm_bastion_host` whose `ip_configuration` points to
+         `AzureBastionSubnet`.
+
+      **Why:** an NSG only filters traffic once it is associated with a subnet or NIC, and Microsoft recommends the
+      subnet level. Admin ports open to the internet are scanned and brute-forced continuously; Azure Bastion gives
+      RDP/SSH over TLS (443) from the portal or native client without any public IP on the VMs.
+
+      **Without writing code in Nimbo**
+
+      1. Click the NSG `app`. On its **security_rule** card set **source_address_prefix** to `VirtualNetwork` (keep port 22, priority 100, Inbound, Allow, Tcp) and name it `allow-ssh-from-vnet`.
+      2. From the palette add a **subnet NSG association**: **Link to…** `subnet_id` → the `app` subnet's id and `network_security_group_id` → the NSG's id.
+      3. Add a subnet from the palette, drag the resource group onto it and pick **Place in the resource group**. Name it `AzureBastionSubnet`, **Link to…** `virtual_network_name` → the virtual network's name, and add the address prefix `10.20.255.0/26`.
+      4. Add a public IP, place it in the resource group the same way, name it `pip-learn-dev-bastion`, pick `Static` allocation and `Standard` SKU.
+      5. Add a Bastion host, place it in the resource group, name it `bas-learn-dev` with SKU `Standard`. In its **ip_configuration** block set the name `configuration` and **Link to…** the Bastion subnet's id and the public IP's id.
+    solutionFiles:
+      network.tf: |
+        resource "azurerm_virtual_network" "main" {
+          name                = "vnet-${local.name_prefix}"
+          resource_group_name = azurerm_resource_group.main.name
+          location            = azurerm_resource_group.main.location
+          address_space       = ["10.20.0.0/16"]
+          tags                = local.common_tags
+        }
+
+        resource "azurerm_subnet" "app" {
+          name                 = "snet-app"
+          resource_group_name  = azurerm_resource_group.main.name
+          virtual_network_name = azurerm_virtual_network.main.name
+          address_prefixes     = ["10.20.1.0/24"]
+        }
+
+        resource "azurerm_subnet" "bastion" {
+          # Azure Bastion requires this exact name and at least a /26.
+          name                 = "AzureBastionSubnet"
+          resource_group_name  = azurerm_resource_group.main.name
+          virtual_network_name = azurerm_virtual_network.main.name
+          address_prefixes     = ["10.20.255.0/26"]
+        }
+
+        resource "azurerm_network_security_group" "app" {
+          name                = "nsg-${local.name_prefix}-app"
+          resource_group_name = azurerm_resource_group.main.name
+          location            = azurerm_resource_group.main.location
+          tags                = local.common_tags
+
+          security_rule {
+            name                       = "allow-ssh-from-vnet"
+            priority                   = 100
+            direction                  = "Inbound"
+            access                     = "Allow"
+            protocol                   = "Tcp"
+            source_port_range          = "*"
+            destination_port_range     = "22"
+            source_address_prefix      = "VirtualNetwork"
+            destination_address_prefix = "*"
+          }
+        }
+
+        resource "azurerm_subnet_network_security_group_association" "app" {
+          subnet_id                 = azurerm_subnet.app.id
+          network_security_group_id = azurerm_network_security_group.app.id
+        }
+
+        resource "azurerm_public_ip" "bastion" {
+          name                = "pip-${local.name_prefix}-bastion"
+          resource_group_name = azurerm_resource_group.main.name
+          location            = azurerm_resource_group.main.location
+          allocation_method   = "Static"
+          sku                 = "Standard"
+          tags                = local.common_tags
+        }
+
+        resource "azurerm_bastion_host" "main" {
+          name                = "bas-${local.name_prefix}"
+          resource_group_name = azurerm_resource_group.main.name
+          location            = azurerm_resource_group.main.location
+          sku                 = "Standard"
+          tags                = local.common_tags
+
+          ip_configuration {
+            name                 = "configuration"
+            subnet_id            = azurerm_subnet.bastion.id
+            public_ip_address_id = azurerm_public_ip.bastion.id
+          }
+        }
+    starter:
+      kind: terraform
+      cloud: azure
+      files:
+        versions.tf: |
+          terraform {
+            required_version = ">= 1.6"
+
+            required_providers {
+              azurerm = {
+                source  = "hashicorp/azurerm"
+                version = "~> 4.0"
+              }
+            }
+          }
+        providers.tf: |
+          provider "azurerm" {
+            features {}
+          }
+        variables.tf: |
+          variable "project" {
+            type        = string
+            default     = "nimbolearn"
+            description = "Project name: part of every resource name."
+          }
+
+          variable "environment" {
+            type        = string
+            default     = "dev"
+            description = "Deployment environment (dev, test, prod)."
+          }
+
+          variable "location" {
+            type        = string
+            default     = "eastus"
+            description = "Azure region of the resource group and its resources."
+          }
+        locals.tf: |
+          locals {
+            name_prefix = "${var.project}-${var.environment}"
+            common_tags = {
+              project     = var.project
+              environment = var.environment
+              managedby   = "terraform"
+            }
+          }
+        main.tf: |
+          resource "azurerm_resource_group" "main" {
+            name     = "rg-${local.name_prefix}"
+            location = var.location
+            tags     = local.common_tags
+          }
+        network.tf: |
+          resource "azurerm_virtual_network" "main" {
+            name                = "vnet-${local.name_prefix}"
+            resource_group_name = azurerm_resource_group.main.name
+            location            = azurerm_resource_group.main.location
+            address_space       = ["10.20.0.0/16"]
+            tags                = local.common_tags
+          }
+
+          resource "azurerm_subnet" "app" {
+            name                 = "snet-app"
+            resource_group_name  = azurerm_resource_group.main.name
+            virtual_network_name = azurerm_virtual_network.main.name
+            address_prefixes     = ["10.20.1.0/24"]
+          }
+
+          resource "azurerm_network_security_group" "app" {
+            name                = "nsg-${local.name_prefix}-app"
+            resource_group_name = azurerm_resource_group.main.name
+            location            = azurerm_resource_group.main.location
+            tags                = local.common_tags
+
+            security_rule {
+              name                       = "allow-ssh"
+              priority                   = 100
+              direction                  = "Inbound"
+              access                     = "Allow"
+              protocol                   = "Tcp"
+              source_port_range          = "*"
+              destination_port_range     = "22"
+              source_address_prefix      = "*"
+              destination_address_prefix = "*"
+            }
+          }
+    checks:
+    - id: validate
+      label: The workflow validates
+      type: validate
+    - id: subnets
+      label: The virtual network has at least two subnets
+      type: has
+      has:
+        terraform:
+          type: azurerm_subnet
+          count:
+            min: 2
+    - id: nsg-associated
+      label: The NSG is associated with a subnet
+      type: has
+      has:
+        terraform:
+          type: azurerm_subnet_network_security_group_association
+          where:
+            subnet_id:
+              ref: azurerm_subnet
+            network_security_group_id:
+              ref: azurerm_network_security_group
+    - id: no-open-admin-ports
+      label: No admin or database port is open to the internet (bp_open_ingress)
+      type: rules_clean
+      rules_clean:
+        codes: [bp_open_ingress]
+        minSeverity: info
+    - id: bastion-subnet
+      label: A subnet named AzureBastionSubnet exists
+      type: has
+      has:
+        terraform:
+          type: azurerm_subnet
+          where:
+            name: AzureBastionSubnet
+    - id: bastion
+      label: Azure Bastion runs in AzureBastionSubnet
+      type: has
+      has:
+        terraform:
+          type: azurerm_bastion_host
+          where:
+            ip_configuration.subnet_id:
+              ref: azurerm_subnet
+            ip_configuration.public_ip_address_id:
+              ref: azurerm_public_ip
+    sources:
+    - title: Plan virtual networks
+      url: https://learn.microsoft.com/en-us/azure/virtual-network/virtual-network-vnet-plan-design-arm
+    - title: Network security groups overview
+      url: https://learn.microsoft.com/en-us/azure/virtual-network/network-security-groups-overview
+    - title: What is Azure Bastion?
+      url: https://learn.microsoft.com/en-us/azure/bastion/bastion-overview
+    - title: Azure Bastion configuration settings (AzureBastionSubnet size)
+      url: https://learn.microsoft.com/en-us/azure/bastion/configuration-settings
+    - title: Study guide for Exam AZ-104 (configure and manage virtual networks)
+      url: https://learn.microsoft.com/en-us/credentials/certifications/resources/study-guides/az-104
+    - title: azurerm_subnet_network_security_group_association (azurerm 4.x)
+      url: https://registry.terraform.io/providers/hashicorp/azurerm/4.81.0/docs/resources/subnet_network_security_group_association
+    - title: azurerm_bastion_host (azurerm 4.x)
+      url: https://registry.terraform.io/providers/hashicorp/azurerm/4.81.0/docs/resources/bastion_host
+    solvableWithoutCode: true
+- op: upsert
+  kind: challenge
+  id: azure-app-service-key-vault
+  data:
+    provider: azure
+    level: intermediate
+    title: Give a web app a managed identity and read secrets from Key Vault
+    summary: Remove a plaintext password from App Service settings using a managed identity, Key Vault RBAC and a Key Vault reference.
+    minutes: 40
+    tags: [app-service, identity, key-vault, secrets, least-privilege]
+    prerequisites: [azure-naming-tagging]
+    runtime: design
+    problem: |
+      A Linux web app on App Service reads its database password from an app setting that holds the password in
+      plain text — it lives in the Terraform code, the state and the portal for anyone with read access. The app
+      also accepts plain HTTP, negotiates TLS 1.0 and allows FTP deployments. The team already created a Key Vault,
+      but it uses legacy access policies and can be purged by accident.
+
+      Follow the App Service and Key Vault guidance: the app authenticates to Key Vault with its own **managed
+      identity**, gets only the **Key Vault Secrets User** role on that vault, and the app setting becomes a
+      **Key Vault reference** that App Service resolves at runtime.
+    requirements:
+    - The web app has a managed identity (`identity { type = "SystemAssigned" }` or a user-assigned identity).
+    - The web app sets `https_only = true`, `site_config.minimum_tls_version` 1.2 or higher and `site_config.ftps_state = "Disabled"`.
+    - The `DB_PASSWORD` app setting is a Key Vault reference (`@Microsoft.KeyVault(...)`), not the secret value.
+    - The Key Vault uses Azure RBAC (`rbac_authorization_enabled = true`) and has purge protection on (`purge_protection_enabled = true`).
+    - An `azurerm_role_assignment` grants **Key Vault Secrets User** on the vault (scope) to the web app's identity (principal).
+    - The workflow validates.
+    hints:
+    - The app needs its own identity and a role on the vault, not a password. Nimbo can create both for you with one canvas gesture.
+    - 'Drag the web app onto the Key Vault and pick Read: Nimbo turns on a system-assigned identity and adds a role assignment of Key Vault Secrets User scoped to the vault. Then check the transport fields (`https_only`, `site_config` TLS and FTPS) and the vault''s RBAC and purge protection switches.'
+    - 'In the web app''s `app_settings` editor, replace the `DB_PASSWORD` value with a Key Vault reference: `@Microsoft.KeyVault(SecretUri=https://kv-shopapi-dev.vault.azure.net/secrets/db-password/)` (no version, so it follows the latest).'
+    - Create the secret value outside Terraform (pipeline or portal) so it never lands in code or state; the reference only needs its name.
+    solution: |
+      ```hcl
+      resource "azurerm_key_vault" "main" {
+        # ...
+        rbac_authorization_enabled = true
+        purge_protection_enabled   = true
+        soft_delete_retention_days = 90
+      }
+
+      resource "azurerm_linux_web_app" "api" {
+        # ...
+        https_only = true
+        identity { type = "SystemAssigned" }
+        site_config {
+          minimum_tls_version = "1.2"
+          ftps_state          = "Disabled"
+        }
+        app_settings = {
+          DB_PASSWORD = "@Microsoft.KeyVault(SecretUri=${azurerm_key_vault.main.vault_uri}secrets/db-password/)"
+        }
+      }
+
+      resource "azurerm_role_assignment" "api_secrets" {
+        scope                = azurerm_key_vault.main.id
+        role_definition_name = "Key Vault Secrets User"
+        principal_id         = azurerm_linux_web_app.api.identity[0].principal_id
+      }
+      ```
+
+      **Why:** a managed identity is a Microsoft Entra identity that Azure manages for the app, so no credential
+      is stored anywhere. With the RBAC permission model the role assignment is least privilege: *Key Vault Secrets
+      User* can read secret values of this vault only. App Service resolves the `@Microsoft.KeyVault(...)` reference
+      with the app's identity, so the code still reads an ordinary environment variable. Purge protection keeps a
+      deleted vault or secret recoverable for the soft-delete retention period. HTTPS only, TLS 1.2+ and FTP disabled
+      are the App Service Well-Architected security baseline.
+
+      **Without writing code in Nimbo**
+
+      1. Drag the web app `api` onto the Key Vault `main` and pick **Read**. Nimbo adds a system-assigned identity to the app and a role assignment (Key Vault Secrets User) scoped to the vault.
+      2. Click the web app: turn **https_only** on, and in the **site_config** block pick `1.2` for **minimum_tls_version** and `Disabled` for **ftps_state**.
+      3. In the **app_settings** editor keep `DB_HOST` and change `DB_PASSWORD` to `@Microsoft.KeyVault(SecretUri=https://kv-shopapi-dev.vault.azure.net/secrets/db-password/)`.
+      4. Click the Key Vault and turn **rbac_authorization_enabled** and **purge_protection_enabled** on.
+    solutionFiles:
+      main.tf: |
+        data "azurerm_client_config" "current" {}
+
+        resource "azurerm_resource_group" "main" {
+          name     = "rg-${local.name_prefix}"
+          location = var.location
+          tags     = local.common_tags
+        }
+
+        resource "azurerm_key_vault" "main" {
+          name                       = "kv-${local.name_prefix}"
+          resource_group_name        = azurerm_resource_group.main.name
+          location                   = azurerm_resource_group.main.location
+          tenant_id                  = data.azurerm_client_config.current.tenant_id
+          sku_name                   = "standard"
+          rbac_authorization_enabled = true
+          purge_protection_enabled   = true
+          soft_delete_retention_days = 90
+          tags                       = local.common_tags
+        }
+
+        resource "azurerm_service_plan" "main" {
+          name                = "asp-${local.name_prefix}"
+          resource_group_name = azurerm_resource_group.main.name
+          location            = azurerm_resource_group.main.location
+          os_type             = "Linux"
+          sku_name            = "P1v3"
+          tags                = local.common_tags
+        }
+
+        resource "azurerm_linux_web_app" "api" {
+          name                = "app-${local.name_prefix}-api"
+          resource_group_name = azurerm_resource_group.main.name
+          location            = azurerm_resource_group.main.location
+          service_plan_id     = azurerm_service_plan.main.id
+          https_only          = true
+          tags                = local.common_tags
+
+          identity {
+            type = "SystemAssigned"
+          }
+
+          site_config {
+            minimum_tls_version = "1.2"
+            ftps_state          = "Disabled"
+
+            application_stack {
+              node_version = "20-lts"
+            }
+          }
+
+          app_settings = {
+            DB_HOST     = var.db_host
+            DB_PASSWORD = "@Microsoft.KeyVault(SecretUri=${azurerm_key_vault.main.vault_uri}secrets/db-password/)"
+          }
+        }
+
+        resource "azurerm_role_assignment" "api_secrets" {
+          scope                = azurerm_key_vault.main.id
+          role_definition_name = "Key Vault Secrets User"
+          principal_id         = azurerm_linux_web_app.api.identity[0].principal_id
+        }
+    starter:
+      kind: terraform
+      cloud: azure
+      files:
+        versions.tf: |
+          terraform {
+            required_version = ">= 1.6"
+
+            required_providers {
+              azurerm = {
+                source  = "hashicorp/azurerm"
+                version = "~> 4.0"
+              }
+            }
+          }
+        providers.tf: |
+          provider "azurerm" {
+            features {}
+          }
+        variables.tf: |
+          variable "project" {
+            type        = string
+            default     = "shopapi"
+            description = "Project name: part of every resource name."
+          }
+
+          variable "environment" {
+            type        = string
+            default     = "dev"
+            description = "Deployment environment (dev, test, prod)."
+          }
+
+          variable "location" {
+            type        = string
+            default     = "eastus"
+            description = "Azure region of the resource group and its resources."
+          }
+
+          variable "db_host" {
+            type        = string
+            default     = "sql-shopapi-dev.database.windows.net"
+            description = "Database host name the API connects to."
+          }
+        locals.tf: |
+          locals {
+            name_prefix = "${var.project}-${var.environment}"
+            common_tags = {
+              project     = var.project
+              environment = var.environment
+              managedby   = "terraform"
+            }
+          }
+        main.tf: |
+          data "azurerm_client_config" "current" {}
+
+          resource "azurerm_resource_group" "main" {
+            name     = "rg-${local.name_prefix}"
+            location = var.location
+            tags     = local.common_tags
+          }
+
+          resource "azurerm_key_vault" "main" {
+            name                = "kv-${local.name_prefix}"
+            resource_group_name = azurerm_resource_group.main.name
+            location            = azurerm_resource_group.main.location
+            tenant_id           = data.azurerm_client_config.current.tenant_id
+            sku_name            = "standard"
+            tags                = local.common_tags
+          }
+
+          resource "azurerm_service_plan" "main" {
+            name                = "asp-${local.name_prefix}"
+            resource_group_name = azurerm_resource_group.main.name
+            location            = azurerm_resource_group.main.location
+            os_type             = "Linux"
+            sku_name            = "P1v3"
+            tags                = local.common_tags
+          }
+
+          resource "azurerm_linux_web_app" "api" {
+            name                = "app-${local.name_prefix}-api"
+            resource_group_name = azurerm_resource_group.main.name
+            location            = azurerm_resource_group.main.location
+            service_plan_id     = azurerm_service_plan.main.id
+            tags                = local.common_tags
+
+            site_config {
+              minimum_tls_version = "1.0"
+              ftps_state          = "AllAllowed"
+
+              application_stack {
+                node_version = "20-lts"
+              }
+            }
+
+            app_settings = {
+              DB_HOST     = var.db_host
+              DB_PASSWORD = "Sup3r-Secret-Passw0rd!"
+            }
+          }
+    checks:
+    - id: validate
+      label: The workflow validates
+      type: validate
+    - id: identity
+      label: The web app has a managed identity
+      type: has
+      has:
+        terraform:
+          type: azurerm_linux_web_app
+          where:
+            identity.type:
+              in: [SystemAssigned, UserAssigned, 'SystemAssigned, UserAssigned']
+    - id: transport
+      label: The web app is HTTPS only with TLS 1.2+ and FTP disabled
+      type: has
+      has:
+        terraform:
+          type: azurerm_linux_web_app
+          where:
+            https_only: true
+            site_config.minimum_tls_version:
+              in: ['1.2', '1.3']
+            site_config.ftps_state: Disabled
+    - id: kv-reference
+      label: The DB_PASSWORD app setting is a Key Vault reference
+      type: has
+      has:
+        terraform:
+          type: azurerm_linux_web_app
+          where:
+            app_settings.DB_PASSWORD:
+              contains: '@Microsoft.KeyVault('
+    - id: no-plaintext-secret
+      label: The plaintext password is gone from the app settings
+      type: has
+      has:
+        terraform:
+          type: azurerm_linux_web_app
+          where:
+            app_settings:
+              contains: Sup3r-Secret-Passw0rd
+          count:
+            max: 0
+    - id: kv-hardening
+      label: Key Vault uses RBAC and purge protection
+      type: has
+      has:
+        terraform:
+          type: azurerm_key_vault
+          where:
+            rbac_authorization_enabled: true
+            purge_protection_enabled: true
+    - id: least-privilege
+      label: The app's identity has Key Vault Secrets User on the vault
+      type: has
+      has:
+        terraform:
+          type: azurerm_role_assignment
+          where:
+            role_definition_name: Key Vault Secrets User
+            scope:
+              ref: azurerm_key_vault
+            principal_id:
+              ref: azurerm_linux_web_app
+    sources:
+    - title: Well-Architected Framework service guide — App Service (web apps)
+      url: https://learn.microsoft.com/en-us/azure/well-architected/service-guides/app-service-web-apps
+    - title: Use Key Vault references as app settings in App Service
+      url: https://learn.microsoft.com/en-us/azure/app-service/app-service-key-vault-references
+    - title: What are managed identities for Azure resources?
+      url: https://learn.microsoft.com/en-us/entra/identity/managed-identities-azure-resources/overview
+    - title: Best practices for using Azure Key Vault
+      url: https://learn.microsoft.com/en-us/azure/key-vault/general/best-practices
+    - title: Provide access to Key Vault keys, certificates, and secrets with Azure RBAC
+      url: https://learn.microsoft.com/en-us/azure/key-vault/general/rbac-guide
+    - title: Azure Key Vault soft-delete overview
+      url: https://learn.microsoft.com/en-us/azure/key-vault/general/soft-delete-overview
+    - title: azurerm_linux_web_app (azurerm 4.x)
+      url: https://registry.terraform.io/providers/hashicorp/azurerm/4.81.0/docs/resources/linux_web_app
+    - title: azurerm_key_vault (azurerm 4.x)
+      url: https://registry.terraform.io/providers/hashicorp/azurerm/4.81.0/docs/resources/key_vault
+    - title: azurerm_role_assignment (azurerm 4.x)
+      url: https://registry.terraform.io/providers/hashicorp/azurerm/4.81.0/docs/resources/role_assignment
+    solvableWithoutCode: true
+- op: upsert
+  kind: challenge
+  id: azure-storage-data-protection
+  data:
+    provider: azure
+    level: intermediate
+    title: Protect blob data against deletion, corruption and outages
+    summary: Add zone-redundant replication, soft delete, versioning, a network default-deny and a delete lock to a storage account.
+    minutes: 35
+    tags: [storage, reliability, backup, data-protection, network]
+    prerequisites: [azure-storage-secure-defaults]
+    runtime: design
+    problem: |
+      The invoices storage account is now private and TLS-only, but it is still fragile: it keeps its three copies
+      in a single datacenter (LRS), a script that deletes the wrong container or overwrites blobs loses data for
+      good, it accepts connections from every network, and anyone with Contributor rights can delete the whole
+      account.
+
+      Use the Azure Storage data-protection and redundancy guidance to make the account survive a zone outage and
+      human mistakes, and narrow who can reach it.
+    requirements:
+    - 'Replication survives a zone outage: `account_replication_type` is `ZRS`, `GZRS` or `RAGZRS`.'
+    - '`blob_properties` enables `versioning_enabled = true`, blob soft delete (`delete_retention_policy`) and container soft delete (`container_delete_retention_policy`), each kept for at least 7 days.'
+    - '`network_rules` sets `default_action = "Deny"` (allow only the networks that need access, plus the trusted Azure services bypass).'
+    - An `azurerm_management_lock` with `lock_level = "CanNotDelete"` protects the storage account.
+    - The workflow validates.
+    hints:
+    - Zone-redundant storage (ZRS) copies data across three availability zones; GZRS adds an asynchronous copy in the paired region. Look at the account's replication select first.
+    - 'Soft delete and versioning live in the account''s `blob_properties` block: add it in the inspector, turn versioning on and add the two nested retention blocks. The `network_rules` block holds the default action and the bypass list.'
+    - Add a management lock from the palette, pick `CanNotDelete` and use Link to… on `scope` to pick the storage account's id. Remember a lock protects the resource, not the data inside it.
+    solution: |
+      ```hcl
+      resource "azurerm_storage_account" "invoices" {
+        # ...
+        account_replication_type = "GZRS"
+
+        blob_properties {
+          versioning_enabled = true
+          delete_retention_policy { days = 14 }
+          container_delete_retention_policy { days = 14 }
+        }
+
+        network_rules {
+          default_action             = "Deny"
+          bypass                     = ["AzureServices"]
+          virtual_network_subnet_ids = [azurerm_subnet.app.id]
+        }
+      }
+
+      resource "azurerm_management_lock" "invoices" {
+        name       = "lock-invoices-nodelete"
+        scope      = azurerm_storage_account.invoices.id
+        lock_level = "CanNotDelete"
+      }
+      ```
+
+      **Why:** LRS only survives disk and rack failures inside one datacenter; Microsoft recommends ZRS for high
+      availability in the primary region and GZRS when you also need regional disaster recovery. Blob and container
+      soft delete let you restore deleted data during the retention window and versioning keeps previous versions of
+      overwritten blobs (the Well-Architected guide suggests at least 7 days; versions and soft-deleted data are
+      billed, so pair them with lifecycle rules). A default-deny firewall starts from zero network access. A
+      `CanNotDelete` lock stops accidental deletion of the account through Azure Resource Manager — it does not
+      protect data-plane operations, which is why you need soft delete as well.
+
+      **Without writing code in Nimbo**
+
+      1. Click the storage account `invoices` and pick `GZRS` in **account_replication_type**.
+      2. Add the **blob_properties** block: turn **versioning_enabled** on, add **delete_retention_policy** and **container_delete_retention_policy** with `14` days each.
+      3. Add the **network_rules** block: **default_action** `Deny` and `AzureServices` in **bypass**.
+      4. From the palette add a **management lock**: name `lock-invoices`, **lock_level** `CanNotDelete`, a short note, and **Link to…** on **scope** → the storage account's id.
+    solutionFiles:
+      main.tf: |
+        resource "azurerm_resource_group" "main" {
+          name     = "rg-${local.name_prefix}"
+          location = var.location
+          tags     = local.common_tags
+        }
+
+        resource "azurerm_virtual_network" "main" {
+          name                = "vnet-${local.name_prefix}"
+          resource_group_name = azurerm_resource_group.main.name
+          location            = azurerm_resource_group.main.location
+          address_space       = ["10.30.0.0/16"]
+          tags                = local.common_tags
+        }
+
+        resource "azurerm_subnet" "app" {
+          name                 = "snet-app"
+          resource_group_name  = azurerm_resource_group.main.name
+          virtual_network_name = azurerm_virtual_network.main.name
+          address_prefixes     = ["10.30.1.0/24"]
+          service_endpoints    = ["Microsoft.Storage"]
+        }
+
+        resource "azurerm_storage_account" "invoices" {
+          name                            = substr("st${replace(local.name_prefix, "-", "")}inv", 0, 24)
+          resource_group_name             = azurerm_resource_group.main.name
+          location                        = azurerm_resource_group.main.location
+          account_tier                    = "Standard"
+          account_replication_type        = "GZRS"
+          min_tls_version                 = "TLS1_2"
+          https_traffic_only_enabled      = true
+          allow_nested_items_to_be_public = false
+          tags                            = local.common_tags
+
+          blob_properties {
+            versioning_enabled = true
+
+            delete_retention_policy {
+              days = 14
+            }
+
+            container_delete_retention_policy {
+              days = 14
+            }
+          }
+
+          network_rules {
+            default_action             = "Deny"
+            bypass                     = ["AzureServices"]
+            virtual_network_subnet_ids = [azurerm_subnet.app.id]
+          }
+        }
+
+        resource "azurerm_storage_container" "invoices" {
+          name                  = "invoices"
+          storage_account_id    = azurerm_storage_account.invoices.id
+          container_access_type = "private"
+        }
+
+        resource "azurerm_management_lock" "invoices" {
+          name       = "lock-${local.name_prefix}-invoices"
+          scope      = azurerm_storage_account.invoices.id
+          lock_level = "CanNotDelete"
+          notes      = "Invoices are retained for compliance; remove this lock only through a reviewed change."
+        }
+    starter:
+      kind: terraform
+      cloud: azure
+      files:
+        versions.tf: |
+          terraform {
+            required_version = ">= 1.6"
+
+            required_providers {
+              azurerm = {
+                source  = "hashicorp/azurerm"
+                version = "~> 4.0"
+              }
+            }
+          }
+        providers.tf: |
+          provider "azurerm" {
+            features {}
+          }
+        variables.tf: |
+          variable "project" {
+            type        = string
+            default     = "billing"
+            description = "Project name: part of every resource name."
+          }
+
+          variable "environment" {
+            type        = string
+            default     = "prod"
+            description = "Deployment environment (dev, test, prod)."
+          }
+
+          variable "location" {
+            type        = string
+            default     = "eastus2"
+            description = "Azure region of the resource group and its resources."
+          }
+        locals.tf: |
+          locals {
+            name_prefix = "${var.project}-${var.environment}"
+            common_tags = {
+              project     = var.project
+              environment = var.environment
+              managedby   = "terraform"
+            }
+          }
+        main.tf: |
+          resource "azurerm_resource_group" "main" {
+            name     = "rg-${local.name_prefix}"
+            location = var.location
+            tags     = local.common_tags
+          }
+
+          resource "azurerm_virtual_network" "main" {
+            name                = "vnet-${local.name_prefix}"
+            resource_group_name = azurerm_resource_group.main.name
+            location            = azurerm_resource_group.main.location
+            address_space       = ["10.30.0.0/16"]
+            tags                = local.common_tags
+          }
+
+          resource "azurerm_subnet" "app" {
+            name                 = "snet-app"
+            resource_group_name  = azurerm_resource_group.main.name
+            virtual_network_name = azurerm_virtual_network.main.name
+            address_prefixes     = ["10.30.1.0/24"]
+            service_endpoints    = ["Microsoft.Storage"]
+          }
+
+          resource "azurerm_storage_account" "invoices" {
+            name                            = substr("st${replace(local.name_prefix, "-", "")}inv", 0, 24)
+            resource_group_name             = azurerm_resource_group.main.name
+            location                        = azurerm_resource_group.main.location
+            account_tier                    = "Standard"
+            account_replication_type        = "LRS"
+            min_tls_version                 = "TLS1_2"
+            https_traffic_only_enabled      = true
+            allow_nested_items_to_be_public = false
+            tags                            = local.common_tags
+          }
+
+          resource "azurerm_storage_container" "invoices" {
+            name                  = "invoices"
+            storage_account_id    = azurerm_storage_account.invoices.id
+            container_access_type = "private"
+          }
+    checks:
+    - id: validate
+      label: The workflow validates
+      type: validate
+    - id: zone-redundant
+      label: Replication survives a zone outage (ZRS, GZRS or RA-GZRS)
+      type: has
+      has:
+        terraform:
+          type: azurerm_storage_account
+          where:
+            account_replication_type:
+              in: [ZRS, GZRS, RAGZRS]
+    - id: versioning
+      label: Blob versioning is enabled
+      type: has
+      has:
+        terraform:
+          type: azurerm_storage_account
+          where:
+            blob_properties.versioning_enabled: true
+    - id: soft-delete
+      label: Blob and container soft delete keep data at least 7 days
+      type: has
+      has:
+        terraform:
+          type: azurerm_storage_account
+          where:
+            blob_properties.delete_retention_policy.days:
+              min: 7
+            blob_properties.container_delete_retention_policy.days:
+              min: 7
+    - id: network-deny
+      label: The storage firewall denies by default
+      type: has
+      has:
+        terraform:
+          type: azurerm_storage_account
+          where:
+            network_rules.default_action: Deny
+    - id: delete-lock
+      label: A CanNotDelete lock protects the storage account
+      type: has
+      has:
+        terraform:
+          type: azurerm_management_lock
+          where:
+            lock_level: CanNotDelete
+            scope:
+              ref: azurerm_storage_account
+    sources:
+    - title: Azure Storage redundancy
+      url: https://learn.microsoft.com/en-us/azure/storage/common/storage-redundancy
+    - title: Security recommendations for Blob Storage (data protection and networking)
+      url: https://learn.microsoft.com/en-us/azure/storage/blobs/security-recommendations
+    - title: Well-Architected Framework service guide — Azure Blob Storage
+      url: https://learn.microsoft.com/en-us/azure/well-architected/service-guides/azure-blob-storage
+    - title: Lock your Azure resources to protect your infrastructure
+      url: https://learn.microsoft.com/en-us/azure/azure-resource-manager/management/lock-resources
+    - title: Study guide for Exam AZ-104 (configure Azure Files and Blob Storage)
+      url: https://learn.microsoft.com/en-us/credentials/certifications/resources/study-guides/az-104
+    - title: azurerm_storage_account (azurerm 4.x)
+      url: https://registry.terraform.io/providers/hashicorp/azurerm/4.81.0/docs/resources/storage_account
+    - title: azurerm_management_lock (azurerm 4.x)
+      url: https://registry.terraform.io/providers/hashicorp/azurerm/4.81.0/docs/resources/management_lock
+    solvableWithoutCode: true
+- op: upsert
+  kind: challenge
+  id: azure-sql-private-endpoint
+  data:
+    provider: azure
+    level: intermediate
+    title: Put Azure SQL Database behind a private endpoint
+    summary: Close a SQL server's public endpoint, reach it through Private Link with private DNS, and switch to Microsoft Entra-only authentication.
+    minutes: 45
+    tags: [database, networking, private-link, identity, security]
+    prerequisites: [azure-vnet-nsg]
+    runtime: design
+    problem: |
+      The orders database runs on Azure SQL Database. To "make connections work" someone added a firewall rule
+      that allows every IPv4 address, left public network access on, and the server uses a SQL login whose password
+      is a Terraform variable that isn't even marked sensitive.
+
+      Azure SQL security guidance says to deny public network access, connect from your virtual network through a
+      **private endpoint** (Azure Private Link) with the `privatelink.database.windows.net` private DNS zone, and use
+      **Microsoft Entra authentication** instead of SQL passwords. Rebuild the data tier that way.
+    requirements:
+    - '`azurerm_mssql_server` sets `public_network_access_enabled = false` and `minimum_tls_version = "1.2"`, and there are no `azurerm_mssql_firewall_rule` resources.'
+    - 'The server uses Microsoft Entra-only authentication: an `azuread_administrator` block with `azuread_authentication_only = true` (no SQL admin password).'
+    - An `azurerm_private_endpoint` in the data subnet connects to the server with the `sqlServer` subresource.
+    - An `azurerm_private_dns_zone` named `privatelink.database.windows.net` is linked to the virtual network and attached to the private endpoint through `private_dns_zone_group`.
+    - The workflow validates and no secret variable is left unmarked (`bp_sensitive_not_marked`).
+    hints:
+    - 'Adding a private endpoint does not close the public endpoint by itself: the server''s `public_network_access_enabled` switch and the allow-all firewall rule node both need attention.'
+    - For Entra-only sign-in, add the client config data source from the palette, add the server's `azuread_administrator` block (object ID with Link to… the data source's `object_id`, Entra-only switch on) and clear the SQL admin login and password fields. Mark the leftover password variable as sensitive in the Variables panel.
+    - 'From the palette add a private DNS zone `privatelink.database.windows.net`, a DNS zone virtual network link and a private endpoint (drag the resource group onto each: Place in the resource group). Link the endpoint to the data subnet and to the server with subresource `sqlServer`.'
+    - In the endpoint's `private_dns_zone_group` block, Link to… on `private_dns_zone_ids` picks the zone's id and adds it to the list.
+    solution: |
+      1. Delete the `allow-all` firewall rule and the password variable.
+      2. On the server set `public_network_access_enabled = false`, `minimum_tls_version = "1.2"` and an
+         `azuread_administrator` block (an Entra group as admin) with `azuread_authentication_only = true`.
+      3. Create the private DNS zone `privatelink.database.windows.net`, link it to the VNet, and add an
+         `azurerm_private_endpoint` in `snet-data` with `subresource_names = ["sqlServer"]` and a
+         `private_dns_zone_group` pointing to the zone.
+
+      **Why:** Private Link gives the server a private IP inside your VNet, so traffic never crosses the internet,
+      and denying public network access removes the public attack surface entirely (the private endpoint alone
+      would leave it open). The private DNS zone keeps connection strings unchanged. Microsoft Entra authentication
+      centralizes identities and lets apps use managed identities, so there is no SQL password to leak or rotate.
+
+      **Without writing code in Nimbo**
+
+      1. Delete the `allow_all` SQL firewall rule node.
+      2. From the palette add the **client config** data source (name `current`).
+      3. Click the SQL server: turn **public_network_access_enabled** off, pick `1.2` for **minimum_tls_version**, clear **administrator_login** and **administrator_login_password**, and add the **azuread_administrator** block with login `sql-admins`, **Link to…** `object_id` → the client config's `object_id`, and **azuread_authentication_only** on.
+      4. In the **Variables** panel mark `sql_admin_password` as sensitive.
+      5. Add a private DNS zone, drag the resource group onto it (**Place in the resource group**) and name it `privatelink.database.windows.net`.
+      6. Add a private DNS zone virtual network link, place it in the resource group, name it `sql-vnet-link`, and **Link to…** the zone's name and the virtual network's id.
+      7. Add a private endpoint, place it in the resource group, name it `pe-sql` and **Link to…** `subnet_id` → the `data` subnet. In **private_service_connection** name it `sql`, **Link to…** the server's id, leave manual connection off and add `sqlServer` to **subresource_names**. In **private_dns_zone_group** name it `sql` and use **Link to…** on **private_dns_zone_ids** to add the zone's id.
+    solutionFiles:
+      variables.tf: |
+        variable "project" {
+          type        = string
+          default     = "orders"
+          description = "Project name: part of every resource name."
+        }
+
+        variable "environment" {
+          type        = string
+          default     = "prod"
+          description = "Deployment environment (dev, test, prod)."
+        }
+
+        variable "location" {
+          type        = string
+          default     = "eastus2"
+          description = "Azure region of the resource group and its resources."
+        }
+
+        variable "sql_admin_group_name" {
+          type        = string
+          default     = "sg-orders-dba"
+          description = "Display name of the Microsoft Entra group that administers the SQL server."
+        }
+
+        variable "sql_admin_group_object_id" {
+          type        = string
+          default     = "00000000-0000-0000-0000-000000000000"
+          description = "Object ID of the Microsoft Entra group that administers the SQL server."
+        }
+      data.tf: |
+        resource "azurerm_mssql_server" "orders" {
+          name                          = "sql-${local.name_prefix}"
+          resource_group_name           = azurerm_resource_group.main.name
+          location                      = azurerm_resource_group.main.location
+          version                       = "12.0"
+          minimum_tls_version           = "1.2"
+          public_network_access_enabled = false
+          tags                          = local.common_tags
+
+          azuread_administrator {
+            login_username              = var.sql_admin_group_name
+            object_id                   = var.sql_admin_group_object_id
+            azuread_authentication_only = true
+          }
+        }
+
+        resource "azurerm_mssql_database" "orders" {
+          name      = "sqldb-${local.name_prefix}"
+          server_id = azurerm_mssql_server.orders.id
+          sku_name  = "S0"
+          tags      = local.common_tags
+        }
+
+        resource "azurerm_private_dns_zone" "sql" {
+          name                = "privatelink.database.windows.net"
+          resource_group_name = azurerm_resource_group.main.name
+          tags                = local.common_tags
+        }
+
+        resource "azurerm_private_dns_zone_virtual_network_link" "sql" {
+          name                  = "link-${local.name_prefix}-sql"
+          resource_group_name   = azurerm_resource_group.main.name
+          private_dns_zone_name = azurerm_private_dns_zone.sql.name
+          virtual_network_id    = azurerm_virtual_network.main.id
+          tags                  = local.common_tags
+        }
+
+        resource "azurerm_private_endpoint" "sql" {
+          name                = "pep-${local.name_prefix}-sql"
+          resource_group_name = azurerm_resource_group.main.name
+          location            = azurerm_resource_group.main.location
+          subnet_id           = azurerm_subnet.data.id
+          tags                = local.common_tags
+
+          private_service_connection {
+            name                           = "psc-${local.name_prefix}-sql"
+            private_connection_resource_id = azurerm_mssql_server.orders.id
+            subresource_names              = ["sqlServer"]
+            is_manual_connection           = false
+          }
+
+          private_dns_zone_group {
+            name                 = "default"
+            private_dns_zone_ids = [azurerm_private_dns_zone.sql.id]
+          }
+        }
+    starter:
+      kind: terraform
+      cloud: azure
+      files:
+        versions.tf: |
+          terraform {
+            required_version = ">= 1.6"
+
+            required_providers {
+              azurerm = {
+                source  = "hashicorp/azurerm"
+                version = "~> 4.0"
+              }
+            }
+          }
+        providers.tf: |
+          provider "azurerm" {
+            features {}
+          }
+        variables.tf: |
+          variable "project" {
+            type        = string
+            default     = "orders"
+            description = "Project name: part of every resource name."
+          }
+
+          variable "environment" {
+            type        = string
+            default     = "prod"
+            description = "Deployment environment (dev, test, prod)."
+          }
+
+          variable "location" {
+            type        = string
+            default     = "eastus2"
+            description = "Azure region of the resource group and its resources."
+          }
+
+          variable "sql_admin_password" {
+            type        = string
+            description = "Password of the SQL administrator login."
+          }
+        locals.tf: |
+          locals {
+            name_prefix = "${var.project}-${var.environment}"
+            common_tags = {
+              project     = var.project
+              environment = var.environment
+              managedby   = "terraform"
+            }
+          }
+        main.tf: |
+          resource "azurerm_resource_group" "main" {
+            name     = "rg-${local.name_prefix}"
+            location = var.location
+            tags     = local.common_tags
+          }
+
+          resource "azurerm_virtual_network" "main" {
+            name                = "vnet-${local.name_prefix}"
+            resource_group_name = azurerm_resource_group.main.name
+            location            = azurerm_resource_group.main.location
+            address_space       = ["10.40.0.0/16"]
+            tags                = local.common_tags
+          }
+
+          resource "azurerm_subnet" "app" {
+            name                 = "snet-app"
+            resource_group_name  = azurerm_resource_group.main.name
+            virtual_network_name = azurerm_virtual_network.main.name
+            address_prefixes     = ["10.40.1.0/24"]
+          }
+
+          resource "azurerm_subnet" "data" {
+            name                 = "snet-data"
+            resource_group_name  = azurerm_resource_group.main.name
+            virtual_network_name = azurerm_virtual_network.main.name
+            address_prefixes     = ["10.40.2.0/24"]
+          }
+        data.tf: |
+          resource "azurerm_mssql_server" "orders" {
+            name                         = "sql-${local.name_prefix}"
+            resource_group_name          = azurerm_resource_group.main.name
+            location                     = azurerm_resource_group.main.location
+            version                      = "12.0"
+            administrator_login          = "sqladmin"
+            administrator_login_password = var.sql_admin_password
+            tags                         = local.common_tags
+          }
+
+          resource "azurerm_mssql_firewall_rule" "allow_all" {
+            name             = "allow-all"
+            server_id        = azurerm_mssql_server.orders.id
+            start_ip_address = "0.0.0.0"
+            end_ip_address   = "255.255.255.255"
+          }
+
+          resource "azurerm_mssql_database" "orders" {
+            name      = "sqldb-${local.name_prefix}"
+            server_id = azurerm_mssql_server.orders.id
+            sku_name  = "S0"
+            tags      = local.common_tags
+          }
+    checks:
+    - id: validate
+      label: The workflow validates
+      type: validate
+    - id: public-off
+      label: The SQL server denies public network access and requires TLS 1.2
+      type: has
+      has:
+        terraform:
+          type: azurerm_mssql_server
+          where:
+            public_network_access_enabled: false
+            minimum_tls_version: '1.2'
+    - id: no-firewall-rules
+      label: No SQL firewall rules open the server
+      type: has
+      has:
+        terraform:
+          type: azurerm_mssql_firewall_rule
+          count:
+            max: 0
+    - id: entra-only
+      label: The server uses Microsoft Entra-only authentication
+      type: has
+      has:
+        terraform:
+          type: azurerm_mssql_server
+          where:
+            azuread_administrator.azuread_authentication_only: true
+            administrator_login_password:
+              exists: false
+    - id: private-endpoint
+      label: A private endpoint connects to the server (sqlServer subresource)
+      type: has
+      has:
+        terraform:
+          type: azurerm_private_endpoint
+          where:
+            private_service_connection.private_connection_resource_id:
+              ref: azurerm_mssql_server
+            private_service_connection.subresource_names:
+              contains: sqlServer
+            private_dns_zone_group.private_dns_zone_ids:
+              ref: azurerm_private_dns_zone
+    - id: private-dns
+      label: The privatelink.database.windows.net zone is linked to the VNet
+      type: has
+      has:
+        terraform:
+          type: azurerm_private_dns_zone_virtual_network_link
+          where:
+            private_dns_zone_name:
+              ref: azurerm_private_dns_zone
+            virtual_network_id:
+              ref: azurerm_virtual_network
+    - id: private-dns-zone
+      label: The private DNS zone is privatelink.database.windows.net
+      type: has
+      has:
+        terraform:
+          type: azurerm_private_dns_zone
+          where:
+            name: privatelink.database.windows.net
+    - id: secrets
+      label: No unmarked secret variables (bp_sensitive_not_marked)
+      type: rules_clean
+      rules_clean:
+        codes: [bp_sensitive_not_marked]
+        minSeverity: info
+    sources:
+    - title: Azure SQL Database security best practices
+      url: https://learn.microsoft.com/en-us/azure/azure-sql/database/security-best-practice
+    - title: Azure Private Link for Azure SQL Database
+      url: https://learn.microsoft.com/en-us/azure/azure-sql/database/private-endpoint-overview
+    - title: Azure SQL connectivity settings (deny public network access, minimum TLS)
+      url: https://learn.microsoft.com/en-us/azure/azure-sql/database/connectivity-settings
+    - title: Azure private endpoint DNS configuration
+      url: https://learn.microsoft.com/en-us/azure/private-link/private-endpoint-dns
+    - title: Microsoft Entra authentication for Azure SQL
+      url: https://learn.microsoft.com/en-us/azure/azure-sql/database/authentication-aad-overview
+    - title: azurerm_mssql_server (azurerm 4.x)
+      url: https://registry.terraform.io/providers/hashicorp/azurerm/4.81.0/docs/resources/mssql_server
+    - title: azurerm_private_endpoint (azurerm 4.x)
+      url: https://registry.terraform.io/providers/hashicorp/azurerm/4.81.0/docs/resources/private_endpoint
+    - title: azurerm_private_dns_zone_virtual_network_link (azurerm 4.x)
+      url: https://registry.terraform.io/providers/hashicorp/azurerm/4.81.0/docs/resources/private_dns_zone_virtual_network_link
+    solvableWithoutCode: true
+- op: upsert
+  kind: challenge
+  id: azure-front-door-waf
+  data:
+    provider: azure
+    level: advanced
+    title: Protect a Front Door edge with a Web Application Firewall
+    summary: Upgrade a Front Door reverse proxy to Premium and attach a WAF policy in Prevention mode with managed rules, bot protection and rate limiting.
+    minutes: 50
+    tags: [edge, front-door, waf, security, defense-in-depth]
+    prerequisites: [azure-app-service-key-vault]
+    runtime: design
+    problem: |
+      This starter is Nimbo's *Reverse proxy (Front Door)* template: Azure Front Door is the only public entry
+      point and the two App Service origins already refuse traffic that doesn't come from this Front Door profile
+      (`AzureFrontDoor.Backend` service tag plus the `X-Azure-FDID` header check).
+
+      But nothing inspects the requests themselves: SQL injection, cross-site scripting and bad bots go straight
+      to the apps. The security team asks for the Azure WAF on Front Door with Microsoft's managed rule sets,
+      enforced (not just logging), plus a rate limit to blunt abusive clients — all defined as code.
+    requirements:
+    - The Front Door profile uses the Premium tier (`sku_name = "Premium_AzureFrontDoor"`), which managed rule sets require.
+    - An `azurerm_cdn_frontdoor_firewall_policy` on the Premium SKU runs in `Prevention` mode.
+    - The policy enables the managed `Microsoft_DefaultRuleSet` and the `Microsoft_BotManagerRuleSet`.
+    - The policy has a `RateLimitRule` custom rule.
+    - An `azurerm_cdn_frontdoor_security_policy` associates the WAF policy with the Front Door endpoint (`patterns_to_match = ["/*"]`).
+    - The origins still accept traffic only from this Front Door (`ip_restriction` with the `AzureFrontDoor.Backend` service tag).
+    - The workflow validates.
+    hints:
+    - Front Door Standard only supports custom WAF rules; managed rule sets (Default Rule Set 2.1, Bot Manager 1.1) need the Premium tier on both the profile and the WAF policy.
+    - Add a Front Door firewall policy from the palette in `Prevention` mode (in Detection mode it only logs). Add a `custom_rule` block of type `RateLimitRule` with a duration, a threshold and one `match_condition`, plus two `managed_rule` blocks.
+    - Add a Front Door security policy from the palette. Inside `security_policies` → `firewall`, Link to… the WAF policy; in its `association` set the pattern `/*` and Link to… the endpoint's id as the domain (you have no custom domain).
+    solution: |
+      1. Switch `azurerm_cdn_frontdoor_profile.main` to `Premium_AzureFrontDoor`.
+      2. Add a WAF policy:
+
+      ```hcl
+      resource "azurerm_cdn_frontdoor_firewall_policy" "main" {
+        name                = "wafedgeproxydev"
+        resource_group_name = azurerm_resource_group.main.name
+        sku_name            = azurerm_cdn_frontdoor_profile.main.sku_name
+        mode                = "Prevention"
+
+        custom_rule {
+          name                           = "RateLimitPerClient"
+          type                           = "RateLimitRule"
+          action                         = "Block"
+          priority                       = 100
+          rate_limit_duration_in_minutes = 1
+          rate_limit_threshold           = 1000
+          match_condition {
+            match_variable = "RequestUri"
+            operator       = "BeginsWith"
+            match_values   = ["/"]
+          }
+        }
+
+        managed_rule {
+          type    = "Microsoft_DefaultRuleSet"
+          version = "2.1"
+          action  = "Block"
+        }
+
+        managed_rule {
+          type    = "Microsoft_BotManagerRuleSet"
+          version = "1.1"
+          action  = "Block"
+        }
+      }
+      ```
+
+      3. Attach it with `azurerm_cdn_frontdoor_security_policy` (firewall → association → domain = the endpoint,
+         `patterns_to_match = ["/*"]`).
+
+      **Why:** the Default Rule Set covers the common web attack classes (SQL injection, XSS, local/remote file
+      inclusion, remote code execution, protocol attacks) and the Bot Manager rule set blocks known bad bots;
+      Prevention mode actually takes the rule action. Custom rules run before managed rules, so the rate limit
+      throttles floods cheaply; Microsoft recommends a threshold well above normal per-client traffic. Together
+      with origin lock-down (service tag + `X-Azure-FDID`) this is defense in depth: the edge filters requests and
+      the origins only trust that edge. Keeping the policy in Terraform lets you review exclusions and upgrade
+      rule-set versions safely.
+
+      **Without writing code in Nimbo**
+
+      1. Click the Front Door profile and pick `Premium_AzureFrontDoor` in **sku_name**.
+      2. From the palette add a **Front Door firewall policy**: name `wafwebdev`, **Link to…** `resource_group_name` → the resource group's name, SKU `Premium_AzureFrontDoor`, enabled on, mode `Prevention`.
+      3. In the policy add a **custom_rule** block: name `RateLimitPerClient`, type `RateLimitRule`, action `Block`, enabled, priority `100`, duration `1` minute, threshold `1000`, and a **match_condition** with variable `RequestUri`, operator `BeginsWith` and value `/`.
+      4. Add two **managed_rule** blocks: `Microsoft_DefaultRuleSet` version `2.1` and `Microsoft_BotManagerRuleSet` version `1.1`, both with action `Block`.
+      5. Add a **Front Door security policy**: name `web-dev-waf`, **Link to…** the profile's id. In **security_policies** → **firewall** use **Link to…** for the WAF policy's id; in its **association** add the pattern `/*` and a **domain** whose id is **Link to…** the endpoint's id.
+      6. Leave the origins as they are: they already accept only Front Door traffic.
+    solutionFiles:
+      main.tf: |
+        resource "azurerm_resource_group" "main" {
+          name     = "${local.name_prefix}-rg"
+          location = var.location
+          tags     = local.common_tags
+        }
+
+        # App Service names are global: a short random suffix keeps them unique.
+        resource "random_string" "suffix" {
+          length  = 6
+          special = false
+          upper   = false
+        }
+
+        resource "azurerm_service_plan" "main" {
+          name                = "${local.name_prefix}-plan"
+          resource_group_name = azurerm_resource_group.main.name
+          location            = azurerm_resource_group.main.location
+          os_type             = "Linux"
+          sku_name            = var.app_service_sku
+          tags                = local.common_tags
+        }
+
+        # The internal servers: they refuse every request that does not come
+        # through this Front Door profile (service tag + X-Azure-FDID header).
+        resource "azurerm_linux_web_app" "app" {
+          for_each                      = local.apps
+          name                          = "${local.name_prefix}-${each.key}-${random_string.suffix.result}"
+          resource_group_name           = azurerm_resource_group.main.name
+          location                      = azurerm_resource_group.main.location
+          service_plan_id               = azurerm_service_plan.main.id
+          https_only                    = true
+          public_network_access_enabled = true
+          tags                          = local.common_tags
+
+          site_config {
+            always_on                         = true
+            ftps_state                        = "Disabled"
+            http2_enabled                     = true
+            minimum_tls_version               = "1.2"
+            health_check_path                 = "/"
+            health_check_eviction_time_in_min = 5
+            ip_restriction_default_action     = "Deny"
+
+            application_stack {
+              docker_image_name   = var.app_image
+              docker_registry_url = "https://index.docker.io"
+            }
+
+            ip_restriction {
+              name        = "front-door-only"
+              priority    = 100
+              action      = "Allow"
+              service_tag = "AzureFrontDoor.Backend"
+
+              headers {
+                x_azure_fdid = [azurerm_cdn_frontdoor_profile.main.resource_guid]
+              }
+            }
+          }
+        }
+
+        # Front Door: the one public endpoint, terminating HTTPS at the edge.
+        # Premium is required for the WAF managed rule sets.
+        resource "azurerm_cdn_frontdoor_profile" "main" {
+          name                     = "${local.name_prefix}-fd"
+          resource_group_name      = azurerm_resource_group.main.name
+          sku_name                 = "Premium_AzureFrontDoor"
+          response_timeout_seconds = 60
+          tags                     = local.common_tags
+        }
+
+        resource "azurerm_cdn_frontdoor_endpoint" "main" {
+          name                     = "${local.name_prefix}-${random_string.suffix.result}"
+          cdn_frontdoor_profile_id = azurerm_cdn_frontdoor_profile.main.id
+          tags                     = local.common_tags
+        }
+
+        resource "azurerm_cdn_frontdoor_origin_group" "app" {
+          for_each                 = local.apps
+          name                     = each.key
+          cdn_frontdoor_profile_id = azurerm_cdn_frontdoor_profile.main.id
+
+          load_balancing {
+            sample_size                 = 4
+            successful_samples_required = 3
+          }
+
+          health_probe {
+            path                = "/"
+            protocol            = "Https"
+            request_type        = "HEAD"
+            interval_in_seconds = 100
+          }
+        }
+
+        resource "azurerm_cdn_frontdoor_origin" "app" {
+          for_each                       = local.apps
+          name                           = each.key
+          cdn_frontdoor_origin_group_id  = azurerm_cdn_frontdoor_origin_group.app[each.key].id
+          enabled                        = true
+          host_name                      = azurerm_linux_web_app.app[each.key].default_hostname
+          origin_host_header             = azurerm_linux_web_app.app[each.key].default_hostname
+          certificate_name_check_enabled = true
+          http_port                      = 80
+          https_port                     = 443
+          priority                       = 1
+          weight                         = 1000
+        }
+
+        # Path routing: /api/* to the API app, everything else to the web app.
+        resource "azurerm_cdn_frontdoor_route" "app" {
+          for_each                      = local.apps
+          name                          = each.key
+          cdn_frontdoor_endpoint_id     = azurerm_cdn_frontdoor_endpoint.main.id
+          cdn_frontdoor_origin_group_id = azurerm_cdn_frontdoor_origin_group.app[each.key].id
+          cdn_frontdoor_origin_ids      = [azurerm_cdn_frontdoor_origin.app[each.key].id]
+          patterns_to_match             = each.value
+          supported_protocols           = ["Http", "Https"]
+          https_redirect_enabled        = true
+          forwarding_protocol           = "HttpsOnly"
+          link_to_default_domain        = true
+        }
+      waf.tf: |
+        # WAF policy names allow letters and digits only.
+        resource "azurerm_cdn_frontdoor_firewall_policy" "main" {
+          name                = "waf${replace(local.name_prefix, "-", "")}"
+          resource_group_name = azurerm_resource_group.main.name
+          sku_name            = azurerm_cdn_frontdoor_profile.main.sku_name
+          enabled             = true
+          mode                = "Prevention"
+          tags                = local.common_tags
+
+          # Custom rules run before the managed rule sets.
+          custom_rule {
+            name                           = "RateLimitPerClient"
+            type                           = "RateLimitRule"
+            action                         = "Block"
+            enabled                        = true
+            priority                       = 100
+            rate_limit_duration_in_minutes = 1
+            rate_limit_threshold           = 1000
+
+            match_condition {
+              match_variable = "RequestUri"
+              operator       = "BeginsWith"
+              match_values   = ["/"]
+            }
+          }
+
+          managed_rule {
+            type    = "Microsoft_DefaultRuleSet"
+            version = "2.1"
+            action  = "Block"
+          }
+
+          managed_rule {
+            type    = "Microsoft_BotManagerRuleSet"
+            version = "1.1"
+            action  = "Block"
+          }
+        }
+
+        resource "azurerm_cdn_frontdoor_security_policy" "main" {
+          name                     = "${local.name_prefix}-waf"
+          cdn_frontdoor_profile_id = azurerm_cdn_frontdoor_profile.main.id
+
+          security_policies {
+            firewall {
+              cdn_frontdoor_firewall_policy_id = azurerm_cdn_frontdoor_firewall_policy.main.id
+
+              association {
+                patterns_to_match = ["/*"]
+
+                domain {
+                  cdn_frontdoor_domain_id = azurerm_cdn_frontdoor_endpoint.main.id
+                }
+              }
+            }
+          }
+        }
+    starter:
+      templateId: azure-reverse-proxy
+    checks:
+    - id: validate
+      label: The workflow validates
+      type: validate
+    - id: premium-profile
+      label: The Front Door profile is Premium
+      type: has
+      has:
+        terraform:
+          type: azurerm_cdn_frontdoor_profile
+          where:
+            sku_name: Premium_AzureFrontDoor
+    - id: waf-prevention
+      label: A Front Door WAF policy runs in Prevention mode
+      type: has
+      has:
+        terraform:
+          type: azurerm_cdn_frontdoor_firewall_policy
+          where:
+            mode: Prevention
+    - id: managed-rules
+      label: The Microsoft Default Rule Set 2.1 is enabled
+      type: has
+      has:
+        terraform:
+          type: azurerm_cdn_frontdoor_firewall_policy
+          where:
+            managed_rule.type: Microsoft_DefaultRuleSet
+            managed_rule.version:
+              in: ['2.1']
+    - id: bot-rules
+      label: Bot protection is enabled (Microsoft_BotManagerRuleSet)
+      type: has
+      has:
+        terraform:
+          type: azurerm_cdn_frontdoor_firewall_policy
+          where:
+            managed_rule.type: Microsoft_BotManagerRuleSet
+    - id: rate-limit
+      label: A rate-limit custom rule throttles abusive clients
+      type: has
+      has:
+        terraform:
+          type: azurerm_cdn_frontdoor_firewall_policy
+          where:
+            custom_rule.type: RateLimitRule
+    - id: waf-attached
+      label: A security policy attaches the WAF policy to the endpoint
+      type: has
+      has:
+        terraform:
+          type: azurerm_cdn_frontdoor_security_policy
+          where:
+            security_policies.firewall.cdn_frontdoor_firewall_policy_id:
+              ref: azurerm_cdn_frontdoor_firewall_policy
+            security_policies.firewall.association.domain.cdn_frontdoor_domain_id:
+              ref: azurerm_cdn_frontdoor_endpoint
+    - id: origin-locked
+      label: Origins only accept traffic from Front Door
+      type: has
+      has:
+        terraform:
+          type: azurerm_linux_web_app
+          where:
+            site_config.ip_restriction.service_tag: AzureFrontDoor.Backend
+            site_config.ip_restriction_default_action: Deny
+    sources:
+    - title: Azure Web Application Firewall on Azure Front Door
+      url: https://learn.microsoft.com/en-us/azure/web-application-firewall/afds/afds-overview
+    - title: Best practices for Web Application Firewall on Azure Front Door
+      url: https://learn.microsoft.com/en-us/azure/web-application-firewall/afds/waf-front-door-best-practices
+    - title: Secure traffic to Azure Front Door origins
+      url: https://learn.microsoft.com/en-us/azure/frontdoor/origin-security
+    - title: App Service access restrictions (restrict access to a specific Azure Front Door instance)
+      url: https://learn.microsoft.com/en-us/azure/app-service/overview-access-restrictions
+    - title: azurerm_cdn_frontdoor_firewall_policy (azurerm 4.x)
+      url: https://registry.terraform.io/providers/hashicorp/azurerm/4.81.0/docs/resources/cdn_frontdoor_firewall_policy
+    - title: azurerm_cdn_frontdoor_security_policy (azurerm 4.x)
+      url: https://registry.terraform.io/providers/hashicorp/azurerm/4.81.0/docs/resources/cdn_frontdoor_security_policy
+    - title: azurerm_cdn_frontdoor_profile (azurerm 4.x)
+      url: https://registry.terraform.io/providers/hashicorp/azurerm/4.81.0/docs/resources/cdn_frontdoor_profile
+    solvableWithoutCode: true
+- op: upsert
+  kind: challenge
+  id: azure-hub-spoke-firewall
+  data:
+    provider: azure
+    level: advanced
+    title: Build a hub-spoke network with Azure Firewall
+    summary: Turn three loosely peered VNets into a hub-spoke topology where all spoke egress and spoke-to-spoke traffic flows through Azure Firewall.
+    minutes: 60
+    tags: [networking, hub-spoke, firewall, segmentation, landing-zone]
+    prerequisites: [azure-vnet-nsg]
+    runtime: design
+    problem: |
+      The platform team has a `hub` virtual network and two workload spokes (`spoke-a`, `spoke-b`). Peerings
+      exist only from the hub to each spoke, nobody inspects traffic leaving the spokes, and someone opened RDP
+      to the internet on a spoke "just for a day".
+
+      The Azure Architecture Center hub-spoke reference architecture — the basis of Azure landing zones — puts
+      shared services such as Azure Firewall in the hub, peers each spoke to the hub in both directions and uses
+      user-defined routes so spoke traffic is forced through the firewall. Peering is not transitive, so
+      spoke-to-spoke traffic also has to be routed through the hub.
+    requirements:
+    - Each spoke is peered with the hub in **both** directions, and the peerings allow forwarded traffic (`allow_forwarded_traffic = true`).
+    - The hub has a subnet named exactly `AzureFirewallSubnet` and an `azurerm_firewall` (`sku_name = "AZFW_VNet"`, Standard or Premium tier, spread across availability zones) placed in it, governed by an `azurerm_firewall_policy`.
+    - An `azurerm_route_table` with an `azurerm_route` sends `0.0.0.0/0` to the firewall's private IP (`next_hop_type = "VirtualAppliance"`), and it is associated with the workload subnet of each spoke.
+    - No NSG rule exposes admin or database ports to the internet (`bp_open_ingress`).
+    - The workflow validates.
+    hints:
+    - 'Peerings are one-way: for two spokes you need four peerings, all allowing forwarded traffic. The existing hub-to-spoke peerings only need a switch; add the spoke-to-hub ones from the palette.'
+    - The firewall needs a hub subnet named exactly `AzureFirewallSubnet` (at least /26), a Standard, Static public IP and a firewall policy. Add them from the palette, drag the resource group onto each one (Place in the resource group) and link them in the firewall's `ip_configuration` block.
+    - Add a route table and a route for `0.0.0.0/0` with next hop type `VirtualAppliance`. For the next hop address use Link to… → More… and pick the firewall's `ip_configuration[0].private_ip_address`. Associate the route table with each spoke's app subnet.
+    - 'Remove the public RDP rule card from the spoke NSG with its Trash button. For admin access, put Azure Bastion in the hub: one Bastion can reach VMs in peered spokes.'
+    solution: |
+      1. Add the missing `spoke -> hub` peerings and set `allow_forwarded_traffic = true` on all four peerings.
+      2. In the hub, add `AzureFirewallSubnet` (/26), a Standard Static public IP, an `azurerm_firewall_policy`, a rule
+         collection group that allows the spoke-to-spoke and outbound flows you need, and an `azurerm_firewall`
+         (`AZFW_VNet`, `Standard`, `zones = ["1", "2", "3"]`).
+      3. Create `rt-spokes` with a route `0.0.0.0/0 -> VirtualAppliance -> firewall private IP` and associate it with
+         both spoke workload subnets (`azurerm_subnet_route_table_association`).
+      4. Remove the inbound RDP rule from the internet.
+
+      **Why:** the hub concentrates shared, centrally managed controls; spokes isolate workloads and can be
+      delegated to teams or subscriptions. Because VNet peering is non-transitive, the UDRs make the firewall the
+      next hop for both internet egress and spoke-to-spoke traffic, and that only works when peerings accept
+      forwarded traffic. Zones make the hub service resilient to a datacenter failure; the firewall policy keeps
+      rules as reviewable code; removing public RDP closes the most scanned attack surface.
+
+      **Without writing code in Nimbo**
+
+      1. Click the NSG `spoke_b_app` and remove its RDP **security_rule** card with the Trash button.
+      2. On both existing hub-to-spoke peerings turn **allow_forwarded_traffic** on.
+      3. Add two virtual network peerings from the palette (`peer-spoke-a-to-hub`, `peer-spoke-b-to-hub`): **Link to…** the resource group's name, the spoke's virtual network name and the hub's id as remote network, and turn **allow_forwarded_traffic** on.
+      4. Add a subnet `AzureFirewallSubnet` in the hub (**Link to…** the resource group name and the hub network name) with prefix `10.0.0.0/26`.
+      5. Add a public IP and a firewall policy; drag the resource group onto each and pick **Place in the resource group**. Public IP: `pip-corpnet-prod-fw`, `Static`, `Standard`, zones 1, 2, 3. Policy: `afwp-corpnet-prod`.
+      6. Add a firewall, place it in the resource group: name `afw-corpnet-prod-hub`, SKU `AZFW_VNet`, tier `Standard`, zones 1, 2, 3, **Link to…** the policy id. In **ip_configuration** name it `configuration` and **Link to…** the firewall subnet's id and the public IP's id.
+      7. Add a route table `rt-corpnet-prod-spokes` (placed in the resource group) and a route `default-via-firewall`: **Link to…** the resource group name and the route table name, prefix `0.0.0.0/0`, next hop type `VirtualAppliance`, and for **next_hop_in_ip_address** open **Link to…** → **More…** and pick the firewall's `ip_configuration[0].private_ip_address`.
+      8. Add two subnet route table associations and **Link to…** each spoke's app subnet and the route table.
+    solutionFiles:
+      network.tf: |
+        resource "azurerm_virtual_network" "hub" {
+          name                = "vnet-${local.name_prefix}-hub"
+          resource_group_name = azurerm_resource_group.main.name
+          location            = azurerm_resource_group.main.location
+          address_space       = ["10.0.0.0/22"]
+          tags                = local.common_tags
+        }
+
+        resource "azurerm_subnet" "firewall" {
+          # Azure Firewall requires this exact name and at least a /26.
+          name                 = "AzureFirewallSubnet"
+          resource_group_name  = azurerm_resource_group.main.name
+          virtual_network_name = azurerm_virtual_network.hub.name
+          address_prefixes     = ["10.0.0.0/26"]
+        }
+
+        resource "azurerm_virtual_network" "spoke_a" {
+          name                = "vnet-${local.name_prefix}-spoke-a"
+          resource_group_name = azurerm_resource_group.main.name
+          location            = azurerm_resource_group.main.location
+          address_space       = ["10.1.0.0/16"]
+          tags                = local.common_tags
+        }
+
+        resource "azurerm_subnet" "spoke_a_app" {
+          name                 = "snet-app"
+          resource_group_name  = azurerm_resource_group.main.name
+          virtual_network_name = azurerm_virtual_network.spoke_a.name
+          address_prefixes     = ["10.1.1.0/24"]
+        }
+
+        resource "azurerm_virtual_network" "spoke_b" {
+          name                = "vnet-${local.name_prefix}-spoke-b"
+          resource_group_name = azurerm_resource_group.main.name
+          location            = azurerm_resource_group.main.location
+          address_space       = ["10.2.0.0/16"]
+          tags                = local.common_tags
+        }
+
+        resource "azurerm_subnet" "spoke_b_app" {
+          name                 = "snet-app"
+          resource_group_name  = azurerm_resource_group.main.name
+          virtual_network_name = azurerm_virtual_network.spoke_b.name
+          address_prefixes     = ["10.2.1.0/24"]
+        }
+
+        resource "azurerm_network_security_group" "spoke_b_app" {
+          name                = "nsg-${local.name_prefix}-spoke-b-app"
+          resource_group_name = azurerm_resource_group.main.name
+          location            = azurerm_resource_group.main.location
+          tags                = local.common_tags
+        }
+
+        resource "azurerm_subnet_network_security_group_association" "spoke_b_app" {
+          subnet_id                 = azurerm_subnet.spoke_b_app.id
+          network_security_group_id = azurerm_network_security_group.spoke_b_app.id
+        }
+
+        # Peerings are one-way: each spoke needs hub -> spoke and spoke -> hub.
+        resource "azurerm_virtual_network_peering" "hub_to_spoke_a" {
+          name                      = "peer-hub-to-spoke-a"
+          resource_group_name       = azurerm_resource_group.main.name
+          virtual_network_name      = azurerm_virtual_network.hub.name
+          remote_virtual_network_id = azurerm_virtual_network.spoke_a.id
+          allow_forwarded_traffic   = true
+        }
+
+        resource "azurerm_virtual_network_peering" "spoke_a_to_hub" {
+          name                      = "peer-spoke-a-to-hub"
+          resource_group_name       = azurerm_resource_group.main.name
+          virtual_network_name      = azurerm_virtual_network.spoke_a.name
+          remote_virtual_network_id = azurerm_virtual_network.hub.id
+          allow_forwarded_traffic   = true
+        }
+
+        resource "azurerm_virtual_network_peering" "hub_to_spoke_b" {
+          name                      = "peer-hub-to-spoke-b"
+          resource_group_name       = azurerm_resource_group.main.name
+          virtual_network_name      = azurerm_virtual_network.hub.name
+          remote_virtual_network_id = azurerm_virtual_network.spoke_b.id
+          allow_forwarded_traffic   = true
+        }
+
+        resource "azurerm_virtual_network_peering" "spoke_b_to_hub" {
+          name                      = "peer-spoke-b-to-hub"
+          resource_group_name       = azurerm_resource_group.main.name
+          virtual_network_name      = azurerm_virtual_network.spoke_b.name
+          remote_virtual_network_id = azurerm_virtual_network.hub.id
+          allow_forwarded_traffic   = true
+        }
+      firewall.tf: |
+        resource "azurerm_public_ip" "firewall" {
+          name                = "pip-${local.name_prefix}-afw"
+          resource_group_name = azurerm_resource_group.main.name
+          location            = azurerm_resource_group.main.location
+          allocation_method   = "Static"
+          sku                 = "Standard"
+          zones               = ["1", "2", "3"]
+          tags                = local.common_tags
+        }
+
+        resource "azurerm_firewall_policy" "hub" {
+          name                     = "afwp-${local.name_prefix}"
+          resource_group_name      = azurerm_resource_group.main.name
+          location                 = azurerm_resource_group.main.location
+          sku                      = "Standard"
+          threat_intelligence_mode = "Deny"
+          tags                     = local.common_tags
+        }
+
+        resource "azurerm_firewall_policy_rule_collection_group" "spokes" {
+          name               = "rcg-spokes"
+          firewall_policy_id = azurerm_firewall_policy.hub.id
+          priority           = 200
+
+          network_rule_collection {
+            name     = "allow-spoke-to-spoke"
+            priority = 100
+            action   = "Allow"
+
+            rule {
+              name                  = "spoke-a-to-spoke-b-https"
+              protocols             = ["TCP"]
+              source_addresses      = ["10.1.0.0/16"]
+              destination_addresses = ["10.2.0.0/16"]
+              destination_ports     = ["443"]
+            }
+          }
+        }
+
+        resource "azurerm_firewall" "hub" {
+          name                = "afw-${local.name_prefix}"
+          resource_group_name = azurerm_resource_group.main.name
+          location            = azurerm_resource_group.main.location
+          sku_name            = "AZFW_VNet"
+          sku_tier            = "Standard"
+          firewall_policy_id  = azurerm_firewall_policy.hub.id
+          zones               = ["1", "2", "3"]
+          tags                = local.common_tags
+
+          ip_configuration {
+            name                 = "configuration"
+            subnet_id            = azurerm_subnet.firewall.id
+            public_ip_address_id = azurerm_public_ip.firewall.id
+          }
+        }
+
+        # Force spoke egress and spoke-to-spoke traffic through the firewall.
+        resource "azurerm_route_table" "spokes" {
+          name                          = "rt-${local.name_prefix}-spokes"
+          resource_group_name           = azurerm_resource_group.main.name
+          location                      = azurerm_resource_group.main.location
+          bgp_route_propagation_enabled = false
+          tags                          = local.common_tags
+        }
+
+        resource "azurerm_route" "default_via_firewall" {
+          name                   = "udr-default-via-afw"
+          resource_group_name    = azurerm_resource_group.main.name
+          route_table_name       = azurerm_route_table.spokes.name
+          address_prefix         = "0.0.0.0/0"
+          next_hop_type          = "VirtualAppliance"
+          next_hop_in_ip_address = azurerm_firewall.hub.ip_configuration[0].private_ip_address
+        }
+
+        resource "azurerm_subnet_route_table_association" "spoke_a_app" {
+          subnet_id      = azurerm_subnet.spoke_a_app.id
+          route_table_id = azurerm_route_table.spokes.id
+        }
+
+        resource "azurerm_subnet_route_table_association" "spoke_b_app" {
+          subnet_id      = azurerm_subnet.spoke_b_app.id
+          route_table_id = azurerm_route_table.spokes.id
+        }
+    starter:
+      kind: terraform
+      cloud: azure
+      files:
+        versions.tf: |
+          terraform {
+            required_version = ">= 1.6"
+
+            required_providers {
+              azurerm = {
+                source  = "hashicorp/azurerm"
+                version = "~> 4.0"
+              }
+            }
+          }
+        providers.tf: |
+          provider "azurerm" {
+            features {}
+          }
+        variables.tf: |
+          variable "project" {
+            type        = string
+            default     = "corpnet"
+            description = "Project name: part of every resource name."
+          }
+
+          variable "environment" {
+            type        = string
+            default     = "prod"
+            description = "Deployment environment (dev, test, prod)."
+          }
+
+          variable "location" {
+            type        = string
+            default     = "westeurope"
+            description = "Azure region of the hub and its spokes (one hub per region)."
+          }
+        locals.tf: |
+          locals {
+            name_prefix = "${var.project}-${var.environment}"
+            common_tags = {
+              project     = var.project
+              environment = var.environment
+              managedby   = "terraform"
+            }
+          }
+        main.tf: |
+          resource "azurerm_resource_group" "main" {
+            name     = "rg-${local.name_prefix}-network"
+            location = var.location
+            tags     = local.common_tags
+          }
+        network.tf: |
+          resource "azurerm_virtual_network" "hub" {
+            name                = "vnet-${local.name_prefix}-hub"
+            resource_group_name = azurerm_resource_group.main.name
+            location            = azurerm_resource_group.main.location
+            address_space       = ["10.0.0.0/22"]
+            tags                = local.common_tags
+          }
+
+          resource "azurerm_virtual_network" "spoke_a" {
+            name                = "vnet-${local.name_prefix}-spoke-a"
+            resource_group_name = azurerm_resource_group.main.name
+            location            = azurerm_resource_group.main.location
+            address_space       = ["10.1.0.0/16"]
+            tags                = local.common_tags
+          }
+
+          resource "azurerm_subnet" "spoke_a_app" {
+            name                 = "snet-app"
+            resource_group_name  = azurerm_resource_group.main.name
+            virtual_network_name = azurerm_virtual_network.spoke_a.name
+            address_prefixes     = ["10.1.1.0/24"]
+          }
+
+          resource "azurerm_virtual_network" "spoke_b" {
+            name                = "vnet-${local.name_prefix}-spoke-b"
+            resource_group_name = azurerm_resource_group.main.name
+            location            = azurerm_resource_group.main.location
+            address_space       = ["10.2.0.0/16"]
+            tags                = local.common_tags
+          }
+
+          resource "azurerm_subnet" "spoke_b_app" {
+            name                 = "snet-app"
+            resource_group_name  = azurerm_resource_group.main.name
+            virtual_network_name = azurerm_virtual_network.spoke_b.name
+            address_prefixes     = ["10.2.1.0/24"]
+          }
+
+          resource "azurerm_network_security_group" "spoke_b_app" {
+            name                = "nsg-${local.name_prefix}-spoke-b-app"
+            resource_group_name = azurerm_resource_group.main.name
+            location            = azurerm_resource_group.main.location
+            tags                = local.common_tags
+
+            security_rule {
+              name                       = "temp-rdp"
+              priority                   = 100
+              direction                  = "Inbound"
+              access                     = "Allow"
+              protocol                   = "Tcp"
+              source_port_range          = "*"
+              destination_port_range     = "3389"
+              source_address_prefix      = "Internet"
+              destination_address_prefix = "*"
+            }
+          }
+
+          resource "azurerm_subnet_network_security_group_association" "spoke_b_app" {
+            subnet_id                 = azurerm_subnet.spoke_b_app.id
+            network_security_group_id = azurerm_network_security_group.spoke_b_app.id
+          }
+
+          resource "azurerm_virtual_network_peering" "hub_to_spoke_a" {
+            name                      = "peer-hub-to-spoke-a"
+            resource_group_name       = azurerm_resource_group.main.name
+            virtual_network_name      = azurerm_virtual_network.hub.name
+            remote_virtual_network_id = azurerm_virtual_network.spoke_a.id
+          }
+
+          resource "azurerm_virtual_network_peering" "hub_to_spoke_b" {
+            name                      = "peer-hub-to-spoke-b"
+            resource_group_name       = azurerm_resource_group.main.name
+            virtual_network_name      = azurerm_virtual_network.hub.name
+            remote_virtual_network_id = azurerm_virtual_network.spoke_b.id
+          }
+    checks:
+    - id: validate
+      label: The workflow validates
+      type: validate
+    - id: spoke-to-hub
+      label: Spokes peer back to the hub and accept forwarded traffic
+      type: has
+      has:
+        terraform:
+          type: azurerm_virtual_network_peering
+          where:
+            remote_virtual_network_id:
+              ref: azurerm_virtual_network.hub
+            allow_forwarded_traffic: true
+          count:
+            min: 2
+    - id: hub-to-spoke
+      label: Hub peerings accept forwarded traffic
+      type: has
+      has:
+        terraform:
+          type: azurerm_virtual_network_peering
+          where:
+            virtual_network_name:
+              ref: azurerm_virtual_network.hub
+            allow_forwarded_traffic: true
+          count:
+            min: 2
+    - id: firewall-subnet
+      label: The hub has an AzureFirewallSubnet
+      type: has
+      has:
+        terraform:
+          type: azurerm_subnet
+          where:
+            name: AzureFirewallSubnet
+            virtual_network_name:
+              ref: azurerm_virtual_network.hub
+    - id: firewall
+      label: Azure Firewall (VNet SKU, Standard or Premium, zone-redundant) runs in the hub with a firewall policy
+      type: has
+      has:
+        terraform:
+          type: azurerm_firewall
+          where:
+            sku_name: AZFW_VNet
+            sku_tier:
+              in: [Standard, Premium]
+            zones:
+              exists: true
+            firewall_policy_id:
+              ref: azurerm_firewall_policy
+            ip_configuration.subnet_id:
+              ref: azurerm_subnet
+    - id: udr
+      label: A route sends 0.0.0.0/0 to the firewall
+      type: has
+      has:
+        terraform:
+          type: azurerm_route
+          where:
+            address_prefix: 0.0.0.0/0
+            next_hop_type: VirtualAppliance
+            next_hop_in_ip_address:
+              ref: azurerm_firewall
+    - id: udr-associated
+      label: The route table is associated with both spoke workload subnets
+      type: has
+      has:
+        terraform:
+          type: azurerm_subnet_route_table_association
+          where:
+            route_table_id:
+              ref: azurerm_route_table
+          count:
+            min: 2
+    - id: no-open-admin-ports
+      label: No admin or database port is open to the internet (bp_open_ingress)
+      type: rules_clean
+      rules_clean:
+        codes: [bp_open_ingress]
+        minSeverity: info
+    sources:
+    - title: Hub-spoke network topology in Azure (Azure Architecture Center)
+      url: https://learn.microsoft.com/en-us/azure/architecture/networking/architecture/hub-spoke
+    - title: Plan virtual networks
+      url: https://learn.microsoft.com/en-us/azure/virtual-network/virtual-network-vnet-plan-design-arm
+    - title: Study guide for Exam AZ-305 (design network solutions)
+      url: https://learn.microsoft.com/en-us/credentials/certifications/resources/study-guides/az-305
+    - title: azurerm_virtual_network_peering (azurerm 4.x)
+      url: https://registry.terraform.io/providers/hashicorp/azurerm/4.81.0/docs/resources/virtual_network_peering
+    - title: azurerm_firewall (azurerm 4.x)
+      url: https://registry.terraform.io/providers/hashicorp/azurerm/4.81.0/docs/resources/firewall
+    - title: azurerm_route (azurerm 4.x)
+      url: https://registry.terraform.io/providers/hashicorp/azurerm/4.81.0/docs/resources/route
+    - title: azurerm_subnet_route_table_association (azurerm 4.x)
+      url: https://registry.terraform.io/providers/hashicorp/azurerm/4.81.0/docs/resources/subnet_route_table_association
+    solvableWithoutCode: true
+- op: upsert
+  kind: challenge
+  id: azure-aks-baseline
+  data:
+    provider: azure
+    level: expert
+    title: Harden an AKS cluster to the baseline architecture
+    summary: Turn a single-node demo AKS cluster into a zone-redundant, private, Entra-integrated, policy-governed and monitored cluster.
+    minutes: 75
+    tags: [kubernetes, aks, reliability, security, identity, observability, autoscaling]
+    prerequisites: [azure-hub-spoke-firewall, azure-app-service-key-vault]
+    runtime: design
+    problem: |
+      A product team wants to run production workloads on an AKS cluster that started as a demo: Free tier, one
+      node pool with a single node in one zone, kubenet networking, local Kubernetes admin accounts, a public API
+      server, no Azure Policy, no monitoring and no upgrade strategy.
+
+      The Azure Architecture Center *baseline architecture for an AKS cluster* and the AKS Well-Architected service
+      guide describe what production needs. Rework the Terraform so the cluster follows that baseline (the
+      hub-spoke network from the advanced level is assumed to be in place; this workflow only models the spoke).
+    requirements:
+    - The cluster uses the Standard tier (`sku_tier = "Standard"`, financially backed uptime SLA).
+    - The default (system) node pool spreads across availability zones, autoscales (`auto_scaling_enabled = true`, `min_count` at least 2; the baseline uses 3) and only runs critical add-ons (`only_critical_addons_enabled = true`).
+    - A separate `azurerm_kubernetes_cluster_node_pool` in `User` mode runs the workloads, zone-spread and autoscaling.
+    - 'Identity: local accounts are disabled (`local_account_disabled = true`), Kubernetes authorization uses Microsoft Entra ID with Azure RBAC (`azure_active_directory_role_based_access_control { azure_rbac_enabled = true }`) and Microsoft Entra Workload ID is on (`workload_identity_enabled = true`).'
+    - 'Networking: Azure CNI Overlay (`network_plugin = "azure"`, `network_plugin_mode = "overlay"`) with a network policy engine, and a private API server (`private_cluster_enabled = true`).'
+    - 'Governance and operations: the Azure Policy add-on is on, Container Insights sends to a Log Analytics workspace (`oms_agent`), and an automatic upgrade channel is set.'
+    - The workflow validates.
+    hints:
+    - Almost every baseline setting is a switch or select on the cluster or inside its `default_node_pool` and `network_profile` blocks. Read the requirements and tick them off in the inspector.
+    - 'Changing zones or critical-add-ons-only on the default node pool forces a rotation: fill `temporary_name_for_rotation`. In azurerm 4.x the autoscaler switch is `auto_scaling_enabled` with `min_count`/`max_count` (clear the fixed `node_count`).'
+    - 'Add a Log Analytics workspace and the client config data source from the palette. Link the cluster''s `oms_agent` block to the workspace id and the Entra RBAC block''s tenant to the data source''s `tenant_id`. Cilium is the recommended policy engine: pick it for both data plane and network policy.'
+    - 'The workloads go in a separate node pool from the palette: mode `User`, Link to… the cluster id and the nodes subnet, zones 1-3 and autoscaling on.'
+    solution: |
+      Key parts of the hardened cluster:
+
+      ```hcl
+      resource "azurerm_kubernetes_cluster" "main" {
+        sku_tier                  = "Standard"
+        automatic_upgrade_channel = "patch"
+        local_account_disabled    = true
+        oidc_issuer_enabled       = true
+        workload_identity_enabled = true
+        azure_policy_enabled      = true
+        private_cluster_enabled   = true
+
+        default_node_pool {
+          name                         = "system"
+          zones                        = ["1", "2", "3"]
+          auto_scaling_enabled         = true
+          min_count                    = 3
+          max_count                    = 5
+          only_critical_addons_enabled = true
+          temporary_name_for_rotation  = "systemtmp"
+        }
+
+        azure_active_directory_role_based_access_control {
+          azure_rbac_enabled = true
+        }
+
+        network_profile {
+          network_plugin      = "azure"
+          network_plugin_mode = "overlay"
+          network_policy      = "cilium"
+          network_data_plane  = "cilium"
+        }
+
+        oms_agent {
+          log_analytics_workspace_id = azurerm_log_analytics_workspace.main.id
+        }
+      }
+      ```
+
+      plus an `azurerm_kubernetes_cluster_node_pool` with `mode = "User"`, zones and autoscaling for the apps.
+
+      **Why:** the Standard tier adds the uptime SLA for the control plane; zones and the cluster autoscaler keep
+      capacity through a datacenter failure and load changes; separating system and user pools protects CoreDNS
+      and other critical add-ons from noisy workloads. Disabling local accounts forces every user through
+      Microsoft Entra ID with Azure RBAC (auditable, least privilege), and Workload ID lets pods reach Key Vault and
+      other services with federated identities instead of secrets. Azure CNI Overlay is the recommended pod
+      networking for new clusters and a network policy engine enables pod-to-pod segmentation. A private API
+      server removes the public control-plane endpoint (administer it through Bastion/jump hosts in the hub). The
+      Azure Policy add-on enforces guardrails inside the cluster, Container Insights gives logs and metrics, and an
+      upgrade channel keeps the cluster patched.
+
+      **Without writing code in Nimbo**
+
+      1. Add a **Log Analytics workspace** from the palette, drag the resource group onto it (**Place in the resource group**), name it `log-learn-dev-aks`, SKU `PerGB2018`, retention `30` days.
+      2. Add the **client config** data source (name `current`).
+      3. Click the cluster: tier `Standard`, upgrade channel `patch`, node OS upgrade channel `NodeImage`; turn on **local_account_disabled**, **workload_identity_enabled**, **oidc_issuer_enabled**, **azure_policy_enabled** and **private_cluster_enabled**.
+      4. In **default_node_pool**: name `system`, size `Standard_D4ds_v5`, clear **node_count**, turn **auto_scaling_enabled** on with min `3` and max `5`, zones `1`, `2`, `3`, **only_critical_addons_enabled** on, **temporary_name_for_rotation** `systemtmp`, and **upgrade_settings** max surge `33%`.
+      5. In **network_profile**: plugin `azure`, plugin mode `overlay`, data plane `cilium`, network policy `cilium`.
+      6. Add **azure_active_directory_role_based_access_control**: **azure_rbac_enabled** on and **Link to…** `tenant_id` → the client config's `tenant_id`. Add **oms_agent**: **Link to…** the workspace id and turn **msi_auth_for_monitoring_enabled** on.
+      7. Add a **Kubernetes cluster node pool** from the palette: name `apps`, **Link to…** the cluster id and the `nodes` subnet id, mode `User`, size `Standard_D4ds_v5`, autoscaling on with min `2` and max `10`, zones `1`, `2`, `3`.
+    solutionFiles:
+      aks.tf: |
+        data "azurerm_client_config" "current" {}
+
+        resource "azurerm_log_analytics_workspace" "main" {
+          name                = "log-${local.name_prefix}"
+          resource_group_name = azurerm_resource_group.main.name
+          location            = azurerm_resource_group.main.location
+          sku                 = "PerGB2018"
+          retention_in_days   = 30
+          tags                = local.common_tags
+        }
+
+        resource "azurerm_kubernetes_cluster" "main" {
+          name                      = "aks-${local.name_prefix}"
+          resource_group_name       = azurerm_resource_group.main.name
+          location                  = azurerm_resource_group.main.location
+          dns_prefix                = "aks-${local.name_prefix}"
+          sku_tier                  = "Standard"
+          automatic_upgrade_channel = "patch"
+          node_os_upgrade_channel   = "NodeImage"
+          local_account_disabled    = true
+          oidc_issuer_enabled       = true
+          workload_identity_enabled = true
+          azure_policy_enabled      = true
+          private_cluster_enabled   = true
+          tags                      = local.common_tags
+
+          default_node_pool {
+            name                         = "system"
+            vm_size                      = "Standard_D4ds_v5"
+            vnet_subnet_id               = azurerm_subnet.nodes.id
+            zones                        = ["1", "2", "3"]
+            auto_scaling_enabled         = true
+            min_count                    = 3
+            max_count                    = 5
+            only_critical_addons_enabled = true
+            temporary_name_for_rotation  = "systemtmp"
+
+            upgrade_settings {
+              max_surge = "33%"
+            }
+          }
+
+          identity {
+            type = "SystemAssigned"
+          }
+
+          azure_active_directory_role_based_access_control {
+            azure_rbac_enabled = true
+            tenant_id          = data.azurerm_client_config.current.tenant_id
+          }
+
+          network_profile {
+            network_plugin      = "azure"
+            network_plugin_mode = "overlay"
+            network_policy      = "cilium"
+            network_data_plane  = "cilium"
+          }
+
+          oms_agent {
+            log_analytics_workspace_id      = azurerm_log_analytics_workspace.main.id
+            msi_auth_for_monitoring_enabled = true
+          }
+        }
+
+        resource "azurerm_kubernetes_cluster_node_pool" "apps" {
+          name                  = "apps"
+          kubernetes_cluster_id = azurerm_kubernetes_cluster.main.id
+          mode                  = "User"
+          vm_size               = "Standard_D4ds_v5"
+          vnet_subnet_id        = azurerm_subnet.nodes.id
+          zones                 = ["1", "2", "3"]
+          auto_scaling_enabled  = true
+          min_count             = 2
+          max_count             = 10
+          tags                  = local.common_tags
+        }
+    starter:
+      kind: terraform
+      cloud: azure
+      files:
+        versions.tf: |
+          terraform {
+            required_version = ">= 1.6"
+
+            required_providers {
+              azurerm = {
+                source  = "hashicorp/azurerm"
+                version = "~> 4.0"
+              }
+            }
+          }
+        providers.tf: |
+          provider "azurerm" {
+            features {}
+          }
+        variables.tf: |
+          variable "project" {
+            type        = string
+            default     = "storefront"
+            description = "Project name: part of every resource name."
+          }
+
+          variable "environment" {
+            type        = string
+            default     = "prod"
+            description = "Deployment environment (dev, test, prod)."
+          }
+
+          variable "location" {
+            type        = string
+            default     = "eastus2"
+            description = "Azure region of the cluster (choose one with availability zones)."
+          }
+        locals.tf: |
+          locals {
+            name_prefix = "${var.project}-${var.environment}"
+            common_tags = {
+              project     = var.project
+              environment = var.environment
+              managedby   = "terraform"
+            }
+          }
+        main.tf: |
+          resource "azurerm_resource_group" "main" {
+            name     = "rg-${local.name_prefix}-aks"
+            location = var.location
+            tags     = local.common_tags
+          }
+
+          # Spoke network of the cluster; egress and admin access come from the hub.
+          resource "azurerm_virtual_network" "spoke" {
+            name                = "vnet-${local.name_prefix}-aks"
+            resource_group_name = azurerm_resource_group.main.name
+            location            = azurerm_resource_group.main.location
+            address_space       = ["10.240.0.0/16"]
+            tags                = local.common_tags
+          }
+
+          resource "azurerm_subnet" "nodes" {
+            name                 = "snet-aks-nodes"
+            resource_group_name  = azurerm_resource_group.main.name
+            virtual_network_name = azurerm_virtual_network.spoke.name
+            address_prefixes     = ["10.240.0.0/22"]
+          }
+        aks.tf: |
+          resource "azurerm_kubernetes_cluster" "main" {
+            name                = "aks-${local.name_prefix}"
+            resource_group_name = azurerm_resource_group.main.name
+            location            = azurerm_resource_group.main.location
+            dns_prefix          = "aks-${local.name_prefix}"
+            tags                = local.common_tags
+
+            default_node_pool {
+              name           = "default"
+              vm_size        = "Standard_D2s_v5"
+              node_count     = 1
+              vnet_subnet_id = azurerm_subnet.nodes.id
+            }
+
+            identity {
+              type = "SystemAssigned"
+            }
+
+            network_profile {
+              network_plugin = "kubenet"
+            }
+          }
+    checks:
+    - id: validate
+      label: The workflow validates
+      type: validate
+    - id: standard-tier
+      label: The cluster uses the Standard tier (uptime SLA)
+      type: has
+      has:
+        terraform:
+          type: azurerm_kubernetes_cluster
+          where:
+            sku_tier: Standard
+    - id: system-pool
+      label: The system pool is zone-spread, autoscaled and reserved for critical add-ons
+      type: has
+      has:
+        terraform:
+          type: azurerm_kubernetes_cluster
+          where:
+            default_node_pool.zones:
+              exists: true
+            default_node_pool.auto_scaling_enabled: true
+            default_node_pool.min_count:
+              min: 2
+            default_node_pool.only_critical_addons_enabled: true
+    - id: user-pool
+      label: A zone-spread, autoscaled User node pool runs the workloads
+      type: has
+      has:
+        terraform:
+          type: azurerm_kubernetes_cluster_node_pool
+          where:
+            kubernetes_cluster_id:
+              ref: azurerm_kubernetes_cluster
+            mode: User
+            zones:
+              exists: true
+            auto_scaling_enabled: true
+    - id: entra-rbac
+      label: Local accounts are disabled and Microsoft Entra ID with Azure RBAC authorizes access
+      type: has
+      has:
+        terraform:
+          type: azurerm_kubernetes_cluster
+          where:
+            local_account_disabled: true
+            azure_active_directory_role_based_access_control.azure_rbac_enabled: true
+    - id: workload-identity
+      label: Microsoft Entra Workload ID is enabled
+      type: has
+      has:
+        terraform:
+          type: azurerm_kubernetes_cluster
+          where:
+            workload_identity_enabled: true
+    - id: cni-overlay
+      label: Azure CNI Overlay with a network policy engine
+      type: has
+      has:
+        terraform:
+          type: azurerm_kubernetes_cluster
+          where:
+            network_profile.network_plugin: azure
+            network_profile.network_plugin_mode: overlay
+            network_profile.network_policy:
+              in: [cilium, azure, calico]
+    - id: private-api
+      label: The API server is private
+      type: has
+      has:
+        terraform:
+          type: azurerm_kubernetes_cluster
+          where:
+            private_cluster_enabled: true
+    - id: azure-policy
+      label: The Azure Policy add-on is enabled
+      type: has
+      has:
+        terraform:
+          type: azurerm_kubernetes_cluster
+          where:
+            azure_policy_enabled: true
+    - id: monitoring
+      label: Container Insights sends to a Log Analytics workspace
+      type: has
+      has:
+        terraform:
+          type: azurerm_kubernetes_cluster
+          where:
+            oms_agent.log_analytics_workspace_id:
+              ref: azurerm_log_analytics_workspace
+    - id: upgrades
+      label: An automatic upgrade channel keeps the cluster patched
+      type: has
+      has:
+        terraform:
+          type: azurerm_kubernetes_cluster
+          where:
+            automatic_upgrade_channel:
+              in: [patch, stable, rapid, node-image]
+    sources:
+    - title: Baseline architecture for an Azure Kubernetes Service (AKS) cluster
+      url: https://learn.microsoft.com/en-us/azure/architecture/reference-architectures/containers/aks/baseline-aks
+    - title: Well-Architected Framework service guide — Azure Kubernetes Service
+      url: https://learn.microsoft.com/en-us/azure/well-architected/service-guides/azure-kubernetes-service
+    - title: Study guide for Exam AZ-305 (design compute and container solutions)
+      url: https://learn.microsoft.com/en-us/credentials/certifications/resources/study-guides/az-305
+    - title: azurerm_kubernetes_cluster (azurerm 4.x)
+      url: https://registry.terraform.io/providers/hashicorp/azurerm/4.81.0/docs/resources/kubernetes_cluster
+    - title: azurerm_kubernetes_cluster_node_pool (azurerm 4.x)
+      url: https://registry.terraform.io/providers/hashicorp/azurerm/4.81.0/docs/resources/kubernetes_cluster_node_pool
+    solvableWithoutCode: true
+- op: upsert
+  kind: challenge
+  id: azure-landing-zone-governance
+  data:
+    provider: azure
+    level: expert
+    title: Govern a landing zone with management groups, Azure Policy and locks
+    summary: Build a Cloud Adoption Framework management group hierarchy and enforce allowed regions, required tags and delete locks as code.
+    minutes: 70
+    tags: [governance, landing-zone, policy, management-groups, tagging, cost]
+    prerequisites: [azure-naming-tagging, azure-storage-data-protection]
+    runtime: design
+    problem: |
+      The company is moving its first production workloads to Azure. Today every subscription sits directly under
+      the tenant root group, teams deploy to any region (including ones the legal team can't approve), cost reports
+      can't be split by cost center, and nothing stops someone from deleting a production resource group.
+
+      The Cloud Adoption Framework's Azure landing zone guidance answers this with a **management group
+      hierarchy** used for policy inheritance, **Azure Policy** assignments that enforce allowed regions and
+      mandatory tags, and **resource locks** on critical resources. Implement that governance foundation as code.
+    requirements:
+    - 'A management group hierarchy under an intermediate root: at least three `azurerm_management_group` resources, where the children (for example *Platform* and *Landing zones*) set `parent_management_group_id` to another management group.'
+    - A management-group-scope assignment of the built-in **Allowed locations** policy (`e56962a6-4747-49cd-b67b-bf8b01975c4c`) with its `listOfAllowedLocations` parameter.
+    - A management-group-scope assignment of the built-in **Require a tag on resources** policy (`871b6d14-10aa-478d-b590-94f262ecfa99`) with its `tagName` parameter and a non-compliance message that tells people what to fix.
+    - An `azurerm_management_lock` with `lock_level = "CanNotDelete"` on the production resource group.
+    - Every taggable resource is tagged (`bp_missing_tags`) and the workflow validates.
+    hints:
+    - 'Policy assignments inherit downwards: assign at the intermediate root (or *Landing zones*) and every subscription and resource group below is evaluated.'
+    - 'Built-in definitions are referenced by ID: `/providers/Microsoft.Authorization/policyDefinitions/<guid>`.'
+    - '`parameters = jsonencode({ listOfAllowedLocations = { value = var.allowed_locations } })` — the parameter names come from the built-in definition.'
+    - '`azurerm_management_group_policy_assignment` names are limited to 24 characters.'
+    - Locks can't be placed on management groups; put them on the subscription, resource group or resource.
+    solution: |
+      1. Create `Contoso` (intermediate root) with children `Platform`, `Landing zones` (with `Corp` and `Online`
+         below it) and `Sandbox`, each child pointing at its parent with `parent_management_group_id`. Place the
+         workload subscription under `Corp` with `subscription_ids`.
+      2. Assign **Allowed locations** at `Contoso` with the approved regions, and **Require a tag on resources**
+         (`tagName = "costcenter"`) at `Landing zones`, each with a `non_compliance_message`.
+      3. Tag the production resource group (including `costcenter`) and protect it with a `CanNotDelete` lock.
+
+      **Why:** CAF recommends a flat hierarchy (3–4 levels) used for policy assignment, not mirroring the org chart
+      or splitting by environment; platform and application landing zones get different guardrails. Policy is
+      evaluated on create/update and in periodic compliance scans, and assignments at a management group apply to
+      everything below, so new subscriptions are governed automatically. Microsoft suggests rolling out new
+      policies in audit mode first and enforcing once compliant (`enforce = false` gives DoNotEnforce). Required
+      tags make cost and ownership reportable. A `CanNotDelete` lock blocks deletion through Azure Resource Manager
+      for every user, even owners, until the lock is removed deliberately.
+
+      **Without writing code in Nimbo**
+
+      The management groups, policy assignments (name, scope, definition ID, non-compliance message), the lock and the tags are all inspector fields and palette nodes. The one part that needs code is each assignment's `parameters`: it is a JSON document built with `jsonencode({ ... })`, so write it in `main.tf`.
+    solutionFiles:
+      variables.tf: |
+        variable "org_prefix" {
+          type        = string
+          default     = "contoso"
+          description = "Organization prefix of the management group IDs."
+        }
+
+        variable "workload_subscription_id" {
+          type        = string
+          default     = "00000000-0000-0000-0000-000000000000"
+          description = "Subscription ID (GUID) of the production workload, placed under the Corp landing zone."
+        }
+
+        variable "location" {
+          type        = string
+          default     = "eastus2"
+          description = "Primary Azure region of the workload."
+        }
+
+        variable "allowed_locations" {
+          type        = list(string)
+          default     = ["eastus2", "centralus"]
+          description = "Regions where resources may be deployed (Allowed locations policy)."
+        }
+
+        variable "cost_center" {
+          type        = string
+          default     = "cc-4711"
+          description = "Cost center of the production workload (costcenter tag)."
+        }
+      governance.tf: |
+        locals {
+          policy_definitions = "/providers/Microsoft.Authorization/policyDefinitions"
+        }
+
+        # CAF hierarchy: tenant root -> intermediate root -> platform / landing zones / sandbox.
+        resource "azurerm_management_group" "root" {
+          name         = var.org_prefix
+          display_name = "Contoso"
+        }
+
+        resource "azurerm_management_group" "platform" {
+          name                       = "${var.org_prefix}-platform"
+          display_name               = "Platform"
+          parent_management_group_id = azurerm_management_group.root.id
+        }
+
+        resource "azurerm_management_group" "landing_zones" {
+          name                       = "${var.org_prefix}-landingzones"
+          display_name               = "Landing zones"
+          parent_management_group_id = azurerm_management_group.root.id
+        }
+
+        resource "azurerm_management_group" "corp" {
+          name                       = "${var.org_prefix}-corp"
+          display_name               = "Corp"
+          parent_management_group_id = azurerm_management_group.landing_zones.id
+          subscription_ids           = [var.workload_subscription_id]
+        }
+
+        resource "azurerm_management_group" "online" {
+          name                       = "${var.org_prefix}-online"
+          display_name               = "Online"
+          parent_management_group_id = azurerm_management_group.landing_zones.id
+        }
+
+        resource "azurerm_management_group" "sandbox" {
+          name                       = "${var.org_prefix}-sandbox"
+          display_name               = "Sandbox"
+          parent_management_group_id = azurerm_management_group.root.id
+        }
+
+        resource "azurerm_management_group_policy_assignment" "allowed_locations" {
+          name                 = "allowed-locations"
+          display_name         = "Allowed locations"
+          management_group_id  = azurerm_management_group.root.id
+          policy_definition_id = "${local.policy_definitions}/e56962a6-4747-49cd-b67b-bf8b01975c4c"
+          parameters = jsonencode({
+            listOfAllowedLocations = { value = var.allowed_locations }
+          })
+
+          non_compliance_message {
+            content = "Deploy only to the approved regions: ${join(", ", var.allowed_locations)}."
+          }
+        }
+
+        resource "azurerm_management_group_policy_assignment" "require_costcenter" {
+          name                 = "require-costcenter-tag"
+          display_name         = "Require a costcenter tag on resources"
+          management_group_id  = azurerm_management_group.landing_zones.id
+          policy_definition_id = "${local.policy_definitions}/871b6d14-10aa-478d-b590-94f262ecfa99"
+          parameters = jsonencode({
+            tagName = { value = "costcenter" }
+          })
+
+          non_compliance_message {
+            content = "Every resource needs a costcenter tag so its cost can be charged back."
+          }
+        }
+      main.tf: |
+        resource "azurerm_resource_group" "prod" {
+          name     = "rg-shop-prod-${var.location}"
+          location = var.location
+          tags = {
+            app         = "shop"
+            environment = "prod"
+            costcenter  = var.cost_center
+            owner       = "shop-team"
+          }
+        }
+
+        resource "azurerm_management_lock" "prod" {
+          name       = "lock-rg-shop-prod-nodelete"
+          scope      = azurerm_resource_group.prod.id
+          lock_level = "CanNotDelete"
+          notes      = "Production workload: remove only through a reviewed change."
+        }
+    starter:
+      kind: terraform
+      cloud: azure
+      files:
+        versions.tf: |
+          terraform {
+            required_version = ">= 1.6"
+
+            required_providers {
+              azurerm = {
+                source  = "hashicorp/azurerm"
+                version = "~> 4.0"
+              }
+            }
+          }
+        providers.tf: |
+          provider "azurerm" {
+            features {}
+          }
+        variables.tf: |
+          variable "location" {
+            type        = string
+            default     = "eastus2"
+            description = "Primary Azure region of the workload."
+          }
+        main.tf: |
+          resource "azurerm_resource_group" "prod" {
+            name     = "rg-shop-prod-${var.location}"
+            location = var.location
+          }
+    checks:
+    - id: validate
+      label: The workflow validates
+      type: validate
+    - id: management-groups
+      label: At least three management groups exist
+      type: has
+      has:
+        terraform:
+          type: azurerm_management_group
+          count:
+            min: 3
+    - id: hierarchy
+      label: Child management groups hang under the intermediate root
+      type: has
+      has:
+        terraform:
+          type: azurerm_management_group
+          where:
+            parent_management_group_id:
+              ref: azurerm_management_group
+          count:
+            min: 2
+    - id: allowed-locations
+      label: Allowed locations is assigned at a management group
+      type: has
+      has:
+        terraform:
+          type: azurerm_management_group_policy_assignment
+          where:
+            management_group_id:
+              ref: azurerm_management_group
+            policy_definition_id:
+              contains: e56962a6-4747-49cd-b67b-bf8b01975c4c
+            parameters:
+              contains: listOfAllowedLocations
+    - id: required-tag
+      label: Require a tag on resources is assigned with a non-compliance message
+      type: has
+      has:
+        terraform:
+          type: azurerm_management_group_policy_assignment
+          where:
+            management_group_id:
+              ref: azurerm_management_group
+            policy_definition_id:
+              contains: 871b6d14-10aa-478d-b590-94f262ecfa99
+            parameters:
+              contains: tagName
+            non_compliance_message.content:
+              exists: true
+    - id: delete-lock
+      label: A CanNotDelete lock protects the production resource group
+      type: has
+      has:
+        terraform:
+          type: azurerm_management_lock
+          where:
+            lock_level: CanNotDelete
+            scope:
+              ref: azurerm_resource_group
+    - id: tags
+      label: Every resource is tagged (bp_missing_tags)
+      type: rules_clean
+      rules_clean:
+        codes: [bp_missing_tags]
+        minSeverity: info
+    sources:
+    - title: Azure landing zone design areas (Cloud Adoption Framework)
+      url: https://learn.microsoft.com/en-us/azure/cloud-adoption-framework/ready/landing-zone/design-areas
+    - title: Management groups — resource organization design area (Cloud Adoption Framework)
+      url: https://learn.microsoft.com/en-us/azure/cloud-adoption-framework/ready/landing-zone/design-area/resource-org-management-groups
+    - title: What is Azure Policy?
+      url: https://learn.microsoft.com/en-us/azure/governance/policy/overview
+    - title: Understand scope in Azure Policy
+      url: https://learn.microsoft.com/en-us/azure/governance/policy/concepts/scope
+    - title: Azure Policy built-in policy definitions
+      url: https://learn.microsoft.com/en-us/azure/governance/policy/samples/built-in-policies
+    - title: Lock your Azure resources to protect your infrastructure
+      url: https://learn.microsoft.com/en-us/azure/azure-resource-manager/management/lock-resources
+    - title: CAF — Define your tagging strategy
+      url: https://learn.microsoft.com/en-us/azure/cloud-adoption-framework/ready/azure-best-practices/resource-tagging
+    - title: Study guide for Exam AZ-305 (design governance)
+      url: https://learn.microsoft.com/en-us/credentials/certifications/resources/study-guides/az-305
+    - title: azurerm_management_group (azurerm 4.x)
+      url: https://registry.terraform.io/providers/hashicorp/azurerm/4.81.0/docs/resources/management_group
+    - title: azurerm_management_group_policy_assignment (azurerm 4.x)
+      url: https://registry.terraform.io/providers/hashicorp/azurerm/4.81.0/docs/resources/management_group_policy_assignment
+    solvableWithoutCode: false
