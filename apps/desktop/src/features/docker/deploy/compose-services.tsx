@@ -61,15 +61,16 @@ export function ComposeServices({
   onLogs: (service: string) => void
 }) {
   const byId = useMemo(() => new Map(nodes.map((n) => [n.id, n])), [nodes])
+  // Narrow views (the deploy views pane is the container) drop the replicas, then the restarts column.
   return (
     <table className="w-full text-xs">
       <thead className="sticky top-0 z-10 bg-background text-left text-[11px] text-muted-foreground">
         <tr className="border-b">
           <th className="px-3 py-1.5 font-medium">Service</th>
           <th className="px-2 py-1.5 font-medium">State</th>
-          <th className="px-2 py-1.5 font-medium">Replicas</th>
+          <th className="hidden px-2 py-1.5 font-medium @lg:table-cell">Replicas</th>
           <th className="px-2 py-1.5 font-medium">Ports</th>
-          <th className="px-2 py-1.5 font-medium">Restarts</th>
+          <th className="hidden px-2 py-1.5 font-medium @md:table-cell">Restarts</th>
           <th className="px-3 py-1.5" aria-label="Actions" />
         </tr>
       </thead>
@@ -126,12 +127,12 @@ function ServiceRow({
       </td>
       <td className="px-2 py-1.5">
         <div className="flex flex-wrap items-center gap-1.5">
-          <ComposeStateLabel state={s.state} />
+          <ComposeStateLabel state={s.state} className="whitespace-nowrap" />
           {s.health && <HealthBadge health={s.health} />}
           {exited && <span className="font-mono text-[10px] text-destructive">exit {exited.exitCode}</span>}
         </div>
       </td>
-      <td className="px-2 py-1.5 tabular-nums">
+      <td className="hidden px-2 py-1.5 tabular-nums @lg:table-cell">
         {replicas.total === 0 ? <span className="text-muted-foreground">—</span> : `${replicas.running}/${replicas.total}`}
       </td>
       <td className="px-2 py-1.5">
@@ -161,7 +162,7 @@ function ServiceRow({
           </div>
         )}
       </td>
-      <td className={cn("px-2 py-1.5 tabular-nums", restarts > 0 && "text-amber-700 dark:text-amber-400")}>{restarts}</td>
+      <td className={cn("hidden px-2 py-1.5 tabular-nums @md:table-cell", restarts > 0 && "text-amber-700 dark:text-amber-400")}>{restarts}</td>
       <td className="px-3 py-1.5">
         <div className="flex justify-end gap-0.5">
           <RowAction

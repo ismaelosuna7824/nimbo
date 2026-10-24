@@ -21,7 +21,9 @@ import (
 	"github.com/ismaelosuna7824/nimbo/backend/internal/agents"
 	"github.com/ismaelosuna7824/nimbo/backend/internal/api"
 	"github.com/ismaelosuna7824/nimbo/backend/internal/catalog"
+	"github.com/ismaelosuna7824/nimbo/backend/internal/challenge"
 	"github.com/ismaelosuna7824/nimbo/backend/internal/events"
+	"github.com/ismaelosuna7824/nimbo/backend/internal/learn"
 	"github.com/ismaelosuna7824/nimbo/backend/internal/loadtest"
 	"github.com/ismaelosuna7824/nimbo/backend/internal/mcp"
 	"github.com/ismaelosuna7824/nimbo/backend/internal/sandbox"
@@ -103,6 +105,8 @@ type daemon struct {
 	url    string
 	home   string
 	srv    *http.Server
+	engine *loadtest.Engine
+	learn  *learn.Store
 	cancel context.CancelFunc
 	done   chan error
 	logger *slog.Logger
@@ -155,7 +159,26 @@ func startDaemon(home, addr string, legacyMigrated bool, logger *slog.Logger) (*
 	if err != nil {
 		return nil, err
 	}
-	engine := loadtest.NewEngine(loadtest.EngineConfig{Home: home, Events: hub, Resolver: sb, Connections: conns, Monitor: sb, Workflows: loadTestWorkflows{st}})
+	// Learn content migrations apply here; a failure is logged and shown
+	// on the Learn page, never fatal.
+	learnDB := learn.Open(home, learn.Options{ValidateChallenge: challenge.Validate})
+	if st := learnDB.Status(); len(st.Errors) > 0 {
+		logger.Warn("learn content", "applied", st.Applied, "pending", st.Pending, "errors", st.Errors)
+	}
+	engine := loadtest.NewEngine(loadtest.EngineConfig{Home: home, Events: hub, Resolver: sb, Connections: conns, Monitor: sb, Workflows: loadTestWorkflows{st}, Faults: sb})
+	// Faults a previous daemon could not revert (crash mid-scenario) are
+	// reverted now: unpaused containers, netem removed, replicas restored.
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+		defer cancel()
+		n, err := sb.RecoverFaults(ctx)
+		if n > 0 {
+			logger.Info("reverted scenario faults left by a previous run", "count", n)
+		}
+		if err != nil {
+			logger.Warn("revert leftover scenario faults", "err", err)
+		}
+	}()
 	server := api.New(api.Config{
 		Version: version, Home: home, Store: st, Connections: conns, Catalog: cat,
 		Sandbox: sb, LoadTest: engine, Events: hub, Logger: logger,
@@ -164,6 +187,7 @@ func startDaemon(home, addr string, legacyMigrated bool, logger *slog.Logger) (*
 			return api.MCPCatalog{Tools: mcp.ToolCatalog(), Prompts: mcp.PromptCatalog()}
 		},
 		Setup: setup.New(setup.Config{Home: home, Settings: prefs.Get, Events: hub}),
+		Learn: learnDB,
 	})
 
 	ln, err := net.Listen("tcp", addr)
@@ -175,6 +199,8 @@ func startDaemon(home, addr string, legacyMigrated bool, logger *slog.Logger) (*
 	d := &daemon{
 		url:    "http://" + ln.Addr().String(),
 		home:   home,
+		engine: engine,
+		learn:  learnDB,
 		cancel: cancel,
 		done:   make(chan error, 1),
 		logger: logger,
@@ -205,6 +231,13 @@ func (d *daemon) shutdown() {
 	defer cancel()
 	if err := d.srv.Shutdown(ctx); err != nil {
 		d.logger.Warn("shutdown", "err", err)
+	}
+	// Running load tests stop; their scenario faults are reverted first.
+	rctx, rcancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer rcancel()
+	d.engine.Shutdown(rctx)
+	if err := d.learn.Close(); err != nil {
+		d.logger.Warn("close learn database", "err", err)
 	}
 	removeDaemonFile(d.home, d.url)
 }

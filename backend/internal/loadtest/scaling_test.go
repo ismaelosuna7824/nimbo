@@ -295,16 +295,47 @@ func TestScalingHeadlineAndFold(t *testing.T) {
 }
 
 func TestDegradations(t *testing.T) {
-	secs := []secStat{
-		{resolved: 10, ok: 10, p95: 10}, {resolved: 10, ok: 10, p95: 12}, {resolved: 10, ok: 10, p95: 11},
-		{resolved: 10, ok: 10, p95: 44}, {resolved: 10, ok: 10, p95: 45}, // 4×11 = 44 is not above
-		{resolved: 20, errors: 1, ok: 19, p95: 11}, {resolved: 10, errors: 6, ok: 4, p95: 11}, // 5% is not above
+	ok := func(p95 float64) secStat { return secStat{resolved: 10, ok: 10, p95: p95} }
+	cases := []struct {
+		name string
+		secs []secStat
+		want []degradation
+	}{
+		{
+			// Baseline 11: slow above max(4×11, 11+50) = 61, two seconds in a row.
+			"floor boundary", []secStat{ok(10), ok(12), ok(11), ok(61), ok(61), ok(61.5), ok(62)},
+			[]degradation{{}, {}, {}, {}, {}, {latency: true}, {latency: true}},
+		},
+		{
+			// Baseline 30: the factor dominates, 4×30 = 120 > 30+50.
+			"factor boundary", []secStat{ok(30), ok(30), ok(30), ok(120), ok(120), ok(121), ok(121)},
+			[]degradation{{}, {}, {}, {}, {}, {latency: true}, {latency: true}},
+		},
+		{
+			"single slow second is noise", []secStat{ok(10), ok(10), ok(10), ok(500), ok(10), ok(500)},
+			[]degradation{{}, {}, {}, {}, {}, {}},
+		},
+		{
+			// The whole streak is flagged, so the breaking point is its start.
+			"sustained streak", []secStat{ok(10), ok(10), ok(10), ok(10), ok(200), ok(300), ok(400), ok(10)},
+			[]degradation{{}, {}, {}, {}, {latency: true}, {latency: true}, {latency: true}, {}},
+		},
+		{
+			// An idle or erroring second ends a streak; errors count at once.
+			"broken streak", []secStat{ok(10), ok(10), ok(10), ok(200), {}, ok(200), {resolved: 10, errors: 6, ok: 4, p95: 200}, ok(200)},
+			[]degradation{{}, {}, {}, {}, {}, {}, {errors: true}, {}},
+		},
+		{
+			"error rate boundary", []secStat{ok(10), ok(10), ok(10), {resolved: 20, errors: 1, ok: 19, p95: 10}, {resolved: 10, errors: 6, ok: 4, p95: 10}},
+			[]degradation{{}, {}, {}, {}, {errors: true}}, // 5% is not above
+		},
 	}
-	d := degradations(secs)
-	want := []degradation{{}, {}, {}, {}, {latency: true}, {}, {errors: true}}
-	for i := range want {
-		if d[i] != want[i] {
-			t.Errorf("second %d: %+v, want %+v", i+1, d[i], want[i])
+	for _, c := range cases {
+		d := degradations(c.secs)
+		for i := range c.want {
+			if d[i] != c.want[i] {
+				t.Errorf("%s: second %d: %+v, want %+v", c.name, i+1, d[i], c.want[i])
+			}
 		}
 	}
 }
@@ -325,18 +356,22 @@ func (m scalingMonitor) MonitorResources(context.Context, string, model.LoadTarg
 	return m.probe
 }
 
-type fakeInspector struct{ env string }
+type fakeInspector struct {
+	env string
+	wf  *model.Workflow
+}
 
 func (f fakeInspector) ActiveEnvironment(string) (string, bool) { return f.env, true }
 func (f fakeInspector) AutoscaledIn(context.Context, string, string, string, string) []string {
 	return nil
 }
+func (f fakeInspector) Workflow(string) (*model.Workflow, bool) { return f.wf, f.wf != nil }
 
 func TestEngineRecordsScalingAndEnvironment(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write([]byte("ok")) }))
 	defer srv.Close()
 	w := newWatcher()
-	e := NewEngine(EngineConfig{Home: t.TempDir(), Events: w, Monitor: scalingMonitor{&scalingFakeProbe{}}, Workflows: fakeInspector{"prod"}})
+	e := NewEngine(EngineConfig{Home: t.TempDir(), Events: w, Monitor: scalingMonitor{&scalingFakeProbe{}}, Workflows: fakeInspector{env: "prod"}})
 	run := runSpec(t, e, w, httpSpec(srv.URL, hold(3, 20)))
 	if run.Environment != "prod" {
 		t.Errorf("environment %q", run.Environment)

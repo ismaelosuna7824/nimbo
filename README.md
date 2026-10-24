@@ -80,6 +80,11 @@ account. AI agents can do the same through the built-in MCP server.
   state, logs, port-forwards, Ingress URLs and load tests with a resource
   verdict. *Convert to Kubernetes* turns a compose project into manifests,
   Kustomize or a Helm chart.
+- **Learn**: roadmaps (beginner → expert) and hands-on challenges for AWS,
+  Azure, Google Cloud, Oracle Cloud, Docker, Kubernetes and provider-agnostic
+  problems, written from official documentation and graded for real. Content
+  ships as migrations anyone can add: see
+  [docs/CONTRIBUTING-learn.md](docs/CONTRIBUTING-learn.md).
 - **MCP**: 74 tools for agents (search → add → connect → validate → deploy →
   use what you deployed → check networks → load test → export, plus the
   Connections library, Docker and Kubernetes workspaces). See

@@ -33,6 +33,7 @@ func MergeImported(prev, next *model.Workflow, resourceFile func(string) string)
 	next.CreatedAt = prev.CreatedAt
 	next.Archived = prev.Archived
 	next.Icon = prev.Icon
+	next.Challenge = prev.Challenge
 
 	prevByAddr := map[string]*model.Node{}
 	for i := range prev.Nodes {

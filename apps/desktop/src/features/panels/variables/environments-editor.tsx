@@ -92,7 +92,7 @@ export function EnvironmentsEditor() {
 
   return (
     <div className="flex h-full min-h-0">
-      <div className="flex w-40 shrink-0 flex-col border-r">
+      <div className="flex w-32 shrink-0 flex-col border-r @2xl:w-40">
         <div className="flex h-8 items-center justify-between border-b pr-1 pl-2.5 text-[11px] font-medium text-muted-foreground">
           Environments
           <Button size="icon-xs" variant="ghost" aria-label="New environment" onClick={create}>
@@ -200,9 +200,10 @@ function EnvironmentDetail({ env, onRenamed }: { env: Environment; onRenamed: (n
   }
 
   return (
-    <div className="flex min-w-0 flex-1 flex-col">
+    // Narrow details (< 28rem) keep the header actions as icons, named by their titles.
+    <div className="@container flex min-w-0 flex-1 flex-col">
       <div className="flex h-8 shrink-0 items-center gap-1 border-b px-2">
-        <CommitInput value={env.name} aria-label="Environment name" className="h-6 w-36 font-mono" onCommit={rename} />
+        <CommitInput value={env.name} aria-label="Environment name" className="h-6 w-24 min-w-0 font-mono @md:w-36" onCommit={rename} />
         {active ? (
           <Badge variant="secondary" className="text-emerald-600 dark:text-emerald-400">
             <CircleDot /> Active
@@ -213,11 +214,13 @@ function EnvironmentDetail({ env, onRenamed }: { env: Environment; onRenamed: (n
           </Button>
         )}
         <div className="ml-auto flex items-center gap-0.5">
-          <Button size="xs" variant="ghost" onClick={duplicate}>
-            <Copy /> Duplicate
+          <Button size="xs" variant="ghost" title="Duplicate" onClick={duplicate}>
+            <Copy />
+            <span className="sr-only @md:not-sr-only">Duplicate</span>
           </Button>
-          <Button size="xs" variant="ghost" className="text-destructive" onClick={() => setConfirmDelete(true)}>
-            <Trash2 /> Delete
+          <Button size="xs" variant="ghost" title="Delete" className="text-destructive" onClick={() => setConfirmDelete(true)}>
+            <Trash2 />
+            <span className="sr-only @md:not-sr-only">Delete</span>
           </Button>
         </div>
       </div>
@@ -239,7 +242,7 @@ function EnvironmentDetail({ env, onRenamed }: { env: Environment; onRenamed: (n
             </Button>
           }
         />
-        <Table className={DENSE_TABLE}>
+        <Table className={cn(DENSE_TABLE, "min-w-[26rem]")}>
           <TableHeader>
             <TableRow>
               <TableHead className="w-[30%]">Variable</TableHead>
@@ -351,9 +354,9 @@ function EnvironmentDetail({ env, onRenamed }: { env: Environment; onRenamed: (n
 function SectionTitle({ title, hint, action }: { title: string; hint?: ReactNode; action?: ReactNode }) {
   return (
     <div className="flex h-8 items-center gap-2 border-y bg-muted/30 px-2.5 text-[11px] first:border-t-0">
-      <span className="font-semibold">{title}</span>
-      {hint && <span className="truncate text-muted-foreground">{hint}</span>}
-      <div className="ml-auto">{action}</div>
+      <span className="shrink-0 font-semibold whitespace-nowrap">{title}</span>
+      {hint && <span className="min-w-0 truncate text-muted-foreground">{hint}</span>}
+      <div className="ml-auto shrink-0">{action}</div>
     </div>
   )
 }
@@ -364,7 +367,7 @@ function EnvVarRows({ env }: { env: Environment }) {
 
   return (
     <div className="flex flex-col">
-      <Table className={DENSE_TABLE}>
+      <Table className={cn(DENSE_TABLE, "min-w-[26rem]")}>
         <TableHeader>
           <TableRow>
             <TableHead className="w-[30%]">Key</TableHead>

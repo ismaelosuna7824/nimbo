@@ -1,6 +1,6 @@
 import type { ReactNode } from "react"
 import { Info } from "lucide-react"
-import { Bar, BarChart, CartesianGrid, Line, LineChart, ReferenceLine, XAxis, YAxis } from "recharts"
+import { Bar, BarChart, CartesianGrid, Line, LineChart, ReferenceArea, ReferenceLine, XAxis, YAxis } from "recharts"
 import { useArcade } from "@/components/arcade/arcade-store"
 import {
   ChartContainer,
@@ -11,10 +11,11 @@ import {
   type ChartConfig,
 } from "@/components/ui/chart"
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip"
-import type { LoadMode, LoadResources, LoadSample, WorkloadScaling } from "@/lib/api/types"
+import type { LoadMode, LoadResources, LoadSample, ScenarioResult, WorkloadScaling } from "@/lib/api/types"
 import { cn } from "@/lib/utils"
 import { formatPct, resourceRows, scalingRows } from "@/features/docker/perf/model"
 import { compactTick, EXPLAIN, modeUnit, SERIES_COLORS } from "./metrics"
+import { INJECT_MARK, instantScenario } from "./scenario-result"
 
 /** Seconds axis; a fixed `domain` keeps several charts of one run aligned. */
 function timeAxis(domain?: [number, number]) {
@@ -61,9 +62,51 @@ function ChartCard({ title, hint, children }: { title: string; hint?: string; ch
   )
 }
 
-export function LoadCharts({ samples, mode, domain }: { samples: LoadSample[]; mode: LoadMode; domain?: [number, number] }) {
+/**
+ * An incident scenario on a chart: its fault window shaded, and labelled markers where it was injected, reverted and
+ * where the target was healthy again. `yAxisId` names the axis on charts with two.
+ */
+function scenarioMarks(s: ScenarioResult | undefined, yAxisId?: string) {
+  if (!s) return null
+  const axis = yAxisId ? { yAxisId } : {}
+  const mark = (t: number, label: string, color: string, side: "left" | "right") => (
+    <ReferenceLine
+      key={label}
+      x={t}
+      {...axis}
+      stroke={color}
+      strokeDasharray="3 3"
+      strokeOpacity={0.9}
+      ifOverflow="extendDomain"
+      label={{ value: label, position: side === "left" ? "insideTopRight" : "insideTopLeft", fontSize: 10, fill: color }}
+    />
+  )
+  const end = s.revertedAtSec
+  const recovered = s.recoveredAtSec
+  return [
+    end !== undefined && end > s.injectedAtSec && (
+      <ReferenceArea key="window" x1={s.injectedAtSec} x2={end} {...axis} fill="var(--destructive)" fillOpacity={0.08} strokeOpacity={0} ifOverflow="hidden" />
+    ),
+    mark(s.injectedAtSec, INJECT_MARK[s.id], "var(--destructive)", "right"),
+    end !== undefined && !instantScenario(s.id) && mark(end, "revert", "var(--muted-foreground)", "right"),
+    recovered !== undefined && recovered !== s.injectedAtSec && recovered !== end && mark(recovered, "recovered", "var(--chart-2, oklch(0.6 0.13 160))", "left"),
+  ]
+}
+
+export function LoadCharts({
+  samples,
+  mode,
+  domain,
+  scenario,
+}: {
+  samples: LoadSample[]
+  mode: LoadMode
+  domain?: [number, number]
+  scenario?: ScenarioResult
+}) {
   const xAxis = timeAxis(domain)
   const unit = modeUnit(mode)
+  const marks = scenarioMarks(scenario)
   // Arcade plots hard steps with pixel markers; the default keeps smooth curves.
   const arcade = useArcade()
   const curve = arcade ? "stepAfter" : "monotone"
@@ -80,7 +123,7 @@ export function LoadCharts({ samples, mode, domain }: { samples: LoadSample[]; m
   const errors: ChartConfig = { errors: { label: "Errors / s", theme: SERIES_COLORS.errors } }
 
   return (
-    <div className="grid h-full min-h-44 grid-cols-1 gap-2 md:grid-cols-3">
+    <div className="grid h-full min-h-44 grid-cols-1 gap-2 @3xl:grid-cols-3">
       <ChartCard title="Traffic: target vs achieved" hint={EXPLAIN.rps}>
         <ChartContainer config={throughput} className="aspect-auto h-full min-h-32 w-full">
           <LineChart data={samples} margin={{ left: 0, right: 8, top: 4, bottom: 0 }}>
@@ -88,6 +131,7 @@ export function LoadCharts({ samples, mode, domain }: { samples: LoadSample[]; m
             {xAxis}
             <YAxis tickLine={false} axisLine={false} width={40} tickFormatter={compactTick} />
             <ChartTooltip content={<ChartTooltipContent labelFormatter={secondsLabel} />} />
+            {marks}
             <ChartLegend content={<ChartLegendContent />} />
             <Line dataKey="rps" type={curve} stroke="var(--color-rps)" strokeWidth={2} dot={dot} isAnimationActive={false} />
             <Line dataKey="target" type={arcade ? "stepAfter" : "linear"} stroke="var(--color-target)" strokeDasharray="4 3" dot={false} isAnimationActive={false} />
@@ -101,6 +145,7 @@ export function LoadCharts({ samples, mode, domain }: { samples: LoadSample[]; m
             {xAxis}
             <YAxis tickLine={false} axisLine={false} width={40} tickFormatter={compactTick} />
             <ChartTooltip content={<ChartTooltipContent labelFormatter={secondsLabel} />} />
+            {marks}
             <ChartLegend content={<ChartLegendContent />} />
             <Line dataKey="p50" type={curve} stroke="var(--color-p50)" strokeWidth={arcade ? 2 : undefined} dot={dot} isAnimationActive={false} />
             <Line dataKey="p95" type={curve} stroke="var(--color-p95)" strokeWidth={2} dot={dot} isAnimationActive={false} />
@@ -115,6 +160,7 @@ export function LoadCharts({ samples, mode, domain }: { samples: LoadSample[]; m
             {xAxis}
             <YAxis tickLine={false} axisLine={false} width={40} tickFormatter={compactTick} allowDecimals={false} />
             <ChartTooltip content={<ChartTooltipContent labelFormatter={secondsLabel} />} />
+            {marks}
             <Bar dataKey="errors" fill="var(--color-errors)" isAnimationActive={false} radius={arcade ? 0 : [2, 2, 0, 0]} />
           </BarChart>
         </ChartContainer>
@@ -137,7 +183,8 @@ const SERVICE_SERIES = [
  * CPU (% of each service's limit) and memory (MiB) of the workflow's services during a load test, on the same
  * seconds axis as the traffic and latency charts.
  */
-export function ResourceCharts({ resources, domain }: { resources: LoadResources; domain?: [number, number] }) {
+export function ResourceCharts({ resources, domain, scenario }: { resources: LoadResources; domain?: [number, number]; scenario?: ScenarioResult }) {
+  const marks = scenarioMarks(scenario)
   const arcade = useArcade()
   const curve = arcade ? "stepAfter" : "monotone"
   const dot = arcade ? PixelDot : false
@@ -152,7 +199,7 @@ export function ResourceCharts({ resources, domain }: { resources: LoadResources
   const peakCpu = Math.max(100, ...resources.services.map((s) => s.peakCpuOfLimit * 100))
   const xAxis = timeAxis(domain)
   return (
-    <div className="grid h-full min-h-44 grid-cols-1 gap-2 md:grid-cols-2" data-testid="loadtest-resources-chart">
+    <div className="grid h-full min-h-44 grid-cols-1 gap-2 @3xl:grid-cols-2" data-testid="loadtest-resources-chart">
       <ChartCard title="CPU (% of each service's limit)" hint="docker stats CPU divided by the service's CPU limit (host CPUs when unlimited). 100% = the limit is saturated.">
         <ChartContainer config={cpu} className="aspect-auto h-full min-h-32 w-full">
           <LineChart data={rows} margin={{ left: 0, right: 8, top: 4, bottom: 0 }}>
@@ -161,6 +208,7 @@ export function ResourceCharts({ resources, domain }: { resources: LoadResources
             <YAxis tickLine={false} axisLine={false} width={40} domain={[0, Math.ceil(peakCpu / 10) * 10]} tickFormatter={(v: number) => formatPct(v)} />
             <ReferenceLine y={100} stroke="var(--destructive)" strokeDasharray="4 3" strokeOpacity={0.6} />
             <ChartTooltip content={<ChartTooltipContent labelFormatter={secondsLabel} />} />
+            {marks}
             <ChartLegend content={<ChartLegendContent />} />
             {series.map((s) => (
               <Line
@@ -184,6 +232,7 @@ export function ResourceCharts({ resources, domain }: { resources: LoadResources
             {xAxis}
             <YAxis tickLine={false} axisLine={false} width={40} tickFormatter={compactTick} />
             <ChartTooltip content={<ChartTooltipContent labelFormatter={secondsLabel} />} />
+            {marks}
             <ChartLegend content={<ChartLegendContent />} />
             {series.map((s) => (
               <Line
@@ -233,7 +282,17 @@ function moment(t: number | undefined, label: string, side: "left" | "right") {
  * One workload's autoscaling on the run's seconds axis: desired and Ready replicas (steps) against p95 latency, and
  * the HPA's CPU reading against its target.
  */
-export function ScalingCharts({ workload, samples, domain }: { workload: WorkloadScaling; samples: LoadSample[]; domain?: [number, number] }) {
+export function ScalingCharts({
+  workload,
+  samples,
+  domain,
+  scenario,
+}: {
+  workload: WorkloadScaling
+  samples: LoadSample[]
+  domain?: [number, number]
+  scenario?: ScenarioResult
+}) {
   const rows = scalingRows(workload, samples)
   const xAxis = timeAxis(domain)
   const hpa = workload.hpa
@@ -241,7 +300,7 @@ export function ScalingCharts({ workload, samples, domain }: { workload: Workloa
   const cpuTop = Math.max(100, (hpa?.targetCpu ?? 0) * 1.5, workload.peakCpuUtilization ?? 0)
   const showCpu = !!hpa?.targetCpu
   return (
-    <div className={cn("grid h-full min-h-44 grid-cols-1 gap-2", showCpu && "md:grid-cols-2")} data-testid="loadtest-scaling-chart" data-workload={workload.workload}>
+    <div className={cn("grid h-full min-h-44 grid-cols-1 gap-2", showCpu && "@3xl:grid-cols-2")} data-testid="loadtest-scaling-chart" data-workload={workload.workload}>
       <ChartCard
         title={`${workload.workload}: replicas vs p95`}
         hint="Desired = the replicas the HPA asked for (spec.replicas); Ready = pods passing their readiness probe. New pods should be Ready before p95 climbs."
@@ -266,6 +325,7 @@ export function ScalingCharts({ workload, samples, domain }: { workload: Workloa
             )}
             {moment(workload.scaleUpAt, "scale-up", "left")}
             {moment(workload.readyAt, "ready", "right")}
+            {scenarioMarks(scenario, "pods")}
             <Line yAxisId="ms" dataKey="p95" type="monotone" stroke="var(--color-p95)" strokeWidth={1.25} strokeOpacity={0.8} dot={false} connectNulls isAnimationActive={false} />
             <Line yAxisId="pods" dataKey="desired" type="stepAfter" stroke="var(--color-desired)" strokeDasharray="4 3" dot={false} connectNulls isAnimationActive={false} />
             <Line yAxisId="pods" dataKey="ready" type="stepAfter" stroke="var(--color-ready)" strokeWidth={2.5} dot={false} connectNulls isAnimationActive={false} />
@@ -290,6 +350,7 @@ export function ScalingCharts({ workload, samples, domain }: { workload: Workloa
                 label={{ value: `target ${hpa.targetCpu}%`, position: "insideTopLeft", fontSize: 10, fill: "var(--muted-foreground)" }}
               />
               <ChartTooltip content={<ChartTooltipContent labelFormatter={secondsLabel} />} />
+              {scenarioMarks(scenario)}
               <ChartLegend content={<ChartLegendContent />} />
               <Line dataKey="cpu" type="stepAfter" stroke="var(--color-cpu)" strokeWidth={2} dot={false} connectNulls isAnimationActive={false} />
             </LineChart>

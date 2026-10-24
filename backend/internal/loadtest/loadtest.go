@@ -35,6 +35,7 @@ import (
 	"time"
 
 	"github.com/ismaelosuna7824/nimbo/backend/internal/model"
+	"github.com/ismaelosuna7824/nimbo/backend/internal/scenario"
 )
 
 // Resolver locates a workflow's sandbox emulators on the host.
@@ -49,8 +50,9 @@ type ConnectionResolver interface {
 }
 
 // WorkflowInspector tells the engine about docker and Kubernetes
-// workflows: the environment a run is recorded under and, for the
-// autoscaling verdict, which other environments autoscale a workload.
+// workflows: the environment a run is recorded under, for the autoscaling
+// verdict which other environments autoscale a workload, and the workflow
+// itself (scenario validation).
 type WorkflowInspector interface {
 	// ActiveEnvironment is the environment a docker or Kubernetes workflow
 	// renders and runs ("" = the base); ok is false for other workflows.
@@ -59,13 +61,16 @@ type WorkflowInspector interface {
 	// rendered objects have a HorizontalPodAutoscaler scaling the workload
 	// kind/name.
 	AutoscaledIn(ctx context.Context, wfID, env, kind, name string) []string
+	// Workflow returns the stored workflow.
+	Workflow(wfID string) (*model.Workflow, bool)
 }
 
 // EngineConfig configures an Engine. Resolver may be nil when only plain
 // host URLs are tested; Connections may be nil when no connection is used.
 // Monitor (optional) samples the containers of docker and Kubernetes
 // workflows during their runs (LoadTestRun.Resources); Workflows
-// (optional) records Kubernetes runs' environment.
+// (optional) records Kubernetes runs' environment and validates scenarios;
+// Faults (optional) injects scenario faults.
 type EngineConfig struct {
 	Home        string
 	Events      model.Publisher
@@ -73,6 +78,7 @@ type EngineConfig struct {
 	Connections ConnectionResolver
 	Monitor     ResourceMonitor
 	Workflows   WorkflowInspector
+	Faults      FaultInjector
 }
 
 const (
@@ -108,13 +114,35 @@ type Engine struct {
 	connections ConnectionResolver
 	monitor     ResourceMonitor
 	workflows   WorkflowInspector
+	faults      FaultInjector
 
 	mu   sync.Mutex
 	runs map[string]*runner // running, plus finished runs that could not be saved
 }
 
 func NewEngine(cfg EngineConfig) *Engine {
-	return &Engine{home: cfg.Home, events: cfg.Events, resolver: cfg.Resolver, connections: cfg.Connections, monitor: cfg.Monitor, workflows: cfg.Workflows, runs: map[string]*runner{}}
+	return &Engine{home: cfg.Home, events: cfg.Events, resolver: cfg.Resolver, connections: cfg.Connections, monitor: cfg.Monitor, workflows: cfg.Workflows, faults: cfg.Faults, runs: map[string]*runner{}}
+}
+
+// Shutdown stops every running test and waits (until ctx ends) for them to
+// finish, so injected scenario faults are reverted before the daemon exits.
+func (e *Engine) Shutdown(ctx context.Context) {
+	e.mu.Lock()
+	rs := make([]*runner, 0, len(e.runs))
+	for _, r := range e.runs {
+		rs = append(rs, r)
+	}
+	e.mu.Unlock()
+	for _, r := range rs {
+		r.stop()
+	}
+	for _, r := range rs {
+		select {
+		case <-r.done:
+		case <-ctx.Done():
+			return
+		}
+	}
 }
 
 // Start validates spec, then runs it in the background on behalf of the
@@ -154,6 +182,14 @@ func (e *Engine) start(ctx context.Context, wfID, connID string, spec model.Load
 	if err != nil {
 		return nil, err
 	}
+	sched := newSchedule(spec.Profile.Stages)
+	kind, err := e.validateScenario(wfID, &spec, sched.duration())
+	if err != nil {
+		return nil, err
+	}
+	if sc := spec.Scenario; sc != nil && sc.ID == model.ScenarioTrafficSpike {
+		sched = sched.withSpike(float64(sc.AtSec), float64(sc.DurationSec), scenario.Param(sc.Params, "factor", scenario.DefaultSpikeFactor))
+	}
 	if p.external && !spec.ConfirmExternal {
 		return nil, ErrConfirmationRequired
 	}
@@ -166,12 +202,14 @@ func (e *Engine) start(ctx context.Context, wfID, connID string, spec model.Load
 	}
 	r := &runner{
 		e:          e,
-		sched:      newSchedule(spec.Profile.Stages),
+		sched:      sched,
 		exec:       exec,
 		conn:       p.conn,
 		timeout:    time.Duration(spec.TimeoutMs) * time.Millisecond,
 		maxWorkers: spec.MaxWorkers,
 		col:        newCollector(),
+		sc:         scenarioState{kind: kind},
+		done:       make(chan struct{}),
 		run: model.LoadTestRun{
 			ID:           newRunID(),
 			WorkflowID:   wfID,

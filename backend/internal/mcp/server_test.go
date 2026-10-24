@@ -13,6 +13,7 @@ import (
 	"github.com/ismaelosuna7824/nimbo/backend/internal/api"
 	"github.com/ismaelosuna7824/nimbo/backend/internal/catalog"
 	"github.com/ismaelosuna7824/nimbo/backend/internal/events"
+	"github.com/ismaelosuna7824/nimbo/backend/internal/learn"
 	"github.com/ismaelosuna7824/nimbo/backend/internal/loadtest"
 	"github.com/ismaelosuna7824/nimbo/backend/internal/model"
 	"github.com/ismaelosuna7824/nimbo/backend/internal/sandbox"
@@ -53,9 +54,12 @@ func sessionURL(t *testing.T) (*sdk.ClientSession, *events.Hub, string) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	learnDB := learn.Open(home, learn.Options{Migrations: learnFixture})
+	t.Cleanup(func() { learnDB.Close() })
 	srv := httptest.NewServer(api.New(api.Config{
 		Version: "test", Home: home, Store: st, Connections: conns, Catalog: cat, Sandbox: sb, Events: hub, Settings: prefs,
 		LoadTest: loadtest.NewEngine(loadtest.EngineConfig{Home: home, Events: hub, Resolver: sb, Connections: conns}),
+		Learn:    learnDB,
 	}).Handler())
 	t.Cleanup(srv.Close)
 

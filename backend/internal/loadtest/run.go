@@ -36,6 +36,9 @@ type runner struct {
 	maxWorkers int
 	col        *collector
 	resources  *resourceRecorder // docker and Kubernetes workflow targets; nil otherwise
+	sc         scenarioState     // guarded by mu
+	chaos      sync.WaitGroup    // the scenario's inject/revert goroutine
+	done       chan struct{}     // closed when execute returns
 
 	ctx     context.Context
 	cancel  context.CancelFunc
@@ -77,9 +80,11 @@ func (r *runner) stop() {
 }
 
 func (r *runner) execute() {
+	defer close(r.done)
 	defer r.exec.close()
 	defer r.cancel()
 
+	r.prepareFault()
 	if m := r.e.monitor; m != nil && r.run.WorkflowID != "" && r.run.Spec.Target.ConnectionID == "" {
 		if probe := m.MonitorResources(r.ctx, r.run.WorkflowID, r.run.Spec.Target); probe != nil {
 			r.resources = newResourceRecorder(probe)
@@ -104,6 +109,13 @@ func (r *runner) execute() {
 	if r.resources != nil {
 		r.resources.record(0)
 	}
+	if sc := r.run.Spec.Scenario; sc != nil && sc.ID != model.ScenarioTrafficSpike {
+		r.chaos.Add(1)
+		go func() {
+			defer r.chaos.Done()
+			r.runFault()
+		}()
+	}
 
 	var sampler sync.WaitGroup
 	sampler.Add(1)
@@ -120,6 +132,7 @@ func (r *runner) execute() {
 	// Requests issued before the end finish within their own timeout and
 	// count towards the summary; after Stop they are canceled and dropped.
 	r.reqs.Wait()
+	r.chaos.Wait()
 	r.finish(nil)
 }
 
@@ -282,14 +295,17 @@ type sampleEvent struct {
 // finish settles the run status, persists it and releases its slot.
 func (r *runner) finish(preflightErr error) {
 	now := time.Now()
+	// The status leaves "running" only once resources and the scenario
+	// verdict are set, so pollers never see a finished run without them.
+	var status model.LoadTestStatus
 	r.mu.Lock()
 	r.run.EndedAt = &now
 	switch {
 	case preflightErr != nil:
-		r.run.Status = model.LoadErrored
+		status = model.LoadErrored
 		r.run.Error = "target unreachable: " + redactSecrets(preflightErr.Error(), r.conn)
 	case r.start.IsZero():
-		r.run.Status = model.LoadStopped
+		status = model.LoadStopped
 	default:
 		active := time.Duration(r.sched.duration() * float64(time.Second))
 		if !r.stopTime.IsZero() {
@@ -298,14 +314,14 @@ func (r *runner) finish(preflightErr error) {
 		sum := r.col.summary(active, r.secs)
 		r.run.Summary = &sum
 		r.run.Thresholds = evaluate(r.run.Spec.Thresholds, &sum)
-		r.run.Status = model.LoadPassed
+		status = model.LoadPassed
 		for _, th := range r.run.Thresholds {
 			if !th.Passed {
-				r.run.Status = model.LoadFailed
+				status = model.LoadFailed
 			}
 		}
 		if r.stopped.Load() {
-			r.run.Status = model.LoadStopped
+			status = model.LoadStopped
 		}
 	}
 	r.mu.Unlock()
@@ -325,6 +341,14 @@ func (r *runner) finish(preflightErr error) {
 			r.mu.Unlock()
 		}
 	}
+	var sc *model.ScenarioResult
+	if r.run.Spec.Scenario != nil {
+		sc = r.scenarioResult()
+	}
+	r.mu.Lock()
+	r.run.Scenario = sc
+	r.run.Status = status
+	r.mu.Unlock()
 
 	if err := r.e.save(r.snapshot(true)); err != nil {
 		r.mu.Lock()

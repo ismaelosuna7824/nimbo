@@ -1,0 +1,45 @@
+# Challenge: a background job is starving the API.
+# The orders api serves customers and also runs the sales report job in
+# the same process. Redis holds the time of the last report.
+
+x-defaults: &defaults
+  restart: unless-stopped
+  logging:
+    driver: json-file
+    options:
+      max-size: "10m"
+      max-file: "3"
+
+services:
+  api:
+    <<: *defaults
+    build: ./app
+    init: true
+    ports:
+      - "3405:3000"
+    environment:
+      ROLE: api
+      RUN_JOBS: "true"
+      REDIS_URL: redis://cache:6379
+    depends_on:
+      cache:
+        condition: service_healthy
+    deploy:
+      resources:
+        limits:
+          cpus: "1"
+          memory: 128M
+
+  cache:
+    <<: *defaults
+    image: redis:7.4.6-alpine3.21
+    healthcheck:
+      test: ["CMD-SHELL", "redis-cli ping | grep PONG"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    deploy:
+      resources:
+        limits:
+          cpus: "0.5"
+          memory: 128M

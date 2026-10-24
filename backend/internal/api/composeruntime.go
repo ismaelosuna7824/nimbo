@@ -122,12 +122,22 @@ func (s *Server) startComposeRun(w http.ResponseWriter, r *http.Request, wf *mod
 			return err
 		}
 	}
+	run, err := s.cfg.Sandbox.ComposeRun(context.WithoutCancel(r.Context()), s.composeRunRequest(wf, req))
+	if err != nil {
+		return composeError(err)
+	}
+	return writeJSON(w, http.StatusCreated, run)
+}
+
+// composeRunRequest is the sandbox request of a compose action on wf in
+// its active environment.
+func (s *Server) composeRunRequest(wf *model.Workflow, req runRequest) sandbox.ComposeRunRequest {
 	files, envFiles, profiles := s.composeFiles(wf)
 	var hints map[string]sandbox.BuildHint
 	if req.Action == model.ActionUp || req.Action == model.ActionBuild {
 		hints = s.buildHints(wf)
 	}
-	run, err := s.cfg.Sandbox.ComposeRun(context.WithoutCancel(r.Context()), sandbox.ComposeRunRequest{
+	return sandbox.ComposeRunRequest{
 		Workflow:      wf,
 		Action:        req.Action,
 		SourceDir:     s.cfg.Store.AssetsDir(wf.ID),
@@ -139,11 +149,7 @@ func (s *Server) startComposeRun(w http.ResponseWriter, r *http.Request, wf *mod
 		RemapPorts:    req.RemapPorts,
 		Timeout:       time.Duration(req.TimeoutSec) * time.Second,
 		BuildHints:    hints,
-	})
-	if err != nil {
-		return composeError(err)
 	}
-	return writeJSON(w, http.StatusCreated, run)
 }
 
 func (s *Server) composeWorkflow(r *http.Request) (*model.Workflow, error) {

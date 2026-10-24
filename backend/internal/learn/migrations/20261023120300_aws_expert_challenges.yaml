@@ -1,0 +1,1618 @@
+description: Adds the AWS expert challenges (Well-Architected three-tier web application, cross-Region backup and restore with cost controls)
+operations:
+  - op: upsert
+    kind: challenge
+    id: aws-three-tier-well-architected
+    data:
+      provider: aws
+      level: expert
+      title: Well-Architected review of a lift-and-shift web app
+      summary: Rebuild a single-server, single-zone app into a secure, resilient three-tier architecture with zero best-practice and network warnings.
+      minutes: 120
+      tags: [well-architected, three-tier, vpc, alb, auto-scaling, rds, security]
+      prerequisites: [aws-alb-auto-scaling, aws-rds-multi-az]
+      runtime: design
+      problem: |
+        A company lifted its web application into AWS as-is: one EC2
+        instance in a public subnet of one Availability Zone (SSH, HTTP and
+        PostgreSQL open to the internet, an IAM role with full admin rights)
+        and an RDS database that is public, single-AZ, unencrypted, without
+        backups and with its password in a variable. You run the
+        **Well-Architected review**.
+
+        The AWS Well-Architected Framework evaluates a workload against six
+        pillars: operational excellence, security, reliability, performance
+        efficiency, cost optimization and sustainability. For a classic web
+        application the reference answer is a **three-tier** network: a
+        public tier with only the load balancer (and NAT gateways), a private
+        application tier, and an isolated data tier, each in at least two
+        Availability Zones, with security groups chained tier to tier. In
+        this challenge you design that architecture; Nimbo grades the design
+        (structure, best-practice rules and network analysis) rather than
+        deploying it.
+      requirements:
+        - "Network: subnets `aws_subnet.public`, `aws_subnet.app` and `aws_subnet.db`, each in two Availability Zones from a data source lookup. The app tier reaches the internet through NAT gateways in the public subnets; the db tier has no route to the internet."
+        - "Edge: an internet-facing `aws_lb` in the public subnets with an HTTPS listener (an ACM certificate and a TLS security policy) and an HTTP listener that redirects to HTTPS."
+        - "App tier: an `aws_autoscaling_group` in `aws_subnet.app` (at least 2 instances, `health_check_type = \"ELB\"`) from a launch template that requires IMDSv2; a target tracking `aws_autoscaling_policy`; instances managed through Systems Manager (`AmazonSSMManagedInstanceCore` attached to their role), not SSH; no standalone `aws_instance`."
+        - "Data tier: `aws_db_instance` in a subnet group of `aws_subnet.db`, Multi-AZ, encrypted, not public, backups kept at least 7 days, master password managed in Secrets Manager."
+        - "Security groups `aws_security_group.alb` → `aws_security_group.app` → `aws_security_group.db`: each tier accepts traffic only from the tier in front of it."
+        - "Operations: an `aws_cloudwatch_metric_alarm` on the load balancer (`AWS/ApplicationELB`)."
+        - "No `bp_*` or `net_*` findings at warning level or above."
+      hints:
+        - "Start from the network: `data \"aws_availability_zones\"`, then three subnet resources with `count = 2` and non-overlapping `cidrsubnet` ranges (e.g. netnums 0-1 public, 10-11 app, 20-21 db). One NAT gateway (and Elastic IP) per AZ in the public subnets, and one private route table per AZ whose `0.0.0.0/0` goes to that zone's NAT gateway."
+        - "Reuse what you built in the ALB and RDS challenges: target group with `/health`, launch template with `metadata_options { http_tokens = \"required\" }`, ASG with `target_group_arns`; RDS with `multi_az`, `storage_encrypted`, `manage_master_user_password`. Replace the admin role with an instance profile whose role has only `arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore`."
+        - "HTTPS listener: `protocol = \"HTTPS\"`, `ssl_policy = \"ELBSecurityPolicy-TLS13-1-2-2021-06\"`, `certificate_arn = var.certificate_arn`. HTTP listener: `default_action { type = \"redirect\" redirect { port = \"443\" protocol = \"HTTPS\" status_code = \"HTTP_301\" } }`. Scaling: `policy_type = \"TargetTrackingScaling\"` with `ASGAverageCPUUtilization`."
+      solution: |
+        The reference splits the design by tier: `main.tf` (network),
+        `app.tf` (load balancer, app servers, scaling, alarm) and `data.tf`
+        (database). How each pillar is addressed:
+
+        | Pillar | Design decision |
+        |---|---|
+        | Security | Only the ALB is public; SG chain ALB → app → db; TLS 1.3/1.2 policy and HTTP→HTTPS redirect; IMDSv2; SSM instead of SSH; least-privilege instance role; encrypted RDS and EBS; password in Secrets Manager |
+        | Reliability | Every tier in two AZs; ASG with ELB health checks replaces broken instances; RDS Multi-AZ with 7-day backups; one NAT gateway per AZ so a zone failure doesn't cut egress for the other |
+        | Performance efficiency | Target tracking keeps average CPU near 50 % instead of fixed capacity |
+        | Operational excellence | Infrastructure as code split by concern; an alarm on unhealthy targets |
+        | Cost optimization | `single_nat_gateway` switches to one NAT gateway for non-production environments (a documented trade-off against zone independence); instance types are variables to right-size |
+        | Sustainability | Scaling in when idle avoids running unused capacity |
+
+        ```hcl
+        resource "aws_nat_gateway" "main" {
+          count         = local.nat_count
+          allocation_id = aws_eip.nat[count.index].id
+          subnet_id     = aws_subnet.public[count.index].id
+        }
+
+        resource "aws_route" "app_egress" {
+          count                  = length(local.azs)
+          route_table_id         = aws_route_table.app[count.index].id
+          destination_cidr_block = "0.0.0.0/0"
+          nat_gateway_id         = aws_nat_gateway.main[min(count.index, local.nat_count - 1)].id
+        }
+        ```
+
+        Next steps a real review would add: AWS WAF on the ALB, ALB access
+        logs to S3, VPC Flow Logs, and a Well-Architected Tool review to
+        track the remaining risks.
+      solutionFiles:
+        main.tf: |
+          data "aws_availability_zones" "available" {
+            state = "available"
+          }
+
+          locals {
+            azs = slice(data.aws_availability_zones.available.names, 0, 2)
+            # One NAT gateway per zone; one in total when cost matters more
+            # than zone independence (non-production).
+            nat_count = var.single_nat_gateway ? 1 : length(local.azs)
+          }
+
+          resource "aws_vpc" "main" {
+            cidr_block           = var.vpc_cidr
+            enable_dns_support   = true
+            enable_dns_hostnames = true
+            tags                 = { Name = local.name_prefix }
+          }
+
+          resource "aws_internet_gateway" "main" {
+            vpc_id = aws_vpc.main.id
+            tags   = { Name = local.name_prefix }
+          }
+
+          # Public tier: the load balancer and the NAT gateways only.
+          resource "aws_subnet" "public" {
+            count                   = length(local.azs)
+            vpc_id                  = aws_vpc.main.id
+            cidr_block              = cidrsubnet(var.vpc_cidr, 8, count.index)
+            availability_zone       = local.azs[count.index]
+            map_public_ip_on_launch = false
+            tags                    = { Name = "${local.name_prefix}-public-${local.azs[count.index]}", Tier = "public" }
+          }
+
+          # App tier: private, outbound through the NAT gateways.
+          resource "aws_subnet" "app" {
+            count             = length(local.azs)
+            vpc_id            = aws_vpc.main.id
+            cidr_block        = cidrsubnet(var.vpc_cidr, 8, count.index + 10)
+            availability_zone = local.azs[count.index]
+            tags              = { Name = "${local.name_prefix}-app-${local.azs[count.index]}", Tier = "app" }
+          }
+
+          # Data tier: isolated, no route to the internet.
+          resource "aws_subnet" "db" {
+            count             = length(local.azs)
+            vpc_id            = aws_vpc.main.id
+            cidr_block        = cidrsubnet(var.vpc_cidr, 8, count.index + 20)
+            availability_zone = local.azs[count.index]
+            tags              = { Name = "${local.name_prefix}-db-${local.azs[count.index]}", Tier = "db" }
+          }
+
+          resource "aws_route_table" "public" {
+            vpc_id = aws_vpc.main.id
+            tags   = { Name = "${local.name_prefix}-public" }
+          }
+
+          resource "aws_route" "public_internet" {
+            route_table_id         = aws_route_table.public.id
+            destination_cidr_block = "0.0.0.0/0"
+            gateway_id             = aws_internet_gateway.main.id
+          }
+
+          resource "aws_route_table_association" "public" {
+            count          = length(local.azs)
+            subnet_id      = aws_subnet.public[count.index].id
+            route_table_id = aws_route_table.public.id
+          }
+
+          resource "aws_eip" "nat" {
+            count  = local.nat_count
+            domain = "vpc"
+            tags   = { Name = "${local.name_prefix}-nat-${local.azs[count.index]}" }
+          }
+
+          resource "aws_nat_gateway" "main" {
+            count         = local.nat_count
+            allocation_id = aws_eip.nat[count.index].id
+            subnet_id     = aws_subnet.public[count.index].id
+            tags          = { Name = "${local.name_prefix}-${local.azs[count.index]}" }
+            depends_on    = [aws_internet_gateway.main]
+          }
+
+          # One route table per zone: each app subnet uses its own zone's NAT
+          # gateway (or the single one).
+          resource "aws_route_table" "app" {
+            count  = length(local.azs)
+            vpc_id = aws_vpc.main.id
+            tags   = { Name = "${local.name_prefix}-app-${local.azs[count.index]}" }
+          }
+
+          resource "aws_route" "app_egress" {
+            count                  = length(local.azs)
+            route_table_id         = aws_route_table.app[count.index].id
+            destination_cidr_block = "0.0.0.0/0"
+            nat_gateway_id         = aws_nat_gateway.main[min(count.index, local.nat_count - 1)].id
+          }
+
+          resource "aws_route_table_association" "app" {
+            count          = length(local.azs)
+            subnet_id      = aws_subnet.app[count.index].id
+            route_table_id = aws_route_table.app[count.index].id
+          }
+
+          resource "aws_route_table" "db" {
+            vpc_id = aws_vpc.main.id
+            tags   = { Name = "${local.name_prefix}-db" }
+          }
+
+          resource "aws_route_table_association" "db" {
+            count          = length(local.azs)
+            subnet_id      = aws_subnet.db[count.index].id
+            route_table_id = aws_route_table.db.id
+          }
+        app.tf: |
+          data "aws_ssm_parameter" "al2023" {
+            name = "/aws/service/ami-amazon-linux-latest/al2023-ami-kernel-default-x86_64"
+          }
+
+          resource "aws_security_group" "alb" {
+            name        = "${local.name_prefix}-alb"
+            description = "Load balancer: HTTP and HTTPS from the internet"
+            vpc_id      = aws_vpc.main.id
+
+            ingress {
+              description = "HTTP (redirected to HTTPS)"
+              from_port   = 80
+              to_port     = 80
+              protocol    = "tcp"
+              cidr_blocks = ["0.0.0.0/0"]
+            }
+
+            ingress {
+              description = "HTTPS"
+              from_port   = 443
+              to_port     = 443
+              protocol    = "tcp"
+              cidr_blocks = ["0.0.0.0/0"]
+            }
+
+            egress {
+              description = "Requests and health checks to the app tier"
+              from_port   = 8080
+              to_port     = 8080
+              protocol    = "tcp"
+              cidr_blocks = [var.vpc_cidr]
+            }
+          }
+
+          resource "aws_security_group" "app" {
+            name        = "${local.name_prefix}-app"
+            description = "App servers: 8080 from the load balancer only"
+            vpc_id      = aws_vpc.main.id
+
+            ingress {
+              description     = "Requests and health checks from the load balancer"
+              from_port       = 8080
+              to_port         = 8080
+              protocol        = "tcp"
+              security_groups = [aws_security_group.alb.id]
+            }
+
+            egress {
+              description = "Outbound HTTPS (updates, AWS APIs) through the NAT gateways"
+              from_port   = 443
+              to_port     = 443
+              protocol    = "tcp"
+              cidr_blocks = ["0.0.0.0/0"]
+            }
+
+            egress {
+              description = "PostgreSQL in the data tier"
+              from_port   = 5432
+              to_port     = 5432
+              protocol    = "tcp"
+              cidr_blocks = [var.vpc_cidr]
+            }
+          }
+
+          resource "aws_lb" "app" {
+            name                       = local.name_prefix
+            load_balancer_type         = "application"
+            internal                   = false
+            security_groups            = [aws_security_group.alb.id]
+            subnets                    = aws_subnet.public[*].id
+            drop_invalid_header_fields = true
+          }
+
+          resource "aws_lb_target_group" "app" {
+            name                 = local.name_prefix
+            port                 = 8080
+            protocol             = "HTTP"
+            target_type          = "instance"
+            vpc_id               = aws_vpc.main.id
+            deregistration_delay = 30
+
+            health_check {
+              path                = "/health"
+              matcher             = "200"
+              interval            = 15
+              healthy_threshold   = 2
+              unhealthy_threshold = 2
+            }
+          }
+
+          resource "aws_lb_listener" "https" {
+            load_balancer_arn = aws_lb.app.arn
+            port              = 443
+            protocol          = "HTTPS"
+            ssl_policy        = "ELBSecurityPolicy-TLS13-1-2-2021-06"
+            certificate_arn   = var.certificate_arn
+
+            default_action {
+              type             = "forward"
+              target_group_arn = aws_lb_target_group.app.arn
+            }
+          }
+
+          resource "aws_lb_listener" "http" {
+            load_balancer_arn = aws_lb.app.arn
+            port              = 80
+            protocol          = "HTTP"
+
+            default_action {
+              type = "redirect"
+
+              redirect {
+                port        = "443"
+                protocol    = "HTTPS"
+                status_code = "HTTP_301"
+              }
+            }
+          }
+
+          # Least privilege for the servers: Systems Manager only (Session
+          # Manager replaces SSH).
+          resource "aws_iam_role" "app" {
+            name = "${local.name_prefix}-app"
+            assume_role_policy = jsonencode({
+              Version = "2012-10-17"
+              Statement = [{
+                Effect    = "Allow"
+                Principal = { Service = "ec2.amazonaws.com" }
+                Action    = "sts:AssumeRole"
+              }]
+            })
+          }
+
+          resource "aws_iam_role_policy_attachment" "app_ssm" {
+            role       = aws_iam_role.app.name
+            policy_arn = "arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore"
+          }
+
+          resource "aws_iam_instance_profile" "app" {
+            name = "${local.name_prefix}-app"
+            role = aws_iam_role.app.name
+          }
+
+          resource "aws_launch_template" "app" {
+            name_prefix            = "${local.name_prefix}-app-"
+            image_id               = data.aws_ssm_parameter.al2023.value
+            instance_type          = var.instance_type
+            vpc_security_group_ids = [aws_security_group.app.id]
+            user_data              = base64encode(local.user_data)
+
+            iam_instance_profile {
+              arn = aws_iam_instance_profile.app.arn
+            }
+
+            metadata_options {
+              http_endpoint = "enabled"
+              http_tokens   = "required"
+            }
+
+            block_device_mappings {
+              device_name = "/dev/xvda"
+
+              ebs {
+                volume_size = 20
+                volume_type = "gp3"
+                encrypted   = true
+              }
+            }
+
+            tag_specifications {
+              resource_type = "instance"
+              tags          = merge(local.common_tags, { Name = "${local.name_prefix}-app" })
+            }
+          }
+
+          resource "aws_autoscaling_group" "app" {
+            name                      = local.name_prefix
+            min_size                  = 2
+            max_size                  = 6
+            vpc_zone_identifier       = aws_subnet.app[*].id
+            target_group_arns         = [aws_lb_target_group.app.arn]
+            health_check_type         = "ELB"
+            health_check_grace_period = 120
+
+            launch_template {
+              id      = aws_launch_template.app.id
+              version = aws_launch_template.app.latest_version
+            }
+          }
+
+          # Capacity follows demand: average CPU around 50 %.
+          resource "aws_autoscaling_policy" "cpu" {
+            name                   = "${local.name_prefix}-cpu"
+            autoscaling_group_name = aws_autoscaling_group.app.name
+            policy_type            = "TargetTrackingScaling"
+
+            target_tracking_configuration {
+              predefined_metric_specification {
+                predefined_metric_type = "ASGAverageCPUUtilization"
+              }
+              target_value = 50
+            }
+          }
+
+          resource "aws_cloudwatch_metric_alarm" "unhealthy_targets" {
+            alarm_name          = "${local.name_prefix}-unhealthy-targets"
+            alarm_description   = "At least one app server fails the load balancer health check."
+            namespace           = "AWS/ApplicationELB"
+            metric_name         = "UnHealthyHostCount"
+            statistic           = "Maximum"
+            period              = 60
+            evaluation_periods  = 3
+            comparison_operator = "GreaterThanThreshold"
+            threshold           = 0
+            dimensions = {
+              LoadBalancer = aws_lb.app.arn_suffix
+              TargetGroup  = aws_lb_target_group.app.arn_suffix
+            }
+          }
+        data.tf: |
+          resource "aws_security_group" "db" {
+            name        = "${local.name_prefix}-db"
+            description = "PostgreSQL from the app tier only"
+            vpc_id      = aws_vpc.main.id
+
+            ingress {
+              description     = "PostgreSQL from the app servers"
+              from_port       = 5432
+              to_port         = 5432
+              protocol        = "tcp"
+              security_groups = [aws_security_group.app.id]
+            }
+          }
+
+          resource "aws_db_subnet_group" "db" {
+            name       = "${local.name_prefix}-db"
+            subnet_ids = aws_subnet.db[*].id
+          }
+
+          resource "aws_db_instance" "main" {
+            identifier                  = "${local.name_prefix}-db"
+            engine                      = "postgres"
+            engine_version              = "16"
+            instance_class              = var.db_instance_class
+            allocated_storage           = 20
+            storage_type                = "gp3"
+            db_name                     = "app"
+            username                    = "app_admin"
+            manage_master_user_password = true
+            db_subnet_group_name        = aws_db_subnet_group.db.name
+            vpc_security_group_ids      = [aws_security_group.db.id]
+            publicly_accessible         = false
+            multi_az                    = true
+            storage_encrypted           = true
+            backup_retention_period     = 7
+            backup_window               = "03:00-04:00"
+            copy_tags_to_snapshot       = true
+            deletion_protection         = true
+            skip_final_snapshot         = false
+            final_snapshot_identifier   = "${local.name_prefix}-db-final"
+          }
+        variables.tf: |
+          variable "project" {
+            type        = string
+            default     = "shop"
+            description = "Project name: the first part of every resource name and the Project tag."
+
+            validation {
+              condition     = can(regex("^[a-z][a-z0-9-]{1,19}$", var.project))
+              error_message = "project must be 2-20 lowercase letters, digits or hyphens, starting with a letter."
+            }
+          }
+
+          variable "environment" {
+            type        = string
+            default     = "prod"
+            description = "Deployment environment (dev, staging, prod, …): part of every resource name and the Environment tag."
+
+            validation {
+              condition     = can(regex("^[a-z][a-z0-9-]{0,11}$", var.environment))
+              error_message = "environment must be 1-12 lowercase letters, digits or hyphens, starting with a letter."
+            }
+          }
+
+          variable "aws_region" {
+            type        = string
+            default     = "us-east-1"
+            description = "AWS region to deploy into."
+          }
+
+          variable "vpc_cidr" {
+            type        = string
+            default     = "10.20.0.0/16"
+            description = "CIDR block of the VPC; every subnet is a /24 slice of it."
+          }
+
+          variable "single_nat_gateway" {
+            type        = bool
+            default     = false
+            description = "Use one NAT gateway for both zones (cheaper, but egress depends on one zone). Keep false in production."
+          }
+
+          variable "certificate_arn" {
+            type        = string
+            description = "ARN of the ACM certificate of the site's domain, for the HTTPS listener."
+          }
+
+          variable "instance_type" {
+            type        = string
+            default     = "t3.small"
+            description = "EC2 instance type of the app servers (x86_64)."
+          }
+
+          variable "db_instance_class" {
+            type        = string
+            default     = "db.t4g.medium"
+            description = "RDS instance class of the database."
+          }
+        outputs.tf: |
+          output "load_balancer_dns_name" {
+            value       = aws_lb.app.dns_name
+            description = "DNS name of the load balancer: point the site's domain at it."
+          }
+
+          output "db_endpoint" {
+            value       = aws_db_instance.main.address
+            description = "Host name of the database (reachable from the app tier only)."
+          }
+      starter:
+        kind: terraform
+        cloud: aws
+        files:
+          versions.tf: |
+            terraform {
+              required_version = ">= 1.6"
+
+              required_providers {
+                aws = {
+                  source  = "hashicorp/aws"
+                  version = "~> 6.0"
+                }
+              }
+            }
+          providers.tf: |
+            provider "aws" {
+              region = var.aws_region
+
+              default_tags {
+                tags = local.common_tags
+              }
+            }
+          locals.tf: |
+            locals {
+              name_prefix = "${var.project}-${var.environment}"
+              common_tags = {
+                Project     = var.project
+                Environment = var.environment
+                ManagedBy   = "nimbo"
+              }
+
+              # The app: a small Python service on port 8080 (/health answers ok).
+              user_data = <<-EOT
+                #!/bin/bash
+                set -euo pipefail
+                mkdir -p /opt/app
+                cat > /opt/app/server.py <<'PY'
+                import json, socket
+                from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+                class Handler(BaseHTTPRequestHandler):
+                    def do_GET(self):
+                        body = {"status": "ok"} if self.path == "/health" else {"server": socket.gethostname()}
+                        payload = json.dumps(body).encode()
+                        self.send_response(200)
+                        self.send_header("content-type", "application/json")
+                        self.send_header("content-length", str(len(payload)))
+                        self.end_headers()
+                        self.wfile.write(payload)
+                ThreadingHTTPServer(("0.0.0.0", 8080), Handler).serve_forever()
+                PY
+                nohup python3 /opt/app/server.py >/var/log/app.log 2>&1 &
+              EOT
+            }
+          variables.tf: |
+            variable "project" {
+              type        = string
+              default     = "shop"
+              description = "Project name: the first part of every resource name and the Project tag."
+
+              validation {
+                condition     = can(regex("^[a-z][a-z0-9-]{1,19}$", var.project))
+                error_message = "project must be 2-20 lowercase letters, digits or hyphens, starting with a letter."
+              }
+            }
+
+            variable "environment" {
+              type        = string
+              default     = "prod"
+              description = "Deployment environment (dev, staging, prod, …): part of every resource name and the Environment tag."
+
+              validation {
+                condition     = can(regex("^[a-z][a-z0-9-]{0,11}$", var.environment))
+                error_message = "environment must be 1-12 lowercase letters, digits or hyphens, starting with a letter."
+              }
+            }
+
+            variable "aws_region" {
+              type        = string
+              default     = "us-east-1"
+              description = "AWS region to deploy into."
+            }
+
+            variable "vpc_cidr" {
+              type        = string
+              default     = "10.20.0.0/16"
+              description = "CIDR block of the VPC."
+            }
+
+            variable "instance_type" {
+              type        = string
+              default     = "t3.small"
+              description = "EC2 instance type of the server (x86_64)."
+            }
+
+            variable "db_password" {
+              type        = string
+              description = "Master password of the database."
+            }
+          main.tf: |
+            # Lift and shift: everything in one public subnet of one zone.
+            resource "aws_vpc" "main" {
+              cidr_block           = var.vpc_cidr
+              enable_dns_support   = true
+              enable_dns_hostnames = true
+              tags                 = { Name = local.name_prefix }
+            }
+
+            resource "aws_internet_gateway" "main" {
+              vpc_id = aws_vpc.main.id
+              tags   = { Name = local.name_prefix }
+            }
+
+            resource "aws_subnet" "public" {
+              vpc_id                  = aws_vpc.main.id
+              cidr_block              = cidrsubnet(var.vpc_cidr, 8, 0)
+              availability_zone       = "us-east-1a"
+              map_public_ip_on_launch = true
+              tags                    = { Name = "${local.name_prefix}-public" }
+            }
+
+            resource "aws_route_table" "public" {
+              vpc_id = aws_vpc.main.id
+              tags   = { Name = "${local.name_prefix}-public" }
+            }
+
+            resource "aws_route" "internet" {
+              route_table_id         = aws_route_table.public.id
+              destination_cidr_block = "0.0.0.0/0"
+              gateway_id             = aws_internet_gateway.main.id
+            }
+
+            resource "aws_route_table_association" "public" {
+              subnet_id      = aws_subnet.public.id
+              route_table_id = aws_route_table.public.id
+            }
+
+            resource "aws_security_group" "server" {
+              name        = "${local.name_prefix}-server"
+              description = "Everything the server and database need"
+              vpc_id      = aws_vpc.main.id
+
+              ingress {
+                description = "SSH"
+                from_port   = 22
+                to_port     = 22
+                protocol    = "tcp"
+                cidr_blocks = ["0.0.0.0/0"]
+              }
+
+              ingress {
+                description = "App"
+                from_port   = 8080
+                to_port     = 8080
+                protocol    = "tcp"
+                cidr_blocks = ["0.0.0.0/0"]
+              }
+
+              ingress {
+                description = "PostgreSQL"
+                from_port   = 5432
+                to_port     = 5432
+                protocol    = "tcp"
+                cidr_blocks = ["0.0.0.0/0"]
+              }
+
+              egress {
+                description = "All outbound traffic"
+                from_port   = 0
+                to_port     = 0
+                protocol    = "-1"
+                cidr_blocks = ["0.0.0.0/0"]
+              }
+            }
+
+            resource "aws_iam_role" "server" {
+              name = "${local.name_prefix}-server"
+              assume_role_policy = jsonencode({
+                Version = "2012-10-17"
+                Statement = [{
+                  Effect    = "Allow"
+                  Principal = { Service = "ec2.amazonaws.com" }
+                  Action    = "sts:AssumeRole"
+                }]
+              })
+            }
+
+            resource "aws_iam_role_policy" "server_admin" {
+              name = "${local.name_prefix}-admin"
+              role = aws_iam_role.server.id
+              policy = jsonencode({
+                Version   = "2012-10-17"
+                Statement = [{ Effect = "Allow", Action = "*", Resource = "*" }]
+              })
+            }
+
+            resource "aws_iam_instance_profile" "server" {
+              name = "${local.name_prefix}-server"
+              role = aws_iam_role.server.name
+            }
+
+            data "aws_ssm_parameter" "al2023" {
+              name = "/aws/service/ami-amazon-linux-latest/al2023-ami-kernel-default-x86_64"
+            }
+
+            resource "aws_instance" "server" {
+              ami                    = data.aws_ssm_parameter.al2023.value
+              instance_type          = var.instance_type
+              subnet_id              = aws_subnet.public.id
+              vpc_security_group_ids = [aws_security_group.server.id]
+              iam_instance_profile   = aws_iam_instance_profile.server.name
+              user_data              = local.user_data
+              tags                   = { Name = "${local.name_prefix}-server" }
+            }
+
+            resource "aws_db_subnet_group" "db" {
+              name       = "${local.name_prefix}-db"
+              subnet_ids = [aws_subnet.public.id]
+            }
+
+            resource "aws_db_instance" "main" {
+              identifier              = "${local.name_prefix}-db"
+              engine                  = "postgres"
+              engine_version          = "16"
+              instance_class          = "db.t4g.medium"
+              allocated_storage       = 20
+              db_name                 = "app"
+              username                = "app_admin"
+              password                = var.db_password
+              db_subnet_group_name    = aws_db_subnet_group.db.name
+              vpc_security_group_ids  = [aws_security_group.server.id]
+              publicly_accessible     = true
+              backup_retention_period = 0
+              skip_final_snapshot     = true
+            }
+          outputs.tf: |
+            output "server_public_ip" {
+              value       = aws_instance.server.public_ip
+              description = "Public IP of the server."
+            }
+      checks:
+        - id: valid
+          label: The configuration is valid
+          type: validate
+        - id: no-findings
+          label: No best-practice or network findings at warning level or above
+          type: rules_clean
+          rules_clean:
+            prefixes: [bp_, net_]
+            minSeverity: warning
+        - id: zones-lookup
+          label: Availability Zones come from a data source
+          type: has
+          has:
+            terraform:
+              type: data.aws_availability_zones
+        - id: app-tier-subnets
+          label: "A private app tier (aws_subnet.app)"
+          type: has
+          has:
+            terraform:
+              type: aws_subnet
+              name: app
+        - id: db-tier-subnets
+          label: "An isolated data tier (aws_subnet.db)"
+          type: has
+          has:
+            terraform:
+              type: aws_subnet
+              name: db
+        - id: nat-egress
+          label: The app tier reaches the internet through NAT gateways in the public subnets
+          type: has
+          has:
+            terraform:
+              type: aws_nat_gateway
+              where:
+                subnet_id: {ref: aws_subnet.public}
+        - id: public-alb
+          label: An internet-facing ALB in the public subnets
+          type: has
+          has:
+            terraform:
+              type: aws_lb
+              where:
+                load_balancer_type: application
+                subnets: {ref: aws_subnet.public}
+        - id: https-listener
+          label: An HTTPS listener with a TLS policy and certificate
+          type: has
+          has:
+            terraform:
+              type: aws_lb_listener
+              where:
+                protocol: HTTPS
+                ssl_policy: {exists: true}
+                certificate_arn: {exists: true}
+        - id: http-redirect
+          label: HTTP redirects to HTTPS
+          type: has
+          has:
+            terraform:
+              type: aws_lb_listener
+              where:
+                default_action.type: redirect
+                default_action.redirect.protocol: HTTPS
+        - id: asg-in-app-tier
+          label: "An Auto Scaling group of at least 2 servers in aws_subnet.app with ELB health checks"
+          type: has
+          has:
+            terraform:
+              type: aws_autoscaling_group
+              where:
+                vpc_zone_identifier: {ref: aws_subnet.app}
+                health_check_type: ELB
+                min_size: {min: 2}
+                target_group_arns: {ref: aws_lb_target_group}
+        - id: target-tracking
+          label: A target tracking scaling policy
+          type: has
+          has:
+            terraform:
+              type: aws_autoscaling_policy
+              where:
+                policy_type: TargetTrackingScaling
+        - id: imdsv2
+          label: The launch template requires IMDSv2
+          type: has
+          has:
+            terraform:
+              type: aws_launch_template
+              where:
+                metadata_options.http_tokens: required
+        - id: ssm-instead-of-ssh
+          label: Servers are managed through Systems Manager
+          type: has
+          has:
+            terraform:
+              type: aws_iam_role_policy_attachment
+              where:
+                policy_arn: {contains: AmazonSSMManagedInstanceCore}
+        - id: no-pet-server
+          label: No standalone EC2 instance
+          type: has
+          has:
+            terraform:
+              type: aws_instance
+              count: {max: 0}
+        - id: database
+          label: The database is Multi-AZ, encrypted, private, backed up and has a managed password
+          type: has
+          has:
+            terraform:
+              type: aws_db_instance
+              where:
+                multi_az: true
+                storage_encrypted: true
+                publicly_accessible: false
+                backup_retention_period: {min: 7}
+                manage_master_user_password: true
+        - id: db-subnet-group
+          label: "The database lives in the data tier (aws_subnet.db)"
+          type: has
+          has:
+            terraform:
+              type: aws_db_subnet_group
+              where:
+                subnet_ids: {ref: aws_subnet.db}
+        - id: sg-alb-to-app
+          label: The app tier accepts traffic from the load balancer only
+          type: has
+          has:
+            terraform:
+              type: aws_security_group
+              name: app
+              where:
+                ingress.security_groups: {ref: aws_security_group.alb}
+        - id: sg-app-to-db
+          label: The data tier accepts traffic from the app tier only
+          type: has
+          has:
+            terraform:
+              type: aws_security_group
+              name: db
+              where:
+                ingress.security_groups: {ref: aws_security_group.app}
+        - id: alb-alarm
+          label: An alarm watches the load balancer
+          type: has
+          has:
+            terraform:
+              type: aws_cloudwatch_metric_alarm
+              where:
+                namespace: AWS/ApplicationELB
+      sources:
+        - title: AWS Well-Architected Framework
+          url: https://docs.aws.amazon.com/wellarchitected/latest/framework/welcome.html
+        - title: The pillars of the framework
+          url: https://docs.aws.amazon.com/wellarchitected/latest/framework/the-pillars-of-the-framework.html
+        - title: "AWS Certified Solutions Architect – Professional: Domain 3, Continuous Improvement for Existing Solutions"
+          url: https://docs.aws.amazon.com/aws-certification/latest/solutions-architect-professional-02/solutions-architect-professional-02-domain3.html
+        - title: "Example: VPC with servers in private subnets and NAT"
+          url: https://docs.aws.amazon.com/vpc/latest/userguide/vpc-example-private-subnets-nat.html
+        - title: Create an HTTPS listener for your Application Load Balancer
+          url: https://docs.aws.amazon.com/elasticloadbalancing/latest/application/create-https-listener.html
+        - title: Target tracking scaling policies for Amazon EC2 Auto Scaling
+          url: https://docs.aws.amazon.com/autoscaling/ec2/userguide/as-scaling-target-tracking.html
+        - title: AWS Systems Manager Session Manager
+          url: https://docs.aws.amazon.com/systems-manager/latest/userguide/session-manager.html
+        - title: Multi-AZ DB instance deployments for Amazon RDS
+          url: https://docs.aws.amazon.com/AmazonRDS/latest/UserGuide/Concepts.MultiAZSingleStandby.html
+
+  - op: upsert
+    kind: challenge
+    id: aws-backup-dr-cost
+    data:
+      provider: aws
+      level: expert
+      title: Cross-Region backup and restore with cost controls
+      summary: Design a backup-and-restore disaster recovery plan for a DynamoDB table and an S3 bucket, with a second Region, PITR and lifecycle rules.
+      minutes: 90
+      tags: [disaster-recovery, aws-backup, dynamodb, s3, replication, cost-optimization]
+      prerequisites: [aws-private-s3-bucket, aws-rds-multi-az]
+      runtime: design
+      problem: |
+        The orders service keeps its data in a DynamoDB table and customer
+        documents in an S3 bucket, both in one Region. The business sets the
+        recovery objectives: lose at most **minutes** of orders after an
+        accidental write or delete, and recover from the loss of the whole
+        Region within a day, with backups kept for a year for audit. Finance
+        adds one constraint: old data must move to cheaper storage
+        automatically.
+
+        AWS describes four DR strategies, in increasing cost and decreasing
+        RTO/RPO: **backup and restore**, pilot light, warm standby and
+        multi-site active/active. These objectives fit backup and restore:
+        - **DynamoDB point-in-time recovery (PITR)** restores the table to
+          any second of the recovery window (up to 35 days), which covers
+          the minutes-level RPO for data corruption.
+        - **AWS Backup** runs scheduled backup plans into encrypted **backup
+          vaults** and can **copy each recovery point to a vault in another
+          Region**; lifecycle rules move long-term backups to cold storage
+          and delete them when their retention ends.
+        - **S3 Replication** (Cross-Region Replication) copies new objects
+          to a bucket in the recovery Region; both buckets need versioning.
+        - **S3 Lifecycle** transitions noncurrent versions to cheaper
+          storage classes and expires them, so versioning doesn't grow the
+          bill forever.
+
+        Design the plan in Terraform. Nimbo grades the design; it isn't
+        deployed.
+      requirements:
+        - "A second `aws` provider with an alias points at the recovery Region (a variable, not a hard-coded Region in resources)."
+        - "The table has point-in-time recovery enabled (`point_in_time_recovery { enabled = true }`)."
+        - "Two `aws_backup_vault`s, one per Region (the recovery one uses the aliased provider), each encrypted with a customer managed `aws_kms_key` that has key rotation enabled."
+        - "An `aws_backup_plan` with a daily rule whose recovery points expire (`lifecycle { delete_after }`) and are copied to the recovery vault (`copy_action`), and a rule that keeps long-term backups for a year with cold storage (`cold_storage_after`; AWS requires at least 90 days in cold storage)."
+        - "An `aws_backup_selection` assigns the table and the bucket to the plan with a role that `backup.amazonaws.com` can assume (the AWS Backup managed policies attached)."
+        - "Both buckets are versioned, the source replicates to the recovery bucket (`aws_s3_bucket_replication_configuration`), and the source has a lifecycle rule that transitions and expires noncurrent versions."
+        - "No best-practice warnings (`bp_*` at warning level or above)."
+      hints:
+        - "`provider \"aws\" { alias = \"dr\" region = var.dr_region }` declares the recovery Region; resources there set `provider = aws.dr`. Remember `default_tags` in the second provider too."
+        - "Backup plan rule: `rule { rule_name = \"daily\" target_vault_name = aws_backup_vault.primary.name schedule = \"cron(0 5 ? * * *)\" lifecycle { delete_after = 35 } copy_action { destination_vault_arn = aws_backup_vault.dr.arn lifecycle { delete_after = 35 } } }`. A monthly rule with `cold_storage_after = 30` and `delete_after = 365` keeps the audit copies."
+        - "AWS Backup can back up S3 only when versioning is on. The replication role needs `s3:GetReplicationConfiguration`/`s3:ListBucket` on the source bucket, `s3:GetObjectVersion*` on its objects and `s3:Replicate*` on the destination objects; set `depends_on` on the source bucket's versioning resource."
+      solution: |
+        The reference keeps the table and bucket and adds:
+
+        - **Recovery Region**: `provider "aws" { alias = "dr" }` with
+          `var.dr_region`.
+        - **PITR** on the table (RPO of minutes for logical corruption) and
+          `deletion_protection_enabled`.
+        - **Vaults**: `primary` and `dr`, each with its own KMS key
+          (rotation on). Copies are re-encrypted with the destination
+          vault's key.
+        - **Backup plan**: `daily` (kept 35 days, copied to the recovery
+          vault) and `monthly` (cold storage after 30 days, deleted after
+          365, copied as well). Cold storage needs a total retention of at
+          least 90 days more than the transition.
+        - **Selection**: table + bucket, role trusted by
+          `backup.amazonaws.com` with the AWS Backup managed policies for
+          backups, restores and S3.
+        - **S3**: versioning on both buckets, CRR to the recovery bucket
+          into `STANDARD_IA` (cheaper for a copy that's rarely read), and a
+          lifecycle rule moving noncurrent versions to `STANDARD_IA` after
+          30 days and expiring them after 365.
+
+        ```hcl
+        resource "aws_backup_plan" "orders" {
+          name = "${local.name_prefix}-orders"
+
+          rule {
+            rule_name         = "daily"
+            target_vault_name = aws_backup_vault.primary.name
+            schedule          = "cron(0 5 ? * * *)"
+
+            lifecycle {
+              delete_after = 35
+            }
+
+            copy_action {
+              destination_vault_arn = aws_backup_vault.dr.arn
+              lifecycle {
+                delete_after = 35
+              }
+            }
+          }
+        }
+        ```
+
+        RTO is the time to restore the table from PITR or a copied recovery
+        point and to redeploy the stack with Terraform in the recovery
+        Region: practice it. If the business later needs an RTO of minutes,
+        move up to pilot light or warm standby (for example DynamoDB global
+        tables), at a higher cost.
+      solutionFiles:
+        providers.tf: |
+          provider "aws" {
+            region = var.aws_region
+
+            default_tags {
+              tags = local.common_tags
+            }
+          }
+
+          # The recovery Region.
+          provider "aws" {
+            alias  = "dr"
+            region = var.dr_region
+
+            default_tags {
+              tags = local.common_tags
+            }
+          }
+        variables.tf: |
+          variable "project" {
+            type        = string
+            default     = "orders"
+            description = "Project name: the first part of every resource name and the Project tag."
+
+            validation {
+              condition     = can(regex("^[a-z][a-z0-9-]{1,19}$", var.project))
+              error_message = "project must be 2-20 lowercase letters, digits or hyphens, starting with a letter."
+            }
+          }
+
+          variable "environment" {
+            type        = string
+            default     = "prod"
+            description = "Deployment environment (dev, staging, prod, …): part of every resource name and the Environment tag."
+
+            validation {
+              condition     = can(regex("^[a-z][a-z0-9-]{0,11}$", var.environment))
+              error_message = "environment must be 1-12 lowercase letters, digits or hyphens, starting with a letter."
+            }
+          }
+
+          variable "aws_region" {
+            type        = string
+            default     = "us-east-1"
+            description = "Primary AWS Region of the workload."
+          }
+
+          variable "dr_region" {
+            type        = string
+            default     = "us-west-2"
+            description = "Recovery Region: backup copies and the replica bucket live here."
+          }
+        main.tf: |
+          resource "aws_dynamodb_table" "orders" {
+            name                        = "${local.name_prefix}-orders"
+            billing_mode                = "PAY_PER_REQUEST"
+            hash_key                    = "id"
+            deletion_protection_enabled = true
+
+            attribute {
+              name = "id"
+              type = "S"
+            }
+
+            server_side_encryption {
+              enabled = true
+            }
+
+            # Restore to any second of the last 35 days.
+            point_in_time_recovery {
+              enabled = true
+            }
+          }
+
+          resource "aws_s3_bucket" "documents" {
+            bucket_prefix = "${local.name_prefix}-documents-"
+          }
+
+          resource "aws_s3_bucket_public_access_block" "documents" {
+            bucket                  = aws_s3_bucket.documents.id
+            block_public_acls       = true
+            block_public_policy     = true
+            ignore_public_acls      = true
+            restrict_public_buckets = true
+          }
+
+          resource "aws_s3_bucket_server_side_encryption_configuration" "documents" {
+            bucket = aws_s3_bucket.documents.id
+
+            rule {
+              apply_server_side_encryption_by_default {
+                sse_algorithm = "AES256"
+              }
+            }
+          }
+
+          resource "aws_s3_bucket_versioning" "documents" {
+            bucket = aws_s3_bucket.documents.id
+
+            versioning_configuration {
+              status = "Enabled"
+            }
+          }
+
+          # Cost: older versions move to Standard-IA, then expire.
+          resource "aws_s3_bucket_lifecycle_configuration" "documents" {
+            bucket = aws_s3_bucket.documents.id
+
+            rule {
+              id     = "noncurrent-versions"
+              status = "Enabled"
+
+              filter {}
+
+              noncurrent_version_transition {
+                noncurrent_days = 30
+                storage_class   = "STANDARD_IA"
+              }
+
+              noncurrent_version_expiration {
+                noncurrent_days = 365
+              }
+
+              abort_incomplete_multipart_upload {
+                days_after_initiation = 7
+              }
+            }
+
+            depends_on = [aws_s3_bucket_versioning.documents]
+          }
+        dr.tf: |
+          # Replica bucket in the recovery Region.
+          resource "aws_s3_bucket" "documents_dr" {
+            provider      = aws.dr
+            bucket_prefix = "${local.name_prefix}-documents-dr-"
+          }
+
+          resource "aws_s3_bucket_public_access_block" "documents_dr" {
+            provider                = aws.dr
+            bucket                  = aws_s3_bucket.documents_dr.id
+            block_public_acls       = true
+            block_public_policy     = true
+            ignore_public_acls      = true
+            restrict_public_buckets = true
+          }
+
+          resource "aws_s3_bucket_server_side_encryption_configuration" "documents_dr" {
+            provider = aws.dr
+            bucket   = aws_s3_bucket.documents_dr.id
+
+            rule {
+              apply_server_side_encryption_by_default {
+                sse_algorithm = "AES256"
+              }
+            }
+          }
+
+          resource "aws_s3_bucket_versioning" "documents_dr" {
+            provider = aws.dr
+            bucket   = aws_s3_bucket.documents_dr.id
+
+            versioning_configuration {
+              status = "Enabled"
+            }
+          }
+
+          resource "aws_iam_role" "replication" {
+            name = "${local.name_prefix}-s3-replication"
+            assume_role_policy = jsonencode({
+              Version = "2012-10-17"
+              Statement = [{
+                Effect    = "Allow"
+                Principal = { Service = "s3.amazonaws.com" }
+                Action    = "sts:AssumeRole"
+              }]
+            })
+          }
+
+          resource "aws_iam_role_policy" "replication" {
+            name = "${local.name_prefix}-s3-replication"
+            role = aws_iam_role.replication.id
+            policy = jsonencode({
+              Version = "2012-10-17"
+              Statement = [
+                {
+                  Effect   = "Allow"
+                  Action   = ["s3:GetReplicationConfiguration", "s3:ListBucket"]
+                  Resource = aws_s3_bucket.documents.arn
+                },
+                {
+                  Effect   = "Allow"
+                  Action   = ["s3:GetObjectVersionForReplication", "s3:GetObjectVersionAcl", "s3:GetObjectVersionTagging"]
+                  Resource = "${aws_s3_bucket.documents.arn}/*"
+                },
+                {
+                  Effect   = "Allow"
+                  Action   = ["s3:ReplicateObject", "s3:ReplicateDelete", "s3:ReplicateTags"]
+                  Resource = "${aws_s3_bucket.documents_dr.arn}/*"
+                }
+              ]
+            })
+          }
+
+          resource "aws_s3_bucket_replication_configuration" "documents" {
+            role   = aws_iam_role.replication.arn
+            bucket = aws_s3_bucket.documents.id
+
+            rule {
+              id     = "to-recovery-region"
+              status = "Enabled"
+
+              filter {}
+
+              delete_marker_replication {
+                status = "Enabled"
+              }
+
+              destination {
+                bucket        = aws_s3_bucket.documents_dr.arn
+                storage_class = "STANDARD_IA"
+              }
+            }
+
+            depends_on = [aws_s3_bucket_versioning.documents, aws_s3_bucket_versioning.documents_dr]
+          }
+        backup.tf: |
+          resource "aws_kms_key" "backup" {
+            description         = "Encrypts the primary backup vault"
+            enable_key_rotation = true
+          }
+
+          resource "aws_kms_key" "backup_dr" {
+            provider            = aws.dr
+            description         = "Encrypts the recovery-Region backup vault"
+            enable_key_rotation = true
+          }
+
+          resource "aws_backup_vault" "primary" {
+            name        = "${local.name_prefix}-primary"
+            kms_key_arn = aws_kms_key.backup.arn
+          }
+
+          resource "aws_backup_vault" "dr" {
+            provider    = aws.dr
+            name        = "${local.name_prefix}-dr"
+            kms_key_arn = aws_kms_key.backup_dr.arn
+          }
+
+          resource "aws_backup_plan" "orders" {
+            name = "${local.name_prefix}-orders"
+
+            # Operational recovery: daily, kept 35 days, copied to the
+            # recovery Region.
+            rule {
+              rule_name         = "daily"
+              target_vault_name = aws_backup_vault.primary.name
+              schedule          = "cron(0 5 ? * * *)"
+
+              lifecycle {
+                delete_after = 35
+              }
+
+              copy_action {
+                destination_vault_arn = aws_backup_vault.dr.arn
+
+                lifecycle {
+                  delete_after = 35
+                }
+              }
+            }
+
+            # Audit: monthly, cold storage after 30 days, kept a year.
+            rule {
+              rule_name         = "monthly"
+              target_vault_name = aws_backup_vault.primary.name
+              schedule          = "cron(0 6 1 * ? *)"
+
+              lifecycle {
+                cold_storage_after = 30
+                delete_after       = 365
+              }
+
+              copy_action {
+                destination_vault_arn = aws_backup_vault.dr.arn
+
+                lifecycle {
+                  cold_storage_after = 30
+                  delete_after       = 365
+                }
+              }
+            }
+          }
+
+          resource "aws_iam_role" "backup" {
+            name = "${local.name_prefix}-backup"
+            assume_role_policy = jsonencode({
+              Version = "2012-10-17"
+              Statement = [{
+                Effect    = "Allow"
+                Principal = { Service = "backup.amazonaws.com" }
+                Action    = "sts:AssumeRole"
+              }]
+            })
+          }
+
+          resource "aws_iam_role_policy_attachment" "backup" {
+            for_each = toset([
+              "arn:aws:iam::aws:policy/service-role/AWSBackupServiceRolePolicyForBackup",
+              "arn:aws:iam::aws:policy/service-role/AWSBackupServiceRolePolicyForRestores",
+              "arn:aws:iam::aws:policy/AWSBackupServiceRolePolicyForS3Backup",
+              "arn:aws:iam::aws:policy/AWSBackupServiceRolePolicyForS3Restore",
+            ])
+            role       = aws_iam_role.backup.name
+            policy_arn = each.value
+          }
+
+          resource "aws_backup_selection" "orders" {
+            name         = "${local.name_prefix}-orders"
+            plan_id      = aws_backup_plan.orders.id
+            iam_role_arn = aws_iam_role.backup.arn
+            resources    = [aws_dynamodb_table.orders.arn, aws_s3_bucket.documents.arn]
+          }
+        outputs.tf: |
+          output "table_name" {
+            value       = aws_dynamodb_table.orders.name
+            description = "Name of the orders table."
+          }
+
+          output "documents_bucket" {
+            value       = aws_s3_bucket.documents.bucket
+            description = "Name of the documents bucket."
+          }
+
+          output "recovery_vault_arn" {
+            value       = aws_backup_vault.dr.arn
+            description = "ARN of the backup vault in the recovery Region."
+          }
+      starter:
+        kind: terraform
+        cloud: aws
+        files:
+          versions.tf: |
+            terraform {
+              required_version = ">= 1.6"
+
+              required_providers {
+                aws = {
+                  source  = "hashicorp/aws"
+                  version = "~> 6.0"
+                }
+              }
+            }
+          providers.tf: |
+            provider "aws" {
+              region = var.aws_region
+
+              default_tags {
+                tags = local.common_tags
+              }
+            }
+          locals.tf: |
+            locals {
+              name_prefix = "${var.project}-${var.environment}"
+              common_tags = {
+                Project     = var.project
+                Environment = var.environment
+                ManagedBy   = "nimbo"
+              }
+            }
+          variables.tf: |
+            variable "project" {
+              type        = string
+              default     = "orders"
+              description = "Project name: the first part of every resource name and the Project tag."
+
+              validation {
+                condition     = can(regex("^[a-z][a-z0-9-]{1,19}$", var.project))
+                error_message = "project must be 2-20 lowercase letters, digits or hyphens, starting with a letter."
+              }
+            }
+
+            variable "environment" {
+              type        = string
+              default     = "prod"
+              description = "Deployment environment (dev, staging, prod, …): part of every resource name and the Environment tag."
+
+              validation {
+                condition     = can(regex("^[a-z][a-z0-9-]{0,11}$", var.environment))
+                error_message = "environment must be 1-12 lowercase letters, digits or hyphens, starting with a letter."
+              }
+            }
+
+            variable "aws_region" {
+              type        = string
+              default     = "us-east-1"
+              description = "Primary AWS Region of the workload."
+            }
+          main.tf: |
+            # The data the business can't lose. No backups, no second Region.
+            resource "aws_dynamodb_table" "orders" {
+              name         = "${local.name_prefix}-orders"
+              billing_mode = "PAY_PER_REQUEST"
+              hash_key     = "id"
+
+              attribute {
+                name = "id"
+                type = "S"
+              }
+
+              server_side_encryption {
+                enabled = true
+              }
+            }
+
+            resource "aws_s3_bucket" "documents" {
+              bucket_prefix = "${local.name_prefix}-documents-"
+            }
+
+            resource "aws_s3_bucket_public_access_block" "documents" {
+              bucket                  = aws_s3_bucket.documents.id
+              block_public_acls       = true
+              block_public_policy     = true
+              ignore_public_acls      = true
+              restrict_public_buckets = true
+            }
+
+            resource "aws_s3_bucket_server_side_encryption_configuration" "documents" {
+              bucket = aws_s3_bucket.documents.id
+
+              rule {
+                apply_server_side_encryption_by_default {
+                  sse_algorithm = "AES256"
+                }
+              }
+            }
+          outputs.tf: |
+            output "table_name" {
+              value       = aws_dynamodb_table.orders.name
+              description = "Name of the orders table."
+            }
+
+            output "documents_bucket" {
+              value       = aws_s3_bucket.documents.bucket
+              description = "Name of the documents bucket."
+            }
+      checks:
+        - id: valid
+          label: The configuration is valid
+          type: validate
+        - id: best-practices
+          label: No best-practice warnings
+          type: rules_clean
+          rules_clean:
+            prefixes: [bp_]
+            minSeverity: warning
+        - id: pitr
+          label: The table has point-in-time recovery
+          type: has
+          has:
+            terraform:
+              type: aws_dynamodb_table
+              where:
+                point_in_time_recovery.enabled: true
+        - id: recovery-region-vault
+          label: A backup vault in the recovery Region (aliased provider)
+          type: has
+          has:
+            terraform:
+              type: aws_backup_vault
+              where:
+                provider: {exists: true}
+        - id: encrypted-vaults
+          label: Both vaults use customer managed KMS keys
+          type: has
+          has:
+            terraform:
+              type: aws_backup_vault
+              where:
+                kms_key_arn: {ref: aws_kms_key}
+              count: {min: 2}
+        - id: key-rotation
+          label: The vault keys rotate
+          type: has
+          has:
+            terraform:
+              type: aws_kms_key
+              where:
+                enable_key_rotation: true
+              count: {min: 2}
+        - id: cross-region-copy
+          label: The backup plan copies recovery points to the recovery vault
+          type: has
+          has:
+            terraform:
+              type: aws_backup_plan
+              where:
+                rule.copy_action.destination_vault_arn: {ref: aws_backup_vault}
+        - id: retention
+          label: Recovery points expire
+          type: has
+          has:
+            terraform:
+              type: aws_backup_plan
+              where:
+                rule.lifecycle.delete_after: {exists: true}
+        - id: cold-storage
+          label: Long-term backups move to cold storage
+          type: has
+          has:
+            terraform:
+              type: aws_backup_plan
+              where:
+                rule.lifecycle.cold_storage_after: {exists: true}
+        - id: selection
+          label: The table is assigned to the plan with a backup role
+          type: has
+          has:
+            terraform:
+              type: aws_backup_selection
+              where:
+                resources: {ref: aws_dynamodb_table}
+                iam_role_arn: {ref: aws_iam_role}
+        - id: backup-role
+          label: AWS Backup can assume the selection's role
+          type: has
+          has:
+            terraform:
+              type: aws_iam_role
+              where:
+                assume_role_policy: {contains: backup.amazonaws.com}
+        - id: versioned-buckets
+          label: Source and replica buckets are versioned
+          type: has
+          has:
+            terraform:
+              type: aws_s3_bucket_versioning
+              where:
+                versioning_configuration.status: Enabled
+              count: {min: 2}
+        - id: replication
+          label: The bucket replicates to another bucket
+          type: has
+          has:
+            terraform:
+              type: aws_s3_bucket_replication_configuration
+              where:
+                rule.status: Enabled
+                rule.destination.bucket: {ref: aws_s3_bucket}
+        - id: replica-in-recovery-region
+          label: The replica bucket is in the recovery Region
+          type: has
+          has:
+            terraform:
+              type: aws_s3_bucket
+              where:
+                provider: {exists: true}
+        - id: noncurrent-lifecycle
+          label: Noncurrent versions transition to cheaper storage and expire
+          type: has
+          has:
+            terraform:
+              type: aws_s3_bucket_lifecycle_configuration
+              where:
+                rule.noncurrent_version_transition.storage_class: {exists: true}
+                rule.noncurrent_version_expiration.noncurrent_days: {exists: true}
+      sources:
+        - title: Disaster recovery options in the cloud
+          url: https://docs.aws.amazon.com/whitepapers/latest/disaster-recovery-workloads-on-aws/disaster-recovery-options-in-the-cloud.html
+        - title: "REL13-BP02 Use defined recovery strategies to meet the recovery objectives"
+          url: https://docs.aws.amazon.com/wellarchitected/latest/reliability-pillar/rel_planning_for_recovery_disaster_recovery.html
+        - title: Creating backup copies across AWS Regions
+          url: https://docs.aws.amazon.com/aws-backup/latest/devguide/cross-region-backup.html
+        - title: Backup plan options and configuration
+          url: https://docs.aws.amazon.com/aws-backup/latest/devguide/plan-options-and-configuration.html
+        - title: Create a backup plan
+          url: https://docs.aws.amazon.com/aws-backup/latest/devguide/creating-a-backup-plan.html
+        - title: Point-in-time backups for DynamoDB
+          url: https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/PointInTimeRecovery_Howitworks.html
+        - title: Requirements and considerations for replication
+          url: https://docs.aws.amazon.com/AmazonS3/latest/userguide/replication-requirements.html
+        - title: Managing the lifecycle of objects
+          url: https://docs.aws.amazon.com/AmazonS3/latest/userguide/object-lifecycle-mgmt.html
+        - title: Optimizing costs with the AWS Well-Architected cost optimization pillar
+          url: https://docs.aws.amazon.com/wellarchitected/latest/cost-optimization-pillar/welcome.html

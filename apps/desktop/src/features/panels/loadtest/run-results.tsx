@@ -1,5 +1,5 @@
 import { lazy, Suspense, useState } from "react"
-import { Check, Info, Square, X } from "lucide-react"
+import { Calculator, Check, Info, Square, X } from "lucide-react"
 import { toast } from "sonner"
 import { PixelProgress } from "@/components/arcade/pixel-progress"
 import { Badge } from "@/components/ui/badge"
@@ -19,7 +19,10 @@ import { StatusBadge } from "../components/status-badge"
 import { formatDuration, formatMs, formatNumber, formatPercent } from "../lib/format"
 import { DENSE_TABLE } from "../variables/blocks-editors"
 import { computeKpis, EXPLAIN, formatThreshold, METRIC_META, modeUnit, runDurationSec, stabilityLabel, totalDuration } from "./metrics"
+import { plannable } from "./capacity"
+import { revealCapacity } from "./reveal"
 import { ScalingVerdicts } from "./scaling"
+import { ScenarioCard } from "./scenario-result"
 import { useLoadRun } from "./use-load-run"
 
 // recharts loads with the first run shown, not with the tab.
@@ -113,6 +116,8 @@ export function RunResults({ runId }: { runId: string }) {
   const [stopping, setStopping] = useState(false)
   // Kubernetes: usage is keyed by workload node id; verdicts, peaks and charts show workload names.
   const kubeWorkloads = useWorkflowStore((s) => (s.workflow?.kind === "kubernetes" ? (s.kube?.workloads ?? NO_WORKLOADS) : undefined))
+  // Docker and Kubernetes runs of the open workflow can size a capacity plan.
+  const containers = useWorkflowStore((s) => (s.workflow?.kind === "docker" || s.workflow?.kind === "kubernetes") && s.workflow.id === run?.workflowId)
 
   if (!run) {
     return <div className="flex h-full items-center justify-center">{loading ? <Spinner /> : "Run not found."}</div>
@@ -159,12 +164,18 @@ export function RunResults({ runId }: { runId: string }) {
             {stopping ? <Spinner /> : <Square />} Stop
           </Button>
         )}
+        {containers && plannable(run) && (
+          <Button size="xs" variant="outline" className="ml-auto" onClick={() => revealCapacity(run.id)} data-testid="loadtest-plan-capacity">
+            <Calculator /> Plan capacity
+          </Button>
+        )}
       </div>
       {running && <PixelProgress value={planned > 0 ? (elapsed / planned) * 100 : undefined} label="Load test progress" />}
       {run.error && <p className="text-xs text-destructive">{run.error}</p>}
       {resources && <LoadVerdictBanner resources={resources} />}
+      {run.scenario && <ScenarioCard scenario={run.scenario} running={running} />}
 
-      <div className="grid grid-cols-2 gap-2 sm:grid-cols-4 xl:grid-cols-8">
+      <div className="grid grid-cols-2 gap-2 @xl:grid-cols-4 @6xl:grid-cols-8">
         <Kpi label="Requests" value={formatNumber(kpis.requests)} hint={EXPLAIN.requests} />
         <Kpi
           label={running ? "Current req/s" : "Peak req/s"}
@@ -196,10 +207,10 @@ export function RunResults({ runId }: { runId: string }) {
         />
       </div>
 
-      {/* Side by side from md up at a fixed height; stacked charts on narrow panels take their own height. */}
-      <div className="shrink-0 md:h-56">
+      {/* Side by side from 48rem of panel up at a fixed height; stacked charts on narrow panels take their own height. */}
+      <div className="shrink-0 @3xl:h-56">
         {samples.length === 0 ? (
-          <div className="flex h-56 items-center justify-center rounded-lg border text-xs text-muted-foreground md:h-full">
+          <div className="flex h-56 items-center justify-center rounded-lg border text-xs text-muted-foreground @3xl:h-full">
             {running ? (
               <span className="flex items-center gap-2">
                 <Spinner /> Warming up…
@@ -210,7 +221,7 @@ export function RunResults({ runId }: { runId: string }) {
           </div>
         ) : (
           <Suspense fallback={chartFallback}>
-            <LoadCharts samples={samples} mode={run.spec.profile.mode} domain={domain} />
+            <LoadCharts samples={samples} mode={run.spec.profile.mode} domain={domain} scenario={run.scenario} />
           </Suspense>
         )}
       </div>
@@ -221,9 +232,9 @@ export function RunResults({ runId }: { runId: string }) {
           {resources.scaling.workloads
             .filter((w) => w.timeline.length > 0)
             .map((w) => (
-              <div key={w.nodeId} className="shrink-0 md:h-52">
+              <div key={w.nodeId} className="shrink-0 @3xl:h-52">
                 <Suspense fallback={chartFallback}>
-                  <ScalingCharts workload={w} samples={samples} domain={domain} />
+                  <ScalingCharts workload={w} samples={samples} domain={domain} scenario={run.scenario} />
                 </Suspense>
               </div>
             ))}
@@ -231,16 +242,16 @@ export function RunResults({ runId }: { runId: string }) {
       )}
 
       {resources && resources.services.some((s) => s.timeline.length > 0) && (
-        <div className="shrink-0 md:h-56">
+        <div className="shrink-0 @3xl:h-56">
           <Suspense fallback={chartFallback}>
-            <ResourceCharts resources={resources} domain={domain} />
+            <ResourceCharts resources={resources} domain={domain} scenario={run.scenario} />
           </Suspense>
         </div>
       )}
       {resources && <LoadResourcesDetail resources={resources} />}
 
       {(run.thresholds?.length || run.summary) && (
-        <div className="grid grid-cols-1 gap-2 lg:grid-cols-3">
+        <div className="grid grid-cols-1 gap-2 @5xl:grid-cols-3">
           <div className="min-w-0 rounded-lg border">
             <div className="px-2 pt-2 text-[11px] font-medium text-muted-foreground">Pass criteria</div>
             <Table className={DENSE_TABLE}>

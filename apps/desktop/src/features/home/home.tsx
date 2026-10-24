@@ -43,6 +43,7 @@ import { DeleteWorkflowDialog } from "../toolbar/delete-workflow-dialog"
 import { useUiStore } from "../toolbar/ui-store"
 import { archiveWorkflow, duplicateWorkflow, renameWorkflow, restoreWorkflow } from "../toolbar/workflow-actions"
 import { ConnectionsSection } from "../connections/home-section"
+import { LearnSection } from "../learn/home-section"
 import { HealthBanner } from "./health-banner"
 
 const relative = new Intl.RelativeTimeFormat("en", { numeric: "auto" })
@@ -138,6 +139,8 @@ export function Home() {
           )}
           {archived.length > 0 && <ArchivedSection workflows={archived} onDelete={setDeleting} />}
         </section>
+
+        <LearnSection />
 
         <ConnectionsSection />
       </div>

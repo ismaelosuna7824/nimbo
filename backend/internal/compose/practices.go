@@ -556,6 +556,15 @@ func LongRunning(s types.ServiceConfig, healthcheck bool) bool {
 	return healthcheck || len(s.Ports) > 0 || dataServiceOf(s.Image) != nil
 }
 
+// DataCategory is "database", "cache" or "messaging" for an image that
+// holds data (see dataServiceOf), "" otherwise.
+func DataCategory(image string) string {
+	if d := dataServiceOf(image); d != nil {
+		return d.category
+	}
+	return ""
+}
+
 // dataServiceOf recognizes an image that holds data (nil otherwise): the
 // palette's databases, caches and brokers, else official images by name.
 func dataServiceOf(image string) *dataService {

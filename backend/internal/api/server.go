@@ -19,9 +19,11 @@ import (
 
 	"github.com/ismaelosuna7824/nimbo/backend/internal/agents"
 	"github.com/ismaelosuna7824/nimbo/backend/internal/catalog"
+	"github.com/ismaelosuna7824/nimbo/backend/internal/challenge"
 	"github.com/ismaelosuna7824/nimbo/backend/internal/compose"
 	"github.com/ismaelosuna7824/nimbo/backend/internal/events"
 	"github.com/ismaelosuna7824/nimbo/backend/internal/kube/kubecatalog"
+	"github.com/ismaelosuna7824/nimbo/backend/internal/learn"
 	"github.com/ismaelosuna7824/nimbo/backend/internal/loadtest"
 	"github.com/ismaelosuna7824/nimbo/backend/internal/model"
 	"github.com/ismaelosuna7824/nimbo/backend/internal/sandbox"
@@ -52,6 +54,9 @@ type Config struct {
 	MCPCatalog func() MCPCatalog
 	// Setup runs the onboarding checks and one-click fixes (GET /setup).
 	Setup *setup.Checker
+	// Learn is the learn database (roadmaps, challenges, progress); its
+	// Status reports content migrations that failed to load.
+	Learn *learn.Store
 }
 
 // Server handles /api/v1.
@@ -68,6 +73,9 @@ type Server struct {
 	mu sync.Mutex
 
 	session sessionState
+
+	// challenges runs "Check my solution" of challenge workflows.
+	challenges *challenge.Checker
 }
 
 const (
@@ -97,6 +105,7 @@ func New(cfg Config) *Server {
 	if s.log == nil {
 		s.log = slog.Default()
 	}
+	s.challenges = s.newChallenges()
 	s.routes()
 	return s
 }
@@ -183,7 +192,6 @@ func (s *Server) routes() {
 	// kubernetes (engine)
 	h("PATCH "+p+"/workflows/{id}/kubernetes/layout", s.kubeLayout)
 	h("GET "+p+"/workflows/{id}/kubernetes/render", s.kubeRender)
-	h("GET "+p+"/workflows/{id}/kubernetes/readiness", s.kubeReadiness)
 	h("GET "+p+"/workflows/{id}/kubernetes/fields", s.kubeFields)
 	h("POST "+p+"/workflows/{id}/kubernetes/objects", s.addKubeObject)
 	h("PATCH "+p+"/workflows/{id}/kubernetes/objects", s.patchKubeObject)
@@ -220,6 +228,7 @@ func (s *Server) routes() {
 	h("POST "+p+"/workflows/{id}/convert/kubernetes", s.convertToKubernetes)
 	h("GET "+p+"/workflows/{id}/monitoring", s.getMonitoring)
 	h("POST "+p+"/workflows/{id}/monitoring", s.addMonitoring)
+	h("GET "+p+"/workflows/{id}/readiness", s.workflowReadiness)
 	h("GET "+p+"/workflows/{id}/endpoints", s.getEndpoints)
 	h("POST "+p+"/workflows/{id}/endpoints/try", s.tryEndpoint)
 	h("GET "+p+"/workflows/{id}/endpoints/postman.json", s.postmanCollection)
@@ -232,6 +241,27 @@ func (s *Server) routes() {
 	h("GET "+p+"/workflows/{id}/loadtests", s.listLoadTests)
 	h("GET "+p+"/loadtests/{runId}", s.getLoadTest)
 	h("POST "+p+"/loadtests/{runId}/stop", s.stopLoadTest)
+	h("GET "+p+"/workflows/{id}/scenarios", s.scenarios)
+
+	// capacity plans from load tests (capacity.go)
+	h("POST "+p+"/workflows/{id}/capacity-plan", s.planCapacity)
+	h("GET "+p+"/workflows/{id}/capacity-plan", s.getCapacityPlan)
+	h("POST "+p+"/workflows/{id}/capacity-plan/apply", s.applyCapacityPlan)
+
+	// challenge workspaces: start, check, solution copy (challenge.go)
+	h("POST "+p+"/learn/challenges/{id}/start", s.startChallenge)
+	h("GET "+p+"/workflows/{id}/challenge", s.getChallenge)
+	h("POST "+p+"/workflows/{id}/challenge/check", s.checkChallenge)
+	h("DELETE "+p+"/workflows/{id}/challenge/check", s.cancelChallengeCheck)
+	h("POST "+p+"/workflows/{id}/challenge/solution", s.challengeSolution)
+
+	// learn: roadmaps, challenge catalog and progress (learn.go)
+	h("GET "+p+"/learn", s.learnOverview)
+	h("GET "+p+"/learn/providers/{provider}/roadmap", s.learnRoadmap)
+	h("GET "+p+"/learn/challenges", s.learnChallenges)
+	h("GET "+p+"/learn/challenges/{id}", s.learnChallenge)
+	h("GET "+p+"/learn/progress", s.learnProgress)
+	h("PUT "+p+"/learn/progress/{id}", s.putLearnProgress)
 
 	h("GET "+p+"/connections", s.listConnections)
 	h("POST "+p+"/connections", s.createConnection)

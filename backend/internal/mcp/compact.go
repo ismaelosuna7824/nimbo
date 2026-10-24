@@ -512,8 +512,11 @@ type loadRunView struct {
 	// an HPA), its replicas and autoscaling verdict.
 	Environment string   `json:"environment,omitempty"`
 	Autoscaling []string `json:"autoscaling,omitempty"`
-	Error       string   `json:"error,omitempty"`
-	Hint        string   `json:"hint,omitempty"`
+	// Scenario: the injected incident, its verdict (survived, degraded,
+	// failed) with numbers and a fix hint, and the checks behind it.
+	Scenario *model.ScenarioResult `json:"scenario,omitempty"`
+	Error    string                `json:"error,omitempty"`
+	Hint     string                `json:"hint,omitempty"`
 }
 
 func viewLoadRun(r *model.LoadTestRun) loadRunView {
@@ -521,7 +524,7 @@ func viewLoadRun(r *model.LoadTestRun) loadRunView {
 	if r.Spec.Profile.Label != "" {
 		profile = r.Spec.Profile.Label
 	}
-	v := loadRunView{ID: r.ID, Status: r.Status, Target: r.Spec.Target.Label, Profile: profile, Summary: r.Summary, Thresholds: r.Thresholds, Environment: r.Environment, Error: r.Error}
+	v := loadRunView{ID: r.ID, Status: r.Status, Target: r.Spec.Target.Label, Profile: profile, Summary: r.Summary, Thresholds: r.Thresholds, Environment: r.Environment, Error: r.Error, Scenario: r.Scenario}
 	if res := r.Resources; res != nil {
 		v.Bottleneck = res.Verdict
 		for i, s := range res.Services {

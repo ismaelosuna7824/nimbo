@@ -1,0 +1,742 @@
+description: Adds the Docker intermediate challenges (multi-stage non-root image, secrets as files, network isolation)
+operations:
+  - op: upsert
+    kind: challenge
+    id: docker-multi-stage-nonroot
+    data:
+      provider: docker
+      level: intermediate
+      title: A small, non-root image with a multi-stage build
+      summary: Build a Go service in a build stage and ship only the static binary on a minimal runtime image that runs as a non-root user.
+      minutes: 30
+      tags: [dockerfile, multi-stage, go, distroless, non-root, image-size]
+      prerequisites: [docker-cache-friendly-dockerfile]
+      runtime: local
+      problem: |
+        The inventory service is a single Go binary, yet its image weighs several
+        hundred megabytes: it is built and run in the same `golang` stage, so the
+        container ships the Go toolchain, the module cache and the sources, and the
+        process runs as `root`.
+
+        Security asked for two things before the service can go anywhere near
+        production: the runtime image must contain only what the binary needs, and
+        the process must not run as root.
+      requirements:
+        - "The Dockerfile has a build stage (on a pinned `golang` image) that compiles a static binary (`CGO_ENABLED=0`)."
+        - "The final stage is a minimal runtime image (for example `gcr.io/distroless/static-debian12`, or a pinned `alpine`) that only receives the binary with `COPY --from=`."
+        - "The final stage runs as a non-root user (`USER`)."
+        - "The service still deploys and `GET /health` answers 200."
+      hints:
+        - "Each `FROM` starts a new stage. Name the first one (`FROM golang:1.23-alpine AS build`) and copy its output into the next with `COPY --from=build /out/app /app`."
+        - "A binary built with `CGO_ENABLED=0` has no libc dependency, so it runs on an image with no shell or package manager."
+        - "`gcr.io/distroless/static-debian12:nonroot` already defines a `nonroot` user (uid 65532); add `USER nonroot:nonroot` so the intent is explicit in your Dockerfile. On Alpine, create one with `adduser -D -u 10001 app`."
+        - "Distroless has no `wget` or shell for a healthcheck. The service supports `-healthcheck`: `HEALTHCHECK CMD [\"/app\", \"-healthcheck\"]` (exec form, no shell needed)."
+      solution: |
+        **Why.** Docker's multi-stage build guide shows how to compile in one
+        stage and copy only the artifacts into a clean final stage, so the image
+        carries no compilers, caches or sources. The building best practices
+        recommend a minimal base image to reduce size and attack surface, and
+        switching to a non-root `USER` when the service doesn't need privileges.
+        The Docker security docs explain why: root in a container is still root
+        over everything mounted into it.
+
+        **Steps.**
+        1. Build stage: `FROM golang:1.23-alpine AS build`, `WORKDIR /src`,
+           `COPY go.mod ./` then `RUN go mod download` (a cacheable layer),
+           `COPY . .`, then
+           `RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/app .`
+        2. Runtime stage: `FROM gcr.io/distroless/static-debian12:nonroot`,
+           `COPY --from=build /out/app /app`, `USER nonroot:nonroot`, `EXPOSE 8080`.
+        3. `HEALTHCHECK --interval=10s --timeout=3s --start-period=5s --retries=3 CMD ["/app", "-healthcheck"]`
+        4. `ENTRYPOINT ["/app"]`
+        5. Rebuild and compare `docker image ls`: the image shrinks from hundreds
+           of MB to a few MB.
+      solutionFiles:
+        inventory/Dockerfile: |
+          # Build a static binary in the build stage...
+          FROM golang:1.23-alpine AS build
+          WORKDIR /src
+          COPY go.mod ./
+          RUN go mod download
+          COPY . .
+          RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/app .
+
+          # ...and run it alone on distroless as a non-root user
+          # (no shell, no package manager: a few MB).
+          FROM gcr.io/distroless/static-debian12:nonroot
+          COPY --from=build /out/app /app
+          USER nonroot:nonroot
+          EXPOSE 8080
+          HEALTHCHECK --interval=10s --timeout=3s --start-period=5s --retries=3 CMD ["/app", "-healthcheck"]
+          ENTRYPOINT ["/app"]
+      starter:
+        kind: docker
+        files:
+          compose.yaml: |
+            services:
+              inventory:
+                build: ./inventory
+                ports:
+                  - "8080:8080"
+                restart: unless-stopped
+          inventory/Dockerfile: |
+            FROM golang:1.23-alpine
+            WORKDIR /src
+            COPY . .
+            RUN go build -o /usr/local/bin/inventory .
+            EXPOSE 8080
+            HEALTHCHECK --interval=10s --timeout=3s --start-period=5s --retries=3 CMD ["inventory", "-healthcheck"]
+            CMD ["inventory"]
+          inventory/.dockerignore: |
+            .git
+            Dockerfile
+            .dockerignore
+          inventory/go.mod: |
+            module example.com/inventory
+
+            go 1.23
+          inventory/main.go: |
+            // Command inventory serves a small product inventory over HTTP.
+            package main
+
+            import (
+            	"context"
+            	"encoding/json"
+            	"flag"
+            	"log"
+            	"net/http"
+            	"os"
+            	"os/signal"
+            	"syscall"
+            	"time"
+            )
+
+            var items = []map[string]any{
+            	{"sku": "NB-001", "name": "Notebook", "stock": 42},
+            	{"sku": "PN-002", "name": "Pen", "stock": 310},
+            }
+
+            func main() {
+            	// The runtime image may have no shell or wget: the binary probes itself.
+            	healthcheck := flag.Bool("healthcheck", false, "probe the running server and exit")
+            	flag.Parse()
+            	if *healthcheck {
+            		client := http.Client{Timeout: 3 * time.Second}
+            		resp, err := client.Get("http://127.0.0.1:8080/health")
+            		if err != nil || resp.StatusCode != http.StatusOK {
+            			os.Exit(1)
+            		}
+            		return
+            	}
+
+            	mux := http.NewServeMux()
+            	mux.HandleFunc("GET /health", func(w http.ResponseWriter, r *http.Request) {
+            		writeJSON(w, map[string]string{"status": "ok"})
+            	})
+            	mux.HandleFunc("GET /items", func(w http.ResponseWriter, r *http.Request) {
+            		writeJSON(w, items)
+            	})
+            	srv := &http.Server{Addr: ":8080", Handler: mux, ReadHeaderTimeout: 5 * time.Second}
+
+            	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGTERM, os.Interrupt)
+            	defer stop()
+            	go func() {
+            		<-ctx.Done()
+            		shutdown, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+            		defer cancel()
+            		_ = srv.Shutdown(shutdown)
+            	}()
+            	log.Println("listening on :8080")
+            	if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+            		log.Fatal(err)
+            	}
+            }
+
+            func writeJSON(w http.ResponseWriter, v any) {
+            	w.Header().Set("Content-Type", "application/json")
+            	_ = json.NewEncoder(w).Encode(v)
+            }
+      checks:
+        - id: valid
+          label: The compose project is valid
+          type: validate
+        - id: multi-stage
+          label: The Go toolchain stays in a build stage
+          type: rules_clean
+          rules_clean: { codes: [dk_single_stage], minSeverity: info }
+        - id: slim-runtime
+          label: The final stage runs on a minimal image
+          type: rules_clean
+          rules_clean: { codes: [dk_heavy_base, dk_latest_tag], minSeverity: info }
+        - id: non-root
+          label: The container runs as a non-root user
+          type: rules_clean
+          rules_clean: { codes: [dk_root_user], minSeverity: info }
+        - id: deploy
+          label: The service deploys
+          type: deploy
+        - id: health
+          label: GET /health answers 200
+          type: http
+          http: { service: inventory, port: 8080, path: /health, status: 200 }
+      sources:
+        - { title: "Docker Docs: Multi-stage builds", url: "https://docs.docker.com/build/building/multi-stage/" }
+        - { title: "Docker Docs: Multi-stage builds (Docker concepts)", url: "https://docs.docker.com/get-started/docker-concepts/building-images/multi-stage-builds/" }
+        - { title: "Docker Docs: Building best practices (choose the right base image, USER)", url: "https://docs.docker.com/build/building/best-practices/" }
+        - { title: "Docker Docs: Docker Engine security", url: "https://docs.docker.com/engine/security/" }
+        - { title: "Docker Docs: Dockerfile reference (HEALTHCHECK, USER, COPY --from)", url: "https://docs.docker.com/reference/dockerfile/" }
+
+  - op: upsert
+    kind: challenge
+    id: docker-secrets-as-files
+    data:
+      provider: docker
+      level: intermediate
+      title: Database passwords as secrets, not environment variables
+      summary: Move a password out of environment variables into a Compose secret mounted as a file, for both PostgreSQL and the API.
+      minutes: 25
+      tags: [compose, secrets, postgres, security]
+      prerequisites: [docker-app-with-postgres]
+      runtime: local
+      problem: |
+        The orders API and its PostgreSQL database share a password that is
+        written right into `compose.yaml`, in the `environment:` of both services.
+        It is in the repository history, `docker inspect` prints it, and any
+        process in the containers can read it from the environment.
+
+        Docker Compose can hand the password to exactly the services that need it
+        as a file under `/run/secrets/`. The official postgres image reads
+        `POSTGRES_PASSWORD_FILE`, and the API already reads `PGPASSWORD_FILE` when
+        it is set (see `api/server.js`).
+      requirements:
+        - "A top-level `secrets:` entry provides the database password from a file (for example `./secrets/db_password.txt`)."
+        - "`db` and `api` are both granted the secret with a service-level `secrets:` list."
+        - "`db` uses `POSTGRES_PASSWORD_FILE` and no longer sets `POSTGRES_PASSWORD`."
+        - "`api` uses `PGPASSWORD_FILE` and no longer sets `PGPASSWORD`."
+        - "No password is written literally in the compose file, and the stack still deploys with `GET /health` answering 200."
+      hints:
+        - "Compose mounts each secret a service is granted at `/run/secrets/<secret_name>`."
+        - "Declaring the secret is two steps: `secrets: {db_password: {file: ./secrets/db_password.txt}}` at the top level, then `secrets: [db_password]` in each service that needs it."
+        - "The `_FILE` variables are a convention of Docker Official Images such as postgres: `POSTGRES_PASSWORD_FILE: /run/secrets/db_password`."
+        - "Keep the secret file out of git (add `secrets/` to `.gitignore`) and out of the image build context."
+      solution: |
+        **Why.** Docker's Compose secrets guide explains that environment
+        variables are visible to every process in the container, are hard to
+        track and can leak into logs, while secrets are mounted as files in
+        `/run/secrets/<name>` and only for the services that are explicitly
+        granted them. The postgres Official Image supports `*_FILE` variables for
+        exactly this.
+
+        **Steps.**
+        1. Create `secrets/db_password.txt` with the password (no trailing secrets
+           in git: ignore the folder).
+        2. Declare it: `secrets: {db_password: {file: ./secrets/db_password.txt}}`.
+        3. `db`: replace `POSTGRES_PASSWORD` with
+           `POSTGRES_PASSWORD_FILE: /run/secrets/db_password` and add `secrets: [db_password]`.
+        4. `api`: replace `PGPASSWORD` with `PGPASSWORD_FILE: /run/secrets/db_password`
+           and add `secrets: [db_password]`.
+        5. PostgreSQL only reads the password when it initializes an empty data
+           directory: if you deployed the starter before, redeploy with volumes
+           removed so the database is created with the secret.
+      solutionFiles:
+        compose.yaml: |
+          # The password reaches db and api as /run/secrets/db_password, only
+          # in the containers granted the secret.
+          services:
+            api:
+              build: ./api
+              init: true
+              ports:
+                - "3000:3000"
+              environment:
+                PGHOST: db
+                PGUSER: orders
+                PGDATABASE: orders
+                PGPASSWORD_FILE: /run/secrets/db_password
+              secrets:
+                - db_password
+              depends_on:
+                db:
+                  condition: service_healthy
+              restart: unless-stopped
+
+            db:
+              image: postgres:16-alpine
+              environment:
+                POSTGRES_USER: orders
+                POSTGRES_DB: orders
+                POSTGRES_PASSWORD_FILE: /run/secrets/db_password
+              secrets:
+                - db_password
+              volumes:
+                - pgdata:/var/lib/postgresql/data
+              healthcheck:
+                test: ["CMD-SHELL", "pg_isready -U orders -d orders"]
+                interval: 5s
+                timeout: 5s
+                retries: 10
+              restart: unless-stopped
+
+          secrets:
+            db_password:
+              file: ./secrets/db_password.txt
+
+          volumes:
+            pgdata:
+        secrets/db_password.txt: |
+          local-dev-only-change-me
+        .gitignore: |
+          secrets/
+      starter:
+        kind: docker
+        files:
+          compose.yaml: |
+            services:
+              api:
+                build: ./api
+                init: true
+                ports:
+                  - "3000:3000"
+                environment:
+                  PGHOST: db
+                  PGUSER: orders
+                  PGDATABASE: orders
+                  PGPASSWORD: "s3cr3t-orders-pw"
+                depends_on:
+                  db:
+                    condition: service_healthy
+                restart: unless-stopped
+
+              db:
+                image: postgres:16-alpine
+                environment:
+                  POSTGRES_USER: orders
+                  POSTGRES_DB: orders
+                  POSTGRES_PASSWORD: "s3cr3t-orders-pw"
+                volumes:
+                  - pgdata:/var/lib/postgresql/data
+                healthcheck:
+                  test: ["CMD-SHELL", "pg_isready -U orders -d orders"]
+                  interval: 5s
+                  timeout: 5s
+                  retries: 10
+                restart: unless-stopped
+
+            volumes:
+              pgdata:
+          api/Dockerfile: |
+            FROM node:22-alpine
+            ENV NODE_ENV=production
+            WORKDIR /app
+            COPY package.json ./
+            RUN npm install --omit=dev --no-audit --no-fund
+            COPY server.js ./
+            USER node
+            EXPOSE 3000
+            HEALTHCHECK --interval=10s --timeout=3s --start-period=5s --retries=3 \
+              CMD wget -qO- http://127.0.0.1:3000/health >/dev/null || exit 1
+            CMD ["node", "server.js"]
+          api/.dockerignore: |
+            node_modules
+            npm-debug.log*
+            .env*
+            Dockerfile
+            .dockerignore
+          api/package.json: |
+            {
+              "name": "orders-api",
+              "version": "1.0.0",
+              "private": true,
+              "main": "server.js",
+              "dependencies": {
+                "pg": "8.13.1"
+              }
+            }
+          api/server.js: |
+            const fs = require("node:fs");
+            const http = require("node:http");
+            const { Pool } = require("pg");
+
+            const port = Number(process.env.PORT ?? 3000);
+
+            // PGHOST, PGUSER, PGDATABASE and PGPASSWORD come from the environment
+            // (node-postgres reads them). When PGPASSWORD_FILE is set, the password
+            // is read from that file instead (a Compose secret in /run/secrets/).
+            const passwordFile = process.env.PGPASSWORD_FILE;
+            const password = passwordFile ? fs.readFileSync(passwordFile, "utf8").trim() : undefined;
+
+            const pool = new Pool({ password, max: 5 });
+            pool.on("error", (err) => console.error("postgres:", err.message));
+
+            function send(res, status, body) {
+              res.writeHead(status, { "Content-Type": "application/json" });
+              res.end(JSON.stringify(body));
+            }
+
+            const server = http.createServer(async (req, res) => {
+              const path = new URL(req.url, "http://localhost").pathname;
+              try {
+                if (path === "/health") {
+                  await pool.query("SELECT 1");
+                  return send(res, 200, { status: "ok" });
+                }
+                if (path === "/") {
+                  const { rows } = await pool.query("SELECT current_user AS user, now() AS at");
+                  return send(res, 200, rows[0]);
+                }
+                send(res, 404, { error: "not found" });
+              } catch (err) {
+                console.error(err.message);
+                send(res, 503, { error: "database unavailable" });
+              }
+            });
+
+            server.listen(port, () => console.log(`listening on :${port}`));
+
+            process.on("SIGTERM", () => server.close(() => pool.end().then(() => process.exit(0))));
+      checks:
+        - id: valid
+          label: The compose project is valid
+          type: validate
+        - id: no-literal-secrets
+          label: No password is written in the compose file
+          type: rules_clean
+          rules_clean: { codes: [dk_secret_env], minSeverity: warning }
+        - id: secret-from-file
+          label: A top-level secret is read from a file
+          type: has
+          has:
+            compose:
+              where: { "secrets.*.file": { exists: true } }
+        - id: db-secret
+          label: PostgreSQL reads its password from the secret file
+          type: has
+          has:
+            compose:
+              service: db
+              where:
+                secrets: { exists: true }
+                environment.POSTGRES_PASSWORD_FILE: { contains: /run/secrets/ }
+                environment.POSTGRES_PASSWORD: { exists: false }
+        - id: api-secret
+          label: The API reads its password from the secret file
+          type: has
+          has:
+            compose:
+              service: api
+              where:
+                secrets: { exists: true }
+                environment.PGPASSWORD_FILE: { contains: /run/secrets/ }
+                environment.PGPASSWORD: { exists: false }
+        - id: deploy
+          label: The stack deploys
+          type: deploy
+        - id: health
+          label: The API authenticates to the database (GET /health answers 200)
+          type: http
+          http: { service: api, port: 3000, path: /health, status: 200 }
+      sources:
+        - { title: "Docker Docs: Manage secrets securely in Docker Compose", url: "https://docs.docker.com/compose/how-tos/use-secrets/" }
+        - { title: "Docker Docs: Compose file reference, secrets top-level element", url: "https://docs.docker.com/reference/compose-file/secrets/" }
+        - { title: "Docker Docs: Compose file reference, services (secrets)", url: "https://docs.docker.com/reference/compose-file/services/" }
+        - { title: "Docker Docs: Set environment variables within your container's environment", url: "https://docs.docker.com/compose/how-tos/environment-variables/set-environment-variables/" }
+
+  - op: upsert
+    kind: challenge
+    id: docker-network-isolation
+    data:
+      provider: docker
+      level: intermediate
+      title: Front and back networks
+      summary: Split a proxy, an API and a database across a public front network and an internal back network so only the proxy is reachable and the database never is.
+      minutes: 30
+      tags: [compose, networks, nginx, reverse-proxy, postgres, isolation]
+      prerequisites: [docker-app-with-postgres]
+      runtime: local
+      problem: |
+        The shop runs NGINX in front of an API backed by PostgreSQL. Everything is
+        on Compose's single default network and every service publishes a port, so
+        the API can be called without going through the proxy, the database is
+        reachable from the host, and the proxy container could open connections
+        straight to PostgreSQL.
+
+        Give the stack the classic two-tier layout: only the proxy faces the
+        outside world, and the database lives on a network with no external
+        connectivity at all.
+      requirements:
+        - "Two networks are declared: `front` and `back`; `back` is `internal: true`."
+        - "`proxy` is attached to `front` only and is the only service with published `ports:`."
+        - "`api` is attached to `front` and `back` (the proxy reaches it; it reaches the database)."
+        - "`db` is attached to `back` only and publishes no port."
+        - "The stack deploys and the proxy serves `/` and `/health` from the API."
+      hints:
+        - "Declare networks under the top-level `networks:` key and list them per service with `networks: [front, back]`. A service that lists networks no longer joins `default`."
+        - "`internal: true` creates an externally isolated network: containers on it can talk to each other but not to the outside."
+        - "Services sharing no network can't resolve or reach each other: `proxy` (front) and `db` (back) are then isolated by construction."
+        - "Remove `ports:` from `api` and `db`. Other services still reach them by service name on a shared network."
+      solution: |
+        **Why.** Compose's networking guide shows custom networks isolating a
+        proxy from a database: services can only reach services that share a
+        network, and only the app joins both. The Compose networks reference
+        documents `internal: true` for an externally isolated network. Published
+        ports are how traffic enters from the host, so only the entry point should
+        have them.
+
+        **Steps.**
+        1. Add `networks: {front: {}, back: {internal: true}}`.
+        2. `proxy`: `networks: [front]`, keep `ports: ["8080:80"]`.
+        3. `api`: `networks: [front, back]`, remove `ports:`.
+        4. `db`: `networks: [back]`, remove `ports:`.
+        5. Deploy and call `http://localhost:8080/health`: the proxy forwards to
+           `api:3000`, which queries `db:5432`.
+      solutionFiles:
+        compose.yaml: |
+          # proxy (front) -> api (front + back) -> db (back, internal).
+          # Only the proxy publishes a port; db can't reach or be reached from
+          # outside the back network.
+          services:
+            proxy:
+              build: ./proxy
+              ports:
+                - "8080:80"
+              networks: [front]
+              depends_on:
+                api:
+                  condition: service_healthy
+              restart: unless-stopped
+
+            api:
+              build: ./api
+              init: true
+              environment:
+                DATABASE_URL: postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB}
+              networks: [front, back]
+              depends_on:
+                db:
+                  condition: service_healthy
+              restart: unless-stopped
+
+            db:
+              image: postgres:16-alpine
+              environment:
+                POSTGRES_USER: ${POSTGRES_USER}
+                POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+                POSTGRES_DB: ${POSTGRES_DB}
+              volumes:
+                - pgdata:/var/lib/postgresql/data
+              networks: [back]
+              healthcheck:
+                test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+                interval: 5s
+                timeout: 5s
+                retries: 10
+              restart: unless-stopped
+
+          networks:
+            front: {}
+            back:
+              internal: true
+
+          volumes:
+            pgdata:
+      starter:
+        kind: docker
+        files:
+          compose.yaml: |
+            services:
+              proxy:
+                build: ./proxy
+                ports:
+                  - "8080:80"
+                depends_on:
+                  api:
+                    condition: service_healthy
+                restart: unless-stopped
+
+              api:
+                build: ./api
+                init: true
+                ports:
+                  - "3000:3000"
+                environment:
+                  DATABASE_URL: postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB}
+                depends_on:
+                  db:
+                    condition: service_healthy
+                restart: unless-stopped
+
+              db:
+                image: postgres:16-alpine
+                ports:
+                  - "127.0.0.1:5432:5432"
+                environment:
+                  POSTGRES_USER: ${POSTGRES_USER}
+                  POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+                  POSTGRES_DB: ${POSTGRES_DB}
+                volumes:
+                  - pgdata:/var/lib/postgresql/data
+                healthcheck:
+                  test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+                  interval: 5s
+                  timeout: 5s
+                  retries: 10
+                restart: unless-stopped
+
+            volumes:
+              pgdata:
+          .env: |
+            # Local development credentials only: keep real ones out of git.
+            POSTGRES_USER=shop
+            POSTGRES_PASSWORD=local-dev-only
+            POSTGRES_DB=shop
+          proxy/Dockerfile: |
+            FROM nginx:1.27-alpine
+            COPY default.conf /etc/nginx/conf.d/default.conf
+            EXPOSE 80
+            HEALTHCHECK --interval=10s --timeout=3s --start-period=5s --retries=3 \
+              CMD wget -qO- http://127.0.0.1/health >/dev/null || exit 1
+          proxy/.dockerignore: |
+            Dockerfile
+            .dockerignore
+          proxy/default.conf: |
+            # Forward everything to the API service (resolved by Compose's DNS).
+            server {
+              listen 80;
+              location / {
+                proxy_pass http://api:3000;
+                proxy_set_header Host $host;
+                proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+              }
+            }
+          api/Dockerfile: |
+            FROM node:22-alpine
+            ENV NODE_ENV=production
+            WORKDIR /app
+            COPY package.json ./
+            RUN npm install --omit=dev --no-audit --no-fund
+            COPY server.js ./
+            USER node
+            EXPOSE 3000
+            HEALTHCHECK --interval=10s --timeout=3s --start-period=5s --retries=3 \
+              CMD wget -qO- http://127.0.0.1:3000/health >/dev/null || exit 1
+            CMD ["node", "server.js"]
+          api/.dockerignore: |
+            node_modules
+            npm-debug.log*
+            .env*
+            Dockerfile
+            .dockerignore
+          api/package.json: |
+            {
+              "name": "shop-api",
+              "version": "1.0.0",
+              "private": true,
+              "main": "server.js",
+              "dependencies": {
+                "pg": "8.13.1"
+              }
+            }
+          api/server.js: |
+            const http = require("node:http");
+            const { Pool } = require("pg");
+
+            const port = Number(process.env.PORT ?? 3000);
+            const pool = new Pool({ connectionString: process.env.DATABASE_URL, max: 5 });
+            pool.on("error", (err) => console.error("postgres:", err.message));
+
+            function send(res, status, body) {
+              res.writeHead(status, { "Content-Type": "application/json" });
+              res.end(JSON.stringify(body));
+            }
+
+            const server = http.createServer(async (req, res) => {
+              const path = new URL(req.url, "http://localhost").pathname;
+              try {
+                if (path === "/health") {
+                  await pool.query("SELECT 1");
+                  return send(res, 200, { status: "ok" });
+                }
+                if (path === "/") {
+                  const { rows } = await pool.query("SELECT version() AS postgres");
+                  return send(res, 200, { shop: "open", postgres: rows[0].postgres });
+                }
+                send(res, 404, { error: "not found" });
+              } catch (err) {
+                console.error(err.message);
+                send(res, 503, { error: "database unavailable" });
+              }
+            });
+
+            server.listen(port, () => console.log(`listening on :${port}`));
+
+            process.on("SIGTERM", () => server.close(() => pool.end().then(() => process.exit(0))));
+      checks:
+        - id: valid
+          label: The compose project is valid
+          type: validate
+        - id: internal-back
+          label: The back network is internal
+          type: has
+          has:
+            compose:
+              where: { networks.back.internal: true }
+        - id: front-network
+          label: A front network is declared
+          type: has
+          has:
+            compose:
+              where: { networks.front: { exists: true } }
+        - id: proxy-front-only
+          label: The proxy is on the front network only
+          type: has
+          has:
+            compose:
+              service: proxy
+              where:
+                networks.front: { exists: true }
+                networks.back: { exists: false }
+        - id: api-both
+          label: The API joins both networks
+          type: has
+          has:
+            compose:
+              service: api
+              where:
+                networks.front: { exists: true }
+                networks.back: { exists: true }
+        - id: db-back-only
+          label: The database is on the back network only
+          type: has
+          has:
+            compose:
+              service: db
+              where:
+                networks.back: { exists: true }
+                networks.front: { exists: false }
+                networks.default: { exists: false }
+        - id: api-not-published
+          label: The API publishes no port (only the proxy is reachable)
+          type: has
+          has:
+            compose:
+              service: api
+              where: { ports: { exists: false } }
+        - id: db-not-published
+          label: The database publishes no port
+          type: has
+          has:
+            compose:
+              service: db
+              where: { ports: { exists: false } }
+        - id: deploy
+          label: The stack deploys
+          type: deploy
+        - id: through-proxy
+          label: The proxy serves the API's /health
+          type: http
+          http: { service: proxy, port: 80, path: /health, status: 200 }
+      sources:
+        - { title: "Docker Docs: Networking in Compose (specify custom networks)", url: "https://docs.docker.com/compose/how-tos/networking/" }
+        - { title: "Docker Docs: Compose file reference, networks top-level element (internal)", url: "https://docs.docker.com/reference/compose-file/networks/" }
+        - { title: "Docker Docs: Bridge network driver", url: "https://docs.docker.com/engine/network/drivers/bridge/" }
+        - { title: "Docker Docs: Networking overview", url: "https://docs.docker.com/engine/network/" }

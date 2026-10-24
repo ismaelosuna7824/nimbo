@@ -34,6 +34,7 @@ flowchart LR
 | `backend/internal/events` | events | SSE hub implementing `model.Publisher` |
 | `backend/internal/api` | api | HTTP handlers, orchestration |
 | `backend/internal/mcp` | mcp | MCP tools calling the daemon REST API |
+| `backend/internal/learn` | learn | Learn content (roadmaps + challenges) and progress in `<home>/learn.db` (SQLite, pure-Go `modernc.org/sqlite`), fed by embedded content migrations; see "Learn" below |
 | `backend/internal/settings` | settings | User preferences in `<home>/settings.json` (mode, docker, images, default AWS region) |
 | `backend/internal/setup` | setup | Onboarding diagnostics (`GET /setup`, `nimbo doctor`), OS-tailored fixes, one-click actions (start Docker, pull images), PATH augmentation |
 | `backend/internal/agents` | agents | Detects AI agent apps and installs/removes the `nimbo` MCP server in their configs |
@@ -829,7 +830,10 @@ const ComposeLabel = "com.nimbo.workflow"
   service's `ports` with `!override` (same entries, remapped `published`),
   the user's files untouched, and the remaps are saved in
   `compose/.nimbo/ports.json`: later ups reuse a remap while its original port
-  stays busy and drop it once the original is free.
+  stays busy and drop it once the original is free. A published range
+  (`3100-3101`, replicas sharing it) is checked and moved as a whole:
+  `PortConflict.count` / `PortRemap.count` give its size and the remap takes
+  that many consecutive free ports (`planPorts`, `pickRange`).
 - Status: one `docker ps -aq` (both labels) + `docker inspect`: per service
   (every active service of the graph, absent ones too; containers of removed
   services listed as well) its containers with state, health, exit code,
@@ -853,12 +857,19 @@ type EngineConfig struct {
     Home string; Events model.Publisher; Resolver Resolver
     Connections ConnectionResolver // saved connections, secrets in clear
     Monitor ResourceMonitor        // container/pod usage probes (sandbox.Manager)
-    Workflows WorkflowInspector    // Kubernetes environments (cmd/nimbo loadTestWorkflows: store + kube.Open)
+    Workflows WorkflowInspector    // environments, scenario validation (cmd/nimbo loadTestWorkflows: store + kube.Open)
+    Faults FaultInjector           // scenario faults (sandbox.Manager)
 }
 type WorkflowInspector interface {
-    KubeEnvironment(wfID string) (string, bool)                            // recorded as LoadTestRun.environment
+    ActiveEnvironment(wfID string) (string, bool)                          // recorded as LoadTestRun.environment
     AutoscaledIn(ctx context.Context, wfID, env, kind, name string) []string // other environments with an HPA for the workload (no_hpa hint)
+    Workflow(wfID string) (*model.Workflow, bool)                          // scenario.Validate against the workflow's catalog
 }
+type FaultInjector interface {
+    PrepareFaults(ctx context.Context) error // builds the helper image once
+    InjectFault(ctx context.Context, wfID string, spec model.ScenarioSpec, target model.LoadTarget) (scenario.Fault, error)
+}
+func (e *Engine) Shutdown(ctx context.Context) // stops every run and waits, so injected faults are reverted before the daemon exits
 type Resolver interface {
     EmulatorURL(wfID string, cloud model.Cloud) (string, bool)
     HostURL(wfID, emulatorURL string) string
@@ -1376,8 +1387,8 @@ distroless runtime.
   conditions (an HPA informer with no status handler). At the end
   `analyzeScaling` builds `LoadResources.scaling` (`model/scaling.go`): per
   workload a timeline on the latency axis and a verdict. Degraded seconds
-  use the breaking-point rule (`degradations`: p95 > 4× the baseline and
-  +10 ms, or errors > 5 %). Kinds, in order: `no_hpa` (target without an
+  use the breaking-point rule (`degradations`: errors > 5 %, or p95 above
+  max(4× the baseline, baseline + 50 ms) for ≥ 2 seconds in a row). Kinds, in order: `no_hpa` (target without an
   HPA; names other environments that autoscale it, rendered with
   `kube.Project.Autoscales`), `no_metrics` (ScalingActive=False in ≥ 50 % of
   samples, or no CPU reading over ≥ 60 s; the condition message picks the
@@ -1867,44 +1878,226 @@ Desktop: `features/monitoring` (top bar action, command palette, dialog via
   number). `docker-go-nginx`'s proxy answers 404 on `/metrics` so only
   Prometheus inside the network reads it. Existing workflows are unchanged.
 
-### Production readiness (`internal/kube/kubeready`)
+### Capacity planning (`internal/capacity`, `api/capacity.go`)
 
-`GET /workflows/{id}/kubernetes/readiness[?environment=]` →
-`model.KubeReadiness{workflowId, activeEnvironment, environments[]}`.
-`kubeready.Report` renders every environment with `kube.Open(…,
-Options{Environment})` (the workflow's active environment is untouched; a
-workflow without environments has one entry `""`, its base checked as
-`production`), runs `kuberules.Check` with every opt-in rule on (rules
-turned off in Settings stay off and their items show "Turned off in
-Settings") and folds the findings into groups of items (`pass`, `info`,
-`warn`, `fail`, `todo`, `skip`):
+`POST /workflows/{id}/capacity-plan {targetRps, p95Ms?, environment?,
+runId?}` → `model.CapacityPlan` (docker and Kubernetes workflows). The
+run is `runId` or the newest finished run of the environment (default the
+active one) with `LoadTestRun.Resources` and no fault scenario. The plan is
+saved as the environment's latest in
+`<home>/workflows/<id>/capacity/<env|_base>.json` (`capacity.SavePlan` /
+`LastPlan`; production readiness reads it); `GET .../capacity-plan
+[?environment=]` returns it (null when none).
 
-- **Reliability**: manifests apply (every error rule and render
-  problem), replicas + PDBs, probes, requests/limits, rollout strategy,
-  topology spread, wiring. Production-only items are `skip` elsewhere.
-- **Scaling**: autoscaling (stateless Deployments with an HPA via
-  `kuberules.Workloads`; none in prod is a warning, fixed-replica ones are
-  info) and the latest finished load test whose `LoadTestRun.Environment`
-  is that environment: its `LoadResources.Scaling` worst workload kind
-  (maxed/late/no_metrics warn, no_hpa warn in prod, too_short todo,
-  scaled/not_needed pass unless thresholds failed); no run is `todo`
-  "Not tested yet".
-- **Monitoring**: `kubeready.Monitoring` — ServiceMonitor/PrometheusRule
-  (`monitoring.coreos.com`) objects or a helm source whose chart or
-  dependency is kube-prometheus-stack; else warn in prod (info elsewhere)
-  with the `add_monitoring` action.
-- **Security** (secrets, privileges, NetworkPolicies) and **Hygiene**
-  (labels, image pinning, namespaces/quotas).
+`capacity.Plan` is pure math over the stored run:
 
-Every k8s_* rule maps to exactly one item (tested). Status: any `fail` →
-`blocked`, any `warn`/`todo` → `needs_work`, else `ready`; score =
-passed + ½·(warn, todo) over the non-skipped items. Actions:
-`open_problem` (first finding's file:line), `run_load_test` (the UI
-switches the active environment and opens Deploy when it differs),
-`open_load_test` (`runId`), `add_monitoring`. Desktop: the Kubernetes-only
-**Readiness** bottom tab (`features/kubernetes/readiness`) lists the
-environments with status and score, refetches when the workflow is saved
-or a load test finishes. MCP: `production_readiness {workflow,
+- **Healthy seconds**: the timeline before `loadtest.FirstDegraded` (the
+  breaking-point rule: errors above 5%, or p95 above max(4× its baseline,
+  baseline + 50 ms) for at least 2 seconds in a row);
+  `measuredRps` is their highest rate, `extrapolation` = target ÷ it.
+- **Per service** (`LoadServiceResources`, replicas from `Containers`):
+  idle CPU per replica (T 0), CPU per req/s = mean over the healthy
+  seconds within 80% of `measuredRps` of (cores − idle × replicas) ÷ rps,
+  peak working set per replica. Roles: data images
+  (`compose.DataCategory`: databases, caches, brokers) and StatefulSets
+  are **dependencies**; services whose CPU grew by less than 10m are
+  **idle**; the rest are **apps**.
+- **Apps**: replica size = current CPU limit, else the Kubernetes request
+  (≥ 250m), else 500m; one core at most for a single-core verdict. Ceiling
+  70% (an HPA's CPU target, clamped 50–85%). Per-replica rate = (ceiling ×
+  size − idle) ÷ cost, capped by the p95 objective (highest healthy rate
+  within it ÷ replicas). Replicas = ⌈target ÷ rate⌉ + 1, at least 2.
+  Requests = limits. Memory = (idle + growth scaled to the planned
+  per-replica rate, ≤ 4×) × 1.3, 64 MiB steps, ≥ 128 MiB. Kubernetes HPA:
+  min ⌈raw⌉ (≥ 2), max max(⌈2 × raw⌉, replicas), target = ceiling.
+- **Dependencies** keep their instance count; projected CPU = idle + cost
+  × target, sized at the ceiling and never below today's limits (memory
+  peak × 1.5, ≥ current limit); a "not measured beyond X req/s" caveat
+  whenever the target exceeds the run.
+- **Nodes** (`pack.go`): every replica's requests packed first-fit
+  decreasing onto one shape after a progressive system reserve (CPU 6% of
+  the first core, 1%, 0.5% × 2, 0.25% rest; memory 25/20/10/6/2% bands +
+  100 MiB eviction) plus 0.1 CPU / 256 MiB of node agents; at least 2
+  nodes. Every shape of the pinned table (`prices.go`, `PriceDate`;
+  AWS us-east-1 m7g/c7g/m7i, Azure eastus Dpsv5/Dsv5/Fsv2, GCP
+  us-central1 e2/n2/t2a, OCI A1/E4 flex from per-OCPU/GB rates) is tried
+  and options are sorted by monthly cost (hourly × nodes × 730).
+- **Confidence**: high, lowered to medium beyond 1.5× the measured rate,
+  under 30 healthy seconds, unsteady latency (stability > 0.5), a
+  per-replica rate over 3× what one replica served or a dependency
+  outgrowing its limit; low beyond 4×, under 10 healthy seconds, an
+  unmet p95 objective or a restart/OOM during the run.
+
+Apply: for a named environment each service gets `apply {target, values,
+changes, skipped}` from its per-environment settings
+(`capacity.ApplyValues`: Kubernetes `replicas`, `hpa.min/max/cpu` when the
+environment has an HPA, `cpu|memory.request|limit:<first container>`;
+compose `replicas`, `cpus`, `memory`; apps only change replicas; values
+equal today are left out; non-editable knobs are listed as skipped).
+`POST .../capacity-plan/apply {environment?, services?}` writes the
+environment's latest plan through `kubeSetEnvironmentSettings` /
+`composeSetEnvironmentSettings`; the base can't be applied to.
+Desktop: Load test → **Capacity** (`features/panels/loadtest/capacity.tsx`,
+also "Plan capacity" on a run's results, `revealCapacity(runId?)`) with a
+confirmation listing every change. MCP: `plan_capacity`.
+
+### Incident scenarios (`internal/scenario`, `sandbox/faults.go`, `loadtest/scenario.go`, `api/scenarios.go`)
+
+A load test of a docker or Kubernetes workflow can inject one real,
+reversible fault (`LoadTestSpec.scenario` = `model.ScenarioSpec{id, target,
+atSec, durationSec, params}`; result `LoadTestRun.scenario` =
+`model.ScenarioResult{id, target, targetName, injectedAtSec, revertedAtSec?,
+recoveredAtSec?, verdict, message, checks[{name, passed, detail}], detail}`,
+times on `LoadSample.t`'s axis, `verdict` empty while running).
+
+- **Catalog** (`scenario.Catalog(wf)`, pure, active environment's graph;
+  `GET /workflows/{id}/scenarios` → `ScenarioCatalog{kind, environment,
+  scenarios[{id, title, description, needsTarget, targets[{id, name,
+  detail}], params[{name, label, default, min, max, unit}],
+  defaultDurationSec}], unavailable[{id, title, reason}]}`):
+  `kill_replica` — compose services with 2+ replicas or a restart policy,
+  Deployments/StatefulSets; `dependency_down` / `dependency_latency`
+  (`delayMs` 300, `jitterMs`, `lossPct`) — services another service uses
+  (depends_on, links, an env host), workloads behind a Service another
+  workload names in its env; `cache_flush` — Redis/Valkey/KeyDB/Memcached
+  images; `traffic_spike` (`factor` 3) — any. `scenario.Validate` (on Start):
+  applicable id and target, params in bounds, `atSec >= 5`, `durationSec`
+  1–600 (0 = default), `atSec + durationSec` inside the profile; connection
+  runs and Terraform workflows are refused.
+- **Injection** (`sandbox.Manager.InjectFault`; only the workflow's own
+  containers — project and workflow labels — or its own k3s node, user
+  namespaces): docker `kill_replica` crashes the replica the load target hits
+  through its published port (else the first by name) with SIGKILL of its
+  main process from the host PID namespace, so the restart policy applies
+  (`docker kill` would count as a manual stop); a watcher records when it
+  runs again; Nimbo `docker start`s it at the window's end when nothing did.
+  `dependency_down` pauses the service's containers (unpause on revert);
+  `dependency_latency` runs `tc qdisc replace … root netem delay …` on every
+  interface but `lo` in their network namespace; `cache_flush` runs
+  `redis-cli DBSIZE; FLUSHALL` (`REDIS_PASSWORD` honored) or Memcached
+  `flush_all`. Kubernetes (kubectl/crictl inside the node): `kill_replica`
+  force-deletes one Ready pod and watches for a replacement Ready;
+  `dependency_down` scales the workload to 0 and back (revert waits for the
+  replicas Ready, 2 min); `dependency_latency` nsenters each pod's network
+  namespace (PID from `crictl inspect`) from a helper sharing the node's PID
+  namespace; `cache_flush` uses `kubectl exec`. Helpers run
+  `ChaosToolsImage` (`nimbo-chaos-tools:alpine3.20.3-iproute2-6.9.0`, built
+  once from a digest-pinned Alpine with pinned `iproute2-tc`).
+- **Always reverted**: every fault that changes state writes its revert
+  recipe to `<home>/faults/<id>.json` before acting and deletes it once
+  reverted. The engine reverts at `atSec + durationSec`, at once on Stop, and
+  `Engine.Shutdown` (daemon exit) stops runs and waits for their reverts;
+  the daemon replays leftover recipes at startup (`RecoverFaults`) and
+  before the next injection into the same workflow. Recipes naming a
+  container of another workflow are refused.
+- **Traffic spike** is the load generator's: `schedule.withSpike` multiplies
+  the curve on `[atSec, atSec+durationSec)` (rps arrivals and virtual users).
+- **Verdict** (`scenario.Evaluate`, named constants, tested on synthetic
+  timelines): baseline = the 10 s before injection; a healthy second has
+  errors <= max(2× baseline, 1%) and p95 <= max(2× baseline, +50 ms);
+  recovery = the first 3 healthy seconds after the fault ends (instant
+  faults: after the injection). Survived: window errors within 1% of the
+  baseline, p95 within bound, recovery <= 10 s and the scenario's own checks;
+  failed: no recovery before the run ends, recovery > 60 s, window errors >=
+  50%, or (dependency_down) a hang — in-flight > max(3× baseline, +10) or
+  p95 >= 80% of the timeout; degraded otherwise. Checks per scenario:
+  kill — errors, traffic off the dead replica after 5 s, replica replaced on
+  its own, p95; down — failed fast, errors, recovery, errors after it
+  returned; latency — amplification (p95 growth / delay <= 2×), errors,
+  in-flight pile-up, recovery; flush — p95, errors, re-warm, database CPU
+  (the non-target service whose CPU grew most: <= max(2×, +20 points));
+  spike — errors, p95, completed >= 90% of the asked load, pile-up, the
+  target workload's autoscaling verdict (Kubernetes). The message carries
+  the numbers and the fix (load balancer / readiness, restart policy, more
+  replicas, timeouts + circuit breaker, fallback, retries with backoff and
+  jitter, cache warming / single-flight, HPA target).
+
+Desktop: Load test → New test → *Incident (optional)* under the traffic
+shape (`scenario-step.tsx`: scenario, target, start, duration, params, the
+window drawn over the test's length; Start is disabled while the window
+does not fit); results show the scenario card (verdict, message, checks)
+and every chart shades the fault window with inject / revert / recovered
+markers (`scenario-result.tsx`, `charts.tsx`); History rows carry a
+scenario badge. `revealScenario(id, target?)` opens New test with a
+scenario preselected (Readiness). MCP: `list_scenarios`, `run_load_test
+scenario`.
+
+### Production readiness (`internal/readiness`, `internal/kube/kubeready`, `api/readiness.go`)
+
+`GET /workflows/{id}/readiness[?environment=]` (docker and Kubernetes) →
+`model.WorkflowReadiness{workflowId, kind, activeEnvironment,
+environments[]}`. Every environment is opened on its own (the workflow's
+active environment is untouched): Kubernetes with `kube.Open(…,
+Options{Environment})` (a workflow without environments has one entry
+`""`, its base checked as `production`), docker with `compose.Open(…,
+Options{Environment})` for the base `""` and every compose environment (the
+base is production-like only when there are no environments). Rules run
+with every opt-in rule on (rules turned off in Settings stay off and their
+items show "Turned off in Settings"). The evidence (`readiness.Sources`):
+the workflow's load test runs and `capacity.LastPlan` per environment; the
+applicable scenarios are `scenario.Catalog` on each environment's own graph
+(`readiness.DockerCatalog`: `compose.Project.Graph` of that environment;
+`kubeready` `catalog`: `kube.Project.Graph` of the rendered environment),
+so a service only prod declares is a target there.
+
+Categories (`ReadinessGroup`, weight = share of the score):
+
+- **Reliability (30)** — Kubernetes: manifests apply (every error rule and
+  render problem), replicas + PDBs, probes, requests/limits, rollout,
+  topology spread, wiring (production-only items `skip` elsewhere).
+  Docker: project loads (every error `dk_*` rule), configuration,
+  healthchecks, restart and shutdown, resource limits, persistent data.
+- **Performance and capacity (20)** — Kubernetes autoscaling (stateless
+  Deployments with an HPA via `kuberules.Workloads`). *Load tested*: the
+  latest finished run of that `LoadTestRun.Environment` without a scenario;
+  Kubernetes judges `LoadResources.Scaling` (worst workload: maxed / late /
+  no_metrics warn, no_hpa warn in prod, too_short todo, not_needed info),
+  docker the resource verdicts (oom / restarted warn; cpu-bound,
+  single-core, memory-bound warn unless the environment's capacity plan was
+  sized from that run, then info); failed thresholds warn. *Capacity
+  planned*: the latest plan (low confidence or sized from an older run:
+  info).
+- **Resilience (15)** — one item per catalog scenario: the latest scenario
+  run of that id in the environment (survived pass, degraded warn, failed
+  fail); none yet is `todo` with `run_scenario {scenario, target}`;
+  unavailable scenarios `skip` with the catalog's reason.
+- **Monitoring (10)** — Kubernetes `kubeready.Monitoring`
+  (ServiceMonitor/PrometheusRule or a kube-prometheus-stack chart); docker
+  `readiness.DockerMonitoring` (the generated `monitoring/compose.yaml` in
+  the compose files, or a Prometheus service); else warn in prod (info
+  elsewhere) with `add_monitoring`.
+- **Security (15)** and **Hygiene (10)** — secrets, privileges, network
+  policies / published ports; labels, image pinning, namespaces, Dockerfile
+  practices, log rotation, port wiring.
+
+Every k8s_* and dk_* rule maps to exactly one item (tested). Scoring
+(`readiness.Summarize`, deterministic): pass/info earn 1, warn ½, fail 0;
+`todo` (not verified yet) and `skip` are left out — missing evidence is
+not a failure. Category score = mean × 100 (null when nothing is scored);
+environment score = weighted mean of the scored categories (unrounded,
+rounded once); confidence = weighted share of scored ÷ (scored + todo)
+over categories with applicable items. Status: any `fail` of a rule or
+runtime item → `blocked`; any `warn`, a failed resilience item (a scenario
+the system did not survive scores 0 but does not block), or any `todo` in
+a production-like environment → `needs_work`; else `ready`.
+
+Components (`EnvironmentReadiness.components`): one row per compose
+service (without the monitoring stack's) or Deployment/StatefulSet, role
+app/data, with cells `rules` (its other findings), `health`
+(healthcheck/restart codes or probe codes), `resources`, `monitoring` (the
+environment's item), `load` (its `LoadServiceResources` headroom and
+verdict, plus its `WorkloadScaling`), `resilience` (the latest verdict per
+scenario id that targeted it; a traffic spike counts on the load-tested
+service/workload) and `capacity` (its `CapacityService`); row score and
+status like a category. Actions: `open_problem`, `run_load_test`,
+`open_load_test` (`runId`), `add_monitoring`, `run_scenario` (`scenario`,
+`target`), `plan_capacity` (`runId` to size from). The UI switches the
+active environment and opens Deploy when a test targets another one.
+Desktop: the **Readiness** bottom tab of docker and Kubernetes workspaces
+(`features/readiness`): environments with score and confidence, a header
+with the category scores, a components table (cell → problem, run,
+scenario or planner) and the checklist; it refetches when the workflow is
+saved or a load test finishes. MCP: `production_readiness {workflow,
 environment?}`.
 
 ### Kubernetes environments (`internal/kube/environments.go`, `envsettings.go`, `envcompare.go`)
@@ -2527,6 +2720,140 @@ are drawn as requests (api → db, the reverse of the graph's "source is
 used by target"), one arrow per pair. The subtitle is `Docker Compose ·
 <project>`; the legend adds internal/external networks when present.
 
+## Learn (`internal/learn`, `api/learn.go`, `apps/desktop/src/features/learn`)
+
+Learn shows a roadmap (beginner → intermediate → advanced → expert) and
+challenges per provider (`aws`, `azure`, `gcp`, `oci`, `docker`,
+`kubernetes`, `global`). Content authoring, the YAML schema, check types
+and the sourcing rule are in [CONTRIBUTING-learn.md](CONTRIBUTING-learn.md).
+Challenges are graded by `internal/challenge` (`api/challenge.go`).
+
+- **Storage**: `<home>/learn.db`, opened by the daemon with
+  `learn.Open(home, Options{ValidateChallenge: challenge.Validate})`. It
+  uses the pure-Go driver `modernc.org/sqlite` (no CGO), WAL and one
+  connection. `PRAGMA user_version` versions the database schema itself.
+  Tables:
+  - `migrations`: filename, checksum, description, applied_at.
+  - `challenges`: id, provider, level, title, lower-case search text,
+    JSON `model.Challenge`, and the migration that last wrote it.
+  - `challenge_tags`: tags, cascading with `challenges`.
+  - `roadmaps`: one row per provider, JSON `model.Roadmap`.
+  - `progress`: status, attempts, completed goal ids, workflow id, and
+    started/updated/completed times. It has **no** foreign key, so
+    migrations never touch it and progress survives content updates,
+    removals and daemon upgrades.
+- **Content migrations**: `internal/learn/migrations/*.yaml`, embedded
+  with `go:embed` and named `YYYYMMDDHHMMSS_<provider>_<slug>.yaml`. Each
+  one is `{description, operations: [{op: upsert|delete, kind:
+  challenge|roadmap, id, data?}]}`. YAML 1.2 is decoded to JSON and then
+  strictly into the model types (unknown fields fail).
+  - **Startup**: the missing files apply in name order, one transaction
+    each, and each is recorded with its SHA-256.
+  - **Validation**: the file name provider; ids `<provider>-<slug>` /
+    `<provider>-roadmap`; required fields; levels, runtimes and providers;
+    official https hosts for sources and docs; adaptations only on
+    `global`; relative file paths; the engine's `challenge.Validate`.
+  - **Errors**: a failing file is rolled back, and the files after it stay
+    pending (they may depend on it). An applied file whose checksum
+    changed is reported, not re-applied.
+  - **References**: roadmap step challenges and prerequisites exist, with
+    no cycles. They are checked on the resulting content.
+  - **Never fatal**: every problem lands in `LearnStatus.errors` (logged
+    at startup and shown on the Learn page). The daemon keeps running and
+    serves what applied. A database that can't be opened makes the
+    readers return `learn.ErrUnavailable` (HTTP 503).
+  - **CI gate**: `go test ./internal/learn/ -run TestMigrations` lints
+    every file (all errors at once) and applies them all to a fresh
+    database.
+- **Go accessor** (used by the grading engine):
+  - `Store.Challenge(id)`, `Detail(id)`, `Challenges(filter)`,
+    `Roadmap(provider)`, `Providers()`, `Progress(id)`, `AllProgress()`.
+  - `MarkStarted(id, workflowID)` sets the challenge in progress (a
+    completed one stays completed).
+  - `RecordAttempt(id, workflowID, ChallengeResult)` adds an attempt and
+    the passed goal ids; a passing result completes the challenge and
+    keeps the first completion time.
+  - `SetProgress(id, {status})` with `not_started` resets the challenge;
+    `in_progress` marks it started.
+- **Desktop**: *Learn* is a full-page view like Connections, opened from
+  the home section (per-provider progress), the workspace top bar
+  (graduation cap) or the command palette. It has:
+  - Provider tabs with completed/total counts, and a content-error banner
+    from `status.errors`.
+  - A roadmap per level: goals, numbered steps with linked challenge chips
+    and progress badges, and official docs.
+  - A catalog with search (server-side), level, topic and progress
+    filters, grouped by level.
+  - A challenge page with the problem, requirements, per-provider
+    adaptations, progressive hints, solution reveal, goals (passed ones
+    checked), prerequisites, roadmap steps and sources.
+  - *Start challenge* (`POST /learn/challenges/{id}/start`, owned by
+    `api/challenge.go`), which opens the new workflow on its Challenge
+    tab, plus *Continue* (the last workflow) and *Reset progress*.
+  - Markdown rendered by `components/markdown.tsx`: a small safe subset,
+    never raw HTML.
+
+### Challenge grading (`internal/challenge`, `api/challenge.go`, `apps/desktop/src/features/challenges`)
+
+```go
+func Validate(c model.Challenge) error // content: ids, level/provider/runtime, sources, starter resolvable, checks well-formed (learn.Options.ValidateChallenge)
+func ResolveStarter(cat *catalog.Catalog, s model.ChallengeStarter) (Starter, error) // _starters/<id> (starter.yaml: kind, kubernetes sources/builds), docker/k8s/Terraform templates, or inline files (k8s sources via kube.Detect)
+func Analyze(ctx, cat, wf, dir, env string) (*Analysis, error) // graph + every finding with ALL rules on (opt-in included, user Settings ignored), in env
+func GradeStatic(c model.ChallengeCheck, a *Analysis) model.ChallengeGoalResult // validate | rules_clean | has
+func GradeRun(c model.ChallengeCheck, run *model.LoadTestRun) model.ChallengeGoalResult // load | scenario (verdict "or better": survived > degraded > failed)
+func Score(goals []model.ChallengeGoalResult) int // every check weighs the same; inside one, every measurement
+func New(cfg Config) *Checker // Start / Cancel / Last / Close; one check per workflow; <wf dir>/challenge.json
+```
+
+- Endpoints: `POST /learn/challenges/{id}/start {name?}` → 201 workflow
+  (`workflow.challenge` = id; Terraform starters keep their file names, no
+  re-layout) and `Learn.MarkStarted`; `GET /workflows/{id}/challenge` →
+  `{challenge, last}`; `POST /workflows/{id}/challenge/check` → 202 running
+  result (poll GET); `DELETE …/check` cancels (the running load test is
+  stopped, its scenario reverted by the engine); `POST
+  …/challenge/solution` → a new workflow: starter + `solutionFiles`.
+- A check runs the checks in order. Static ones open the workflow in the
+  check's `environment`. The first runtime check (deploy/http/load/scenario)
+  deploys once: compose `up` (fixed host ports remapped when taken), k3s
+  `up` of the active environment, or Floci sandbox start + `apply`. Before
+  http/load/scenario the endpoint is polled until three answers in a row
+  are as expected (3 min), so warming or restarting services don't count.
+  Targets: compose service + published container port; Kubernetes Service
+  port (daemon port-forward) or `ingress: true` (per-request balancing by
+  Traefik over Ready pods); Terraform node → the Load test tab's endpoint
+  (API Gateway base up to the stage). Scenario targets are names resolved
+  to graph nodes. Load thresholds are copied into the run so the Load test
+  tab shows the same lines. A finished (not canceled) check is recorded
+  with `Learn.RecordAttempt`; a check left running by a stopped daemon reads
+  canceled.
+- `where` paths: dots, `[i]`, `*`, `"quoted.keys"`; lists select by index,
+  `*`, an element named like the segment, else any element (Terraform
+  blocks: any instance); a key with a null value exists. Matchers: scalar
+  equality (numbers numeric, booleans by spelling, Terraform expressions by
+  source text), `exists`, `in`, `notIn`, `min`, `max`, `contains`
+  (substring, map key, list element or element containing it), `ref`.
+  Compose `where` reads the effective compose-go service (compose-spec
+  keys) or, without a selector, the whole project.
+- Runtime challenges ship their apps as starters in `_starters/` (pinned
+  images: `node:22.21.0-alpine3.22`, `postgres:16.14-alpine`,
+  `redis:7.4.6-alpine3.21`, `haproxy:3.0.11-alpine3.22`; npm deps locked).
+  Machine speed: costs are deterministic — database pages are
+  `pg_sleep`-based with a fixed pool (capacity = pool ÷ sleep), the report
+  job blocks for a measured 400 ms, pricing latency is injected — so
+  outcomes come from queueing, and thresholds sit far from both the
+  starting and the solved numbers. The autoscaling challenge's CPU work is
+  iteration-based; its pass criterion (replicas ≥ 2) is relative to the
+  pods' CPU request, so slower machines only scale earlier.
+- `go test ./internal/challenge/ -run TestContentStaticChecks` grades every
+  migration's static checks on its starter (must fail one when all checks
+  are static) and on starter + solution (must pass all).
+- Desktop: the Challenge tab (first tab, only when `workflow.challenge` is
+  set): problem, requirements, progressive hints, *Show solution* (markdown
+  + *Open the solution in a copy*), official docs, and the checks with live
+  status (polled every 2 s while running), measurements and *Open the run*
+  (Load test tab). A passing check plays the Arcade mascot celebration
+  ("Challenge complete!").
+
 ## Connections (already-deployed services)
 
 The Connections library is global (not per workflow): saved services that
@@ -2697,10 +3024,11 @@ Docker; the desktop onboarding wizard (`GET /setup`) and `nimbo doctor`
 | `POST /workflows/{id}/network/reachability` | `ReachabilityRequest {source, destination: {kind: internet\|node, nodeId?}, protocol: tcp\|udp\|icmp, port, live?}` → `ReachabilityResult {reachable, verdict, basis, summary, path: ReachabilityHop[], blockers, suggestions, live?: LiveCheck}`; 400 for unknown nodes, non-network nodes, internet → internet, bad protocol/port. `live` adds real probes (`LiveCheck.unavailable` explains when they can't run) |
 | `POST /workflows/{id}/network/test-instance` | `{subnet}` (aws_subnet ID/address; count/for_each subnets need an instance address) → 201 `{workflow, nodeId}` |
 | `GET /workflows/{id}/loadtests/targets` | → `LoadTarget[]` (docker workflows: `loadtest.SuggestCompose`) |
-| `POST /workflows/{id}/loadtests` | `LoadTestSpec` → `LoadTestRun` (targets may use a saved connection; outside the sandbox without `confirmExternal` → 428 `confirmation_required`) |
+| `POST /workflows/{id}/loadtests` | `LoadTestSpec` → `LoadTestRun` (targets may use a saved connection; outside the sandbox without `confirmExternal` → 428 `confirmation_required`; a `scenario` that does not apply, or whose window does not fit the profile → 400) |
 | `GET /workflows/{id}/loadtests` | → `LoadTestRun[]` |
 | `GET /loadtests/{runId}` | → `LoadTestRun` |
 | `POST /loadtests/{runId}/stop` | → 204 |
+| `GET /workflows/{id}/scenarios` | → `ScenarioCatalog` (incident scenarios of the active environment; `kind: ""` for Terraform) |
 | `GET /connections` | → `Connection[]` (masked) |
 | `POST /connections` | `Connection` → 201 `Connection` (masked; 400 on validation errors) |
 | `GET /connections/{id}` | → `Connection` (masked) |
@@ -2711,6 +3039,12 @@ Docker; the desktop onboarding wizard (`GET /setup`) and `nimbo doctor`
 | `GET /connections/{id}/targets` | → `LoadTarget[]` (502 if the service cannot be inspected) |
 | `POST /connections/{id}/loadtests` | `LoadTestSpec` → 201 `LoadTestRun` (owned by the connection; 428 without `confirmExternal`) |
 | `GET /connections/{id}/loadtests` | → `LoadTestRun[]` (newest first, no timeline) |
+| `GET /learn` | → `LearnOverview` `{providers: LearnProvider[] (every provider: hasRoadmap, challenge counts and completions per level), status: {applied, pending, errors[]}}`; answers 200 with empty providers and the error when the database is unusable |
+| `GET /learn/providers/{provider}/roadmap` | → `Roadmap` (404 when the provider has none; 400 unknown provider) |
+| `GET /learn/challenges?provider=&level=&tag=&q=` | → `ChallengeSummary[]` with `progress`, ordered by provider, level, position in the provider's roadmap, title; `q` words must all match title/summary/problem/tags (case-insensitive); 400 unknown provider/level |
+| `GET /learn/challenges/{id}` | → `ChallengeDetail` `{challenge, progress, prerequisites: [{id, title, completed, missing?}], steps: ["<level>: <step>"]}` (404 unknown) |
+| `GET /learn/progress` | → `ChallengeProgress[]` (challenges the user touched) |
+| `PUT /learn/progress/{id}` | `{status: "not_started" \| "in_progress"}` → `ChallengeProgress` (`not_started` resets; completion only comes from a passing check; 400 other statuses, 404 unknown challenge) |
 | `GET /session` | → `{openWorkflowId: string \| null}`: the workflow open in the desktop app (in memory; null after a daemon restart or once that workflow is deleted). MCP tools resolve `workflow: "current"` (or omitted) through it |
 | `PUT /session` | `{openWorkflowId: string \| null}` → 204 (404 if the workflow does not exist); sent by the app on open/close |
 | `GET /settings` | → `Settings` (defaults when `<home>/settings.json` is missing; invalid stored fields fall back to defaults) |

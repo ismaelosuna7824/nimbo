@@ -1,0 +1,651 @@
+description: Adds the Azure expert challenges (AKS baseline cluster, landing-zone governance with management groups, Azure Policy and locks)
+operations:
+  - op: upsert
+    kind: challenge
+    id: azure-aks-baseline
+    data:
+      provider: azure
+      level: expert
+      title: Harden an AKS cluster to the baseline architecture
+      summary: Turn a single-node demo AKS cluster into a zone-redundant, private, Entra-integrated, policy-governed and monitored cluster.
+      minutes: 75
+      tags: [kubernetes, aks, reliability, security, identity, observability, autoscaling]
+      prerequisites: [azure-hub-spoke-firewall, azure-app-service-key-vault]
+      runtime: design
+      problem: |
+        A product team wants to run production workloads on an AKS cluster that started as a demo: Free tier, one
+        node pool with a single node in one zone, kubenet networking, local Kubernetes admin accounts, a public API
+        server, no Azure Policy, no monitoring and no upgrade strategy.
+
+        The Azure Architecture Center *baseline architecture for an AKS cluster* and the AKS Well-Architected service
+        guide describe what production needs. Rework the Terraform so the cluster follows that baseline (the
+        hub-spoke network from the advanced level is assumed to be in place; this workflow only models the spoke).
+      requirements:
+        - "The cluster uses the Standard tier (`sku_tier = \"Standard\"`, financially backed uptime SLA)."
+        - "The default (system) node pool spreads across availability zones, autoscales (`auto_scaling_enabled = true`, `min_count` at least 2; the baseline uses 3) and only runs critical add-ons (`only_critical_addons_enabled = true`)."
+        - "A separate `azurerm_kubernetes_cluster_node_pool` in `User` mode runs the workloads, zone-spread and autoscaling."
+        - "Identity: local accounts are disabled (`local_account_disabled = true`), Kubernetes authorization uses Microsoft Entra ID with Azure RBAC (`azure_active_directory_role_based_access_control { azure_rbac_enabled = true }`) and Microsoft Entra Workload ID is on (`workload_identity_enabled = true`)."
+        - "Networking: Azure CNI Overlay (`network_plugin = \"azure\"`, `network_plugin_mode = \"overlay\"`) with a network policy engine, and a private API server (`private_cluster_enabled = true`)."
+        - "Governance and operations: the Azure Policy add-on is on, Container Insights sends to a Log Analytics workspace (`oms_agent`), and an automatic upgrade channel is set."
+        - The workflow validates.
+      hints:
+        - "Changing `zones` or `only_critical_addons_enabled` on the default node pool forces a rotation: set `temporary_name_for_rotation`."
+        - "In azurerm 4.x the autoscaler switch is `auto_scaling_enabled` (with `min_count`/`max_count`), not `enable_auto_scaling`."
+        - "Cilium is Microsoft's recommended network policy engine: `network_policy = \"cilium\"` together with `network_data_plane = \"cilium\"`."
+        - "Workload identity needs the OIDC issuer; `oidc_issuer_enabled` defaults to true in azurerm 4.x, but writing it makes the dependency explicit."
+        - "`automatic_upgrade_channel` accepts `patch`, `stable`, `rapid` or `node-image`; pair it with planned maintenance windows in real clusters."
+      solution: |
+        Key parts of the hardened cluster:
+
+        ```hcl
+        resource "azurerm_kubernetes_cluster" "main" {
+          sku_tier                  = "Standard"
+          automatic_upgrade_channel = "patch"
+          local_account_disabled    = true
+          oidc_issuer_enabled       = true
+          workload_identity_enabled = true
+          azure_policy_enabled      = true
+          private_cluster_enabled   = true
+
+          default_node_pool {
+            name                         = "system"
+            zones                        = ["1", "2", "3"]
+            auto_scaling_enabled         = true
+            min_count                    = 3
+            max_count                    = 5
+            only_critical_addons_enabled = true
+            temporary_name_for_rotation  = "systemtmp"
+          }
+
+          azure_active_directory_role_based_access_control {
+            azure_rbac_enabled = true
+          }
+
+          network_profile {
+            network_plugin      = "azure"
+            network_plugin_mode = "overlay"
+            network_policy      = "cilium"
+            network_data_plane  = "cilium"
+          }
+
+          oms_agent {
+            log_analytics_workspace_id = azurerm_log_analytics_workspace.main.id
+          }
+        }
+        ```
+
+        plus an `azurerm_kubernetes_cluster_node_pool` with `mode = "User"`, zones and autoscaling for the apps.
+
+        **Why:** the Standard tier adds the uptime SLA for the control plane; zones and the cluster autoscaler keep
+        capacity through a datacenter failure and load changes; separating system and user pools protects CoreDNS
+        and other critical add-ons from noisy workloads. Disabling local accounts forces every user through
+        Microsoft Entra ID with Azure RBAC (auditable, least privilege), and Workload ID lets pods reach Key Vault and
+        other services with federated identities instead of secrets. Azure CNI Overlay is the recommended pod
+        networking for new clusters and a network policy engine enables pod-to-pod segmentation. A private API
+        server removes the public control-plane endpoint (administer it through Bastion/jump hosts in the hub). The
+        Azure Policy add-on enforces guardrails inside the cluster, Container Insights gives logs and metrics, and an
+        upgrade channel keeps the cluster patched.
+      solutionFiles:
+        aks.tf: |
+          data "azurerm_client_config" "current" {}
+
+          resource "azurerm_log_analytics_workspace" "main" {
+            name                = "log-${local.name_prefix}"
+            resource_group_name = azurerm_resource_group.main.name
+            location            = azurerm_resource_group.main.location
+            sku                 = "PerGB2018"
+            retention_in_days   = 30
+            tags                = local.common_tags
+          }
+
+          resource "azurerm_kubernetes_cluster" "main" {
+            name                      = "aks-${local.name_prefix}"
+            resource_group_name       = azurerm_resource_group.main.name
+            location                  = azurerm_resource_group.main.location
+            dns_prefix                = "aks-${local.name_prefix}"
+            sku_tier                  = "Standard"
+            automatic_upgrade_channel = "patch"
+            node_os_upgrade_channel   = "NodeImage"
+            local_account_disabled    = true
+            oidc_issuer_enabled       = true
+            workload_identity_enabled = true
+            azure_policy_enabled      = true
+            private_cluster_enabled   = true
+            tags                      = local.common_tags
+
+            default_node_pool {
+              name                         = "system"
+              vm_size                      = "Standard_D4ds_v5"
+              vnet_subnet_id               = azurerm_subnet.nodes.id
+              zones                        = ["1", "2", "3"]
+              auto_scaling_enabled         = true
+              min_count                    = 3
+              max_count                    = 5
+              only_critical_addons_enabled = true
+              temporary_name_for_rotation  = "systemtmp"
+
+              upgrade_settings {
+                max_surge = "33%"
+              }
+            }
+
+            identity {
+              type = "SystemAssigned"
+            }
+
+            azure_active_directory_role_based_access_control {
+              azure_rbac_enabled = true
+              tenant_id          = data.azurerm_client_config.current.tenant_id
+            }
+
+            network_profile {
+              network_plugin      = "azure"
+              network_plugin_mode = "overlay"
+              network_policy      = "cilium"
+              network_data_plane  = "cilium"
+            }
+
+            oms_agent {
+              log_analytics_workspace_id      = azurerm_log_analytics_workspace.main.id
+              msi_auth_for_monitoring_enabled = true
+            }
+          }
+
+          resource "azurerm_kubernetes_cluster_node_pool" "apps" {
+            name                  = "apps"
+            kubernetes_cluster_id = azurerm_kubernetes_cluster.main.id
+            mode                  = "User"
+            vm_size               = "Standard_D4ds_v5"
+            vnet_subnet_id        = azurerm_subnet.nodes.id
+            zones                 = ["1", "2", "3"]
+            auto_scaling_enabled  = true
+            min_count             = 2
+            max_count             = 10
+            tags                  = local.common_tags
+          }
+      starter:
+        kind: terraform
+        cloud: azure
+        files:
+          versions.tf: |
+            terraform {
+              required_version = ">= 1.6"
+
+              required_providers {
+                azurerm = {
+                  source  = "hashicorp/azurerm"
+                  version = "~> 4.0"
+                }
+              }
+            }
+          providers.tf: |
+            provider "azurerm" {
+              features {}
+            }
+          variables.tf: |
+            variable "project" {
+              type        = string
+              default     = "storefront"
+              description = "Project name: part of every resource name."
+            }
+
+            variable "environment" {
+              type        = string
+              default     = "prod"
+              description = "Deployment environment (dev, test, prod)."
+            }
+
+            variable "location" {
+              type        = string
+              default     = "eastus2"
+              description = "Azure region of the cluster (choose one with availability zones)."
+            }
+          locals.tf: |
+            locals {
+              name_prefix = "${var.project}-${var.environment}"
+              common_tags = {
+                project     = var.project
+                environment = var.environment
+                managedby   = "terraform"
+              }
+            }
+          main.tf: |
+            resource "azurerm_resource_group" "main" {
+              name     = "rg-${local.name_prefix}-aks"
+              location = var.location
+              tags     = local.common_tags
+            }
+
+            # Spoke network of the cluster; egress and admin access come from the hub.
+            resource "azurerm_virtual_network" "spoke" {
+              name                = "vnet-${local.name_prefix}-aks"
+              resource_group_name = azurerm_resource_group.main.name
+              location            = azurerm_resource_group.main.location
+              address_space       = ["10.240.0.0/16"]
+              tags                = local.common_tags
+            }
+
+            resource "azurerm_subnet" "nodes" {
+              name                 = "snet-aks-nodes"
+              resource_group_name  = azurerm_resource_group.main.name
+              virtual_network_name = azurerm_virtual_network.spoke.name
+              address_prefixes     = ["10.240.0.0/22"]
+            }
+          aks.tf: |
+            resource "azurerm_kubernetes_cluster" "main" {
+              name                = "aks-${local.name_prefix}"
+              resource_group_name = azurerm_resource_group.main.name
+              location            = azurerm_resource_group.main.location
+              dns_prefix          = "aks-${local.name_prefix}"
+              tags                = local.common_tags
+
+              default_node_pool {
+                name           = "default"
+                vm_size        = "Standard_D2s_v5"
+                node_count     = 1
+                vnet_subnet_id = azurerm_subnet.nodes.id
+              }
+
+              identity {
+                type = "SystemAssigned"
+              }
+
+              network_profile {
+                network_plugin = "kubenet"
+              }
+            }
+      checks:
+        - id: validate
+          label: The workflow validates
+          type: validate
+        - id: standard-tier
+          label: The cluster uses the Standard tier (uptime SLA)
+          type: has
+          has:
+            terraform:
+              type: azurerm_kubernetes_cluster
+              where:
+                sku_tier: Standard
+        - id: system-pool
+          label: The system pool is zone-spread, autoscaled and reserved for critical add-ons
+          type: has
+          has:
+            terraform:
+              type: azurerm_kubernetes_cluster
+              where:
+                default_node_pool.zones:
+                  exists: true
+                default_node_pool.auto_scaling_enabled: true
+                default_node_pool.min_count:
+                  min: 2
+                default_node_pool.only_critical_addons_enabled: true
+        - id: user-pool
+          label: A zone-spread, autoscaled User node pool runs the workloads
+          type: has
+          has:
+            terraform:
+              type: azurerm_kubernetes_cluster_node_pool
+              where:
+                kubernetes_cluster_id:
+                  ref: azurerm_kubernetes_cluster
+                mode: User
+                zones:
+                  exists: true
+                auto_scaling_enabled: true
+        - id: entra-rbac
+          label: Local accounts are disabled and Microsoft Entra ID with Azure RBAC authorizes access
+          type: has
+          has:
+            terraform:
+              type: azurerm_kubernetes_cluster
+              where:
+                local_account_disabled: true
+                azure_active_directory_role_based_access_control.azure_rbac_enabled: true
+        - id: workload-identity
+          label: Microsoft Entra Workload ID is enabled
+          type: has
+          has:
+            terraform:
+              type: azurerm_kubernetes_cluster
+              where:
+                workload_identity_enabled: true
+        - id: cni-overlay
+          label: Azure CNI Overlay with a network policy engine
+          type: has
+          has:
+            terraform:
+              type: azurerm_kubernetes_cluster
+              where:
+                network_profile.network_plugin: azure
+                network_profile.network_plugin_mode: overlay
+                network_profile.network_policy:
+                  in: [cilium, azure, calico]
+        - id: private-api
+          label: The API server is private
+          type: has
+          has:
+            terraform:
+              type: azurerm_kubernetes_cluster
+              where:
+                private_cluster_enabled: true
+        - id: azure-policy
+          label: The Azure Policy add-on is enabled
+          type: has
+          has:
+            terraform:
+              type: azurerm_kubernetes_cluster
+              where:
+                azure_policy_enabled: true
+        - id: monitoring
+          label: Container Insights sends to a Log Analytics workspace
+          type: has
+          has:
+            terraform:
+              type: azurerm_kubernetes_cluster
+              where:
+                oms_agent.log_analytics_workspace_id:
+                  ref: azurerm_log_analytics_workspace
+        - id: upgrades
+          label: An automatic upgrade channel keeps the cluster patched
+          type: has
+          has:
+            terraform:
+              type: azurerm_kubernetes_cluster
+              where:
+                automatic_upgrade_channel:
+                  in: [patch, stable, rapid, node-image]
+      sources:
+        - title: Baseline architecture for an Azure Kubernetes Service (AKS) cluster
+          url: https://learn.microsoft.com/en-us/azure/architecture/reference-architectures/containers/aks/baseline-aks
+        - title: Well-Architected Framework service guide — Azure Kubernetes Service
+          url: https://learn.microsoft.com/en-us/azure/well-architected/service-guides/azure-kubernetes-service
+        - title: Study guide for Exam AZ-305 (design compute and container solutions)
+          url: https://learn.microsoft.com/en-us/credentials/certifications/resources/study-guides/az-305
+        - title: azurerm_kubernetes_cluster (azurerm 4.x)
+          url: https://registry.terraform.io/providers/hashicorp/azurerm/4.81.0/docs/resources/kubernetes_cluster
+        - title: azurerm_kubernetes_cluster_node_pool (azurerm 4.x)
+          url: https://registry.terraform.io/providers/hashicorp/azurerm/4.81.0/docs/resources/kubernetes_cluster_node_pool
+
+  - op: upsert
+    kind: challenge
+    id: azure-landing-zone-governance
+    data:
+      provider: azure
+      level: expert
+      title: Govern a landing zone with management groups, Azure Policy and locks
+      summary: Build a Cloud Adoption Framework management group hierarchy and enforce allowed regions, required tags and delete locks as code.
+      minutes: 70
+      tags: [governance, landing-zone, policy, management-groups, tagging, cost]
+      prerequisites: [azure-naming-tagging, azure-storage-data-protection]
+      runtime: design
+      problem: |
+        The company is moving its first production workloads to Azure. Today every subscription sits directly under
+        the tenant root group, teams deploy to any region (including ones the legal team can't approve), cost reports
+        can't be split by cost center, and nothing stops someone from deleting a production resource group.
+
+        The Cloud Adoption Framework's Azure landing zone guidance answers this with a **management group
+        hierarchy** used for policy inheritance, **Azure Policy** assignments that enforce allowed regions and
+        mandatory tags, and **resource locks** on critical resources. Implement that governance foundation as code.
+      requirements:
+        - "A management group hierarchy under an intermediate root: at least three `azurerm_management_group` resources, where the children (for example *Platform* and *Landing zones*) set `parent_management_group_id` to another management group."
+        - "A management-group-scope assignment of the built-in **Allowed locations** policy (`e56962a6-4747-49cd-b67b-bf8b01975c4c`) with its `listOfAllowedLocations` parameter."
+        - "A management-group-scope assignment of the built-in **Require a tag on resources** policy (`871b6d14-10aa-478d-b590-94f262ecfa99`) with its `tagName` parameter and a non-compliance message that tells people what to fix."
+        - "An `azurerm_management_lock` with `lock_level = \"CanNotDelete\"` on the production resource group."
+        - Every taggable resource is tagged (`bp_missing_tags`) and the workflow validates.
+      hints:
+        - "Policy assignments inherit downwards: assign at the intermediate root (or *Landing zones*) and every subscription and resource group below is evaluated."
+        - "Built-in definitions are referenced by ID: `/providers/Microsoft.Authorization/policyDefinitions/<guid>`."
+        - "`parameters = jsonencode({ listOfAllowedLocations = { value = var.allowed_locations } })` — the parameter names come from the built-in definition."
+        - "`azurerm_management_group_policy_assignment` names are limited to 24 characters."
+        - "Locks can't be placed on management groups; put them on the subscription, resource group or resource."
+      solution: |
+        1. Create `Contoso` (intermediate root) with children `Platform`, `Landing zones` (with `Corp` and `Online`
+           below it) and `Sandbox`, each child pointing at its parent with `parent_management_group_id`. Place the
+           workload subscription under `Corp` with `subscription_ids`.
+        2. Assign **Allowed locations** at `Contoso` with the approved regions, and **Require a tag on resources**
+           (`tagName = "costcenter"`) at `Landing zones`, each with a `non_compliance_message`.
+        3. Tag the production resource group (including `costcenter`) and protect it with a `CanNotDelete` lock.
+
+        **Why:** CAF recommends a flat hierarchy (3–4 levels) used for policy assignment, not mirroring the org chart
+        or splitting by environment; platform and application landing zones get different guardrails. Policy is
+        evaluated on create/update and in periodic compliance scans, and assignments at a management group apply to
+        everything below, so new subscriptions are governed automatically. Microsoft suggests rolling out new
+        policies in audit mode first and enforcing once compliant (`enforce = false` gives DoNotEnforce). Required
+        tags make cost and ownership reportable. A `CanNotDelete` lock blocks deletion through Azure Resource Manager
+        for every user, even owners, until the lock is removed deliberately.
+      solutionFiles:
+        variables.tf: |
+          variable "org_prefix" {
+            type        = string
+            default     = "contoso"
+            description = "Organization prefix of the management group IDs."
+          }
+
+          variable "workload_subscription_id" {
+            type        = string
+            default     = "00000000-0000-0000-0000-000000000000"
+            description = "Subscription ID (GUID) of the production workload, placed under the Corp landing zone."
+          }
+
+          variable "location" {
+            type        = string
+            default     = "eastus2"
+            description = "Primary Azure region of the workload."
+          }
+
+          variable "allowed_locations" {
+            type        = list(string)
+            default     = ["eastus2", "centralus"]
+            description = "Regions where resources may be deployed (Allowed locations policy)."
+          }
+
+          variable "cost_center" {
+            type        = string
+            default     = "cc-4711"
+            description = "Cost center of the production workload (costcenter tag)."
+          }
+        governance.tf: |
+          locals {
+            policy_definitions = "/providers/Microsoft.Authorization/policyDefinitions"
+          }
+
+          # CAF hierarchy: tenant root -> intermediate root -> platform / landing zones / sandbox.
+          resource "azurerm_management_group" "root" {
+            name         = var.org_prefix
+            display_name = "Contoso"
+          }
+
+          resource "azurerm_management_group" "platform" {
+            name                       = "${var.org_prefix}-platform"
+            display_name               = "Platform"
+            parent_management_group_id = azurerm_management_group.root.id
+          }
+
+          resource "azurerm_management_group" "landing_zones" {
+            name                       = "${var.org_prefix}-landingzones"
+            display_name               = "Landing zones"
+            parent_management_group_id = azurerm_management_group.root.id
+          }
+
+          resource "azurerm_management_group" "corp" {
+            name                       = "${var.org_prefix}-corp"
+            display_name               = "Corp"
+            parent_management_group_id = azurerm_management_group.landing_zones.id
+            subscription_ids           = [var.workload_subscription_id]
+          }
+
+          resource "azurerm_management_group" "online" {
+            name                       = "${var.org_prefix}-online"
+            display_name               = "Online"
+            parent_management_group_id = azurerm_management_group.landing_zones.id
+          }
+
+          resource "azurerm_management_group" "sandbox" {
+            name                       = "${var.org_prefix}-sandbox"
+            display_name               = "Sandbox"
+            parent_management_group_id = azurerm_management_group.root.id
+          }
+
+          resource "azurerm_management_group_policy_assignment" "allowed_locations" {
+            name                 = "allowed-locations"
+            display_name         = "Allowed locations"
+            management_group_id  = azurerm_management_group.root.id
+            policy_definition_id = "${local.policy_definitions}/e56962a6-4747-49cd-b67b-bf8b01975c4c"
+            parameters = jsonencode({
+              listOfAllowedLocations = { value = var.allowed_locations }
+            })
+
+            non_compliance_message {
+              content = "Deploy only to the approved regions: ${join(", ", var.allowed_locations)}."
+            }
+          }
+
+          resource "azurerm_management_group_policy_assignment" "require_costcenter" {
+            name                 = "require-costcenter-tag"
+            display_name         = "Require a costcenter tag on resources"
+            management_group_id  = azurerm_management_group.landing_zones.id
+            policy_definition_id = "${local.policy_definitions}/871b6d14-10aa-478d-b590-94f262ecfa99"
+            parameters = jsonencode({
+              tagName = { value = "costcenter" }
+            })
+
+            non_compliance_message {
+              content = "Every resource needs a costcenter tag so its cost can be charged back."
+            }
+          }
+        main.tf: |
+          resource "azurerm_resource_group" "prod" {
+            name     = "rg-shop-prod-${var.location}"
+            location = var.location
+            tags = {
+              app         = "shop"
+              environment = "prod"
+              costcenter  = var.cost_center
+              owner       = "shop-team"
+            }
+          }
+
+          resource "azurerm_management_lock" "prod" {
+            name       = "lock-rg-shop-prod-nodelete"
+            scope      = azurerm_resource_group.prod.id
+            lock_level = "CanNotDelete"
+            notes      = "Production workload: remove only through a reviewed change."
+          }
+      starter:
+        kind: terraform
+        cloud: azure
+        files:
+          versions.tf: |
+            terraform {
+              required_version = ">= 1.6"
+
+              required_providers {
+                azurerm = {
+                  source  = "hashicorp/azurerm"
+                  version = "~> 4.0"
+                }
+              }
+            }
+          providers.tf: |
+            provider "azurerm" {
+              features {}
+            }
+          variables.tf: |
+            variable "location" {
+              type        = string
+              default     = "eastus2"
+              description = "Primary Azure region of the workload."
+            }
+          main.tf: |
+            resource "azurerm_resource_group" "prod" {
+              name     = "rg-shop-prod-${var.location}"
+              location = var.location
+            }
+      checks:
+        - id: validate
+          label: The workflow validates
+          type: validate
+        - id: management-groups
+          label: At least three management groups exist
+          type: has
+          has:
+            terraform:
+              type: azurerm_management_group
+              count:
+                min: 3
+        - id: hierarchy
+          label: Child management groups hang under the intermediate root
+          type: has
+          has:
+            terraform:
+              type: azurerm_management_group
+              where:
+                parent_management_group_id:
+                  ref: azurerm_management_group
+              count:
+                min: 2
+        - id: allowed-locations
+          label: Allowed locations is assigned at a management group
+          type: has
+          has:
+            terraform:
+              type: azurerm_management_group_policy_assignment
+              where:
+                management_group_id:
+                  ref: azurerm_management_group
+                policy_definition_id:
+                  contains: e56962a6-4747-49cd-b67b-bf8b01975c4c
+                parameters:
+                  contains: listOfAllowedLocations
+        - id: required-tag
+          label: Require a tag on resources is assigned with a non-compliance message
+          type: has
+          has:
+            terraform:
+              type: azurerm_management_group_policy_assignment
+              where:
+                management_group_id:
+                  ref: azurerm_management_group
+                policy_definition_id:
+                  contains: 871b6d14-10aa-478d-b590-94f262ecfa99
+                parameters:
+                  contains: tagName
+                non_compliance_message.content:
+                  exists: true
+        - id: delete-lock
+          label: A CanNotDelete lock protects the production resource group
+          type: has
+          has:
+            terraform:
+              type: azurerm_management_lock
+              where:
+                lock_level: CanNotDelete
+                scope:
+                  ref: azurerm_resource_group
+        - id: tags
+          label: Every resource is tagged (bp_missing_tags)
+          type: rules_clean
+          rules_clean:
+            codes: [bp_missing_tags]
+            minSeverity: info
+      sources:
+        - title: Azure landing zone design areas (Cloud Adoption Framework)
+          url: https://learn.microsoft.com/en-us/azure/cloud-adoption-framework/ready/landing-zone/design-areas
+        - title: Management groups — resource organization design area (Cloud Adoption Framework)
+          url: https://learn.microsoft.com/en-us/azure/cloud-adoption-framework/ready/landing-zone/design-area/resource-org-management-groups
+        - title: What is Azure Policy?
+          url: https://learn.microsoft.com/en-us/azure/governance/policy/overview
+        - title: Understand scope in Azure Policy
+          url: https://learn.microsoft.com/en-us/azure/governance/policy/concepts/scope
+        - title: Azure Policy built-in policy definitions
+          url: https://learn.microsoft.com/en-us/azure/governance/policy/samples/built-in-policies
+        - title: Lock your Azure resources to protect your infrastructure
+          url: https://learn.microsoft.com/en-us/azure/azure-resource-manager/management/lock-resources
+        - title: CAF — Define your tagging strategy
+          url: https://learn.microsoft.com/en-us/azure/cloud-adoption-framework/ready/azure-best-practices/resource-tagging
+        - title: Study guide for Exam AZ-305 (design governance)
+          url: https://learn.microsoft.com/en-us/credentials/certifications/resources/study-guides/az-305
+        - title: azurerm_management_group (azurerm 4.x)
+          url: https://registry.terraform.io/providers/hashicorp/azurerm/4.81.0/docs/resources/management_group
+        - title: azurerm_management_group_policy_assignment (azurerm 4.x)
+          url: https://registry.terraform.io/providers/hashicorp/azurerm/4.81.0/docs/resources/management_group_policy_assignment

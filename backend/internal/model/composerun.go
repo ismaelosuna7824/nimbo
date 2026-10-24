@@ -76,25 +76,30 @@ type ComposePort struct {
 	URL       string `json:"url,omitempty"`
 }
 
-// PortConflict is a fixed host port of the compose files that another
-// program or container already holds.
+// PortConflict is a fixed host port (or port range) of the compose files
+// that another program or container already holds.
 type PortConflict struct {
 	Service       string `json:"service"`
 	ContainerPort int    `json:"containerPort"`
 	Protocol      string `json:"protocol"`
 	HostIP        string `json:"hostIp,omitempty"`
 	HostPort      int    `json:"hostPort"`
+	// Count is the size of a published range ("3100-3101": HostPort 3100,
+	// Count 2); 0 for a single port.
+	Count         int    `json:"count,omitempty"`
 	Holder        string `json:"holder,omitempty"` // process name when known
-	SuggestedPort int    `json:"suggestedPort"`    // free port a remap would use
+	SuggestedPort int    `json:"suggestedPort"`    // free port (first of Count free ports) a remap would use
 }
 
 // PortRemap moves a published port of the compose files (HostPort) to Port
 // for Nimbo's runs, through an override file; the user's files are unchanged.
+// A range (Count > 1) moves as a whole to Port..Port+Count-1.
 type PortRemap struct {
 	Service       string `json:"service"`
 	ContainerPort int    `json:"containerPort"`
 	Protocol      string `json:"protocol"`
 	HostPort      int    `json:"hostPort"`
+	Count         int    `json:"count,omitempty"`
 	Port          int    `json:"port"`
 }
 

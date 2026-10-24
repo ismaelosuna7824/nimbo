@@ -1,0 +1,370 @@
+description: Adds the Kubernetes roadmap (beginner to expert), structured after the CNCF CKAD, CKA and CKS curricula and the kubernetes.io documentation
+operations:
+  - op: upsert
+    kind: roadmap
+    id: kubernetes-roadmap
+    data:
+      provider: kubernetes
+      title: Kubernetes roadmap
+      summary: From your first Deployment to production-grade reliability and security, following the CNCF CKAD, CKA and CKS curricula and the official Kubernetes documentation.
+      levels:
+        - level: beginner
+          title: Run and expose an application
+          goals: |
+            Understand what a cluster is made of and how desired state works,
+            then run a containerized app with a Deployment, reach it through
+            a Service and an Ingress, and configure it with ConfigMaps and
+            Secrets. This covers the core of the CKAD domains *Application
+            Deployment* and *Services and Networking*.
+          steps:
+            - title: How a cluster works
+              description: |
+                A cluster is a **control plane** (API server, etcd, scheduler,
+                controller manager) and **nodes** running the kubelet and a
+                container runtime. You declare objects through the API; each
+                object has a `spec` (desired state) and a `status`, and
+                controllers continuously drive the actual state toward the
+                spec. Learn the required fields of every object (`apiVersion`,
+                `kind`, `metadata`, `spec`) and how namespaces group them.
+              docs:
+                - title: Kubernetes docs — Overview
+                  url: https://kubernetes.io/docs/concepts/overview/
+                - title: Kubernetes docs — Kubernetes Components
+                  url: https://kubernetes.io/docs/concepts/overview/components/
+                - title: Kubernetes docs — Objects in Kubernetes
+                  url: https://kubernetes.io/docs/concepts/overview/working-with-objects/
+                - title: Kubernetes docs — Namespaces
+                  url: https://kubernetes.io/docs/concepts/overview/working-with-objects/namespaces/
+            - title: Pods, Deployments and Services
+              description: |
+                A **Pod** is the smallest deployable unit: one or more
+                containers sharing network and storage. You normally create
+                Pods through a **Deployment**, which keeps a number of
+                replicas running and rolls out new versions. A **Service**
+                gives the pods a stable name and address and finds them with a
+                **label selector**: labels are how Kubernetes objects find
+                each other. Pin image versions instead of `latest`.
+              challenges: [kubernetes-first-deployment]
+              docs:
+                - title: Kubernetes docs — Pods
+                  url: https://kubernetes.io/docs/concepts/workloads/pods/
+                - title: Kubernetes docs — Deployments
+                  url: https://kubernetes.io/docs/concepts/workloads/controllers/deployment/
+                - title: Kubernetes docs — Service
+                  url: https://kubernetes.io/docs/concepts/services-networking/service/
+                - title: Kubernetes docs — Labels and Selectors
+                  url: https://kubernetes.io/docs/concepts/overview/working-with-objects/labels/
+            - title: Configuration and Secrets
+              description: |
+                Keep configuration out of images: **ConfigMaps** for
+                non-confidential settings, **Secrets** for credentials,
+                consumed as environment variables or mounted files. Secrets
+                are only base64-encoded by default; learn the good practices
+                (encryption at rest, least-privilege access) early.
+              challenges: [kubernetes-config-and-secrets]
+              docs:
+                - title: Kubernetes docs — ConfigMaps
+                  url: https://kubernetes.io/docs/concepts/configuration/configmap/
+                - title: Kubernetes docs — Secrets
+                  url: https://kubernetes.io/docs/concepts/configuration/secret/
+                - title: Kubernetes docs — Good practices for Kubernetes Secrets
+                  url: https://kubernetes.io/docs/concepts/security/secrets-good-practices/
+            - title: Exposing HTTP with Ingress
+              description: |
+                Service types (`ClusterIP`, `NodePort`, `LoadBalancer`) decide
+                where a Service is reachable. For HTTP, an **Ingress** routes
+                hosts and paths to Services through an Ingress controller
+                (Traefik on k3s). The **Gateway API** is the newer, role-oriented
+                alternative covered by the CKA curriculum.
+              challenges: [kubernetes-ingress-routing]
+              docs:
+                - title: Kubernetes docs — Ingress
+                  url: https://kubernetes.io/docs/concepts/services-networking/ingress/
+                - title: Kubernetes docs — Gateway API
+                  url: https://kubernetes.io/docs/concepts/services-networking/gateway/
+                - title: Kubernetes docs — DNS for Services and Pods
+                  url: https://kubernetes.io/docs/concepts/services-networking/dns-pod-service/
+            - title: kubectl and first debugging
+              description: |
+                Inspect what you deployed: `kubectl get`, `describe`, `logs`,
+                `exec` and events. Most beginner problems are a selector that
+                matches nothing, an image that cannot be pulled or a pod that
+                never becomes ready; the debugging guides walk through each.
+              docs:
+                - title: Kubernetes docs — kubectl Quick Reference
+                  url: https://kubernetes.io/docs/reference/kubectl/quick-reference/
+                - title: Kubernetes docs — Debug Pods
+                  url: https://kubernetes.io/docs/tasks/debug/debug-application/debug-pods/
+                - title: Kubernetes docs — Debug Services
+                  url: https://kubernetes.io/docs/tasks/debug/debug-application/debug-service/
+                - title: Kubernetes docs — Logging Architecture
+                  url: https://kubernetes.io/docs/concepts/cluster-administration/logging/
+        - level: intermediate
+          title: Healthy, right-sized and environment-aware
+          goals: |
+            Make workloads tell Kubernetes when they are healthy, give them
+            the resources they need, scale them automatically and manage
+            several environments from one set of manifests. This matches the
+            CKAD domains *Application Observability and Maintenance* and
+            *Application Environment, Configuration and Security*, plus the
+            Helm and Kustomize items of *Application Deployment*.
+          steps:
+            - title: Probes and health checks
+              description: |
+                **Startup**, **liveness** and **readiness** probes let the
+                kubelet know when a container has started, when it is stuck
+                and must be restarted, and when it may receive traffic. Get
+                them right before scaling anything.
+              challenges: [kubernetes-health-probes]
+              docs:
+                - title: Kubernetes docs — Liveness, Readiness, and Startup Probes
+                  url: https://kubernetes.io/docs/concepts/workloads/pods/probes/
+                - title: Kubernetes docs — Configure Liveness, Readiness and Startup Probes
+                  url: https://kubernetes.io/docs/tasks/configure-pod-container/configure-liveness-readiness-startup-probes/
+                - title: Kubernetes docs — Pod Lifecycle
+                  url: https://kubernetes.io/docs/concepts/workloads/pods/pod-lifecycle/
+            - title: Requests, limits and QoS
+              description: |
+                **Requests** drive scheduling and autoscaling, **limits** cap
+                usage (memory over the limit is OOM-killed, CPU over the limit
+                is throttled). Together they decide a pod's QoS class and its
+                eviction order. **ResourceQuotas** and **LimitRanges** set
+                guard rails per namespace.
+              challenges: [kubernetes-resources-and-hpa]
+              docs:
+                - title: Kubernetes docs — Resource Management for Pods and Containers
+                  url: https://kubernetes.io/docs/concepts/configuration/manage-resources-containers/
+                - title: Kubernetes docs — Pod Quality of Service Classes
+                  url: https://kubernetes.io/docs/concepts/workloads/pods/pod-qos/
+                - title: Kubernetes docs — Resource Quotas
+                  url: https://kubernetes.io/docs/concepts/policy/resource-quotas/
+                - title: Kubernetes docs — Limit Ranges
+                  url: https://kubernetes.io/docs/concepts/policy/limit-range/
+            - title: Horizontal autoscaling
+              description: |
+                A **HorizontalPodAutoscaler** adjusts replicas from metrics
+                (CPU and memory utilization relative to requests, or custom
+                metrics). Resource metrics come from the Metrics Server. Once
+                an HPA owns a workload, remove `spec.replicas` from its
+                manifest.
+              challenges: [kubernetes-resources-and-hpa]
+              docs:
+                - title: Kubernetes docs — Horizontal Pod Autoscaling
+                  url: https://kubernetes.io/docs/tasks/run-application/horizontal-pod-autoscale/
+                - title: Kubernetes docs — HorizontalPodAutoscaler Walkthrough
+                  url: https://kubernetes.io/docs/tasks/run-application/horizontal-pod-autoscale-walkthrough/
+                - title: Kubernetes docs — Autoscaling Workloads
+                  url: https://kubernetes.io/docs/concepts/workloads/autoscaling/
+            - title: Environments with Kustomize
+              description: |
+                Keep shared manifests in a **base** and per-environment
+                differences in **overlays** (namespace, replicas, images,
+                patches, generated ConfigMaps and Secrets). Kustomize is built
+                into `kubectl apply -k`.
+              challenges: [kubernetes-kustomize-overlays]
+              docs:
+                - title: Kubernetes docs — Declarative Management of Kubernetes Objects Using Kustomize
+                  url: https://kubernetes.io/docs/tasks/manage-kubernetes-objects/kustomization/
+                - title: Kustomize reference
+                  url: https://kubectl.docs.kubernetes.io/references/kustomize/
+            - title: Beyond Deployments
+              description: |
+                Pick the right workload for the job: **StatefulSets** for
+                stable identity and storage, **Jobs** and **CronJobs** for
+                batch work, **DaemonSets** for one pod per node, **init** and
+                **sidecar** containers for multi-container patterns, and
+                **PersistentVolumeClaims** for data that outlives a pod.
+              docs:
+                - title: Kubernetes docs — StatefulSets
+                  url: https://kubernetes.io/docs/concepts/workloads/controllers/statefulset/
+                - title: Kubernetes docs — Jobs
+                  url: https://kubernetes.io/docs/concepts/workloads/controllers/job/
+                - title: Kubernetes docs — CronJob
+                  url: https://kubernetes.io/docs/concepts/workloads/controllers/cron-jobs/
+                - title: Kubernetes docs — Sidecar Containers
+                  url: https://kubernetes.io/docs/concepts/workloads/pods/sidecar-containers/
+                - title: Kubernetes docs — Persistent Volumes
+                  url: https://kubernetes.io/docs/concepts/storage/persistent-volumes/
+        - level: advanced
+          title: Production reliability and traffic control
+          goals: |
+            Keep services available through failures, rollouts and node
+            maintenance, isolate traffic between workloads and package an app
+            for many environments with Helm. These are the CKA domains
+            *Workloads and Scheduling* and *Services and Networking*, and the
+            production-readiness guidance of kubernetes.io.
+          steps:
+            - title: Readiness under failure
+              description: |
+                Probes earn their keep when pods die under load: a new pod
+                must only receive traffic once it can answer. Verify it with
+                real traffic and a pod loss.
+              challenges: [kubernetes-readiness-probe]
+              docs:
+                - title: Kubernetes docs — Liveness, Readiness, and Startup Probes
+                  url: https://kubernetes.io/docs/concepts/workloads/pods/probes/
+                - title: Kubernetes docs — Disruptions
+                  url: https://kubernetes.io/docs/concepts/workloads/pods/disruptions/
+            - title: Zero-downtime rollouts and drains
+              description: |
+                Combine a **RollingUpdate** strategy (`maxUnavailable`,
+                `maxSurge`), a **PodDisruptionBudget** that allows evictions,
+                and **topology spread constraints** so replicas survive
+                deploys, node drains and node failures. Know how to roll back
+                a Deployment.
+              challenges: [kubernetes-zero-downtime-prod]
+              docs:
+                - title: Kubernetes docs — Deployments
+                  url: https://kubernetes.io/docs/concepts/workloads/controllers/deployment/
+                - title: Kubernetes docs — Specifying a Disruption Budget for your Application
+                  url: https://kubernetes.io/docs/tasks/run-application/configure-pdb/
+                - title: Kubernetes docs — Pod Topology Spread Constraints
+                  url: https://kubernetes.io/docs/concepts/scheduling-eviction/topology-spread-constraints/
+                - title: Kubernetes docs — Safely Drain a Node
+                  url: https://kubernetes.io/docs/tasks/administer-cluster/safely-drain-node/
+            - title: Network segmentation with NetworkPolicies
+              description: |
+                Pods are non-isolated by default. Start each namespace with a
+                **default-deny** policy, allow DNS, then open only the
+                connections each tier needs.
+              challenges: [kubernetes-network-policy-default-deny]
+              docs:
+                - title: Kubernetes docs — Network Policies
+                  url: https://kubernetes.io/docs/concepts/services-networking/network-policies/
+                - title: Kubernetes docs — Declare Network Policy
+                  url: https://kubernetes.io/docs/tasks/administer-cluster/declare-network-policy/
+            - title: Packaging with Helm
+              description: |
+                A **Helm chart** templates manifests from **values**; each
+                environment installs it with its own values file. Learn values
+                precedence, chart structure and how to render a chart before
+                installing it.
+              challenges: [kubernetes-helm-values-per-environment]
+              docs:
+                - title: Helm docs — Using Helm
+                  url: https://helm.sh/docs/intro/using_helm/
+                - title: Helm docs — Charts
+                  url: https://helm.sh/docs/topics/charts/
+                - title: Helm docs — Values Files
+                  url: https://helm.sh/docs/chart_template_guide/values_files/
+                - title: Helm docs — Best Practices — Values
+                  url: https://helm.sh/docs/chart_best_practices/values/
+            - title: Scheduling and placement
+              description: |
+                Control where pods run with node selectors, node and pod
+                affinity, and taints and tolerations; know how the scheduler
+                uses requests to place pods.
+              docs:
+                - title: Kubernetes docs — Assigning Pods to Nodes
+                  url: https://kubernetes.io/docs/concepts/scheduling-eviction/assign-pod-node/
+                - title: Kubernetes docs — Taints and Tolerations
+                  url: https://kubernetes.io/docs/concepts/scheduling-eviction/taint-and-toleration/
+            - title: Observability
+              description: |
+                Collect container logs, resource metrics (Metrics Server) and
+                the control plane's own metrics; they are the basis of the
+                CKA *Troubleshooting* domain.
+              docs:
+                - title: Kubernetes docs — Logging Architecture
+                  url: https://kubernetes.io/docs/concepts/cluster-administration/logging/
+                - title: Kubernetes docs — Resource metrics pipeline
+                  url: https://kubernetes.io/docs/tasks/debug/debug-cluster/resource-metrics-pipeline/
+                - title: Kubernetes docs — Metrics For Kubernetes System Components
+                  url: https://kubernetes.io/docs/concepts/cluster-administration/system-metrics/
+        - level: expert
+          title: Security and platform engineering
+          goals: |
+            Harden workloads and access to the cluster, scale on the signals
+            that matter and extend Kubernetes for a platform. This follows the
+            CKS domains *Cluster Hardening*, *Minimize Microservice
+            Vulnerabilities* and *Supply Chain Security*, and the CKA items on
+            RBAC and extensions.
+          steps:
+            - title: Pod Security Standards
+              description: |
+                Enforce the **restricted** profile per namespace with Pod
+                Security Admission labels, and harden pods with security
+                contexts: non-root, no privilege escalation, dropped
+                capabilities, `RuntimeDefault` seccomp, read-only root
+                filesystem.
+              challenges: [kubernetes-pod-security-restricted]
+              docs:
+                - title: Kubernetes docs — Pod Security Standards
+                  url: https://kubernetes.io/docs/concepts/security/pod-security-standards/
+                - title: Kubernetes docs — Pod Security Admission
+                  url: https://kubernetes.io/docs/concepts/security/pod-security-admission/
+                - title: Kubernetes docs — Configure a Security Context for a Pod or Container
+                  url: https://kubernetes.io/docs/tasks/configure-pod-container/security-context/
+                - title: Kubernetes docs — Restrict a Container's Syscalls with seccomp
+                  url: https://kubernetes.io/docs/tutorials/security/seccomp/
+            - title: RBAC and service accounts
+              description: |
+                Grant the minimum: namespaced Roles and RoleBindings, no
+                wildcards, no `cluster-admin` for workloads, and no API tokens
+                mounted in pods that don't call the API.
+              challenges: [kubernetes-rbac-least-privilege]
+              docs:
+                - title: Kubernetes docs — Using RBAC Authorization
+                  url: https://kubernetes.io/docs/reference/access-authn-authz/rbac/
+                - title: Kubernetes docs — Role Based Access Control Good Practices
+                  url: https://kubernetes.io/docs/concepts/security/rbac-good-practices/
+                - title: Kubernetes docs — Service Accounts
+                  url: https://kubernetes.io/docs/concepts/security/service-accounts/
+            - title: Protecting Secrets and the API
+              description: |
+                Encrypt Secrets at rest, restrict who can read them, and
+                review the cluster against the security checklist (API access,
+                admission control, audit logging).
+              docs:
+                - title: Kubernetes docs — Encrypting Confidential Data at Rest
+                  url: https://kubernetes.io/docs/tasks/administer-cluster/encrypt-data/
+                - title: Kubernetes docs — Security Checklist
+                  url: https://kubernetes.io/docs/concepts/security/security-checklist/
+                - title: Kubernetes docs — Admission Control in Kubernetes
+                  url: https://kubernetes.io/docs/reference/access-authn-authz/admission-controllers/
+            - title: Autoscaling on the right signal
+              description: |
+                An autoscaler is only as good as its metric: scale on the
+                resource that actually saturates under load and prove it with
+                real traffic.
+              challenges: [kubernetes-autoscale-signal]
+              docs:
+                - title: Kubernetes docs — Horizontal Pod Autoscaling
+                  url: https://kubernetes.io/docs/tasks/run-application/horizontal-pod-autoscale/
+                - title: Kubernetes docs — Autoscaling Workloads
+                  url: https://kubernetes.io/docs/concepts/workloads/autoscaling/
+            - title: Multi-tenancy and isolation
+              description: |
+                Separate teams and trust levels with namespaces, quotas,
+                RBAC, NetworkPolicies and Pod Security; know where namespace
+                boundaries are weak and when to use separate clusters.
+              docs:
+                - title: Kubernetes docs — Multi-tenancy
+                  url: https://kubernetes.io/docs/concepts/security/multi-tenancy/
+            - title: Extending Kubernetes
+              description: |
+                Custom resources and the operator pattern turn domain
+                knowledge into controllers; keep up with API deprecations so
+                upgrades don't break manifests.
+              docs:
+                - title: Kubernetes docs — Custom Resources
+                  url: https://kubernetes.io/docs/concepts/extend-kubernetes/api-extension/custom-resources/
+                - title: Kubernetes docs — Operator pattern
+                  url: https://kubernetes.io/docs/concepts/extend-kubernetes/operator/
+                - title: Kubernetes docs — Deprecated API Migration Guide
+                  url: https://kubernetes.io/docs/reference/using-api/deprecation-guide/
+      sources:
+        - title: CNCF curriculum repository (CKAD, CKA, CKS)
+          url: https://github.com/cncf/curriculum
+        - title: CNCF CKAD curriculum v1.37
+          url: https://github.com/cncf/curriculum/blob/master/CKAD_Curriculum_v1.37.pdf
+        - title: CNCF CKA curriculum v1.37
+          url: https://github.com/cncf/curriculum/blob/master/CKA_Curriculum_v1.37.pdf
+        - title: CNCF CKS curriculum v1.34
+          url: https://github.com/cncf/curriculum/blob/master/CKS_Curriculum%20v1.34.pdf
+        - title: Kubernetes documentation — Concepts
+          url: https://kubernetes.io/docs/concepts/
+        - title: Kubernetes docs — Production environment
+          url: https://kubernetes.io/docs/setup/production-environment/
+        - title: Kubernetes docs — Configuration Best Practices
+          url: https://kubernetes.io/docs/concepts/configuration/overview/

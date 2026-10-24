@@ -182,10 +182,11 @@ function ConnectionDetail({ connection }: { connection: Connection }) {
       <TabsContent value="settings" className="min-h-0 flex-1 overflow-y-auto p-5">
         <ConnectionEditor key={connection.updatedAt} connection={connection} />
       </TabsContent>
-      <TabsContent value="loadtest" className="min-h-0 flex-1">
+      {/* Containers: the shared load-test views lay out by their pane's width, as they do in the bottom panel. */}
+      <TabsContent value="loadtest" className="@container min-h-0 flex-1">
         <ConnectionLoadTest connection={connection} runId={runId} setRunId={setRunId} />
       </TabsContent>
-      <TabsContent value="history" className="min-h-0 flex-1">
+      <TabsContent value="history" className="@container min-h-0 flex-1">
         <ConnectionHistory
           connection={connection}
           onOpen={(id) => {

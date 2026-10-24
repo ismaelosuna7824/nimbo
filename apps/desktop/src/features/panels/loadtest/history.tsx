@@ -17,6 +17,7 @@ import { DENSE_TABLE } from "../variables/blocks-editors"
 import type { CompareRow } from "./charts"
 import { computeKpis, EXPLAIN, runDurationSec, type Kpis } from "./metrics"
 import { EnvironmentBadge, Verdict } from "./run-results"
+import { ScenarioBadge } from "./scenario-result"
 
 // recharts loads with the first comparison, not with the tab.
 const CompareCharts = lazy(() => import("./charts").then((m) => ({ default: m.CompareCharts })))
@@ -112,7 +113,10 @@ export function History({ compare, setCompare, onOpen }: HistoryProps) {
                     {r.spec.name}
                   </TableCell>
                   <TableCell>
-                    <Verdict run={r} />
+                    <div className="flex items-center gap-1">
+                      <Verdict run={r} />
+                      {r.scenario && <ScenarioBadge scenario={r.scenario} />}
+                    </div>
                   </TableCell>
                   <TableCell className="text-muted-foreground">{formatRelative(r.startedAt)}</TableCell>
                   <TableCell className="text-right tabular-nums">{formatDuration(runDurationSec(r) * 1000)}</TableCell>
@@ -167,10 +171,10 @@ function Compare({ ids }: { ids: [string, string] }) {
   const kb = computeKpis(b.timeline ?? [], b.summary)
 
   return (
-    <div className="grid grid-cols-1 gap-2 border-b p-2 lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_minmax(16rem,0.8fr)]">
+    <div className="grid grid-cols-1 gap-2 border-b p-2 @5xl:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_minmax(16rem,0.8fr)]">
       <Suspense
         fallback={
-          <div className="flex h-52 items-center justify-center lg:col-span-2">
+          <div className="flex h-52 items-center justify-center @5xl:col-span-2">
             <Spinner />
           </div>
         }

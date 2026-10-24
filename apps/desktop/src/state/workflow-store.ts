@@ -18,7 +18,7 @@ import type {
   WorkflowSummary,
 } from "@/lib/api/types"
 
-export type BottomTab = "terraform" | "variables" | "environments" | "deploy" | "endpoints" | "loadtest" | "problems" | "readiness"
+export type BottomTab = "terraform" | "variables" | "environments" | "deploy" | "endpoints" | "loadtest" | "problems" | "readiness" | "challenge"
 export type AppDialog = "import" | "export" | "new-workflow" | null
 export type UserMode = "guided" | "pro"
 
@@ -39,7 +39,7 @@ interface WorkflowStoreState {
   selectedNodeId: string | null
   bottomTab: BottomTab
   bottomOpen: boolean
-  /** Kubernetes: environment the Readiness tab shows first when it opens (set by "Readiness" links, then cleared). */
+  /** Docker and Kubernetes: environment the Readiness tab shows first when it opens (set by "Readiness" links, then cleared). */
   readinessEnvironment: string | null
   dialog: AppDialog
   mode: UserMode

@@ -1,0 +1,509 @@
+description: Adds the Docker expert challenges (hardened container runtime, build secrets and supply chain)
+operations:
+  - op: upsert
+    kind: challenge
+    id: docker-hardened-runtime
+    data:
+      provider: docker
+      level: expert
+      title: Lock down a container's runtime
+      summary: Take a service that runs privileged, as root, with the Docker socket mounted, and give it least privilege (non-root, read-only root filesystem, no capabilities, no privilege escalation, bounded resources).
+      minutes: 45
+      tags: [security, hardening, least-privilege, capabilities, read-only, limits]
+      prerequisites: [docker-multi-stage-nonroot, docker-secrets-as-files]
+      runtime: local
+      problem: |
+        The report renderer was "made to work" during an incident and never
+        cleaned up. Its service now:
+
+        - runs with `privileged: true`;
+        - mounts `/var/run/docker.sock` "for debugging";
+        - runs as `root` (the Dockerfile has no `USER`);
+        - has a writable root filesystem, every default Linux capability, no
+          memory, CPU or process limits, no init process, and logs without
+          rotation.
+
+        If anyone finds a bug in it, they own the host. Apply least privilege
+        layer by layer until a compromise of the process is contained in a small,
+        read-only, unprivileged box. The renderer writes scratch files to `/tmp`
+        (its `/health` fails when it can't), so it must keep working.
+      requirements:
+        - "No `privileged`, no Docker socket mount, no host network or PID namespace."
+        - "The image's final stage runs as a non-root user."
+        - "`read_only: true` with a `tmpfs` for `/tmp`, `cap_drop: [ALL]` and `security_opt: [\"no-new-privileges:true\"]`."
+        - "`deploy.resources.limits` caps memory, CPU and the number of processes (`pids`)."
+        - "`init: true` and json-file log rotation (`max-size`)."
+        - "The service deploys and `GET /health` answers 200 (it can still write to `/tmp`)."
+      hints:
+        - "Start by deleting what grants host-level power: `privileged: true` and the `docker.sock` volume. Docker's security docs explain why socket access equals root on the host."
+        - "The official node image already has an unprivileged `node` user: add `USER node` to the Dockerfile."
+        - "With `read_only: true` the root filesystem can't be written at all; give the app scratch space with `tmpfs: [/tmp]`."
+        - "This app needs no Linux capability: `cap_drop: [ALL]`. `no-new-privileges` stops setuid binaries from regaining privileges."
+        - "`deploy.resources.limits` accepts `cpus`, `memory` and `pids`."
+      solution: |
+        **Why.** Docker's Engine security page explains that containers run
+        with a reduced capability set and that you should drop what you don't
+        need, and that access to the Docker daemon (its socket) is equivalent to
+        root on the host. The building best practices recommend a non-root
+        `USER`. The Compose services reference documents `read_only`, `tmpfs`,
+        `cap_drop`, `security_opt`, `init` and `privileged`; the deploy spec
+        documents `resources.limits` including `pids`; and the resource
+        constraints guide explains why unbounded memory lets one container
+        trigger the host's OOM killer. Rootless mode goes one step further by
+        running the daemon itself without root.
+
+        **Steps.**
+        1. Remove `privileged: true` and the `docker.sock` mount.
+        2. Add `USER node` to the Dockerfile's final stage.
+        3. Add `read_only: true`, `tmpfs: [/tmp]`, `cap_drop: [ALL]`,
+           `security_opt: ["no-new-privileges:true"]`.
+        4. Add `deploy.resources.limits` with `cpus: "0.5"`, `memory: 128M`,
+           `pids: 100`.
+        5. Add `init: true` and `logging` with `max-size: "10m"`, `max-file: "3"`.
+        6. Deploy: `/health` still answers 200 because `/tmp` is a writable
+           tmpfs while everything else is read-only.
+      solutionFiles:
+        compose.yaml: |
+          # Least privilege: non-root, read-only root filesystem with a tmpfs
+          # for scratch files, no capabilities, no privilege escalation, and
+          # bounded memory, CPU, processes and logs.
+          services:
+            renderer:
+              build: ./renderer
+              init: true
+              ports:
+                - "3000:3000"
+              read_only: true
+              tmpfs:
+                - /tmp
+              cap_drop:
+                - ALL
+              security_opt:
+                - "no-new-privileges:true"
+              deploy:
+                resources:
+                  limits:
+                    cpus: "0.5"
+                    memory: 128M
+                    pids: 100
+              logging:
+                driver: json-file
+                options:
+                  max-size: "10m"
+                  max-file: "3"
+              restart: unless-stopped
+        renderer/Dockerfile: |
+          FROM node:22-alpine
+          ENV NODE_ENV=production
+          WORKDIR /app
+          COPY package.json ./
+          RUN npm install --omit=dev --no-audit --no-fund
+          COPY server.js ./
+          # The official image's unprivileged user.
+          USER node
+          EXPOSE 3000
+          HEALTHCHECK --interval=10s --timeout=3s --start-period=5s --retries=3 \
+            CMD wget -qO- http://127.0.0.1:3000/health >/dev/null || exit 1
+          CMD ["node", "server.js"]
+      starter:
+        kind: docker
+        files:
+          compose.yaml: |
+            services:
+              renderer:
+                build: ./renderer
+                privileged: true
+                ports:
+                  - "3000:3000"
+                volumes:
+                  - /var/run/docker.sock:/var/run/docker.sock
+                logging:
+                  driver: json-file
+                restart: unless-stopped
+          renderer/Dockerfile: |
+            FROM node:22-alpine
+            ENV NODE_ENV=production
+            WORKDIR /app
+            COPY package.json ./
+            RUN npm install --omit=dev --no-audit --no-fund
+            COPY server.js ./
+            EXPOSE 3000
+            HEALTHCHECK --interval=10s --timeout=3s --start-period=5s --retries=3 \
+              CMD wget -qO- http://127.0.0.1:3000/health >/dev/null || exit 1
+            CMD ["node", "server.js"]
+          renderer/.dockerignore: |
+            node_modules
+            npm-debug.log*
+            .env*
+            Dockerfile
+            .dockerignore
+          renderer/package.json: |
+            {
+              "name": "report-renderer",
+              "version": "1.0.0",
+              "private": true,
+              "main": "server.js"
+            }
+          renderer/server.js: |
+            const fs = require("node:fs");
+            const http = require("node:http");
+            const os = require("node:os");
+            const path = require("node:path");
+
+            const port = Number(process.env.PORT ?? 3000);
+            const scratch = path.join(os.tmpdir(), "renderer");
+
+            // Renders a tiny text report into a scratch file and reads it back.
+            function render(name) {
+              fs.mkdirSync(scratch, { recursive: true });
+              const file = path.join(scratch, `${name}.txt`);
+              fs.writeFileSync(file, `report ${name} rendered at ${new Date().toISOString()}\n`);
+              const body = fs.readFileSync(file, "utf8");
+              fs.rmSync(file);
+              return body;
+            }
+
+            function send(res, status, body) {
+              res.writeHead(status, { "Content-Type": "application/json" });
+              res.end(JSON.stringify(body));
+            }
+
+            const server = http.createServer((req, res) => {
+              const url = new URL(req.url, "http://localhost");
+              try {
+                if (url.pathname === "/health") {
+                  render("health");
+                  return send(res, 200, { status: "ok", scratch: "writable", uid: process.getuid() });
+                }
+                if (url.pathname === "/") {
+                  return send(res, 200, { report: render("daily") });
+                }
+                send(res, 404, { error: "not found" });
+              } catch (err) {
+                console.error(err.message);
+                send(res, 503, { error: "cannot write scratch files" });
+              }
+            });
+
+            server.listen(port, () => console.log(`listening on :${port}`));
+
+            process.on("SIGTERM", () => server.close(() => process.exit(0)));
+      checks:
+        - id: valid
+          label: The compose project is valid
+          type: validate
+        - id: no-host-power
+          label: No privileged mode, host namespaces or Docker socket
+          type: rules_clean
+          rules_clean: { codes: [dk_privileged, dk_docker_sock], minSeverity: warning }
+        - id: non-root
+          label: The container runs as a non-root user
+          type: rules_clean
+          rules_clean: { codes: [dk_root_user], minSeverity: info }
+        - id: hardened
+          label: Read-only root filesystem, no capabilities, no privilege escalation
+          type: rules_clean
+          rules_clean: { codes: [dk_hardening], minSeverity: info }
+        - id: scratch-tmpfs
+          label: /tmp is a tmpfs
+          type: has
+          has:
+            compose:
+              service: renderer
+              where: { tmpfs: { contains: /tmp } }
+        - id: limits
+          label: Memory, CPU and process count are capped
+          type: has
+          has:
+            compose:
+              service: renderer
+              where:
+                deploy.resources.limits.memory: { exists: true }
+                deploy.resources.limits.cpus: { exists: true }
+                deploy.resources.limits.pids: { exists: true }
+        - id: init-and-logs
+          label: An init process and rotated logs
+          type: rules_clean
+          rules_clean: { codes: [dk_no_init, dk_log_rotation, dk_no_limits], minSeverity: info }
+        - id: deploy
+          label: The service deploys
+          type: deploy
+        - id: health
+          label: The renderer still writes its scratch files (GET /health answers 200)
+          type: http
+          http: { service: renderer, port: 3000, path: /health, status: 200, contains: writable }
+      sources:
+        - { title: "Docker Docs: Docker Engine security (capabilities, daemon attack surface)", url: "https://docs.docker.com/engine/security/" }
+        - { title: "Docker Docs: Compose file reference, services (read_only, tmpfs, cap_drop, security_opt, init, privileged)", url: "https://docs.docker.com/reference/compose-file/services/" }
+        - { title: "Docker Docs: Compose deploy specification (resources limits, pids)", url: "https://docs.docker.com/reference/compose-file/deploy/" }
+        - { title: "Docker Docs: Resource constraints", url: "https://docs.docker.com/engine/containers/resource_constraints/" }
+        - { title: "Docker Docs: Building best practices (USER)", url: "https://docs.docker.com/build/building/best-practices/" }
+        - { title: "Docker Docs: Rootless mode", url: "https://docs.docker.com/engine/security/rootless/" }
+        - { title: "Docker Docs: Seccomp security profiles for Docker", url: "https://docs.docker.com/engine/security/seccomp/" }
+
+  - op: upsert
+    kind: challenge
+    id: docker-build-secrets-supply-chain
+    data:
+      provider: docker
+      level: expert
+      title: Build secrets that never reach the image
+      summary: Replace a token passed as a build argument and an API key baked into ENV with a BuildKit secret mount for the build and a Compose secret file at runtime.
+      minutes: 45
+      tags: [security, buildkit, build-secrets, secrets, supply-chain, dockerfile]
+      prerequisites: [docker-secrets-as-files, docker-multi-stage-nonroot]
+      runtime: local
+      problem: |
+        The reports service needs two credentials:
+
+        - a **license token** while the image is built (the build step
+          `node fingerprint.js` validates it and records only a fingerprint);
+        - a **partner API key** while the container runs.
+
+        Today the token is passed with `build.args` and `ARG LICENSE_TOKEN`, and
+        the API key is written in the Dockerfile with `ENV`. Both end up inside
+        the image: anyone who can pull it reads them with `docker history` or
+        `docker inspect`, and they are pushed to every registry the image goes
+        to.
+
+        Rebuild the delivery so that neither credential is stored in any image
+        layer or configuration, while the service keeps working.
+      requirements:
+        - "The Dockerfile has no `ARG` or `ENV` holding a token, key or password."
+        - "The license token reaches the build through a BuildKit secret mount (`RUN --mount=type=secret`), granted with `build.secrets` in compose and defined by a top-level `secrets:` entry that reads it from the `LICENSE_TOKEN` variable (already in `.env`, which stays out of git)."
+        - "`build.args` no longer passes the token."
+        - "The partner API key reaches the running container as a Compose secret file; the app reads `PARTNER_API_KEY_FILE`, and `PARTNER_API_KEY` is no longer set."
+        - "The service deploys and `GET /` reports `\"licensed\":true` and `\"partnerKeyConfigured\":true`."
+      hints:
+        - "Build arguments and environment variables persist in the final image. Secret mounts are only available to the single `RUN` instruction that mounts them."
+        - "In the Dockerfile: `RUN --mount=type=secret,id=license_token,env=LICENSE_TOKEN,required=true node fingerprint.js > license.json`. Start the file with `# syntax=docker/dockerfile:1` so BuildKit uses a current Dockerfile frontend."
+        - "In compose: `build: {context: ./reports, secrets: [license_token]}` plus `secrets: {license_token: {environment: LICENSE_TOKEN}}`. Compose resolves the variable from `.env` like any other."
+        - "Runtime secrets work like in the PostgreSQL challenge: `secrets: [partner_api_key]` on the service and `PARTNER_API_KEY_FILE: /run/secrets/partner_api_key`."
+        - "After the change, `docker history --no-trunc` and `docker image inspect` on the new image show neither value."
+      solution: |
+        **Why.** Docker's build secrets guide states that build arguments and
+        environment variables are inappropriate for secrets because they persist
+        in the final image, and that secret mounts expose a secret to one build
+        instruction only, as a file or (with `env=`) an environment variable.
+        The Compose build reference grants build secrets per service with
+        `build.secrets`, and the Compose secrets guide mounts runtime secrets as
+        files in `/run/secrets/` for the services that are granted them. As a
+        supply-chain follow-up, the build attestations docs describe SBOM and
+        provenance attestations, and Docker Scout analyzes an image's packages
+        for known vulnerabilities.
+
+        **Steps.**
+        1. Keep the token in `.env` (`LICENSE_TOKEN=…`, ignored by git) and put the
+           key in `secrets/partner_api_key.txt` (ignored by git and excluded from
+           the build context).
+        2. Dockerfile: add `# syntax=docker/dockerfile:1`, delete `ARG LICENSE_TOKEN`
+           and the `ENV PARTNER_API_KEY` line, and run the fingerprint step with
+           `RUN --mount=type=secret,id=license_token,env=LICENSE_TOKEN,required=true`.
+        3. compose: replace `build.args` with `build.secrets: [license_token]`,
+           grant `secrets: [partner_api_key]` to the service, set
+           `PARTNER_API_KEY_FILE: /run/secrets/partner_api_key`, and declare the
+           secrets at the top level: `license_token` with
+           `environment: LICENSE_TOKEN`, `partner_api_key` with `file:`.
+        4. Deploy and call `/`: `licensed` and `partnerKeyConfigured` are true.
+        5. Going further: when you push images, build with SBOM and provenance
+           attestations (`docker buildx build --sbom=true --provenance=mode=max`)
+           and review them with `docker scout cves`.
+      solutionFiles:
+        compose.yaml: |
+          # The license token only exists during the fingerprint RUN step; the
+          # partner key is a file in /run/secrets at runtime. Neither is stored
+          # in the image.
+          services:
+            reports:
+              build:
+                context: ./reports
+                secrets:
+                  - license_token
+              init: true
+              ports:
+                - "3000:3000"
+              environment:
+                PARTNER_API_KEY_FILE: /run/secrets/partner_api_key
+              secrets:
+                - partner_api_key
+              restart: unless-stopped
+
+          secrets:
+            license_token:
+              environment: LICENSE_TOKEN
+            partner_api_key:
+              file: ./secrets/partner_api_key.txt
+        reports/Dockerfile: |
+          # syntax=docker/dockerfile:1
+          FROM node:22-alpine
+          ENV NODE_ENV=production
+          WORKDIR /app
+          COPY package.json ./
+          RUN npm install --omit=dev --no-audit --no-fund
+          COPY fingerprint.js server.js ./
+          # The token is mounted for this instruction only and never written to a layer.
+          RUN --mount=type=secret,id=license_token,env=LICENSE_TOKEN,required=true \
+            node fingerprint.js > license.json
+          USER node
+          EXPOSE 3000
+          HEALTHCHECK --interval=10s --timeout=3s --start-period=5s --retries=3 \
+            CMD wget -qO- http://127.0.0.1:3000/health >/dev/null || exit 1
+          CMD ["node", "server.js"]
+        secrets/partner_api_key.txt: |
+          pk-local-dev-not-a-real-key
+        .gitignore: |
+          .env
+          secrets/
+      starter:
+        kind: docker
+        files:
+          compose.yaml: |
+            services:
+              reports:
+                build:
+                  context: ./reports
+                  args:
+                    LICENSE_TOKEN: ${LICENSE_TOKEN}
+                init: true
+                ports:
+                  - "3000:3000"
+                restart: unless-stopped
+          .env: |
+            # Local development value only.
+            LICENSE_TOKEN=lic-local-dev-0000-not-a-real-token
+          reports/Dockerfile: |
+            FROM node:22-alpine
+            ARG LICENSE_TOKEN
+            ENV NODE_ENV=production
+            ENV PARTNER_API_KEY=pk-local-dev-not-a-real-key
+            WORKDIR /app
+            COPY package.json ./
+            RUN npm install --omit=dev --no-audit --no-fund
+            COPY fingerprint.js server.js ./
+            RUN LICENSE_TOKEN="$LICENSE_TOKEN" node fingerprint.js > license.json
+            USER node
+            EXPOSE 3000
+            HEALTHCHECK --interval=10s --timeout=3s --start-period=5s --retries=3 \
+              CMD wget -qO- http://127.0.0.1:3000/health >/dev/null || exit 1
+            CMD ["node", "server.js"]
+          reports/.dockerignore: |
+            node_modules
+            npm-debug.log*
+            .env*
+            secrets
+            Dockerfile
+            .dockerignore
+          reports/package.json: |
+            {
+              "name": "reports",
+              "version": "1.0.0",
+              "private": true,
+              "main": "server.js"
+            }
+          reports/fingerprint.js: |
+            // Validates the license token at build time and prints a short
+            // SHA-256 fingerprint of it: the token itself is never written.
+            const { createHash } = require("node:crypto");
+
+            const token = (process.env.LICENSE_TOKEN ?? "").trim();
+            if (!token) {
+              console.error("LICENSE_TOKEN is required to build this image");
+              process.exit(1);
+            }
+            const fingerprint = createHash("sha256").update(token).digest("hex").slice(0, 12);
+            process.stdout.write(JSON.stringify({ fingerprint }) + "\n");
+          reports/server.js: |
+            const fs = require("node:fs");
+            const http = require("node:http");
+
+            const port = Number(process.env.PORT ?? 3000);
+            const license = JSON.parse(fs.readFileSync("/app/license.json", "utf8"));
+
+            // The partner key comes from PARTNER_API_KEY_FILE (a secret file) when
+            // set, otherwise from PARTNER_API_KEY.
+            const keyFile = process.env.PARTNER_API_KEY_FILE;
+            const partnerKey = keyFile ? fs.readFileSync(keyFile, "utf8").trim() : (process.env.PARTNER_API_KEY ?? "");
+
+            function send(res, status, body) {
+              res.writeHead(status, { "Content-Type": "application/json" });
+              res.end(JSON.stringify(body));
+            }
+
+            const server = http.createServer((req, res) => {
+              const path = new URL(req.url, "http://localhost").pathname;
+              if (path === "/health") return send(res, 200, { status: "ok" });
+              if (path === "/") {
+                return send(res, 200, {
+                  licensed: Boolean(license.fingerprint),
+                  licenseFingerprint: license.fingerprint,
+                  partnerKeyConfigured: partnerKey.length > 0,
+                });
+              }
+              send(res, 404, { error: "not found" });
+            });
+
+            server.listen(port, () => console.log(`listening on :${port}`));
+
+            process.on("SIGTERM", () => server.close(() => process.exit(0)));
+      checks:
+        - id: valid
+          label: The compose project is valid
+          type: validate
+        - id: no-build-secrets
+          label: No ARG or ENV holds a credential
+          type: rules_clean
+          rules_clean: { codes: [dk_secret_build, dk_secret_env], minSeverity: warning }
+        - id: no-build-args
+          label: build.args no longer passes the token
+          type: has
+          has:
+            compose:
+              service: reports
+              where: { build.args.LICENSE_TOKEN: { exists: false } }
+        - id: build-secret
+          label: The build is granted a BuildKit secret
+          type: has
+          has:
+            compose:
+              service: reports
+              where: { build.secrets: { exists: true } }
+        - id: runtime-secret
+          label: The partner key is a runtime secret file
+          type: has
+          has:
+            compose:
+              service: reports
+              where:
+                secrets: { exists: true }
+                environment.PARTNER_API_KEY_FILE: { contains: /run/secrets/ }
+                environment.PARTNER_API_KEY: { exists: false }
+        - id: secrets-from-files
+          label: The partner key secret is read from a file
+          type: has
+          has:
+            compose:
+              where: { secrets.partner_api_key.file: { exists: true } }
+        - id: build-secret-source
+          label: The license token secret comes from the LICENSE_TOKEN variable
+          type: has
+          has:
+            compose:
+              where: { secrets.license_token.environment: LICENSE_TOKEN }
+        - id: deploy
+          label: The service builds and deploys
+          type: deploy
+        - id: works
+          label: The service is licensed and has its partner key
+          type: http
+          http: { service: reports, port: 3000, path: /, status: 200, contains: '"partnerKeyConfigured":true' }
+        - id: licensed
+          label: The build validated the license
+          type: http
+          http: { service: reports, port: 3000, path: /, status: 200, contains: '"licensed":true' }
+      sources:
+        - { title: "Docker Docs: Build secrets", url: "https://docs.docker.com/build/building/secrets/" }
+        - { title: "Docker Docs: Compose Build Specification (secrets)", url: "https://docs.docker.com/reference/compose-file/build/" }
+        - { title: "Docker Docs: Manage secrets securely in Docker Compose", url: "https://docs.docker.com/compose/how-tos/use-secrets/" }
+        - { title: "Docker Docs: Dockerfile reference (RUN --mount=type=secret)", url: "https://docs.docker.com/reference/dockerfile/" }
+        - { title: "Docker Docs: SBOM attestations", url: "https://docs.docker.com/build/metadata/attestations/sbom/" }
+        - { title: "Docker Docs: Docker Scout", url: "https://docs.docker.com/scout/" }

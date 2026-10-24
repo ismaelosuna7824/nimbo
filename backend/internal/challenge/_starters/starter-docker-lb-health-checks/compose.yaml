@@ -1,0 +1,41 @@
+# Challenge: a dead instance still gets traffic.
+# HAProxy spreads requests over two replicas of the catalog api. When a
+# replica crashes, Docker restarts it, and the restarted replica needs
+# 15 seconds of warm-up before it can serve.
+
+x-defaults: &defaults
+  restart: unless-stopped
+  logging:
+    driver: json-file
+    options:
+      max-size: "10m"
+      max-file: "3"
+
+services:
+  lb:
+    <<: *defaults
+    image: haproxy:3.0.11-alpine3.22
+    ports:
+      - "3402:8080"
+    volumes:
+      - ./lb/haproxy.cfg:/usr/local/etc/haproxy/haproxy.cfg:ro
+    depends_on:
+      - api
+    deploy:
+      resources:
+        limits:
+          cpus: "0.5"
+          memory: 128M
+
+  api:
+    <<: *defaults
+    build: ./api
+    init: true
+    environment:
+      WARMUP_SEC: "15"
+    deploy:
+      replicas: 2
+      resources:
+        limits:
+          cpus: "0.5"
+          memory: 128M

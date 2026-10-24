@@ -1,0 +1,592 @@
+description: Adds the Kubernetes expert challenges (Pod Security Standards restricted, RBAC least privilege for workloads)
+operations:
+  - op: upsert
+    kind: challenge
+    id: kubernetes-pod-security-restricted
+    data:
+      provider: kubernetes
+      level: expert
+      title: Enforce the restricted Pod Security Standard
+      summary: Label a namespace to enforce the restricted profile and harden the workload so the admission controller still admits it.
+      minutes: 45
+      tags: [pod-security, security-context, hardening, admission]
+      prerequisites: [kubernetes-health-probes]
+      runtime: local
+      problem: |
+        A security review of the **payments** namespace found a container
+        that runs as root, is `privileged`, adds the `NET_ADMIN` capability
+        and mounts the node's `/var/log` through a `hostPath` volume. Any
+        bug in that app is a path to root on the node.
+
+        Kubernetes defines three **Pod Security Standards**: `privileged`
+        (unrestricted), `baseline` (blocks known privilege escalations) and
+        `restricted` (current hardening best practice). The built-in **Pod
+        Security Admission** controller enforces them per namespace through
+        labels such as `pod-security.kubernetes.io/enforce: restricted`;
+        pods that violate the level are rejected.
+
+        Turn on enforcement for `payments` and fix the workload so it is
+        admitted and keeps serving.
+      requirements:
+        - "Namespace `payments` carries `pod-security.kubernetes.io/enforce: restricted` (add `warn` and `audit` at `restricted` too)."
+        - "The pod runs as a non-root user (`runAsNonRoot: true`, a non-zero `runAsUser`) with `seccompProfile.type: RuntimeDefault`."
+        - "The container sets `allowPrivilegeEscalation: false`, drops `ALL` capabilities, is not privileged and uses `readOnlyRootFilesystem: true`."
+        - "No `hostPath` volume: use an `emptyDir` where the app needs scratch space. The pod does not mount a service account token it does not use."
+        - The workflow deploys under enforcement and `GET /healthz` through the `payments` Service answers 200.
+      hints:
+        - "The restricted profile requires, per container: `allowPrivilegeEscalation: false`, `capabilities.drop: [ALL]` (only `NET_BIND_SERVICE` may be added back), `runAsNonRoot: true`, a `RuntimeDefault` or `Localhost` seccomp profile, and only volume types such as `configMap`, `emptyDir`, `projected`, `secret` or `persistentVolumeClaim`."
+        - "Pod-level `securityContext` fields (`runAsNonRoot`, `runAsUser`, `seccompProfile`) apply to every container; capabilities and `allowPrivilegeEscalation` are container-level only."
+        - "The podinfo image runs fine as UID 10001 with a read-only root filesystem; give it an `emptyDir` at `/tmp` for scratch files."
+      solution: |
+        **1. Enforce the level on the namespace.** Pod Security Admission
+        reads three modes from namespace labels: `enforce` rejects violating
+        pods, `audit` records them in the audit log, `warn` returns a warning
+        to the client. Set all three to `restricted`:
+
+        ```yaml
+        metadata:
+          name: payments
+          labels:
+            pod-security.kubernetes.io/enforce: restricted
+            pod-security.kubernetes.io/audit: restricted
+            pod-security.kubernetes.io/warn: restricted
+        ```
+
+        Admission is checked when pods are created, so a Deployment that
+        violates the level is accepted but its ReplicaSet cannot create
+        pods. Fix the template:
+
+        **2. Pod level.**
+        ```yaml
+        automountServiceAccountToken: false
+        securityContext:
+          runAsNonRoot: true
+          runAsUser: 10001
+          runAsGroup: 10001
+          seccompProfile: {type: RuntimeDefault}
+        ```
+
+        **3. Container level.**
+        ```yaml
+        securityContext:
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: true
+          capabilities: {drop: [ALL]}
+        ```
+        and remove `privileged: true` and the added capability.
+
+        **4. Volumes.** `hostPath` is not allowed at any level above
+        privileged. Use an `emptyDir` for scratch space (the read-only root
+        filesystem makes it necessary for apps that write temporary files);
+        ship logs to stdout instead of the node's `/var/log`.
+
+        `readOnlyRootFilesystem` and the disabled token go beyond the
+        restricted profile; the Kubernetes security checklist and RBAC good
+        practices recommend both.
+      solutionFiles:
+        k8s/payments.yaml: |
+          # Pod Security Admission: reject, audit and warn on anything that
+          # violates the restricted Pod Security Standard.
+          apiVersion: v1
+          kind: Namespace
+          metadata:
+            name: payments
+            labels:
+              pod-security.kubernetes.io/enforce: restricted
+              pod-security.kubernetes.io/audit: restricted
+              pod-security.kubernetes.io/warn: restricted
+          ---
+          apiVersion: apps/v1
+          kind: Deployment
+          metadata:
+            name: payments
+            namespace: payments
+          spec:
+            replicas: 1
+            selector:
+              matchLabels:
+                app: payments
+            template:
+              metadata:
+                labels:
+                  app: payments
+              spec:
+                # The app never calls the Kubernetes API.
+                automountServiceAccountToken: false
+                securityContext:
+                  runAsNonRoot: true
+                  runAsUser: 10001
+                  runAsGroup: 10001
+                  seccompProfile:
+                    type: RuntimeDefault
+                containers:
+                  - name: payments
+                    image: ghcr.io/stefanprodan/podinfo:6.15.0
+                    ports:
+                      - name: http
+                        containerPort: 9898
+                    readinessProbe:
+                      httpGet:
+                        path: /readyz
+                        port: http
+                    livenessProbe:
+                      httpGet:
+                        path: /healthz
+                        port: http
+                    resources:
+                      requests:
+                        cpu: 50m
+                        memory: 64Mi
+                      limits:
+                        memory: 128Mi
+                    securityContext:
+                      allowPrivilegeEscalation: false
+                      readOnlyRootFilesystem: true
+                      capabilities:
+                        drop: ["ALL"]
+                    volumeMounts:
+                      - name: tmp
+                        mountPath: /tmp
+                volumes:
+                  # Scratch space instead of the node's filesystem.
+                  - name: tmp
+                    emptyDir: {}
+          ---
+          apiVersion: v1
+          kind: Service
+          metadata:
+            name: payments
+            namespace: payments
+          spec:
+            selector:
+              app: payments
+            ports:
+              - name: http
+                port: 80
+                targetPort: http
+      starter:
+        kind: kubernetes
+        kubernetes:
+          sources:
+            - {kind: manifests, path: k8s}
+        files:
+          k8s/payments.yaml: |
+            apiVersion: v1
+            kind: Namespace
+            metadata:
+              name: payments
+            ---
+            apiVersion: apps/v1
+            kind: Deployment
+            metadata:
+              name: payments
+              namespace: payments
+            spec:
+              replicas: 1
+              selector:
+                matchLabels:
+                  app: payments
+              template:
+                metadata:
+                  labels:
+                    app: payments
+                spec:
+                  securityContext:
+                    runAsUser: 0
+                  containers:
+                    - name: payments
+                      image: ghcr.io/stefanprodan/podinfo:6.15.0
+                      ports:
+                        - name: http
+                          containerPort: 9898
+                      readinessProbe:
+                        httpGet:
+                          path: /readyz
+                          port: http
+                      livenessProbe:
+                        httpGet:
+                          path: /healthz
+                          port: http
+                      resources:
+                        requests:
+                          cpu: 50m
+                          memory: 64Mi
+                        limits:
+                          memory: 128Mi
+                      securityContext:
+                        privileged: true
+                        capabilities:
+                          add: ["NET_ADMIN"]
+                      volumeMounts:
+                        - name: node-logs
+                          mountPath: /host-logs
+                  volumes:
+                    - name: node-logs
+                      hostPath:
+                        path: /var/log
+            ---
+            apiVersion: v1
+            kind: Service
+            metadata:
+              name: payments
+              namespace: payments
+            spec:
+              selector:
+                app: payments
+              ports:
+                - name: http
+                  port: 80
+                  targetPort: http
+      checks:
+        - id: renders
+          label: The manifests are valid Kubernetes objects
+          type: validate
+        - id: enforce-restricted
+          label: Namespace payments enforces the restricted Pod Security Standard
+          type: has
+          has:
+            kubernetes:
+              kind: Namespace
+              name: payments
+              where:
+                metadata.labels."pod-security.kubernetes.io/enforce": restricted
+        - id: hardened
+          label: No privileged settings, host access or root; containers are hardened
+          type: rules_clean
+          rules_clean:
+            codes: [k8s_privileged, k8s_host_path, k8s_host_namespaces, k8s_run_as_root, k8s_hardening]
+            minSeverity: info
+        - id: no-host-path
+          label: The pod uses no hostPath volume
+          type: has
+          has:
+            kubernetes:
+              kind: Deployment
+              name: payments
+              namespace: payments
+              where:
+                spec.template.spec.volumes[*].hostPath: {exists: false}
+        - id: deploys
+          label: The pods are admitted and become ready under enforcement
+          type: deploy
+        - id: serves
+          label: GET /healthz through the Service answers 200
+          type: http
+          http:
+            service: payments
+            port: 80
+            path: /healthz
+            status: 200
+      sources:
+        - title: Kubernetes docs — Pod Security Standards
+          url: https://kubernetes.io/docs/concepts/security/pod-security-standards/
+        - title: Kubernetes docs — Pod Security Admission
+          url: https://kubernetes.io/docs/concepts/security/pod-security-admission/
+        - title: Kubernetes docs — Enforce Pod Security Standards with Namespace Labels
+          url: https://kubernetes.io/docs/tasks/configure-pod-container/enforce-standards-namespace-labels/
+        - title: Kubernetes docs — Configure a Security Context for a Pod or Container
+          url: https://kubernetes.io/docs/tasks/configure-pod-container/security-context/
+        - title: Kubernetes docs — Security Checklist
+          url: https://kubernetes.io/docs/concepts/security/security-checklist/
+        - title: CNCF CKS curriculum (Minimize Microservice Vulnerabilities — pod security standards)
+          url: https://github.com/cncf/curriculum/blob/master/CKS_Curriculum%20v1.34.pdf
+
+  - op: upsert
+    kind: challenge
+    id: kubernetes-rbac-least-privilege
+    data:
+      provider: kubernetes
+      level: expert
+      title: Least-privilege RBAC for a workload
+      summary: Replace a cluster-admin binding with a namespaced, read-only Role and stop mounting API tokens where they are not needed.
+      minutes: 40
+      tags: [rbac, service-accounts, least-privilege, security]
+      prerequisites: [kubernetes-config-and-secrets]
+      runtime: local
+      problem: |
+        A nightly **config report** runs as a CronJob in namespace
+        `reports`; it lists the namespace's ConfigMaps with `kubectl`. To
+        "make it work", its ServiceAccount `config-reader` was bound to the
+        built-in `cluster-admin` ClusterRole with a ClusterRoleBinding. That
+        token can read every Secret and delete anything in the whole
+        cluster, and every pod of the namespace, including the `web`
+        frontend, also gets an API token mounted it never uses.
+
+        Kubernetes **RBAC** grants permissions through a Role (rules inside
+        one namespace) or ClusterRole (cluster-wide rules), attached to users
+        or ServiceAccounts by a RoleBinding (within a namespace) or a
+        ClusterRoleBinding (everywhere). Permissions are purely additive:
+        there are no deny rules, so least privilege means granting only what
+        is needed, where it is needed.
+      requirements:
+        - No ClusterRoleBinding remains.
+        - "A Role `config-reader` in namespace `reports` allows only `get`, `list` and `watch` on `configmaps` (core API group, no wildcards)."
+        - "A RoleBinding in `reports` binds that Role to the ServiceAccount `config-reader`."
+        - "The CronJob keeps running as `config-reader`; the `web` Deployment sets `automountServiceAccountToken: false`."
+      hints:
+        - "The core API group is the empty string: `apiGroups: [\"\"]`. Read-only verbs are `get`, `list` and `watch`."
+        - "A RoleBinding's `roleRef` is `{apiGroup: rbac.authorization.k8s.io, kind: Role, name: config-reader}` and its `subjects` entry is `{kind: ServiceAccount, name: config-reader, namespace: reports}`."
+        - "`kubectl auth can-i list configmaps -n reports --as=system:serviceaccount:reports:config-reader` lets you test a ServiceAccount's permissions on a live cluster."
+      solution: |
+        Follow the RBAC good practices from the Kubernetes docs: assign
+        permissions at namespace level with RoleBindings rather than
+        ClusterRoleBindings, avoid wildcards, and don't use `cluster-admin`
+        unless specifically needed.
+
+        1. **Delete the ClusterRoleBinding.**
+        2. **A namespaced, read-only Role:**
+           ```yaml
+           apiVersion: rbac.authorization.k8s.io/v1
+           kind: Role
+           metadata: {name: config-reader, namespace: reports}
+           rules:
+             - apiGroups: [""]
+               resources: [configmaps]
+               verbs: [get, list, watch]
+           ```
+        3. **Bind it** to the ServiceAccount with a RoleBinding in the same
+           namespace.
+        4. **Tokens only where needed.** Set
+           `automountServiceAccountToken: false` on the `web` pod template;
+           the CronJob's pods still mount the `config-reader` token because
+           they call the API.
+
+        Why not a ClusterRole? A ClusterRoleBinding grants its rules in
+        every namespace, including access to future resource types when
+        wildcards are used. Even `list` on Secrets reveals their contents,
+        which is why this Role names ConfigMaps only.
+      solutionFiles:
+        k8s/rbac.yaml: |
+          apiVersion: v1
+          kind: ServiceAccount
+          metadata:
+            name: config-reader
+            namespace: reports
+          ---
+          # Read-only access to ConfigMaps in this namespace only.
+          apiVersion: rbac.authorization.k8s.io/v1
+          kind: Role
+          metadata:
+            name: config-reader
+            namespace: reports
+          rules:
+            - apiGroups: [""]
+              resources: ["configmaps"]
+              verbs: ["get", "list", "watch"]
+          ---
+          apiVersion: rbac.authorization.k8s.io/v1
+          kind: RoleBinding
+          metadata:
+            name: config-reader
+            namespace: reports
+          roleRef:
+            apiGroup: rbac.authorization.k8s.io
+            kind: Role
+            name: config-reader
+          subjects:
+            - kind: ServiceAccount
+              name: config-reader
+              namespace: reports
+        k8s/apps.yaml: |
+          apiVersion: v1
+          kind: Namespace
+          metadata:
+            name: reports
+          ---
+          apiVersion: batch/v1
+          kind: CronJob
+          metadata:
+            name: config-report
+            namespace: reports
+          spec:
+            schedule: "0 2 * * *"
+            jobTemplate:
+              spec:
+                template:
+                  spec:
+                    # Calls the API: keeps the config-reader token.
+                    serviceAccountName: config-reader
+                    restartPolicy: OnFailure
+                    containers:
+                      - name: report
+                        image: registry.k8s.io/kubectl:v1.36.5
+                        args: ["get", "configmaps", "--namespace", "reports"]
+          ---
+          apiVersion: apps/v1
+          kind: Deployment
+          metadata:
+            name: web
+            namespace: reports
+          spec:
+            replicas: 1
+            selector:
+              matchLabels:
+                app: web
+            template:
+              metadata:
+                labels:
+                  app: web
+              spec:
+                # Never calls the API: no token in the pod.
+                automountServiceAccountToken: false
+                containers:
+                  - name: nginx
+                    image: nginxinc/nginx-unprivileged:1.30-alpine
+                    ports:
+                      - name: http
+                        containerPort: 8080
+      starter:
+        kind: kubernetes
+        kubernetes:
+          sources:
+            - {kind: manifests, path: k8s}
+        files:
+          k8s/rbac.yaml: |
+            apiVersion: v1
+            kind: ServiceAccount
+            metadata:
+              name: config-reader
+              namespace: reports
+            ---
+            apiVersion: rbac.authorization.k8s.io/v1
+            kind: ClusterRoleBinding
+            metadata:
+              name: config-reader-admin
+            roleRef:
+              apiGroup: rbac.authorization.k8s.io
+              kind: ClusterRole
+              name: cluster-admin
+            subjects:
+              - kind: ServiceAccount
+                name: config-reader
+                namespace: reports
+          k8s/apps.yaml: |
+            apiVersion: v1
+            kind: Namespace
+            metadata:
+              name: reports
+            ---
+            apiVersion: batch/v1
+            kind: CronJob
+            metadata:
+              name: config-report
+              namespace: reports
+            spec:
+              schedule: "0 2 * * *"
+              jobTemplate:
+                spec:
+                  template:
+                    spec:
+                      serviceAccountName: config-reader
+                      restartPolicy: OnFailure
+                      containers:
+                        - name: report
+                          image: registry.k8s.io/kubectl:v1.36.5
+                          args: ["get", "configmaps", "--namespace", "reports"]
+            ---
+            apiVersion: apps/v1
+            kind: Deployment
+            metadata:
+              name: web
+              namespace: reports
+            spec:
+              replicas: 1
+              selector:
+                matchLabels:
+                  app: web
+              template:
+                metadata:
+                  labels:
+                    app: web
+                spec:
+                  containers:
+                    - name: nginx
+                      image: nginxinc/nginx-unprivileged:1.30-alpine
+                      ports:
+                        - name: http
+                          containerPort: 8080
+      checks:
+        - id: renders
+          label: The manifests are valid Kubernetes objects
+          type: validate
+        - id: no-cluster-binding
+          label: No ClusterRoleBinding grants cluster-wide rights
+          type: has
+          has:
+            kubernetes:
+              kind: ClusterRoleBinding
+              count: {max: 0}
+        - id: role
+          label: Role config-reader covers configmaps in reports
+          type: has
+          has:
+            kubernetes:
+              kind: Role
+              name: config-reader
+              namespace: reports
+              where:
+                rules[*].resources[*]: configmaps
+                rules[*].apiGroups[*]: ""
+        - id: read-only
+          label: No Role grants verbs beyond get, list and watch
+          type: has
+          has:
+            kubernetes:
+              kind: Role
+              where:
+                rules[*].verbs[*]: {notIn: [get, list, watch]}
+              count: {max: 0}
+        - id: no-wildcard-resources
+          label: No Role uses a wildcard resource
+          type: has
+          has:
+            kubernetes:
+              kind: Role
+              where:
+                rules[*].resources[*]: "*"
+              count: {max: 0}
+        - id: binding
+          label: A RoleBinding gives the Role to the config-reader ServiceAccount
+          type: has
+          has:
+            kubernetes:
+              kind: RoleBinding
+              namespace: reports
+              where:
+                roleRef.kind: Role
+                roleRef.name: config-reader
+                subjects[*].kind: ServiceAccount
+                subjects[*].name: config-reader
+        - id: job-identity
+          label: The CronJob runs as config-reader
+          type: has
+          has:
+            kubernetes:
+              kind: CronJob
+              name: config-report
+              namespace: reports
+              where:
+                spec.jobTemplate.spec.template.spec.serviceAccountName: config-reader
+        - id: web-no-token
+          label: The web pods do not mount an API token
+          type: has
+          has:
+            kubernetes:
+              kind: Deployment
+              name: web
+              namespace: reports
+              where:
+                spec.template.spec.automountServiceAccountToken: false
+      sources:
+        - title: Kubernetes docs — Using RBAC Authorization
+          url: https://kubernetes.io/docs/reference/access-authn-authz/rbac/
+        - title: Kubernetes docs — Role Based Access Control Good Practices
+          url: https://kubernetes.io/docs/concepts/security/rbac-good-practices/
+        - title: Kubernetes docs — Service Accounts
+          url: https://kubernetes.io/docs/concepts/security/service-accounts/
+        - title: Kubernetes docs — Configure Service Accounts for Pods
+          url: https://kubernetes.io/docs/tasks/configure-pod-container/configure-service-account/
+        - title: CNCF CKA curriculum (Cluster Architecture — manage role based access control)
+          url: https://github.com/cncf/curriculum/blob/master/CKA_Curriculum_v1.37.pdf
+        - title: CNCF CKS curriculum (Cluster Hardening — RBAC and service accounts)
+          url: https://github.com/cncf/curriculum/blob/master/CKS_Curriculum%20v1.34.pdf

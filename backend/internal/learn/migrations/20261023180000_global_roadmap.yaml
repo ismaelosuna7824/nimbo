@@ -1,0 +1,306 @@
+description: Adds the global roadmap "Cloud architecture fundamentals" (beginner to expert) linking the global challenges and their provider equivalents
+operations:
+  - op: upsert
+    kind: roadmap
+    id: global-roadmap
+    data:
+      provider: global
+      title: Cloud architecture fundamentals
+      summary: The practices every well-architected workload shares, whatever the provider — with a challenge per practice and the equivalent challenges on AWS, Azure, Google Cloud, OCI, Docker and Kubernetes.
+      levels:
+        - level: beginner
+          title: Foundations — frameworks, identity, data and cost
+          goals: |
+            - Explain the pillars the four cloud frameworks share (security, reliability, operational excellence,
+              performance efficiency, cost optimization) and use them to review a design.
+            - Grant a workload only the permissions it needs.
+            - Encrypt data at rest and in transit, and know which part is the provider's job and which is yours.
+            - Attribute costs to owners and keep data growth bounded.
+          steps:
+            - title: Learn the well-architected frameworks
+              description: |
+                AWS, Azure, Google Cloud and OCI each publish a framework of design principles and best practices
+                organized in pillars. They differ in names and details but agree on the fundamentals this roadmap
+                covers. Skim each framework's overview and keep it at hand as a review checklist.
+              docs:
+                - title: AWS Well-Architected Framework
+                  url: https://docs.aws.amazon.com/wellarchitected/latest/framework/welcome.html
+                - title: Azure Well-Architected Framework
+                  url: https://learn.microsoft.com/en-us/azure/well-architected/
+                - title: Google Cloud Well-Architected Framework
+                  url: https://cloud.google.com/architecture/framework
+                - title: Well-architected framework for Oracle Cloud Infrastructure
+                  url: https://docs.oracle.com/en/solutions/oci-best-practices/index.html
+            - title: Least privilege
+              description: |
+                Identities (people and workloads) get only the actions they need on the resources they touch;
+                start from nothing and add, review unused permissions, and prefer roles and short-lived credentials
+                over keys.
+              challenges:
+                - global-least-privilege
+                - aws-lambda-least-privilege
+                - azure-app-service-key-vault
+                - gcp-cloud-run-least-privilege
+                - oci-compartment-least-privilege
+                - docker-multi-stage-nonroot
+                - kubernetes-rbac-least-privilege
+              docs:
+                - title: AWS — SEC03-BP02 Grant least privilege access
+                  url: https://docs.aws.amazon.com/wellarchitected/latest/framework/sec_permissions_least_privileges.html
+                - title: Azure — Identity and access management
+                  url: https://learn.microsoft.com/en-us/azure/well-architected/security/identity-access
+                - title: Google Cloud — Use IAM securely
+                  url: https://cloud.google.com/iam/docs/using-iam-securely
+                - title: OCI — Isolate resources and control access
+                  url: https://docs.oracle.com/en/solutions/oci-best-practices/isolate-resources-and-control-access1.html
+                - title: Kubernetes — RBAC good practices
+                  url: https://kubernetes.io/docs/concepts/security/rbac-good-practices/
+            - title: Encryption at rest and in transit
+              description: |
+                Encrypt stored data by default and control who can use the keys; use TLS (1.2 or later) on every
+                connection and refuse plain-text access.
+              challenges:
+                - global-encryption
+                - aws-private-s3-bucket
+                - azure-storage-secure-defaults
+                - oci-vault-customer-managed-keys
+                - docker-secrets-as-files
+                - kubernetes-config-and-secrets
+              docs:
+                - title: AWS — SEC08-BP02 Enforce encryption at rest
+                  url: https://docs.aws.amazon.com/wellarchitected/latest/framework/sec_protect_data_rest_encrypt.html
+                - title: AWS — SEC09-BP02 Enforce encryption in transit
+                  url: https://docs.aws.amazon.com/wellarchitected/latest/framework/sec_protect_data_transit_encrypt.html
+                - title: Azure — Encryption
+                  url: https://learn.microsoft.com/en-us/azure/well-architected/security/encryption
+                - title: Google Cloud — Default encryption at rest
+                  url: https://cloud.google.com/docs/security/encryption/default-encryption
+                - title: OCI — Protect data at rest
+                  url: https://docs.oracle.com/en/solutions/oci-best-practices/protect-data-rest1.html
+                - title: Kubernetes — Encrypting confidential data at rest
+                  url: https://kubernetes.io/docs/tasks/administer-cluster/encrypt-data/
+            - title: Cost awareness
+              description: |
+                Tag or label every resource with its owner, give logs and objects a lifecycle, and set budgets
+                with alerts so spending is watched rather than discovered.
+              challenges:
+                - global-cost-awareness
+                - azure-naming-tagging
+                - gcp-storage-retention-lifecycle
+                - oci-private-bucket-lifecycle
+              docs:
+                - title: AWS — COST03-BP03 Identify cost attribution categories
+                  url: https://docs.aws.amazon.com/wellarchitected/latest/framework/cost_monitor_usage_define_attribution.html
+                - title: Azure — Cost Optimization design principles
+                  url: https://learn.microsoft.com/en-us/azure/well-architected/cost-optimization/principles
+                - title: Google Cloud — Foster a culture of cost awareness
+                  url: https://cloud.google.com/architecture/framework/cost-optimization/foster-culture-cost-awareness
+                - title: OCI — Track and manage usage and cost
+                  url: https://docs.oracle.com/en/solutions/oci-best-practices/track-and-manage-usage-and-cost1.html
+        - level: intermediate
+          title: Resilient building blocks — networks, zones and backups
+          goals: |
+            - Split a workload into network tiers and allow only the flows each tier needs.
+            - Remove single points of failure by spreading redundant instances across zones.
+            - Turn recovery objectives (RPO, RTO) into a backup and restore design.
+          steps:
+            - title: Network segmentation
+              description: |
+                Group components by exposure and data sensitivity — public entry point, private application,
+                private data — and allow only tier-to-tier traffic on the ports in use.
+              challenges:
+                - global-network-segmentation
+                - aws-vpc-multi-az-subnets
+                - azure-vnet-nsg
+                - gcp-custom-vpc-firewall
+                - oci-vcn-public-private-subnets
+                - docker-network-isolation
+                - kubernetes-network-policy-default-deny
+              docs:
+                - title: AWS — SEC05-BP01 Create network layers
+                  url: https://docs.aws.amazon.com/wellarchitected/latest/framework/sec_network_protection_create_layers.html
+                - title: Azure — Segmentation strategy
+                  url: https://learn.microsoft.com/en-us/azure/well-architected/security/segmentation
+                - title: Google Cloud — VPC firewall rules
+                  url: https://cloud.google.com/vpc/docs/firewalls
+                - title: OCI — Ensure secure network access
+                  url: https://docs.oracle.com/en/solutions/oci-best-practices/ensure-secure-network-access1.html
+                - title: Docker — Networking in Compose
+                  url: https://docs.docker.com/compose/how-tos/networking/
+                - title: Kubernetes — Network Policies
+                  url: https://kubernetes.io/docs/concepts/services-networking/network-policies/
+            - title: High availability across zones
+              description: |
+                Run several instances in independent fault domains (zones, availability domains) behind a
+                health-checked load balancer, and keep enough of them up during planned maintenance.
+              challenges:
+                - global-multi-zone-ha
+                - aws-alb-auto-scaling
+                - aws-rds-multi-az
+                - azure-aks-baseline
+                - oci-lb-instance-pool-autoscaling
+                - kubernetes-zero-downtime-prod
+              docs:
+                - title: AWS — REL10-BP01 Deploy the workload to multiple locations
+                  url: https://docs.aws.amazon.com/wellarchitected/latest/framework/rel_fault_isolation_multiaz_region_system.html
+                - title: Azure — Designing for redundancy
+                  url: https://learn.microsoft.com/en-us/azure/well-architected/reliability/redundancy
+                - title: Google Cloud — Build highly available systems through resource redundancy
+                  url: https://cloud.google.com/architecture/framework/reliability/build-highly-available-systems
+                - title: OCI — Design for scalability
+                  url: https://docs.oracle.com/en/solutions/oci-best-practices/design-scalability1.html
+                - title: Kubernetes — Running in multiple zones
+                  url: https://kubernetes.io/docs/setup/best-practices/multiple-zones/
+            - title: Backups and recovery objectives
+              description: |
+                Define RPO (how much data you can lose) and RTO (how long you can be down) per workload, then pick
+                continuous backups, scheduled copies in separate vaults and replication to meet them.
+              challenges:
+                - global-backup-recovery
+                - aws-backup-dr-cost
+                - azure-storage-data-protection
+                - gcp-cloud-sql-private-ip
+                - oci-autonomous-db-private-endpoint
+              docs:
+                - title: AWS — REL13-BP01 Define recovery objectives
+                  url: https://docs.aws.amazon.com/wellarchitected/latest/framework/rel_planning_for_recovery_objective_defined_recovery.html
+                - title: AWS — REL09-BP01 Identify and back up all data
+                  url: https://docs.aws.amazon.com/wellarchitected/latest/framework/rel_backing_up_data_identified_backups_data.html
+                - title: Azure — Defining reliability targets
+                  url: https://learn.microsoft.com/en-us/azure/well-architected/reliability/metrics
+                - title: Azure — Disaster recovery
+                  url: https://learn.microsoft.com/en-us/azure/well-architected/reliability/disaster-recovery
+                - title: OCI — Back up your data
+                  url: https://docs.oracle.com/en/solutions/oci-best-practices/back-your-data1.html
+        - level: advanced
+          title: Operating at scale — scaling, observability and safe change
+          goals: |
+            - Autoscale on the signal that actually limits the workload, with sensible bounds.
+            - Collect metrics, logs and traces, and hold a service to SLOs measured from the user's side.
+            - Release changes without downtime and with a quick way back.
+          steps:
+            - title: Autoscaling on the right signal
+              description: |
+                Scale on the metric that saturates first (CPU, requests per target, queue depth), give the
+                controller a baseline (requests), keep a minimum for redundancy and a maximum for cost.
+              challenges:
+                - global-autoscaling-signal
+                - aws-alb-auto-scaling
+                - oci-lb-instance-pool-autoscaling
+                - kubernetes-resources-and-hpa
+                - kubernetes-autoscale-signal
+              docs:
+                - title: AWS — REL07-BP01 Use automation when obtaining or scaling resources
+                  url: https://docs.aws.amazon.com/wellarchitected/latest/framework/rel_adapt_to_changes_autoscale_adapt.html
+                - title: Azure — Designing a reliable scaling strategy
+                  url: https://learn.microsoft.com/en-us/azure/well-architected/reliability/scaling
+                - title: Google Cloud — Take advantage of horizontal scalability
+                  url: https://cloud.google.com/architecture/framework/reliability/horizontal-scalability
+                - title: Kubernetes — Horizontal Pod Autoscaling
+                  url: https://kubernetes.io/docs/tasks/run-application/horizontal-pod-autoscale/
+            - title: Observability and SLOs
+              description: |
+                Instrument with OpenTelemetry, send metrics, logs and traces through a collector, define SLIs from
+                the user's point of view and SLOs on them, and alert on symptoms.
+              challenges:
+                - global-observability-slo
+                - docker-observability
+                - aws-sqs-dead-letter-queue
+              docs:
+                - title: OpenTelemetry — Observability primer
+                  url: https://opentelemetry.io/docs/concepts/observability-primer/
+                - title: AWS — REL06-BP01 Monitor all components for the workload
+                  url: https://docs.aws.amazon.com/wellarchitected/latest/framework/rel_monitor_aws_resources_monitor_resources.html
+                - title: Azure — Designing a monitoring system
+                  url: https://learn.microsoft.com/en-us/azure/well-architected/operational-excellence/observability
+                - title: Google Cloud — Set realistic targets for reliability
+                  url: https://cloud.google.com/architecture/framework/reliability/set-targets
+                - title: OCI — Monitor your workload
+                  url: https://docs.oracle.com/en/solutions/oci-best-practices/monitor-your-workload1.html
+                - title: Prometheus — Alerting practices
+                  url: https://prometheus.io/docs/practices/alerting/
+            - title: Zero-downtime deployments
+              description: |
+                Roll out gradually (rolling, canary, blue/green), keep serving capacity during the change, gate
+                traffic on health checks and keep rollback one step away.
+              challenges:
+                - global-zero-downtime-deploy
+                - kubernetes-zero-downtime-prod
+                - kubernetes-readiness-probe
+                - docker-lb-health-checks
+              docs:
+                - title: AWS — OPS06-BP03 Employ safe deployment strategies
+                  url: https://docs.aws.amazon.com/wellarchitected/latest/framework/ops_mit_deploy_risks_deploy_mgmt_sys.html
+                - title: Azure — Safe deployment practices
+                  url: https://learn.microsoft.com/en-us/azure/well-architected/operational-excellence/safe-deployments
+                - title: Google Cloud — Automate and manage change
+                  url: https://cloud.google.com/architecture/framework/operational-excellence/automate-and-manage-change
+                - title: OCI — Plan your deployment strategy
+                  url: https://docs.oracle.com/en/solutions/oci-best-practices/plan-your-deployment-strategy1.html
+                - title: Kubernetes — Deployments
+                  url: https://kubernetes.io/docs/concepts/workloads/controllers/deployment/
+        - level: expert
+          title: Defense in depth and continuous verification
+          goals: |
+            - Stack independent controls (edge, network, identity, data, host, detection) so one failure isn't a
+              breach.
+            - Prove reliability and recovery by testing failures and restores regularly instead of assuming them.
+          steps:
+            - title: Defense in depth
+              description: |
+                Assume any single control can fail: combine perimeter and east-west network controls, scoped
+                identities, encryption and managed secrets, hardened hosts and workloads, and continuous posture
+                monitoring.
+              challenges:
+                - global-defense-in-depth
+                - aws-three-tier-well-architected
+                - azure-front-door-waf
+                - azure-hub-spoke-firewall
+                - gcp-https-lb-cloud-armor
+                - gcp-org-policy-guardrails
+                - oci-cis-landing-zone
+                - docker-hardened-runtime
+                - kubernetes-pod-security-restricted
+              docs:
+                - title: Azure — Security design principles
+                  url: https://learn.microsoft.com/en-us/azure/well-architected/security/principles
+                - title: Google Cloud — Implement security by design
+                  url: https://cloud.google.com/architecture/framework/security/implement-security-by-design
+                - title: Google Cloud — Implement zero trust
+                  url: https://cloud.google.com/architecture/framework/security/implement-zero-trust
+                - title: OCI — Effective strategies for security and compliance
+                  url: https://docs.oracle.com/en/solutions/oci-best-practices/effective-strategies-security-and-compliance1.html
+                - title: Kubernetes — Security checklist
+                  url: https://kubernetes.io/docs/concepts/security/security-checklist/
+                - title: CNCF Glossary — Zero Trust Architecture
+                  url: https://glossary.cncf.io/zero-trust-architecture/
+            - title: Test failures and recovery
+              description: |
+                Run restore drills against your RPO/RTO, inject failures in a controlled way, and feed what you
+                learn back into the design. Nimbo's incident scenarios and load tests are a local way to practice
+                this on Docker and Kubernetes workloads.
+              challenges:
+                - docker-slow-dependency
+                - docker-noisy-neighbor
+              docs:
+                - title: AWS — REL09-BP04 Perform periodic recovery of the data
+                  url: https://docs.aws.amazon.com/wellarchitected/latest/framework/rel_backing_up_data_periodic_recovery_testing_data.html
+                - title: Google Cloud — Perform testing for recovery from failures
+                  url: https://cloud.google.com/architecture/framework/reliability/perform-testing-for-recovery-from-failures
+                - title: Google Cloud — Perform testing for recovery from data loss
+                  url: https://cloud.google.com/architecture/framework/reliability/perform-testing-for-recovery-from-data-loss
+                - title: OCI — Reliable and resilient cloud topology practices
+                  url: https://docs.oracle.com/en/solutions/oci-best-practices/reliable-and-resilient-cloud-topology-practices1.html
+      sources:
+        - title: AWS Well-Architected Framework
+          url: https://docs.aws.amazon.com/wellarchitected/latest/framework/welcome.html
+        - title: Azure Well-Architected Framework
+          url: https://learn.microsoft.com/en-us/azure/well-architected/
+        - title: Google Cloud Well-Architected Framework
+          url: https://cloud.google.com/architecture/framework
+        - title: Well-architected framework for Oracle Cloud Infrastructure
+          url: https://docs.oracle.com/en/solutions/oci-best-practices/index.html
+        - title: Kubernetes documentation — Security checklist
+          url: https://kubernetes.io/docs/concepts/security/security-checklist/
+        - title: OpenTelemetry — Observability primer
+          url: https://opentelemetry.io/docs/concepts/observability-primer/

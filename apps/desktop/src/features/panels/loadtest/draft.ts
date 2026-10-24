@@ -1,4 +1,4 @@
-import type { AWSTarget, HTTPTarget, LoadProfile, Threshold } from "@/lib/api/types"
+import type { AWSTarget, HTTPTarget, LoadProfile, ScenarioSpec, Threshold } from "@/lib/api/types"
 import { INITIAL_CONNECTION_TARGET, type ConnectionTargetDraft } from "@/features/connections/target-draft"
 import { DEFAULT_THRESHOLDS } from "./metrics"
 
@@ -14,6 +14,8 @@ export interface LoadDraft {
   thresholds: Threshold[]
   timeoutMs: number
   maxWorkers?: number
+  /** Workflow tab only: the incident to inject. atSec 0 = not timed yet (the picker applies defaults). */
+  scenario: ScenarioSpec | null
 }
 
 export const INITIAL_DRAFT: LoadDraft = {
@@ -25,4 +27,5 @@ export const INITIAL_DRAFT: LoadDraft = {
   profile: null,
   thresholds: DEFAULT_THRESHOLDS,
   timeoutMs: 5000,
+  scenario: null,
 }

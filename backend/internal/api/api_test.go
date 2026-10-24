@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"io"
+	"io/fs"
 	"math"
 	"net/http"
 	"net/http/httptest"
@@ -19,6 +20,7 @@ import (
 	"github.com/ismaelosuna7824/nimbo/backend/internal/catalog"
 	"github.com/ismaelosuna7824/nimbo/backend/internal/events"
 	"github.com/ismaelosuna7824/nimbo/backend/internal/hclcodec"
+	"github.com/ismaelosuna7824/nimbo/backend/internal/learn"
 	"github.com/ismaelosuna7824/nimbo/backend/internal/loadtest"
 	"github.com/ismaelosuna7824/nimbo/backend/internal/mcp"
 	"github.com/ismaelosuna7824/nimbo/backend/internal/model"
@@ -42,7 +44,11 @@ func newEnv(t testing.TB) *testEnv { return newEnvDocker(t, "") }
 
 // newEnvDocker is newEnv with the sandbox driving the given docker binary
 // ("" for the default).
-func newEnvDocker(t testing.TB, docker string) *testEnv {
+func newEnvDocker(t testing.TB, docker string) *testEnv { return newEnvWith(t, docker, nil) }
+
+// newEnvWith is newEnvDocker with the learn database fed by learnFS (nil:
+// the embedded content migrations).
+func newEnvWith(t testing.TB, docker string, learnFS fs.FS) *testEnv {
 	t.Helper()
 	home := t.TempDir()
 	st, err := store.Open(home)
@@ -67,6 +73,8 @@ func newEnvDocker(t testing.TB, docker string) *testEnv {
 	if err != nil {
 		t.Fatal(err)
 	}
+	learnDB := learn.Open(home, learn.Options{Migrations: learnFS})
+	t.Cleanup(func() { learnDB.Close() })
 	s := New(Config{
 		Version: "test", Home: home, Store: st, Connections: conns, Catalog: testCatalog, Sandbox: sb,
 		LoadTest: loadtest.NewEngine(loadtest.EngineConfig{Home: home, Events: hub, Resolver: sb, Connections: conns}),
@@ -76,6 +84,7 @@ func newEnvDocker(t testing.TB, docker string) *testEnv {
 		MCPCatalog: func() MCPCatalog {
 			return MCPCatalog{Tools: mcp.ToolCatalog(), Prompts: mcp.PromptCatalog()}
 		},
+		Learn: learnDB,
 	})
 	srv := httptest.NewServer(s.Handler())
 	t.Cleanup(srv.Close)

@@ -1,0 +1,193 @@
+description: Adds the Docker roadmap (beginner to expert) linking the Docker challenges
+operations:
+  - op: upsert
+    kind: roadmap
+    id: docker-roadmap
+    data:
+      provider: docker
+      title: Docker and Docker Compose
+      summary: From your first container to hardened, observable, production-ready Compose projects, following Docker's official guides.
+      levels:
+        - level: beginner
+          title: Containers, images and your first Compose project
+          goals: |
+            Understand what containers and images are, write a Dockerfile that
+            builds quickly and stops cleanly, and run a multi-container app with
+            Docker Compose that starts in the right order and keeps its data.
+          steps:
+            - title: Containers and images
+              description: |
+                A container is an isolated process with its own filesystem,
+                created from an image: a read-only, layered package of everything
+                the app needs. Learn to pin image versions, publish ports, add a
+                healthcheck so Docker knows the app can serve, and set a restart
+                policy.
+              challenges: [docker-first-web-service]
+              docs:
+                - { title: "What is a container?", url: "https://docs.docker.com/get-started/docker-concepts/the-basics/what-is-a-container/" }
+                - { title: "What is an image?", url: "https://docs.docker.com/get-started/docker-concepts/the-basics/what-is-an-image/" }
+                - { title: "Docker overview", url: "https://docs.docker.com/get-started/docker-overview/" }
+                - { title: "Start containers automatically", url: "https://docs.docker.com/engine/containers/start-containers-automatically/" }
+            - title: Writing good Dockerfiles
+              description: |
+                Order instructions so the dependency layer is cached, keep the
+                build context small with `.dockerignore`, pick a minimal pinned
+                base image, and start the app in exec form so it receives
+                signals.
+              challenges: [docker-cache-friendly-dockerfile]
+              docs:
+                - { title: "Building best practices", url: "https://docs.docker.com/build/building/best-practices/" }
+                - { title: "Optimize cache usage in builds", url: "https://docs.docker.com/build/cache/optimize/" }
+                - { title: "Build context and .dockerignore", url: "https://docs.docker.com/build/concepts/context/" }
+                - { title: "Dockerfile reference", url: "https://docs.docker.com/reference/dockerfile/" }
+            - title: Multi-container apps with Compose
+              description: |
+                Describe services, networks and volumes in `compose.yaml`. Keep
+                database data in named volumes, use healthchecks with
+                `depends_on: condition: service_healthy` for startup order, and
+                reach other services by name instead of publishing their ports.
+              challenges: [docker-app-with-postgres]
+              docs:
+                - { title: "What is Docker Compose?", url: "https://docs.docker.com/get-started/docker-concepts/the-basics/what-is-docker-compose/" }
+                - { title: "How Compose works (the application model)", url: "https://docs.docker.com/compose/intro/compose-application-model/" }
+                - { title: "Control startup and shutdown order", url: "https://docs.docker.com/compose/how-tos/startup-order/" }
+                - { title: "Volumes", url: "https://docs.docker.com/engine/storage/volumes/" }
+        - level: intermediate
+          title: Smaller, safer images and project boundaries
+          goals: |
+            Build images that only contain what runs, run them as non-root,
+            hand credentials to containers as secrets instead of environment
+            variables, and segment a project into networks so each service only
+            reaches what it needs.
+          steps:
+            - title: Multi-stage builds and non-root images
+              description: |
+                Compile in a build stage and copy only the artifacts into a
+                minimal runtime stage (distroless, Alpine or slim), then switch to
+                an unprivileged `USER`.
+              challenges: [docker-multi-stage-nonroot]
+              docs:
+                - { title: "Multi-stage builds", url: "https://docs.docker.com/build/building/multi-stage/" }
+                - { title: "Multi-stage builds (Docker concepts)", url: "https://docs.docker.com/get-started/docker-concepts/building-images/multi-stage-builds/" }
+                - { title: "Docker Hardened Images", url: "https://docs.docker.com/dhi/" }
+            - title: Secrets in Compose
+              description: |
+                Define secrets at the top level from files and grant them per
+                service; containers read them from `/run/secrets/<name>`. Prefer
+                images' `*_FILE` variables over plain environment variables.
+              challenges: [docker-secrets-as-files]
+              docs:
+                - { title: "Manage secrets securely in Docker Compose", url: "https://docs.docker.com/compose/how-tos/use-secrets/" }
+                - { title: "Secrets top-level element", url: "https://docs.docker.com/reference/compose-file/secrets/" }
+                - { title: "Set environment variables", url: "https://docs.docker.com/compose/how-tos/environment-variables/set-environment-variables/" }
+            - title: Networks and isolation
+              description: |
+                Use custom networks to build tiers: a public front network for the
+                entry point and an `internal` back network for data services.
+                Services that share no network can't reach each other.
+              challenges: [docker-network-isolation]
+              docs:
+                - { title: "Networking in Compose", url: "https://docs.docker.com/compose/how-tos/networking/" }
+                - { title: "Networks top-level element", url: "https://docs.docker.com/reference/compose-file/networks/" }
+                - { title: "Bridge network driver", url: "https://docs.docker.com/engine/network/drivers/bridge/" }
+        - level: advanced
+          title: Environments, observability and resilience
+          goals: |
+            Run the same project in development and production with override
+            files, measure it with Prometheus metrics named after OpenTelemetry
+            conventions, and make it keep serving when replicas crash, caches
+            are cold or a neighbour hogs resources.
+          steps:
+            - title: Environments with override files
+              description: |
+                Keep `compose.yaml` as the base and put production differences in
+                `compose.prod.yaml` and `.env.prod`: no code bind mounts, quieter
+                logs, restart policies, limits and log rotation. Learn how Compose
+                merges mappings and sequences and when to use `!reset`.
+              challenges: [docker-prod-environment]
+              docs:
+                - { title: "Use Compose in production", url: "https://docs.docker.com/compose/how-tos/production/" }
+                - { title: "Merge Compose files", url: "https://docs.docker.com/compose/how-tos/multiple-compose-files/merge/" }
+                - { title: "Environment variables precedence", url: "https://docs.docker.com/compose/how-tos/environment-variables/envvars-precedence/" }
+                - { title: "Compose deploy specification", url: "https://docs.docker.com/reference/compose-file/deploy/" }
+            - title: Metrics and monitoring
+              description: |
+                Expose `/metrics` with an HTTP request duration histogram
+                (`http_server_request_duration_seconds`), keep labels
+                low-cardinality, label the service for scraping and add
+                Prometheus, Grafana and cAdvisor with Nimbo's Add monitoring.
+              challenges: [docker-observability]
+              docs:
+                - { title: "Prometheus overview", url: "https://prometheus.io/docs/introduction/overview/" }
+                - { title: "Prometheus instrumentation best practices", url: "https://prometheus.io/docs/practices/instrumentation/" }
+                - { title: "OpenTelemetry HTTP metrics semantic conventions", url: "https://opentelemetry.io/docs/specs/semconv/http/http-metrics/" }
+                - { title: "OpenTelemetry metrics concepts", url: "https://opentelemetry.io/docs/concepts/signals/metrics/" }
+            - title: Health-checked load balancing and caching under load
+              description: |
+                Run several replicas behind a load balancer that only routes to
+                ready ones, put a cache in front of a slow database, and keep one
+                service from starving the others by giving each its own CPU and
+                memory limits. These challenges are graded with real load tests
+                and incident scenarios.
+              challenges: [docker-lb-health-checks, docker-cache-aside, docker-noisy-neighbor]
+              docs:
+                - { title: "Compose services reference (healthcheck, deploy)", url: "https://docs.docker.com/reference/compose-file/services/" }
+                - { title: "Resource constraints", url: "https://docs.docker.com/engine/containers/resource_constraints/" }
+                - { title: "Redis patterns", url: "https://redis.io/docs/latest/develop/use/patterns/" }
+        - level: expert
+          title: Least privilege, supply chain and failure under load
+          goals: |
+            Contain a compromised container with a hardened runtime, keep
+            credentials out of images with BuildKit secrets and track what is in
+            your images, and design services that degrade gracefully when
+            dependencies slow down or caches expire all at once.
+          steps:
+            - title: Hardened runtime
+              description: |
+                Remove host-level privileges (privileged mode, the Docker socket,
+                host namespaces), run non-root on a read-only root filesystem with
+                a tmpfs for scratch space, drop all capabilities, forbid privilege
+                escalation and cap memory, CPU and processes.
+              challenges: [docker-hardened-runtime]
+              docs:
+                - { title: "Docker Engine security", url: "https://docs.docker.com/engine/security/" }
+                - { title: "Seccomp security profiles", url: "https://docs.docker.com/engine/security/seccomp/" }
+                - { title: "Resource constraints", url: "https://docs.docker.com/engine/containers/resource_constraints/" }
+            - title: Daemon-level isolation
+              description: |
+                Go beyond per-container settings: Rootless mode runs the Docker
+                daemon and containers as an unprivileged user, and user namespace
+                remapping maps root in containers to an unprivileged host user.
+              challenges: []
+              docs:
+                - { title: "Rootless mode", url: "https://docs.docker.com/engine/security/rootless/" }
+                - { title: "Isolate containers with a user namespace", url: "https://docs.docker.com/engine/security/userns-remap/" }
+            - title: Build secrets and the software supply chain
+              description: |
+                Pass build-time credentials with secret mounts instead of `ARG`
+                or `ENV`, deliver runtime credentials as secret files, and record
+                what an image contains with SBOM and provenance attestations that
+                Docker Scout can analyze for vulnerabilities.
+              challenges: [docker-build-secrets-supply-chain]
+              docs:
+                - { title: "Build secrets", url: "https://docs.docker.com/build/building/secrets/" }
+                - { title: "Build attestations", url: "https://docs.docker.com/build/metadata/attestations/" }
+                - { title: "SBOM attestations", url: "https://docs.docker.com/build/metadata/attestations/sbom/" }
+                - { title: "Docker Scout quickstart", url: "https://docs.docker.com/scout/quickstart/" }
+            - title: Failure under load
+              description: |
+                Keep latency bounded when a dependency slows down (timeouts,
+                fallbacks) and stop a cache expiry from sending every request to
+                the database at once. Graded with load tests and incident
+                scenarios against the running project.
+              challenges: [docker-slow-dependency, docker-cache-stampede]
+              docs:
+                - { title: "Compose services reference", url: "https://docs.docker.com/reference/compose-file/services/" }
+                - { title: "Redis client-side caching", url: "https://redis.io/docs/latest/develop/clients/client-side-caching/" }
+      sources:
+        - { title: "Docker Docs: Get started", url: "https://docs.docker.com/get-started/docker-overview/" }
+        - { title: "Docker Docs: Building best practices", url: "https://docs.docker.com/build/building/best-practices/" }
+        - { title: "Docker Docs: Docker Compose", url: "https://docs.docker.com/compose/intro/compose-application-model/" }
+        - { title: "Docker Docs: Docker Engine security", url: "https://docs.docker.com/engine/security/" }
+        - { title: "Prometheus: Overview", url: "https://prometheus.io/docs/introduction/overview/" }
+        - { title: "OpenTelemetry: What is OpenTelemetry?", url: "https://opentelemetry.io/docs/what-is-opentelemetry/" }

@@ -4,6 +4,7 @@ import (
 	"context"
 
 	"github.com/ismaelosuna7824/nimbo/backend/internal/kube"
+	"github.com/ismaelosuna7824/nimbo/backend/internal/model"
 	"github.com/ismaelosuna7824/nimbo/backend/internal/store"
 )
 
@@ -25,6 +26,11 @@ func (w loadTestWorkflows) ActiveEnvironment(wfID string) (string, bool) {
 		return wf.Compose.Environment, true
 	}
 	return "", false
+}
+
+func (w loadTestWorkflows) Workflow(wfID string) (*model.Workflow, bool) {
+	wf, err := w.st.Get(wfID)
+	return wf, err == nil
 }
 
 func (w loadTestWorkflows) AutoscaledIn(ctx context.Context, wfID, env, kind, name string) []string {

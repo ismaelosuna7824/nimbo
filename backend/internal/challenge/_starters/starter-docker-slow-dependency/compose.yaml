@@ -1,0 +1,38 @@
+# Challenge: a slow dependency takes everyone down.
+# The quote api asks the pricing service for a price on every request.
+# Only the quote api is published.
+
+x-defaults: &defaults
+  restart: unless-stopped
+  logging:
+    driver: json-file
+    options:
+      max-size: "10m"
+      max-file: "3"
+
+services:
+  api:
+    <<: *defaults
+    build: ./api
+    init: true
+    ports:
+      - "3403:3000"
+    environment:
+      PRICING_URL: http://pricing:4000
+    depends_on:
+      - pricing
+    deploy:
+      resources:
+        limits:
+          cpus: "1"
+          memory: 128M
+
+  pricing:
+    <<: *defaults
+    build: ./pricing
+    init: true
+    deploy:
+      resources:
+        limits:
+          cpus: "0.5"
+          memory: 128M

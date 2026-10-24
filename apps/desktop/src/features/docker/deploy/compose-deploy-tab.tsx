@@ -107,8 +107,13 @@ export function ComposeDeployTab() {
   }
 
   return (
-    <div className="grid h-full min-h-0 grid-cols-[minmax(17rem,22rem)_minmax(0,1fr)]" data-testid="compose-deploy-tab">
-      <div className="flex min-h-0 flex-col gap-2 overflow-auto border-r p-2">
+    // Narrow bottom panels (< 48rem, the panel is the container) stack the controls above the views and scroll as one
+    // page; wide ones put them side by side, each scrolling on its own.
+    <div
+      className="grid h-full min-h-0 grid-rows-[auto_minmax(20rem,1fr)] overflow-y-auto @3xl:grid-cols-[minmax(17rem,22rem)_minmax(0,1fr)] @3xl:grid-rows-1 @3xl:overflow-hidden"
+      data-testid="compose-deploy-tab"
+    >
+      <div className="flex flex-col gap-2 border-b p-2 @3xl:min-h-0 @3xl:overflow-auto @3xl:border-r @3xl:border-b-0">
         {dockerDown && (
           <div className="flex gap-2 rounded-lg border border-destructive/40 bg-destructive/10 p-2 text-xs text-destructive">
             <TriangleAlert className="mt-0.5 size-3.5 shrink-0" />
@@ -159,7 +164,7 @@ export function ComposeDeployTab() {
                   <Button
                     size="sm"
                     variant={action === "up" ? "default" : action === "down" ? "outline" : "secondary"}
-                    className={cn("h-8 flex-col gap-0 px-1 text-[11px]", action === "down" && "text-destructive")}
+                    className={cn("h-auto flex-col gap-1 px-1 py-1.5 text-[11px] leading-none [&_svg]:size-3.5", action === "down" && "text-destructive")}
                     disabled={!!active || starting !== null || dockerDown}
                     data-testid={`compose-action-${action}`}
                     onClick={() => (action === "down" ? setConfirmDown(true) : void start(action, action))}
@@ -213,8 +218,8 @@ export function ComposeDeployTab() {
         </section>
       </div>
 
-      <Tabs value={view} onValueChange={(v) => setView(v as View)} className="flex min-h-0 flex-col gap-0">
-        <TabsList variant="line" className="h-8 w-full shrink-0 justify-start rounded-none border-b px-2">
+      <Tabs value={view} onValueChange={(v) => setView(v as View)} className="@container flex min-h-0 min-w-0 flex-col gap-0">
+        <TabsList variant="line" className="h-8 w-full shrink-0 justify-start overflow-x-auto overflow-y-hidden rounded-none border-b px-2 [scrollbar-width:none]">
           <TabsTrigger value="services" className="flex-none text-xs">
             Services <span className="text-muted-foreground tabular-nums">{services.length}</span>
           </TabsTrigger>

@@ -130,7 +130,7 @@ func (m *Manager) buildAndLoad(ctx context.Context, rs *runState, wfID, node, so
 		args = append(args, abs)
 		m.logLine(rs, "system", fmt.Sprintf("$ docker build -t %s %s", b.Image, ctxDir))
 		start := time.Now()
-		code, err := m.composeExec(ctx, rs, args)
+		code, err := m.composeExec(ctx, rs, sourceDir, args)
 		if err != nil {
 			return err
 		}

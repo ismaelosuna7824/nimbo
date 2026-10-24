@@ -222,18 +222,35 @@ func stability(secs []secStat) float64 {
 	return round3(math.Sqrt(sq/float64(len(vals))) / mean)
 }
 
+// Breaking-point rule, shared by the run summary (BreakingPoint), the
+// scaling verdicts and capacity planning (FirstDegraded).
 const (
+	// breakErrorRate: a second with more errors than this is degraded at
+	// once — failed requests are never noise.
 	breakErrorRate = 0.05
-	breakP95Factor = 4
-	baselineSecs   = 3
-	// minDegradationMs keeps sub-millisecond jitter on very fast local
-	// targets from being reported as a breaking point: p95 must also grow
-	// by at least this much over the baseline.
-	minDegradationMs = 10
+	// baselineSecs: the baseline is the median p95 of the first seconds
+	// with successful requests.
+	baselineSecs = 3
+	// A second's p95 is over the baseline when it exceeds
+	// max(breakP95Factor × baseline, baseline + minDegradationMs). The
+	// factor alone is meaningless on fast endpoints: a 1 ms baseline makes
+	// a perfectly healthy 12 ms p95 at 1500 req/s look "12× slower". The
+	// absolute floor asks for latency a caller would notice (the same
+	// 50 ms slack the scenario verdicts use, scenario.P95SlackMs) before
+	// calling it queueing; on slow endpoints (baseline above ~17 ms) the
+	// factor dominates as before.
+	breakP95Factor   = 4
+	minDegradationMs = 50
+	// breakSustainSec: latency must stay over the baseline this many
+	// seconds in a row to count. One slow second is a GC pause, a cold
+	// connection or a scheduler hiccup; saturation persists. Every second
+	// of a sustained streak is flagged, so the breaking point is where the
+	// streak started.
+	breakSustainSec = 2
 )
 
-// degradation says why one second of a run degraded: p95 above
-// breakP95Factor times the baseline, or an error rate above breakErrorRate.
+// degradation says why one second of a run degraded: p95 sustained over
+// its baseline, or an error rate above breakErrorRate.
 type degradation struct {
 	latency bool
 	errors  bool
@@ -241,33 +258,48 @@ type degradation struct {
 
 func (d degradation) any() bool { return d.latency || d.errors }
 
-// degradations flags every second whose error rate exceeds 5% or whose p95
-// exceeds 4x the median p95 of the first three seconds with successful
-// requests (index i is second i+1 of the timeline).
+// slowP95 is the p95 above which a second is over a baseline.
+func slowP95(baseline float64) float64 {
+	return max(breakP95Factor*baseline, baseline+minDegradationMs)
+}
+
+// degradations flags every second whose error rate exceeds breakErrorRate
+// or that belongs to a streak of at least breakSustainSec seconds whose p95
+// is above slowP95 of the baseline (index i is second i+1 of the
+// timeline). Seconds without traffic, with errors or within the baseline
+// end a streak.
 func degradations(secs []secStat) []degradation {
 	out := make([]degradation, len(secs))
 	var base []float64
 	baseline := -1.0
+	streak := 0 // consecutive seconds over the baseline, ending at i
 	for i, st := range secs {
-		if st.resolved == 0 {
-			continue
-		}
-		if float64(st.errors)/float64(st.resolved) > breakErrorRate {
+		over := false
+		switch {
+		case st.resolved == 0:
+		case float64(st.errors)/float64(st.resolved) > breakErrorRate:
 			out[i].errors = true
-			continue
-		}
-		if st.ok == 0 {
-			continue
-		}
-		if baseline < 0 {
+		case st.ok == 0:
+		case baseline < 0:
 			base = append(base, st.p95)
 			if len(base) == baselineSecs {
 				slices.Sort(base)
 				baseline = base[1]
 			}
+		default:
+			over = st.p95 > slowP95(baseline)
+		}
+		if !over {
+			streak = 0
 			continue
 		}
-		if st.p95 > breakP95Factor*baseline && st.p95-baseline >= minDegradationMs {
+		streak++
+		switch {
+		case streak == breakSustainSec:
+			for j := i - streak + 1; j <= i; j++ {
+				out[j].latency = true
+			}
+		case streak > breakSustainSec:
 			out[i].latency = true
 		}
 	}
@@ -282,6 +314,29 @@ func breakingPoint(secs []secStat) *float64 {
 		}
 	}
 	return nil
+}
+
+// FirstDegraded is the index of the first second of a recorded timeline
+// whose latency or errors degraded (the run's breaking point), -1 when
+// none did. Timelines don't keep arrivals rejected by busy workers apart
+// from executed requests, so the error rate is taken over the executed
+// ones: an upper bound, which only makes the healthy part shorter.
+func FirstDegraded(timeline []model.LoadSample) int {
+	secs := make([]secStat, len(timeline))
+	for i, s := range timeline {
+		ok := 0
+		if s.P95 > 0 {
+			ok = 1
+		}
+		exec := int(s.RPS)
+		secs[i] = secStat{target: s.Target, resolved: max(exec, s.Errors), errors: s.Errors, executed: exec, ok: ok, p95: s.P95}
+	}
+	for i, d := range degradations(secs) {
+		if d.any() {
+			return i
+		}
+	}
+	return -1
 }
 
 var thresholdMetrics = map[string]func(*model.LoadSummary) float64{

@@ -1,0 +1,1300 @@
+description: Adds the global security challenges (least privilege, encryption at rest and in transit, network segmentation, defense in depth) with adaptations for every provider
+operations:
+  - op: upsert
+    kind: challenge
+    id: global-least-privilege
+    data:
+      provider: global
+      level: beginner
+      title: Grant only the access a workload needs
+      summary: Replace an "allow everything" policy with one that lets a reporting job read a single bucket.
+      minutes: 20
+      tags: [security, iam, least-privilege, well-architected]
+      runtime: design
+      problem: |
+        A nightly reporting job reads finished reports from a storage bucket. While prototyping, someone gave
+        its role a policy that allows **every action on every resource** "to get it working". The job works, but
+        if its credentials leak (a dependency compromise, a logged token) the attacker inherits full control of
+        the account: they can delete databases, create users and read every bucket.
+
+        All four cloud frameworks start security with the same principle: an identity gets only the
+        permissions it needs for its task, on the specific resources it touches, and nothing by default.
+
+        This challenge is graded on **AWS** (Terraform, design checks): the starter has an IAM role for the job,
+        the `reports` bucket and the over-broad inline policy. The adaptations explain how the same fix looks
+        on Azure, Google Cloud, OCI, Docker and Kubernetes.
+      requirements:
+        - "The job's policy no longer allows `*` actions on `*` resources (no `bp_iam_wildcard` finding)."
+        - "The policy grants only the read actions the job uses: `s3:ListBucket` on the bucket and `s3:GetObject` on its objects."
+        - "Resources are referenced from the bucket itself (`aws_s3_bucket.reports.arn`), not written as `*`."
+        - "No service-wide wildcard actions such as `s3:*` remain."
+      hints:
+        - "Start from what the job actually does: list the bucket and download objects. Every other permission is risk without benefit."
+        - "Bucket-level actions (`s3:ListBucket`) apply to the bucket ARN; object-level actions (`s3:GetObject`) apply to `<bucket ARN>/*`. That is why least-privilege S3 policies usually have two statements."
+        - "Inside `jsonencode`, write `Resource = [aws_s3_bucket.reports.arn]` for the list statement and `Resource = [\"${aws_s3_bucket.reports.arn}/*\"]` for the read statement."
+      solution: |
+        Least privilege means granting **only the actions a task needs, only on the resources it touches**. IAM
+        identities have no permissions by default, so every statement you add is a deliberate grant.
+
+        1. Identify the job's real API calls: listing the reports bucket and reading objects.
+        2. Replace the single `Action = "*"` / `Resource = "*"` statement with two scoped statements:
+           - `s3:ListBucket` on `aws_s3_bucket.reports.arn`;
+           - `s3:GetObject` on `"${aws_s3_bucket.reports.arn}/*"`.
+        3. Reference the bucket instead of hard-coding ARNs, so the policy follows the resource across
+           environments.
+
+        In a real account you would keep refining over time: IAM Access Analyzer can generate a policy from the
+        actions a role actually used (CloudTrail activity), and last-accessed information shows permissions you
+        can remove. The same thinking applies everywhere: predefined/custom roles instead of basic roles on Google
+        Cloud, built-in roles scoped to a resource on Azure, compartment-scoped policies on OCI, namespaced Roles
+        instead of `cluster-admin` on Kubernetes, and non-root users with dropped capabilities in containers.
+      solutionFiles:
+        main.tf: |
+          resource "aws_s3_bucket" "reports" {
+            bucket_prefix = "${var.project}-reports-"
+          }
+
+          resource "aws_s3_bucket_server_side_encryption_configuration" "reports" {
+            bucket = aws_s3_bucket.reports.id
+
+            rule {
+              apply_server_side_encryption_by_default {
+                sse_algorithm = "AES256"
+              }
+            }
+          }
+
+          resource "aws_s3_bucket_public_access_block" "reports" {
+            bucket                  = aws_s3_bucket.reports.id
+            block_public_acls       = true
+            block_public_policy     = true
+            ignore_public_acls      = true
+            restrict_public_buckets = true
+          }
+
+          # The role the nightly reporting job runs as.
+          resource "aws_iam_role" "report_reader" {
+            name = "${var.project}-report-reader"
+            assume_role_policy = jsonencode({
+              Version = "2012-10-17"
+              Statement = [{
+                Effect    = "Allow"
+                Principal = { Service = "lambda.amazonaws.com" }
+                Action    = "sts:AssumeRole"
+              }]
+            })
+          }
+
+          # Only what the job does: list the bucket and read its objects.
+          resource "aws_iam_role_policy" "report_reader" {
+            name = "${var.project}-read-reports"
+            role = aws_iam_role.report_reader.id
+            policy = jsonencode({
+              Version = "2012-10-17"
+              Statement = [
+                {
+                  Sid      = "ListReports"
+                  Effect   = "Allow"
+                  Action   = ["s3:ListBucket"]
+                  Resource = [aws_s3_bucket.reports.arn]
+                },
+                {
+                  Sid      = "ReadReports"
+                  Effect   = "Allow"
+                  Action   = ["s3:GetObject"]
+                  Resource = ["${aws_s3_bucket.reports.arn}/*"]
+                }
+              ]
+            })
+          }
+      starter:
+        kind: terraform
+        cloud: aws
+        files:
+          versions.tf: |
+            terraform {
+              required_version = ">= 1.6"
+
+              required_providers {
+                aws = {
+                  source  = "hashicorp/aws"
+                  version = "~> 6.0"
+                }
+              }
+            }
+          providers.tf: |
+            provider "aws" {
+              region = var.aws_region
+
+              default_tags {
+                tags = {
+                  Project   = var.project
+                  ManagedBy = "nimbo"
+                }
+              }
+            }
+          variables.tf: |
+            variable "project" {
+              type        = string
+              default     = "reports"
+              description = "Project name: prefix of every resource name and the Project tag."
+            }
+
+            variable "aws_region" {
+              type        = string
+              default     = "us-east-1"
+              description = "AWS region to deploy into."
+            }
+          main.tf: |
+            resource "aws_s3_bucket" "reports" {
+              bucket_prefix = "${var.project}-reports-"
+            }
+
+            resource "aws_s3_bucket_server_side_encryption_configuration" "reports" {
+              bucket = aws_s3_bucket.reports.id
+
+              rule {
+                apply_server_side_encryption_by_default {
+                  sse_algorithm = "AES256"
+                }
+              }
+            }
+
+            resource "aws_s3_bucket_public_access_block" "reports" {
+              bucket                  = aws_s3_bucket.reports.id
+              block_public_acls       = true
+              block_public_policy     = true
+              ignore_public_acls      = true
+              restrict_public_buckets = true
+            }
+
+            # The role the nightly reporting job runs as.
+            resource "aws_iam_role" "report_reader" {
+              name = "${var.project}-report-reader"
+              assume_role_policy = jsonencode({
+                Version = "2012-10-17"
+                Statement = [{
+                  Effect    = "Allow"
+                  Principal = { Service = "lambda.amazonaws.com" }
+                  Action    = "sts:AssumeRole"
+                }]
+              })
+            }
+
+            # "Temporary" while prototyping: the job can do anything.
+            resource "aws_iam_role_policy" "report_reader" {
+              name = "${var.project}-read-reports"
+              role = aws_iam_role.report_reader.id
+              policy = jsonencode({
+                Version = "2012-10-17"
+                Statement = [{
+                  Effect   = "Allow"
+                  Action   = "*"
+                  Resource = "*"
+                }]
+              })
+            }
+      checks:
+        - id: valid
+          label: The configuration is valid
+          type: validate
+        - id: no-admin-policy
+          label: No policy allows every action on every resource
+          type: rules_clean
+          rules_clean:
+            codes: [bp_iam_wildcard]
+            minSeverity: warning
+        - id: read-only-actions
+          label: The policy grants s3:GetObject and s3:ListBucket
+          type: has
+          has:
+            terraform:
+              type: aws_iam_role_policy
+              name: report_reader
+              where:
+                policy:
+                  contains: s3:GetObject
+        - id: list-action
+          label: Listing is allowed on the bucket
+          type: has
+          has:
+            terraform:
+              type: aws_iam_role_policy
+              name: report_reader
+              where:
+                policy:
+                  contains: s3:ListBucket
+        - id: scoped-resource
+          label: Resources reference the reports bucket
+          type: has
+          has:
+            terraform:
+              type: aws_iam_role_policy
+              name: report_reader
+              where:
+                policy:
+                  ref: aws_s3_bucket.reports
+        - id: no-service-wildcard
+          label: No service-wide wildcard actions (s3:*)
+          type: has
+          has:
+            terraform:
+              type: aws_iam_role_policy
+              where:
+                policy:
+                  contains: "s3:*"
+              count:
+                max: 0
+      adaptations:
+        aws: |
+          Attach an **IAM role** to the compute (Lambda execution role, EC2 instance profile, ECS task role) with
+          identity policies that list specific actions and resource ARNs; add conditions where they narrow access.
+          Use **IAM Access Analyzer** policy generation and last-accessed data to trim unused permissions.
+          Practice: `aws-lambda-least-privilege`.
+        azure: |
+          Give the workload a **managed identity** and assign it a **built-in role** (for example *Storage Blob
+          Data Reader*) at the narrowest scope that works: the storage account or container, not the subscription.
+          Avoid Owner/Contributor for workloads; add role-assignment conditions for finer control. Practice:
+          `azure-app-service-key-vault`.
+        gcp: |
+          Run the job as a **dedicated service account** and grant a **predefined role** (for example
+          `roles/storage.objectViewer`) on the bucket, not a basic role (Owner/Editor/Viewer) on the project.
+          Use role recommendations to remove excess permissions. Practice: `gcp-cloud-run-least-privilege`.
+        oci: |
+          Put the bucket in a **compartment** and write an IAM **policy** for a dynamic group (instance or
+          resource principal) such as `allow dynamic-group report-jobs to read objects in compartment reports`.
+          Prefer `read`/`use` verbs over `manage`, and never run workloads as the tenancy administrator. Practice:
+          `oci-compartment-least-privilege`.
+        docker: |
+          Least privilege for containers is about the process: run as a **non-root `USER`**, drop Linux
+          capabilities (`cap_drop: [ALL]`), set `read_only: true` where possible, and never mount the Docker
+          socket. Give each service only the secrets it needs (`secrets:`). Practice: `docker-multi-stage-nonroot`,
+          `docker-hardened-runtime`.
+        kubernetes: |
+          Give each workload its own **ServiceAccount** bound with a namespaced **Role/RoleBinding** listing only
+          the verbs and resources it uses; avoid wildcards and `cluster-admin`, and set
+          `automountServiceAccountToken: false` when the pod doesn't call the API. Practice:
+          `kubernetes-rbac-least-privilege`.
+      sources:
+        - title: AWS Well-Architected — SEC03-BP02 Grant least privilege access
+          url: https://docs.aws.amazon.com/wellarchitected/latest/framework/sec_permissions_least_privileges.html
+        - title: AWS IAM — Security best practices in IAM
+          url: https://docs.aws.amazon.com/IAM/latest/UserGuide/best-practices.html
+        - title: Azure Well-Architected — Identity and access management
+          url: https://learn.microsoft.com/en-us/azure/well-architected/security/identity-access
+        - title: Google Cloud — Use IAM securely
+          url: https://cloud.google.com/iam/docs/using-iam-securely
+        - title: OCI Well-Architected — Isolate resources and control access
+          url: https://docs.oracle.com/en/solutions/oci-best-practices/isolate-resources-and-control-access1.html
+        - title: Kubernetes — Role Based Access Control good practices
+          url: https://kubernetes.io/docs/concepts/security/rbac-good-practices/
+        - title: Docker — Docker Engine security
+          url: https://docs.docker.com/engine/security/
+
+  - op: upsert
+    kind: challenge
+    id: global-encryption
+    data:
+      provider: global
+      level: beginner
+      title: Encrypt data at rest and in transit
+      summary: Turn on default encryption for a records bucket and refuse any request that isn't sent over TLS.
+      minutes: 25
+      tags: [security, encryption, tls, data-protection, well-architected]
+      prerequisites: [global-least-privilege]
+      runtime: design
+      problem: |
+        A clinic stores scanned patient records in an object storage bucket. Access is private, but the bucket
+        has **no default encryption** configured and clients may still talk to it over plain HTTP. An auditor asks
+        two questions: *"Is the data encrypted where it is stored?"* and *"Can it travel unencrypted?"* — today
+        the honest answer is "we don't control either".
+
+        Every framework treats these as two separate controls: **encryption at rest** (data is unreadable
+        without the key, and key access is controlled and audited) and **encryption in transit** (TLS on every
+        connection, with insecure protocols refused).
+
+        Graded on **AWS** (Terraform, design checks): the starter has the private `records` bucket with a public
+        access block and nothing else.
+      requirements:
+        - "The `records` bucket has a server-side encryption configuration with `AES256`, `aws:kms` or `aws:kms:dsse` (no `bp_unencrypted_storage` finding)."
+        - "A bucket policy on `records` **denies** any request where `aws:SecureTransport` is `false`."
+        - "Both resources reference the bucket (`aws_s3_bucket.records`)."
+      hints:
+        - "At rest: `aws_s3_bucket_server_side_encryption_configuration` with a `rule { apply_server_side_encryption_by_default { ... } }` block."
+        - "In transit: a bucket policy statement with `Effect = \"Deny\"`, `Principal = \"*\"`, `Action = \"s3:*\"`, the bucket and object ARNs as resources and `Condition = { Bool = { \"aws:SecureTransport\" = \"false\" } }`."
+        - "With `aws:kms`, set `bucket_key_enabled = true` to reduce KMS request costs; a customer managed key lets you control and audit who can decrypt."
+      solution: |
+        **At rest.** Add `aws_s3_bucket_server_side_encryption_configuration` for the bucket. `aws:kms` uses AWS KMS:
+        with a customer managed key you control the key policy and rotation and every decrypt is logged; S3
+        Bucket Keys cut the number of KMS calls. `AES256` (SSE-S3) also satisfies encrypt-by-default.
+
+        **In transit.** Allowing only HTTPS is done with a **deny** statement: anything that arrives with
+        `aws:SecureTransport = false` is refused, whatever other policies allow. A deny always wins over an allow,
+        which is why this pattern is robust.
+
+        Encryption complements access control, it doesn't replace it: keep the public access block, and limit who
+        may use the key (`kms:Decrypt`) as tightly as who may read the bucket.
+      solutionFiles:
+        main.tf: |
+          resource "aws_s3_bucket" "records" {
+            bucket_prefix = "${var.project}-records-"
+          }
+
+          resource "aws_s3_bucket_public_access_block" "records" {
+            bucket                  = aws_s3_bucket.records.id
+            block_public_acls       = true
+            block_public_policy     = true
+            ignore_public_acls      = true
+            restrict_public_buckets = true
+          }
+
+          # At rest: every new object is encrypted with KMS; the bucket key
+          # reduces KMS requests.
+          resource "aws_s3_bucket_server_side_encryption_configuration" "records" {
+            bucket = aws_s3_bucket.records.id
+
+            rule {
+              apply_server_side_encryption_by_default {
+                sse_algorithm = "aws:kms"
+              }
+              bucket_key_enabled = true
+            }
+          }
+
+          # In transit: refuse every request that doesn't use TLS.
+          resource "aws_s3_bucket_policy" "records" {
+            bucket = aws_s3_bucket.records.id
+            policy = jsonencode({
+              Version = "2012-10-17"
+              Statement = [{
+                Sid       = "DenyInsecureTransport"
+                Effect    = "Deny"
+                Principal = "*"
+                Action    = "s3:*"
+                Resource  = [aws_s3_bucket.records.arn, "${aws_s3_bucket.records.arn}/*"]
+                Condition = { Bool = { "aws:SecureTransport" = "false" } }
+              }]
+            })
+
+            depends_on = [aws_s3_bucket_public_access_block.records]
+          }
+      starter:
+        kind: terraform
+        cloud: aws
+        files:
+          versions.tf: |
+            terraform {
+              required_version = ">= 1.6"
+
+              required_providers {
+                aws = {
+                  source  = "hashicorp/aws"
+                  version = "~> 6.0"
+                }
+              }
+            }
+          providers.tf: |
+            provider "aws" {
+              region = var.aws_region
+
+              default_tags {
+                tags = {
+                  Project   = var.project
+                  ManagedBy = "nimbo"
+                }
+              }
+            }
+          variables.tf: |
+            variable "project" {
+              type        = string
+              default     = "clinic"
+              description = "Project name: prefix of every resource name and the Project tag."
+            }
+
+            variable "aws_region" {
+              type        = string
+              default     = "us-east-1"
+              description = "AWS region to deploy into."
+            }
+          main.tf: |
+            resource "aws_s3_bucket" "records" {
+              bucket_prefix = "${var.project}-records-"
+            }
+
+            resource "aws_s3_bucket_public_access_block" "records" {
+              bucket                  = aws_s3_bucket.records.id
+              block_public_acls       = true
+              block_public_policy     = true
+              ignore_public_acls      = true
+              restrict_public_buckets = true
+            }
+      checks:
+        - id: valid
+          label: The configuration is valid
+          type: validate
+        - id: no-unencrypted-storage
+          label: Storage is encrypted at rest
+          type: rules_clean
+          rules_clean:
+            codes: [bp_unencrypted_storage]
+            minSeverity: warning
+        - id: sse-records
+          label: The records bucket has default encryption
+          type: has
+          has:
+            terraform:
+              type: aws_s3_bucket_server_side_encryption_configuration
+              where:
+                bucket:
+                  ref: aws_s3_bucket.records
+                rule.apply_server_side_encryption_by_default.sse_algorithm:
+                  in: [AES256, "aws:kms", "aws:kms:dsse"]
+        - id: tls-only
+          label: The bucket policy requires TLS (aws:SecureTransport)
+          type: has
+          has:
+            terraform:
+              type: aws_s3_bucket_policy
+              where:
+                bucket:
+                  ref: aws_s3_bucket.records
+                policy:
+                  contains: aws:SecureTransport
+        - id: tls-deny
+          label: Insecure requests are denied, not just not allowed
+          type: has
+          has:
+            terraform:
+              type: aws_s3_bucket_policy
+              where:
+                policy:
+                  contains: Deny
+      adaptations:
+        aws: |
+          At rest: S3 default encryption (SSE-S3 or SSE-KMS with a customer managed key), `storage_encrypted` on
+          RDS, encrypted EBS (account-level EBS encryption by default), DynamoDB server-side encryption. In transit:
+          bucket policies with `aws:SecureTransport`, HTTPS listeners with ACM certificates on load balancers and
+          CloudFront. Practice: `aws-private-s3-bucket`, `aws-cloudfront-s3-oac`.
+        azure: |
+          Storage accounts encrypt at rest by default (customer-managed keys in **Key Vault** when you need key
+          control). For transit set **secure transfer required** (HTTPS only) and a **minimum TLS version of 1.2**;
+          Azure SQL also enforces a minimum TLS version. Practice: `azure-storage-secure-defaults`,
+          `azure-sql-private-endpoint`.
+        gcp: |
+          Google Cloud encrypts data at rest by default (AES-256); use **Cloud KMS** customer-managed encryption
+          keys (CMEK) when you must control the key. For transit, serve through HTTPS load balancers with managed
+          certificates and an SSL policy that sets a minimum TLS version. Practice: `gcp-https-lb-cloud-armor`.
+        oci: |
+          Block, file and object storage are encrypted at rest; use **OCI Vault** master encryption keys when you
+          need to manage and rotate the keys yourself. Terminate TLS on the load balancer (or end-to-end TLS to
+          backends). Practice: `oci-vault-customer-managed-keys`.
+        docker: |
+          Docker doesn't encrypt volumes for you: rely on host disk encryption and keep credentials out of images
+          and compose files with **secrets** (mounted as files under `/run/secrets`). Terminate TLS at a reverse
+          proxy and use TLS between services that cross untrusted networks. Practice: `docker-secrets-as-files`.
+        kubernetes: |
+          Enable **encryption at rest for Secrets** in the API server (EncryptionConfiguration, ideally with a KMS
+          provider) — managed clusters (EKS, AKS, GKE, OKE) offer it as a setting. Terminate TLS at the Ingress
+          with a certificate Secret, and consider a service mesh for mTLS between pods. Practice:
+          `kubernetes-config-and-secrets`.
+      sources:
+        - title: AWS Well-Architected — SEC08-BP02 Enforce encryption at rest
+          url: https://docs.aws.amazon.com/wellarchitected/latest/framework/sec_protect_data_rest_encrypt.html
+        - title: AWS Well-Architected — SEC09-BP02 Enforce encryption in transit
+          url: https://docs.aws.amazon.com/wellarchitected/latest/framework/sec_protect_data_transit_encrypt.html
+        - title: Amazon S3 — Security best practices
+          url: https://docs.aws.amazon.com/AmazonS3/latest/userguide/security-best-practices.html
+        - title: Azure Well-Architected — Encryption
+          url: https://learn.microsoft.com/en-us/azure/well-architected/security/encryption
+        - title: Google Cloud — Default encryption at rest
+          url: https://cloud.google.com/docs/security/encryption/default-encryption
+        - title: Google Cloud — Encryption in transit
+          url: https://cloud.google.com/docs/security/encryption-in-transit
+        - title: OCI Well-Architected — Protect data at rest
+          url: https://docs.oracle.com/en/solutions/oci-best-practices/protect-data-rest1.html
+        - title: Kubernetes — Encrypting confidential data at rest
+          url: https://kubernetes.io/docs/tasks/administer-cluster/encrypt-data/
+        - title: Docker — Manage secrets securely in Docker Compose
+          url: https://docs.docker.com/compose/how-tos/use-secrets/
+
+  - op: upsert
+    kind: challenge
+    id: global-network-segmentation
+    data:
+      provider: global
+      level: intermediate
+      title: Segment the network into tiers
+      summary: Put a proxy, an API and a database on separate networks so only the API can reach the database.
+      minutes: 35
+      tags: [security, networking, segmentation, defense-in-depth, well-architected]
+      prerequisites: [global-least-privilege]
+      runtime: local
+      problem: |
+        A three-tier app — a reverse **proxy**, an **api** and a PostgreSQL **db** — runs on one flat network,
+        and the database is even published on every interface of the host. Anything that compromises the proxy
+        (the only component exposed to clients) can connect straight to the database, and so can anyone on the
+        same Wi-Fi.
+
+        The frameworks call this **network segmentation**: group components into layers by exposure and data
+        sensitivity, and allow only the flows each layer needs (the proxy talks to the API, the API talks to the
+        database, nothing else talks to the database).
+
+        Graded on **Docker** (local, deployed): the starter `compose.yaml` runs all three services on the default
+        network; the proxy forwards `/api/` to the api service.
+      requirements:
+        - "Two networks: `frontend` (proxy and api) and `backend` (api and db)."
+        - "`backend` is an **internal** network (no external connectivity)."
+        - "The proxy is not attached to `backend`; the db is not attached to `frontend`."
+        - "The database is not published on the host (no `ports:`); only the proxy is published."
+        - "After deploying, `GET /api/` through the proxy still reaches the api (HTTP 200)."
+      hints:
+        - "Compose attaches every service to `<project>_default` unless you list `networks:` per service. Declare `frontend` and `backend` under the top-level `networks:` key."
+        - "The api is the only service on both networks: it is the controlled path between tiers."
+        - "Set `internal: true` on `backend` and delete the db's `ports:` — services on the same network reach it as `db:5432`."
+      solution: |
+        Segmentation limits **who can reach what**, so a compromise of the exposed tier doesn't grant access to the
+        data tier.
+
+        1. Declare `frontend` and `backend` networks; mark `backend` as `internal: true` so containers on it have
+           no route to the outside world.
+        2. Attach the proxy to `frontend` only, the db to `backend` only and the api to both. The proxy can now
+           resolve and reach `api`, but not `db`.
+        3. Remove the db's published port: other services use the network, and nothing on the host or LAN can
+           connect to the database.
+
+        On a cloud provider the same design uses public subnets for the entry point, private subnets for the
+        application and data tiers and firewall rules (security groups, NSGs, firewall rules, NSGs/security
+        lists) that allow only tier-to-tier traffic on the needed ports.
+      solutionFiles:
+        compose.yaml: |
+          # Three tiers on two networks: only the proxy is published, only the
+          # api reaches the database, and the database network is internal.
+          services:
+            proxy:
+              image: nginx:1.27-alpine
+              ports:
+                - "80"
+              volumes:
+                - ./proxy/default.conf:/etc/nginx/conf.d/default.conf:ro
+              depends_on:
+                - api
+              networks:
+                - frontend
+
+            api:
+              image: traefik/whoami:v1.10
+              environment:
+                DATABASE_HOST: db
+              networks:
+                - frontend
+                - backend
+
+            db:
+              image: postgres:16-alpine
+              environment:
+                POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+              volumes:
+                - db-data:/var/lib/postgresql/data
+              networks:
+                - backend
+
+          networks:
+            frontend: {}
+            backend:
+              internal: true
+
+          volumes:
+            db-data: {}
+      starter:
+        kind: docker
+        files:
+          compose.yaml: |
+            # Everything shares the default network and the database is
+            # published on every interface of the host.
+            services:
+              proxy:
+                image: nginx:1.27-alpine
+                ports:
+                  - "80"
+                volumes:
+                  - ./proxy/default.conf:/etc/nginx/conf.d/default.conf:ro
+                depends_on:
+                  - api
+
+              api:
+                image: traefik/whoami:v1.10
+                environment:
+                  DATABASE_HOST: db
+
+              db:
+                image: postgres:16-alpine
+                environment:
+                  POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+                ports:
+                  - "15432:5432"
+                volumes:
+                  - db-data:/var/lib/postgresql/data
+
+            volumes:
+              db-data: {}
+          .env: |
+            # Local development value only; never commit real credentials.
+            POSTGRES_PASSWORD=local-dev-only
+          proxy/default.conf: |
+            server {
+              listen 80;
+
+              location /api/ {
+                proxy_pass http://api:80/;
+              }
+
+              location / {
+                default_type text/plain;
+                return 200 "proxy is up\n";
+              }
+            }
+      checks:
+        - id: valid
+          label: The compose project is valid
+          type: validate
+        - id: db-not-published
+          label: The database is not published on every interface
+          type: rules_clean
+          rules_clean:
+            codes: [dk_db_published]
+            minSeverity: warning
+        - id: backend-internal
+          label: The backend network is internal
+          type: has
+          has:
+            compose:
+              where:
+                networks.backend.internal: true
+        - id: db-backend-only
+          label: The database is only on the backend network
+          type: has
+          has:
+            compose:
+              service: db
+              where:
+                networks.backend:
+                  exists: true
+                networks.frontend:
+                  exists: false
+                ports:
+                  exists: false
+        - id: proxy-frontend-only
+          label: The proxy is only on the frontend network
+          type: has
+          has:
+            compose:
+              service: proxy
+              where:
+                networks.frontend:
+                  exists: true
+                networks.backend:
+                  exists: false
+        - id: api-bridges-tiers
+          label: The api is on both networks
+          type: has
+          has:
+            compose:
+              service: api
+              where:
+                networks.frontend:
+                  exists: true
+                networks.backend:
+                  exists: true
+        - id: proxy-reaches-api
+          label: GET /api/ through the proxy reaches the api
+          type: http
+          http:
+            service: proxy
+            port: 80
+            path: /api/
+            status: 200
+            contains: Hostname
+      adaptations:
+        aws: |
+          A **VPC** with public subnets (load balancer only) and private subnets for the app and data tiers, in
+          several Availability Zones. **Security groups** reference each other (db allows 5432 only from the app's
+          security group); network ACLs add a subnet-level layer. Practice: `aws-vpc-multi-az-subnets`.
+        azure: |
+          A **virtual network** with one subnet per tier and a **network security group** per subnet; use
+          **application security groups** to write rules by role instead of IP. Reach PaaS data services through
+          **private endpoints**. Practice: `azure-vnet-nsg`, `azure-sql-private-endpoint`, `azure-hub-spoke-firewall`.
+        gcp: |
+          A **custom-mode VPC** with subnets per tier, **firewall rules** that target service accounts or network
+          tags (allow app → db on 5432 only), VMs without external IPs behind **Cloud NAT**, and private IP for
+          Cloud SQL. Practice: `gcp-custom-vpc-firewall`, `gcp-private-vm-cloud-nat`.
+        oci: |
+          A **VCN** with a public subnet for the load balancer and private subnets for app and database;
+          **network security groups** per tier (db NSG allows 1521/5432 only from the app NSG) and security lists
+          with the minimum ports. Practice: `oci-vcn-public-private-subnets`, `oci-nsg-tiered-access`.
+        docker: |
+          User-defined networks per tier, an `internal: true` network for data services, and no published ports
+          for databases (or `127.0.0.1:` binds for local tools). Practice: `docker-network-isolation`.
+        kubernetes: |
+          Pods can reach each other by default. Apply a **default-deny NetworkPolicy** per namespace, then allow
+          ingress to the database only from pods labelled as the API, and to the API only from the ingress
+          controller. Requires a CNI that enforces policies. Practice: `kubernetes-network-policy-default-deny`.
+      sources:
+        - title: AWS Well-Architected — SEC05-BP01 Create network layers
+          url: https://docs.aws.amazon.com/wellarchitected/latest/framework/sec_network_protection_create_layers.html
+        - title: AWS Well-Architected — SEC05-BP02 Control traffic flow within your network layers
+          url: https://docs.aws.amazon.com/wellarchitected/latest/framework/sec_network_protection_layered.html
+        - title: Azure Well-Architected — Segmentation strategy
+          url: https://learn.microsoft.com/en-us/azure/well-architected/security/segmentation
+        - title: Google Cloud — VPC firewall rules
+          url: https://cloud.google.com/vpc/docs/firewalls
+        - title: OCI Well-Architected — Ensure secure network access
+          url: https://docs.oracle.com/en/solutions/oci-best-practices/ensure-secure-network-access1.html
+        - title: Docker — Networking in Compose
+          url: https://docs.docker.com/compose/how-tos/networking/
+        - title: Docker — Compose networks reference (internal)
+          url: https://docs.docker.com/reference/compose-file/networks/
+        - title: Kubernetes — Network Policies
+          url: https://kubernetes.io/docs/concepts/services-networking/network-policies/
+
+  - op: upsert
+    kind: challenge
+    id: global-defense-in-depth
+    data:
+      provider: global
+      level: expert
+      title: Defense in depth for a web + database stack
+      summary: Layer network, identity, data and host controls so no single mistake exposes the database.
+      minutes: 75
+      tags: [security, defense-in-depth, networking, iam, encryption, well-architected]
+      prerequisites: [global-least-privilege, global-encryption, global-network-segmentation]
+      runtime: design
+      problem: |
+        A web server and its PostgreSQL database were deployed in a hurry. Today a single control stands between
+        the internet and the data — the database password — and even that is a Terraform variable:
+
+        - every subnet is public and the database is `publicly_accessible`;
+        - SSH (22) on the web server and PostgreSQL (5432) on the database are open to `0.0.0.0/0`;
+        - storage isn't encrypted;
+        - the web server's role can do anything (`*` on `*`);
+        - the instance metadata service accepts IMDSv1 requests.
+
+        **Defense in depth** assumes any one layer can fail and stacks independent controls — network, identity,
+        data, host — so a breach of one doesn't become a breach of everything.
+
+        Graded on **AWS** (Terraform, design checks).
+      requirements:
+        - "No admin or database port is open to the internet, no storage is unencrypted and no policy grants `*` on `*` (no `bp_open_ingress`, `bp_unencrypted_storage`, `bp_iam_wildcard` findings)."
+        - "**Network:** the database lives in **private** subnets (`aws_subnet.private`, no public IPs) through its DB subnet group and is not publicly accessible."
+        - "**Network:** the database security group accepts PostgreSQL only from the web security group (a security group reference, no CIDR blocks)."
+        - "**Data:** the database storage is encrypted and its master password is managed by AWS Secrets Manager (`manage_master_user_password = true`) instead of a variable."
+        - "**Host:** the web instance requires IMDSv2 (`metadata_options { http_tokens = \"required\" }`)."
+        - "**Identity:** the web role's permissions are scoped to what it needs (for example reading the database secret)."
+      hints:
+        - "Work layer by layer and re-check the findings after each: network first (subnets, security groups), then data, then identity and host."
+        - "Private subnets: same VPC, `map_public_ip_on_launch = false` and no route to the internet gateway. Point `aws_db_subnet_group.db.subnet_ids` at them."
+        - "Replace SSH from the internet with AWS Systems Manager Session Manager: attach the `AmazonSSMManagedInstanceCore` managed policy to the web role and drop the port 22 rule."
+        - "`manage_master_user_password = true` makes RDS create and rotate the password in Secrets Manager; the secret ARN is `aws_db_instance.db.master_user_secret[0].secret_arn`, which is exactly what the web role needs to read."
+      solution: |
+        Each fix is a **separate layer**; together they mean an attacker needs several independent failures:
+
+        1. **Network perimeter.** Add private subnets (no public IP, no internet route) and move the DB subnet
+           group to them; set `publicly_accessible = false`. Close port 22 and keep only HTTPS on the web security
+           group.
+        2. **East-west traffic.** The database security group allows 5432 only from `aws_security_group.web.id` —
+           a reference, not a CIDR, so only instances in that group can connect.
+        3. **Data.** `storage_encrypted = true` and `manage_master_user_password = true`: the credential lives
+           in Secrets Manager (rotated, audited) instead of state files and variables.
+        4. **Identity.** The web role gets Session Manager access plus `secretsmanager:GetSecretValue` on the one
+           secret, instead of `*`.
+        5. **Host.** `http_tokens = "required"` enforces IMDSv2 on the instance metadata service.
+
+        The frameworks add more layers you can stack the same way: a web application firewall in front of the
+        load balancer, flow logs and threat detection, and automated posture checks.
+      solutionFiles:
+        main.tf: |
+          data "aws_availability_zones" "available" {
+            state = "available"
+          }
+
+          resource "aws_vpc" "main" {
+            cidr_block           = "10.20.0.0/16"
+            enable_dns_hostnames = true
+          }
+
+          # Public tier: only the web server (and later a load balancer).
+          resource "aws_subnet" "public" {
+            count                   = 2
+            vpc_id                  = aws_vpc.main.id
+            cidr_block              = cidrsubnet(aws_vpc.main.cidr_block, 8, count.index)
+            availability_zone       = data.aws_availability_zones.available.names[count.index]
+            map_public_ip_on_launch = true
+          }
+
+          # Private tier: the database, no public IPs and no internet route.
+          resource "aws_subnet" "private" {
+            count                   = 2
+            vpc_id                  = aws_vpc.main.id
+            cidr_block              = cidrsubnet(aws_vpc.main.cidr_block, 8, count.index + 10)
+            availability_zone       = data.aws_availability_zones.available.names[count.index]
+            map_public_ip_on_launch = false
+          }
+
+          resource "aws_internet_gateway" "main" {
+            vpc_id = aws_vpc.main.id
+          }
+
+          resource "aws_route_table" "public" {
+            vpc_id = aws_vpc.main.id
+          }
+
+          resource "aws_route" "internet" {
+            route_table_id         = aws_route_table.public.id
+            destination_cidr_block = "0.0.0.0/0"
+            gateway_id             = aws_internet_gateway.main.id
+          }
+
+          resource "aws_route_table_association" "public" {
+            count          = 2
+            subnet_id      = aws_subnet.public[count.index].id
+            route_table_id = aws_route_table.public.id
+          }
+
+          resource "aws_route_table" "private" {
+            vpc_id = aws_vpc.main.id
+          }
+
+          resource "aws_route_table_association" "private" {
+            count          = 2
+            subnet_id      = aws_subnet.private[count.index].id
+            route_table_id = aws_route_table.private.id
+          }
+
+          # HTTPS only; administration goes through Session Manager.
+          resource "aws_security_group" "web" {
+            name_prefix = "${var.project}-web-"
+            vpc_id      = aws_vpc.main.id
+
+            ingress {
+              description = "HTTPS from clients"
+              from_port   = 443
+              to_port     = 443
+              protocol    = "tcp"
+              cidr_blocks = ["0.0.0.0/0"]
+            }
+
+            egress {
+              from_port   = 0
+              to_port     = 0
+              protocol    = "-1"
+              cidr_blocks = ["0.0.0.0/0"]
+            }
+          }
+
+          # PostgreSQL only from the web tier.
+          resource "aws_security_group" "db" {
+            name_prefix = "${var.project}-db-"
+            vpc_id      = aws_vpc.main.id
+
+            ingress {
+              description     = "PostgreSQL from the web tier"
+              from_port       = 5432
+              to_port         = 5432
+              protocol        = "tcp"
+              security_groups = [aws_security_group.web.id]
+            }
+          }
+
+          resource "aws_db_subnet_group" "db" {
+            name_prefix = "${var.project}-db-"
+            subnet_ids  = aws_subnet.private[*].id
+          }
+
+          resource "aws_db_instance" "db" {
+            identifier_prefix           = "${var.project}-db-"
+            engine                      = "postgres"
+            engine_version              = "16"
+            instance_class              = "db.t4g.micro"
+            allocated_storage           = 20
+            username                    = "app"
+            manage_master_user_password = true
+            storage_encrypted           = true
+            publicly_accessible         = false
+            db_subnet_group_name        = aws_db_subnet_group.db.name
+            vpc_security_group_ids      = [aws_security_group.db.id]
+            skip_final_snapshot         = true
+          }
+
+          resource "aws_iam_role" "web" {
+            name = "${var.project}-web"
+            assume_role_policy = jsonencode({
+              Version = "2012-10-17"
+              Statement = [{
+                Effect    = "Allow"
+                Principal = { Service = "ec2.amazonaws.com" }
+                Action    = "sts:AssumeRole"
+              }]
+            })
+          }
+
+          # Shell access through Session Manager instead of SSH.
+          resource "aws_iam_role_policy_attachment" "web_ssm" {
+            role       = aws_iam_role.web.name
+            policy_arn = "arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore"
+          }
+
+          # The app reads the database credentials, nothing else.
+          resource "aws_iam_role_policy" "web" {
+            name = "${var.project}-web"
+            role = aws_iam_role.web.id
+            policy = jsonencode({
+              Version = "2012-10-17"
+              Statement = [{
+                Effect   = "Allow"
+                Action   = ["secretsmanager:GetSecretValue"]
+                Resource = [aws_db_instance.db.master_user_secret[0].secret_arn]
+              }]
+            })
+          }
+
+          resource "aws_iam_instance_profile" "web" {
+            name = "${var.project}-web"
+            role = aws_iam_role.web.name
+          }
+
+          resource "aws_instance" "web" {
+            ami                    = var.web_ami
+            instance_type          = "t4g.micro"
+            subnet_id              = aws_subnet.public[0].id
+            vpc_security_group_ids = [aws_security_group.web.id]
+            iam_instance_profile   = aws_iam_instance_profile.web.name
+
+            metadata_options {
+              http_tokens = "required"
+            }
+          }
+        variables.tf: |
+          variable "project" {
+            type        = string
+            default     = "shop"
+            description = "Project name: prefix of every resource name and the Project tag."
+          }
+
+          variable "aws_region" {
+            type        = string
+            default     = "us-east-1"
+            description = "AWS region to deploy into."
+          }
+
+          variable "web_ami" {
+            type        = string
+            default     = "ami-0123456789abcdef0"
+            description = "AMI of the web server (an arm64 image for t4g instances)."
+          }
+      starter:
+        kind: terraform
+        cloud: aws
+        files:
+          versions.tf: |
+            terraform {
+              required_version = ">= 1.6"
+
+              required_providers {
+                aws = {
+                  source  = "hashicorp/aws"
+                  version = "~> 6.0"
+                }
+              }
+            }
+          providers.tf: |
+            provider "aws" {
+              region = var.aws_region
+
+              default_tags {
+                tags = {
+                  Project   = var.project
+                  ManagedBy = "nimbo"
+                }
+              }
+            }
+          variables.tf: |
+            variable "project" {
+              type        = string
+              default     = "shop"
+              description = "Project name: prefix of every resource name and the Project tag."
+            }
+
+            variable "aws_region" {
+              type        = string
+              default     = "us-east-1"
+              description = "AWS region to deploy into."
+            }
+
+            variable "web_ami" {
+              type        = string
+              default     = "ami-0123456789abcdef0"
+              description = "AMI of the web server (an arm64 image for t4g instances)."
+            }
+
+            variable "db_password" {
+              type        = string
+              default     = "change-me-please"
+              description = "Master password of the database."
+            }
+          main.tf: |
+            data "aws_availability_zones" "available" {
+              state = "available"
+            }
+
+            resource "aws_vpc" "main" {
+              cidr_block           = "10.20.0.0/16"
+              enable_dns_hostnames = true
+            }
+
+            # Every subnet is public.
+            resource "aws_subnet" "public" {
+              count                   = 2
+              vpc_id                  = aws_vpc.main.id
+              cidr_block              = cidrsubnet(aws_vpc.main.cidr_block, 8, count.index)
+              availability_zone       = data.aws_availability_zones.available.names[count.index]
+              map_public_ip_on_launch = true
+            }
+
+            resource "aws_internet_gateway" "main" {
+              vpc_id = aws_vpc.main.id
+            }
+
+            resource "aws_route_table" "public" {
+              vpc_id = aws_vpc.main.id
+            }
+
+            resource "aws_route" "internet" {
+              route_table_id         = aws_route_table.public.id
+              destination_cidr_block = "0.0.0.0/0"
+              gateway_id             = aws_internet_gateway.main.id
+            }
+
+            resource "aws_route_table_association" "public" {
+              count          = 2
+              subnet_id      = aws_subnet.public[count.index].id
+              route_table_id = aws_route_table.public.id
+            }
+
+            resource "aws_security_group" "web" {
+              name_prefix = "${var.project}-web-"
+              vpc_id      = aws_vpc.main.id
+
+              ingress {
+                description = "HTTPS from clients"
+                from_port   = 443
+                to_port     = 443
+                protocol    = "tcp"
+                cidr_blocks = ["0.0.0.0/0"]
+              }
+
+              ingress {
+                description = "SSH for administration"
+                from_port   = 22
+                to_port     = 22
+                protocol    = "tcp"
+                cidr_blocks = ["0.0.0.0/0"]
+              }
+
+              egress {
+                from_port   = 0
+                to_port     = 0
+                protocol    = "-1"
+                cidr_blocks = ["0.0.0.0/0"]
+              }
+            }
+
+            resource "aws_security_group" "db" {
+              name_prefix = "${var.project}-db-"
+              vpc_id      = aws_vpc.main.id
+
+              ingress {
+                description = "PostgreSQL"
+                from_port   = 5432
+                to_port     = 5432
+                protocol    = "tcp"
+                cidr_blocks = ["0.0.0.0/0"]
+              }
+            }
+
+            resource "aws_db_subnet_group" "db" {
+              name_prefix = "${var.project}-db-"
+              subnet_ids  = aws_subnet.public[*].id
+            }
+
+            resource "aws_db_instance" "db" {
+              identifier_prefix      = "${var.project}-db-"
+              engine                 = "postgres"
+              engine_version         = "16"
+              instance_class         = "db.t4g.micro"
+              allocated_storage      = 20
+              username               = "app"
+              password               = var.db_password
+              storage_encrypted      = false
+              publicly_accessible    = true
+              db_subnet_group_name   = aws_db_subnet_group.db.name
+              vpc_security_group_ids = [aws_security_group.db.id]
+              skip_final_snapshot    = true
+            }
+
+            resource "aws_iam_role" "web" {
+              name = "${var.project}-web"
+              assume_role_policy = jsonencode({
+                Version = "2012-10-17"
+                Statement = [{
+                  Effect    = "Allow"
+                  Principal = { Service = "ec2.amazonaws.com" }
+                  Action    = "sts:AssumeRole"
+                }]
+              })
+            }
+
+            resource "aws_iam_role_policy" "web" {
+              name = "${var.project}-web"
+              role = aws_iam_role.web.id
+              policy = jsonencode({
+                Version = "2012-10-17"
+                Statement = [{
+                  Effect   = "Allow"
+                  Action   = "*"
+                  Resource = "*"
+                }]
+              })
+            }
+
+            resource "aws_iam_instance_profile" "web" {
+              name = "${var.project}-web"
+              role = aws_iam_role.web.name
+            }
+
+            resource "aws_instance" "web" {
+              ami                    = var.web_ami
+              instance_type          = "t4g.micro"
+              subnet_id              = aws_subnet.public[0].id
+              vpc_security_group_ids = [aws_security_group.web.id]
+              iam_instance_profile   = aws_iam_instance_profile.web.name
+            }
+      checks:
+        - id: valid
+          label: The configuration is valid
+          type: validate
+        - id: security-findings
+          label: No open admin/database ports, unencrypted storage or admin policies
+          type: rules_clean
+          rules_clean:
+            codes: [bp_open_ingress, bp_unencrypted_storage, bp_iam_wildcard, bp_public_bucket]
+            minSeverity: warning
+        - id: db-not-public
+          label: The database is not publicly accessible
+          type: has
+          has:
+            terraform:
+              type: aws_db_instance
+              where:
+                publicly_accessible: true
+              count:
+                max: 0
+        - id: db-private-subnets
+          label: The database subnet group uses the private subnets
+          type: has
+          has:
+            terraform:
+              type: aws_db_subnet_group
+              where:
+                subnet_ids:
+                  ref: aws_subnet.private
+        - id: private-subnets-no-public-ip
+          label: Private subnets don't assign public IPs
+          type: has
+          has:
+            terraform:
+              type: aws_subnet
+              name: private
+              where:
+                map_public_ip_on_launch: false
+        - id: db-from-web-only
+          label: The database accepts PostgreSQL only from the web security group
+          type: has
+          has:
+            terraform:
+              type: aws_security_group
+              name: db
+              where:
+                ingress.security_groups:
+                  ref: aws_security_group.web
+                ingress.cidr_blocks:
+                  exists: false
+        - id: db-encrypted
+          label: Database storage is encrypted
+          type: has
+          has:
+            terraform:
+              type: aws_db_instance
+              where:
+                storage_encrypted: true
+        - id: db-managed-secret
+          label: The master password is managed in Secrets Manager
+          type: has
+          has:
+            terraform:
+              type: aws_db_instance
+              where:
+                manage_master_user_password: true
+        - id: imdsv2
+          label: The web instance requires IMDSv2
+          type: has
+          has:
+            terraform:
+              type: aws_instance
+              where:
+                metadata_options.http_tokens: required
+      adaptations:
+        aws: |
+          Layers: VPC public/private subnets and security group references (network), AWS WAF on the ALB or
+          CloudFront (edge), IAM roles with scoped policies (identity), KMS encryption and Secrets Manager (data),
+          IMDSv2 and Session Manager instead of SSH (host), GuardDuty, VPC Flow Logs and Security Hub (detection).
+          Practice: `aws-three-tier-well-architected`.
+        azure: |
+          Layers: Front Door or Application Gateway with **WAF** (edge), VNets with NSGs and private endpoints
+          (network), managed identities with scoped RBAC (identity), Key Vault and encryption settings (data),
+          Defender for Cloud and Azure Policy (posture). Practice: `azure-front-door-waf`, `azure-hub-spoke-firewall`.
+        gcp: |
+          Layers: **Cloud Armor** on the HTTPS load balancer (edge), VPC firewall rules and private IPs (network),
+          service accounts with predefined roles (identity), CMEK and Secret Manager (data), **organization
+          policies** as guardrails and Security Command Center (posture). Practice: `gcp-https-lb-cloud-armor`,
+          `gcp-org-policy-guardrails`.
+        oci: |
+          Layers: WAF on the load balancer (edge), VCN with private subnets, NSGs and security lists (network),
+          compartments and least-privilege policies (identity), Vault keys (data), **Security Zones**, **Cloud
+          Guard** and VCN flow logs (posture and detection). Practice: `oci-cis-landing-zone`.
+        docker: |
+          Layers: a reverse proxy as the only published service, internal networks for data services, non-root
+          users with dropped capabilities and read-only filesystems, secrets as files, pinned and scanned images.
+          Practice: `docker-hardened-runtime`.
+        kubernetes: |
+          Layers: Ingress with TLS (edge), default-deny **NetworkPolicies** (network), per-workload ServiceAccounts
+          with namespaced RBAC (identity), Secrets encryption at rest (data) and the **restricted Pod Security
+          Standard** (workload). Practice: `kubernetes-pod-security-restricted`,
+          `kubernetes-network-policy-default-deny`, `kubernetes-rbac-least-privilege`.
+      sources:
+        - title: AWS Well-Architected — SEC05-BP01 Create network layers
+          url: https://docs.aws.amazon.com/wellarchitected/latest/framework/sec_network_protection_create_layers.html
+        - title: AWS Well-Architected — SEC03-BP02 Grant least privilege access
+          url: https://docs.aws.amazon.com/wellarchitected/latest/framework/sec_permissions_least_privileges.html
+        - title: Amazon RDS — Password management with Amazon RDS and AWS Secrets Manager
+          url: https://docs.aws.amazon.com/AmazonRDS/latest/UserGuide/rds-secrets-manager.html
+        - title: Azure Well-Architected — Security design principles
+          url: https://learn.microsoft.com/en-us/azure/well-architected/security/principles
+        - title: Google Cloud Well-Architected — Implement security by design
+          url: https://cloud.google.com/architecture/framework/security/implement-security-by-design
+        - title: Google Cloud Well-Architected — Implement zero trust
+          url: https://cloud.google.com/architecture/framework/security/implement-zero-trust
+        - title: OCI Well-Architected — Effective strategies for security and compliance
+          url: https://docs.oracle.com/en/solutions/oci-best-practices/effective-strategies-security-and-compliance1.html
+        - title: Kubernetes — Security checklist
+          url: https://kubernetes.io/docs/concepts/security/security-checklist/
+        - title: CNCF Glossary — Zero Trust Architecture
+          url: https://glossary.cncf.io/zero-trust-architecture/

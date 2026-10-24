@@ -1,5 +1,5 @@
-import { lazy, memo, Suspense, useEffect } from "react"
-import { ChevronDown, ChevronUp, ClipboardCheck, Code2, Gauge, Layers, Plug, Rocket, SlidersHorizontal, TriangleAlert } from "lucide-react"
+import { lazy, memo, Suspense, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react"
+import { ChevronDown, ChevronUp, ClipboardCheck, Code2, Gauge, Layers, Plug, Rocket, SlidersHorizontal, TriangleAlert, Trophy } from "lucide-react"
 import { ThemedIcon } from "@/components/arcade/themed-icon"
 import type { PixelIconName } from "@/components/arcade/pixel-icons"
 import { Badge } from "@/components/ui/badge"
@@ -25,12 +25,11 @@ const ComposeDeployTab = lazy(() =>
 const KubeDeployTab = lazy(() =>
   import("@/features/kubernetes/deploy/kube-deploy-tab").then((m) => ({ default: m.KubeDeployTab })),
 )
-const ReadinessTab = lazy(() =>
-  import("@/features/kubernetes/readiness/readiness-tab").then((m) => ({ default: m.ReadinessTab })),
-)
+const ReadinessTab = lazy(() => import("@/features/readiness/readiness-tab").then((m) => ({ default: m.ReadinessTab })))
 const KubeEnvironmentsTab = lazy(() =>
   import("@/features/kubernetes/environments/environments-tab").then((m) => ({ default: m.KubeEnvironmentsTab })),
 )
+const ChallengeTab = lazy(() => import("@/features/challenges/challenge-tab").then((m) => ({ default: m.ChallengeTab })))
 const TAB_FALLBACK = (
   <div className="flex h-full items-center justify-center">
     <Spinner />
@@ -38,6 +37,7 @@ const TAB_FALLBACK = (
 )
 
 const TABS: { id: BottomTab; label: string; icon: typeof Code2; pixel: PixelIconName }[] = [
+  { id: "challenge", label: "Challenge", icon: Trophy, pixel: "check" },
   { id: "terraform", label: "Code", icon: Code2, pixel: "code" },
   { id: "variables", label: "Variables & Environments", icon: SlidersHorizontal, pixel: "sliders" },
   { id: "environments", label: "Environments", icon: Layers, pixel: "sliders" },
@@ -54,11 +54,8 @@ const TABS: { id: BottomTab; label: string; icon: typeof Code2; pixel: PixelIcon
  */
 const CONTAINER_HIDDEN: Partial<Record<BottomTab, true>> = { variables: true }
 
-/** Tabs only container workspaces (docker, Kubernetes) have. */
-const CONTAINER_ONLY: Partial<Record<BottomTab, true>> = { environments: true }
-
-/** Tabs only Kubernetes workspaces have: production readiness per environment. */
-const KUBE_ONLY: Partial<Record<BottomTab, true>> = { readiness: true }
+/** Tabs only container workspaces (docker, Kubernetes) have: their environments and production readiness. */
+const CONTAINER_ONLY: Partial<Record<BottomTab, true>> = { environments: true, readiness: true }
 
 /**
  * Bottom dock with the code (file viewer), variables, deploy, endpoints, load test and
@@ -78,8 +75,10 @@ export function BottomPanel() {
   // Info (mostly best-practice suggestions) is listed in the tab but not counted, like the node badges.
   const alertCount = problems.filter((d) => d.severity !== "info").length
 
+  const challenge = useWorkflowStore((s) => !!s.workflow?.challenge)
+  // The Challenge tab only exists in workflows started from a Learn challenge.
   const tabs = (containers ? TABS.filter((t) => !CONTAINER_HIDDEN[t.id]) : TABS.filter((t) => !CONTAINER_ONLY[t.id])).filter(
-    (t) => kind === "kubernetes" || !KUBE_ONLY[t.id],
+    (t) => challenge || t.id !== "challenge",
   )
 
   useDeployToast()
@@ -95,11 +94,13 @@ export function BottomPanel() {
     return () => window.removeEventListener("keydown", onKey)
   }, [])
 
-  // A workspace opened while a tab it doesn't have was active (Terraform-only, Kubernetes-only): show its code instead.
+  // A workspace opened while a tab it doesn't have was active (Terraform-only, container-only): show its code instead.
   useEffect(() => {
-    if ((containers && CONTAINER_HIDDEN[tab]) || (!containers && CONTAINER_ONLY[tab]) || (kind !== "kubernetes" && KUBE_ONLY[tab]))
+    if ((containers && CONTAINER_HIDDEN[tab]) || (!containers && CONTAINER_ONLY[tab]) || (!challenge && tab === "challenge"))
       useWorkflowStore.setState({ bottomTab: "terraform" })
-  }, [containers, kind, tab])
+  }, [containers, challenge, tab])
+
+  const [stripRef, compact] = useCompactStrip(`${tabs.map((t) => t.id).join()}|${alertCount > 0}`)
 
   if (!workflowId) return null
 
@@ -109,19 +110,18 @@ export function BottomPanel() {
       onValueChange={(v) => showBottom(v as BottomTab)}
       className="flex h-full min-h-0 flex-col gap-0 bg-background"
     >
+      {/* When the names don't fit (narrow panel), the tabs show only their icons, the active one keeps its name (the
+          others keep it as accessible text and a tooltip); a strip that still doesn't fit scrolls sideways. */}
       <div className="flex h-9 shrink-0 items-center gap-2 border-b px-2">
-        <TabsList variant="line" className="h-full gap-0">
+        <TabsList
+          ref={stripRef}
+          variant="line"
+          className="h-full min-w-0 flex-1 justify-start gap-0 overflow-x-auto overflow-y-hidden [scrollbar-width:none]"
+        >
           {tabs.map(({ id, label, icon, pixel }) => (
-            <TabsTrigger
-              key={id}
-              value={id}
-              className="px-2.5 text-xs"
-              onClick={() => {
-                if (!open) showBottom(id)
-              }}
-            >
+            <StripTab key={id} id={id} label={label} active={id === tab} iconOnly={compact && id !== tab} onSelect={() => !open && showBottom(id)}>
               <ThemedIcon icon={icon} pixel={pixel} />
-              {label}
+              <span className={cn(compact && id !== tab && "sr-only")}>{label}</span>
               {id === "problems" && alertCount > 0 && (
                 <Badge
                   variant={errorCount > 0 ? "destructive" : "secondary"}
@@ -130,7 +130,7 @@ export function BottomPanel() {
                   {alertCount}
                 </Badge>
               )}
-            </TabsTrigger>
+            </StripTab>
           ))}
         </TabsList>
         <div className="ml-auto flex items-center">
@@ -156,7 +156,8 @@ export function BottomPanel() {
           key={id}
           value={id}
           forceMount
-          className={cn("min-h-0 flex-1 overflow-hidden data-[state=inactive]:hidden", !open && "hidden")}
+          // The panel is the container: tabs lay themselves out by its width (`@3xl:` …), not the window's.
+          className={cn("@container min-h-0 flex-1 overflow-hidden data-[state=inactive]:hidden", !open && "hidden")}
         >
           {/* Keyed by workflow so edit buffers and wizard state never leak into another workflow. */}
           <TabBody key={workflowId} tab={id} kind={kind ?? ""} />
@@ -164,6 +165,70 @@ export function BottomPanel() {
       ))}
     </Tabs>
   )
+}
+
+/**
+ * A bottom tab, named by a tooltip while it shows only its icon. The tooltip hangs on a wrapper so its data-state
+ * doesn't replace the tab's.
+ */
+function StripTab({
+  id,
+  label,
+  active,
+  iconOnly,
+  onSelect,
+  children,
+}: {
+  id: BottomTab
+  label: string
+  active: boolean
+  iconOnly: boolean
+  onSelect: () => void
+  children: ReactNode
+}) {
+  const [tip, setTip] = useState(false)
+  const ref = useRef<HTMLButtonElement>(null)
+  // A tab opened from elsewhere (palette, canvas, toast) scrolls into a strip too narrow to show them all.
+  useEffect(() => {
+    if (active) ref.current?.scrollIntoView({ block: "nearest", inline: "nearest" })
+  }, [active])
+  return (
+    <Tooltip open={iconOnly && tip} onOpenChange={setTip}>
+      <TooltipTrigger asChild>
+        <span className="flex h-full shrink-0">
+          <TabsTrigger ref={ref} value={id} className="flex-none px-2.5 text-xs" onClick={onSelect}>
+            {children}
+          </TabsTrigger>
+        </span>
+      </TooltipTrigger>
+      <TooltipContent side="top">{label}</TooltipContent>
+    </Tooltip>
+  )
+}
+
+/**
+ * Whether the tab strip is compact (icons only): it turns compact when its tabs overflow with their names and back
+ * once it is as wide as they needed. `layout` names what changes that width (which tabs, the problems badge); a new
+ * one measures again from the full names.
+ */
+function useCompactStrip(layout: string) {
+  const ref = useRef<HTMLDivElement>(null)
+  const [compactFor, setCompactFor] = useState<{ layout: string; needed: number } | null>(null)
+  const compact = compactFor?.layout === layout
+  useLayoutEffect(() => {
+    const list = ref.current
+    if (!list) return
+    const check = () => {
+      if (compact) {
+        if (list.clientWidth >= compactFor.needed) setCompactFor(null)
+      } else if (list.scrollWidth > list.clientWidth + 1) setCompactFor({ layout, needed: list.scrollWidth })
+    }
+    check()
+    const observer = new ResizeObserver(check)
+    observer.observe(list)
+    return () => observer.disconnect()
+  }, [compact, compactFor, layout])
+  return [ref, compact] as const
 }
 
 /** Memoized so switching tabs or collapsing the panel doesn't re-render every (always mounted) tab. */
@@ -199,6 +264,12 @@ const TabBody = memo(function TabBody({ tab, kind }: { tab: BottomTab; kind: str
       )
     case "problems":
       return <ProblemsTab />
+    case "challenge":
+      return (
+        <Suspense fallback={TAB_FALLBACK}>
+          <ChallengeTab />
+        </Suspense>
+      )
     case "readiness":
       return (
         <Suspense fallback={TAB_FALLBACK}>

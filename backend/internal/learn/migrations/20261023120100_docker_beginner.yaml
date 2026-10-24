@@ -1,0 +1,521 @@
+description: Adds the Docker beginner challenges (first web service, cache-friendly Dockerfile, app with PostgreSQL)
+operations:
+  - op: upsert
+    kind: challenge
+    id: docker-first-web-service
+    data:
+      provider: docker
+      level: beginner
+      title: Your first web service
+      summary: Serve a static site from a pinned image, publish its port, and let Docker know when it is healthy and restart it when it crashes.
+      minutes: 15
+      tags: [compose, dockerfile, nginx, healthcheck, restart]
+      runtime: local
+      problem: |
+        Your team's landing page is a single `index.html`. A teammate wrapped it in a
+        Dockerfile and a `compose.yaml`, but nothing works the way it should:
+
+        - the image is built `FROM nginx` with no tag, so every rebuild may pull a
+          different NGINX version;
+        - the container's port 80 is never published, so nobody can open the page
+          from the host;
+        - Docker only knows that the process is running, not whether it actually
+          answers HTTP requests;
+        - when the container stops (a crash, or Docker restarting), it stays down.
+
+        Turn it into a small, well-behaved web service.
+      requirements:
+        - "The Dockerfile's `FROM` names a version tag (for example `nginx:1.27-alpine`), not `latest` or no tag."
+        - "The `web` service publishes container port 80 on a host port, so `GET /` answers 200 from the host."
+        - "The service has a healthcheck (a compose `healthcheck:` or a Dockerfile `HEALTHCHECK`) that fails when NGINX can't serve."
+        - "The service has a restart policy such as `unless-stopped`."
+      hints:
+        - "Image tags are mutable: `nginx` alone means `nginx:latest`. Pick a major-minor tag from the official image, such as `1.27-alpine`."
+        - "Publishing uses the service's `ports:` list in `HOST:CONTAINER` form, e.g. `\"8080:80\"`."
+        - "A healthcheck is any command that exits 0 when the app is fine. The Alpine variant ships BusyBox `wget`: `wget -qO- http://127.0.0.1/ >/dev/null || exit 1`. Use `127.0.0.1` rather than `localhost` so the check doesn't depend on IPv6."
+        - "`restart: unless-stopped` restarts the container after a crash or a Docker restart, but not after you stop it on purpose."
+      solution: |
+        **Why.** Docker's building best practices recommend pinning base image
+        versions (tags are mutable) and choosing a minimal official base. Compose
+        only publishes the ports you list in `ports:`. A healthcheck lets Docker
+        (and Compose `depends_on`) tell a running container from one that can
+        serve, and a restart policy brings a stopped container back.
+
+        **Steps.**
+        1. In `site/Dockerfile`, change `FROM nginx` to `FROM nginx:1.27-alpine`.
+        2. In `compose.yaml`, publish the port with `ports: ["8080:80"]`.
+        3. Add a healthcheck that requests the page:
+           `test: ["CMD-SHELL", "wget -qO- http://127.0.0.1/ >/dev/null || exit 1"]`
+           with `interval: 10s`, `timeout: 3s`, `retries: 3` and `start_period: 5s`
+           (keep the timeout below the interval).
+        4. Add `restart: unless-stopped`.
+        5. Deploy and open `http://localhost:8080/`; the Deploy tab shows the
+           service as healthy once the first check passes.
+      solutionFiles:
+        compose.yaml: |
+          # A static site served by NGINX: pinned image, published port,
+          # healthcheck and restart policy.
+          services:
+            web:
+              build: ./site
+              ports:
+                - "8080:80"
+              restart: unless-stopped
+              healthcheck:
+                test: ["CMD-SHELL", "wget -qO- http://127.0.0.1/ >/dev/null || exit 1"]
+                interval: 10s
+                timeout: 3s
+                retries: 3
+                start_period: 5s
+        site/Dockerfile: |
+          # Pinned official image (Alpine variant: small, ships BusyBox wget).
+          FROM nginx:1.27-alpine
+          COPY index.html /usr/share/nginx/html/index.html
+          EXPOSE 80
+      starter:
+        kind: docker
+        files:
+          compose.yaml: |
+            services:
+              web:
+                build: ./site
+          site/Dockerfile: |
+            FROM nginx
+            COPY index.html /usr/share/nginx/html/index.html
+          site/.dockerignore: |
+            Dockerfile
+            .dockerignore
+          site/index.html: |
+            <!doctype html>
+            <html lang="en">
+              <head>
+                <meta charset="utf-8">
+                <title>Nimbo Learn</title>
+              </head>
+              <body>
+                <h1>Hello from Docker</h1>
+                <p>This page is served by NGINX running in a container.</p>
+              </body>
+            </html>
+      checks:
+        - id: valid
+          label: The compose project is valid
+          type: validate
+        - id: pinned
+          label: The base image is pinned to a version tag
+          type: rules_clean
+          rules_clean: { codes: [dk_latest_tag], minSeverity: info }
+        - id: healthcheck
+          label: The web service has a healthcheck
+          type: rules_clean
+          rules_clean: { codes: [dk_missing_healthcheck, dk_healthcheck_timing], minSeverity: info }
+        - id: restart
+          label: The web service has a restart policy
+          type: rules_clean
+          rules_clean: { codes: [dk_no_restart], minSeverity: info }
+        - id: deploy
+          label: The project deploys
+          type: deploy
+        - id: page
+          label: The page answers 200 from the host
+          type: http
+          http: { service: web, port: 80, path: /, status: 200, contains: Hello from Docker }
+      sources:
+        - { title: "Docker Docs: Building best practices (pin base image versions, choose the right base image)", url: "https://docs.docker.com/build/building/best-practices/" }
+        - { title: "Docker Docs: Compose file reference, services (ports, healthcheck, restart)", url: "https://docs.docker.com/reference/compose-file/services/" }
+        - { title: "Docker Docs: Dockerfile reference (FROM, EXPOSE, HEALTHCHECK)", url: "https://docs.docker.com/reference/dockerfile/" }
+        - { title: "Docker Docs: Start containers automatically (restart policies)", url: "https://docs.docker.com/engine/containers/start-containers-automatically/" }
+
+  - op: upsert
+    kind: challenge
+    id: docker-cache-friendly-dockerfile
+    data:
+      provider: docker
+      level: beginner
+      title: A Dockerfile that builds fast and stops cleanly
+      summary: Reorder a Node.js Dockerfile so dependency installs are cached, run it on a pinned slim base, and start the app in exec form so it receives SIGTERM.
+      minutes: 20
+      tags: [dockerfile, build-cache, node, exec-form, dockerignore]
+      prerequisites: [docker-first-web-service]
+      runtime: local
+      problem: |
+        Every small change to the catalog API's source rebuilds its image from
+        scratch, and `docker compose down` always takes ten seconds before the
+        container goes away. The Dockerfile looks innocent:
+
+        ```dockerfile
+        FROM node
+        WORKDIR /app
+        COPY . .
+        RUN npm install --omit=dev
+        CMD npm start
+        ```
+
+        Fix the image so that editing `server.js` reuses the cached dependency
+        layer, the image is based on a pinned slim Node.js image, and the app
+        shuts down as soon as Docker asks it to.
+      requirements:
+        - "The final image is based on a pinned, slim Node.js tag (for example `node:22-alpine`), not `node` / `node:latest`."
+        - "`package.json` is copied and dependencies are installed **before** the application sources are copied."
+        - "`CMD` uses the exec (JSON array) form and runs `node` directly."
+        - "A `.dockerignore` keeps `node_modules`, logs and env files out of the build context."
+        - "The service still builds and `GET /health` answers 200."
+      hints:
+        - "Docker rebuilds a layer when anything copied before it changed. If `COPY . .` comes first, every source edit invalidates `npm install`."
+        - "Copy only the manifest first: `COPY package.json ./`, then `RUN npm install --omit=dev`, then `COPY server.js ./` (or `COPY . .`)."
+        - "`CMD npm start` is the shell form: `/bin/sh -c` becomes PID 1 and doesn't forward SIGTERM, and `npm` doesn't either. Use `CMD [\"node\", \"server.js\"]`."
+        - "`node` without a tag is the full Debian-based image. The `-alpine` (or `-slim`) variants carry far fewer packages."
+      solution: |
+        **Why.** Docker's cache guide explains that a changed layer invalidates
+        every layer after it, so dependency manifests should be copied and
+        installed before the frequently changing sources. The building best
+        practices recommend a minimal, pinned base image and a `.dockerignore`
+        so the build context only holds what the image needs. The Dockerfile
+        reference recommends the exec form for `CMD`/`ENTRYPOINT`: with the shell
+        form the app runs under `/bin/sh -c` and does not receive signals, so
+        `docker stop` waits for the grace period and kills it.
+
+        **Steps.**
+        1. `FROM node:22-alpine` and `ENV NODE_ENV=production`.
+        2. `COPY package.json ./` then `RUN npm install --omit=dev --no-audit --no-fund`.
+        3. `COPY server.js ./` after the install.
+        4. Run as the image's unprivileged `node` user (`USER node`) and `EXPOSE 3000`.
+        5. `CMD ["node", "server.js"]`; the app already closes its server on SIGTERM.
+        6. Add `api/.dockerignore` with `node_modules`, `npm-debug.log*`, `.env*`, `.git`.
+        7. Optionally add a `HEALTHCHECK` (BusyBox `wget` is available on Alpine).
+
+        Rebuild after editing `server.js`: the `npm install` step now shows `CACHED`.
+      solutionFiles:
+        api/Dockerfile: |
+          # Dependencies first (cached until package.json changes), then the code.
+          FROM node:22-alpine
+          ENV NODE_ENV=production
+          WORKDIR /app
+          COPY package.json ./
+          RUN npm install --omit=dev --no-audit --no-fund
+          COPY server.js ./
+          USER node
+          EXPOSE 3000
+          HEALTHCHECK --interval=10s --timeout=3s --start-period=5s --retries=3 \
+            CMD wget -qO- http://127.0.0.1:3000/health >/dev/null || exit 1
+          # Exec form: node is PID 1's direct command and receives SIGTERM.
+          CMD ["node", "server.js"]
+        api/.dockerignore: |
+          node_modules
+          npm-debug.log*
+          .env*
+          .git
+          Dockerfile
+          .dockerignore
+      starter:
+        kind: docker
+        files:
+          compose.yaml: |
+            services:
+              api:
+                build: ./api
+                init: true
+                ports:
+                  - "3000:3000"
+                restart: unless-stopped
+          api/Dockerfile: |
+            FROM node
+            WORKDIR /app
+            COPY . .
+            RUN npm install --omit=dev
+            EXPOSE 3000
+            CMD npm start
+          api/package.json: |
+            {
+              "name": "catalog-api",
+              "version": "1.0.0",
+              "private": true,
+              "main": "server.js",
+              "scripts": {
+                "start": "node server.js"
+              }
+            }
+          api/server.js: |
+            const http = require("node:http");
+
+            const port = Number(process.env.PORT ?? 3000);
+
+            function send(res, status, body) {
+              res.writeHead(status, { "Content-Type": "application/json" });
+              res.end(JSON.stringify(body));
+            }
+
+            const server = http.createServer((req, res) => {
+              const path = new URL(req.url, "http://localhost").pathname;
+              if (path === "/health") return send(res, 200, { status: "ok" });
+              if (path === "/") return send(res, 200, { message: "Hello from the catalog API" });
+              send(res, 404, { error: "not found" });
+            });
+
+            server.listen(port, () => console.log(`listening on :${port}`));
+
+            // Stop accepting connections and exit when Docker asks us to stop.
+            process.on("SIGTERM", () => server.close(() => process.exit(0)));
+      checks:
+        - id: valid
+          label: The compose project is valid
+          type: validate
+        - id: base
+          label: The image runs on a pinned, slim Node.js base
+          type: rules_clean
+          rules_clean: { codes: [dk_latest_tag, dk_heavy_base], minSeverity: info }
+        - id: layers
+          label: Dependencies install before the sources are copied
+          type: rules_clean
+          rules_clean: { codes: [dk_layer_order], minSeverity: warning }
+        - id: exec-form
+          label: CMD uses the exec form
+          type: rules_clean
+          rules_clean: { codes: [dk_shell_form], minSeverity: warning }
+        - id: deploy
+          label: The project deploys
+          type: deploy
+        - id: health
+          label: GET /health answers 200
+          type: http
+          http: { service: api, port: 3000, path: /health, status: 200 }
+      sources:
+        - { title: "Docker Docs: Optimize cache usage in builds (order your layers)", url: "https://docs.docker.com/build/cache/optimize/" }
+        - { title: "Docker Docs: Building best practices", url: "https://docs.docker.com/build/building/best-practices/" }
+        - { title: "Docker Docs: Dockerfile reference (shell and exec form)", url: "https://docs.docker.com/reference/dockerfile/" }
+        - { title: "Docker Docs: Build context and .dockerignore files", url: "https://docs.docker.com/build/concepts/context/" }
+
+  - op: upsert
+    kind: challenge
+    id: docker-app-with-postgres
+    data:
+      provider: docker
+      level: beginner
+      title: An API and its PostgreSQL database
+      summary: Keep PostgreSQL data in a named volume, start the API only once the database is healthy, and stop exposing the database to your whole network.
+      minutes: 25
+      tags: [compose, postgres, volumes, depends_on, healthcheck, startup-order]
+      prerequisites: [docker-first-web-service]
+      runtime: local
+      problem: |
+        The visits API counts every request in PostgreSQL. It works on a good day,
+        but:
+
+        - after `docker compose down` and `up` the counter is back to zero:
+          PostgreSQL writes to an anonymous volume nobody reuses;
+        - on a cold start the API boots before PostgreSQL accepts connections and
+          its first requests fail;
+        - the database is published as `5432:5432`, so anyone on the same Wi-Fi
+          can try the password.
+
+        Make the stack start in the right order, keep its data, and keep the
+        database private to the project.
+      requirements:
+        - "PostgreSQL stores `/var/lib/postgresql/data` in a **named** volume declared under the top-level `volumes:`."
+        - "The `db` service has a healthcheck that succeeds only when PostgreSQL accepts connections."
+        - "The `api` service waits for `db` with `depends_on: {db: {condition: service_healthy}}`."
+        - "The database is not published on every network interface (drop `ports:`, or bind it to `127.0.0.1`)."
+        - "The stack deploys and `GET /health` on the API answers 200."
+      hints:
+        - "The official postgres image declares a `VOLUME` for its data directory. If you don't mount anything there, Docker creates an anonymous volume with a random name."
+        - "A named volume is `pgdata:/var/lib/postgresql/data` in the service plus `volumes: {pgdata: {}}` at the top level."
+        - "The postgres image ships `pg_isready`: `test: [\"CMD-SHELL\", \"pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}\"]`. `$$` escapes `$` so the variable is expanded inside the container, not by Compose."
+        - "The short form `depends_on: [db]` only waits for the container to be started. The long form takes a `condition`."
+        - "Other services reach the database as `db:5432` on the project network: it needs no published port at all."
+      solution: |
+        **Why.** Docker's volume docs explain that named volumes persist
+        independently of containers and are reused by name, while anonymous
+        volumes get random names. Compose's startup-order guide notes that
+        Compose waits for a dependency to be *running*, not *ready*, unless you
+        use `condition: service_healthy` with a healthcheck. Compose networking
+        gives every service a DNS name on the project network, so a database
+        doesn't need a published port for the API to reach it.
+
+        **Steps.**
+        1. Mount `pgdata:/var/lib/postgresql/data` on `db` and declare `pgdata:` under `volumes:`.
+        2. Add a `pg_isready` healthcheck to `db` (interval 5s, timeout 5s, retries 10).
+        3. Change the API's `depends_on` to the long form with `condition: service_healthy`.
+        4. Remove `ports:` from `db` (use `"127.0.0.1:5432:5432"` only if you need a local SQL client).
+        5. Deploy, call `/` a few times, redeploy: the visit counter keeps counting.
+      solutionFiles:
+        compose.yaml: |
+          # The API reaches PostgreSQL as db:5432 on the project network; only
+          # the API is published. The database keeps its data in a named volume
+          # and the API starts once the database is healthy.
+          services:
+            api:
+              build: ./api
+              init: true
+              ports:
+                - "3000:3000"
+              environment:
+                DATABASE_URL: postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB}
+              depends_on:
+                db:
+                  condition: service_healthy
+              restart: unless-stopped
+
+            db:
+              image: postgres:16-alpine
+              environment:
+                POSTGRES_USER: ${POSTGRES_USER}
+                POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+                POSTGRES_DB: ${POSTGRES_DB}
+              volumes:
+                - pgdata:/var/lib/postgresql/data
+              healthcheck:
+                test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+                interval: 5s
+                timeout: 5s
+                retries: 10
+              restart: unless-stopped
+
+          volumes:
+            pgdata:
+      starter:
+        kind: docker
+        files:
+          compose.yaml: |
+            services:
+              api:
+                build: ./api
+                init: true
+                ports:
+                  - "3000:3000"
+                environment:
+                  DATABASE_URL: postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB}
+                depends_on:
+                  - db
+                restart: unless-stopped
+
+              db:
+                image: postgres:16-alpine
+                ports:
+                  - "5432:5432"
+                environment:
+                  POSTGRES_USER: ${POSTGRES_USER}
+                  POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+                  POSTGRES_DB: ${POSTGRES_DB}
+                restart: unless-stopped
+          .env: |
+            # Local development credentials only: keep real ones out of git.
+            POSTGRES_USER=visits
+            POSTGRES_PASSWORD=local-dev-only
+            POSTGRES_DB=visits
+          api/Dockerfile: |
+            # Dependencies first (cached until package.json changes), then the code.
+            FROM node:22-alpine
+            ENV NODE_ENV=production
+            WORKDIR /app
+            COPY package.json ./
+            RUN npm install --omit=dev --no-audit --no-fund
+            COPY server.js ./
+            USER node
+            EXPOSE 3000
+            HEALTHCHECK --interval=10s --timeout=3s --start-period=5s --retries=3 \
+              CMD wget -qO- http://127.0.0.1:3000/health >/dev/null || exit 1
+            CMD ["node", "server.js"]
+          api/.dockerignore: |
+            node_modules
+            npm-debug.log*
+            .env*
+            Dockerfile
+            .dockerignore
+          api/package.json: |
+            {
+              "name": "visits-api",
+              "version": "1.0.0",
+              "private": true,
+              "main": "server.js",
+              "dependencies": {
+                "pg": "8.13.1"
+              }
+            }
+          api/server.js: |
+            const http = require("node:http");
+            const { Pool } = require("pg");
+
+            const port = Number(process.env.PORT ?? 3000);
+            const pool = new Pool({ connectionString: process.env.DATABASE_URL, max: 5 });
+            // An idle client losing its connection must not crash the process.
+            pool.on("error", (err) => console.error("postgres:", err.message));
+
+            // Create the table once; retried on the next request if it failed.
+            let schema;
+            function ensureSchema() {
+              schema ??= pool
+                .query("CREATE TABLE IF NOT EXISTS visits (id serial PRIMARY KEY, at timestamptz NOT NULL DEFAULT now())")
+                .catch((err) => {
+                  schema = undefined;
+                  throw err;
+                });
+              return schema;
+            }
+
+            function send(res, status, body) {
+              res.writeHead(status, { "Content-Type": "application/json" });
+              res.end(JSON.stringify(body));
+            }
+
+            const server = http.createServer(async (req, res) => {
+              const path = new URL(req.url, "http://localhost").pathname;
+              try {
+                if (path === "/health") {
+                  await pool.query("SELECT 1");
+                  return send(res, 200, { status: "ok" });
+                }
+                if (path === "/") {
+                  await ensureSchema();
+                  await pool.query("INSERT INTO visits DEFAULT VALUES");
+                  const { rows } = await pool.query("SELECT count(*)::int AS total FROM visits");
+                  return send(res, 200, { visits: rows[0].total });
+                }
+                send(res, 404, { error: "not found" });
+              } catch (err) {
+                console.error(err.message);
+                send(res, 503, { error: "database unavailable" });
+              }
+            });
+
+            server.listen(port, () => console.log(`listening on :${port}`));
+
+            process.on("SIGTERM", () => server.close(() => pool.end().then(() => process.exit(0))));
+      checks:
+        - id: valid
+          label: The compose project is valid
+          type: validate
+        - id: named-volume
+          label: PostgreSQL keeps its data in a named volume
+          type: rules_clean
+          rules_clean: { codes: [dk_anon_volume], minSeverity: warning }
+        - id: db-healthcheck
+          label: The database has a healthcheck
+          type: has
+          has:
+            compose:
+              service: db
+              where: { healthcheck.test: { exists: true } }
+        - id: healthy-order
+          label: The API waits until the database is healthy
+          type: has
+          has:
+            compose:
+              service: api
+              where: { depends_on.db.condition: service_healthy }
+        - id: private-db
+          label: The database is not published on every interface
+          type: rules_clean
+          rules_clean: { codes: [dk_db_published], minSeverity: warning }
+        - id: deploy
+          label: The stack deploys
+          type: deploy
+        - id: health
+          label: The API reaches the database (GET /health answers 200)
+          type: http
+          http: { service: api, port: 3000, path: /health, status: 200 }
+      sources:
+        - { title: "Docker Docs: Control startup and shutdown order in Compose", url: "https://docs.docker.com/compose/how-tos/startup-order/" }
+        - { title: "Docker Docs: Volumes", url: "https://docs.docker.com/engine/storage/volumes/" }
+        - { title: "Docker Docs: Compose file reference, volumes top-level element", url: "https://docs.docker.com/reference/compose-file/volumes/" }
+        - { title: "Docker Docs: Networking in Compose", url: "https://docs.docker.com/compose/how-tos/networking/" }
+        - { title: "Docker Docs: Compose file reference, services (depends_on, healthcheck, ports)", url: "https://docs.docker.com/reference/compose-file/services/" }

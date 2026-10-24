@@ -364,3 +364,26 @@ func TestFileLanguage(t *testing.T) {
 		}
 	}
 }
+
+// A duplicate never inherits the original's .nimbo state: a saved port
+// remap there would point at a port the original may hold.
+func TestCopyTreeSkipsNimboState(t *testing.T) {
+	src, dst := t.TempDir(), t.TempDir()
+	for rel, data := range map[string]string{"compose.yaml": "services: {}\n", ".nimbo/ports.json": "[]", "docker/.nimbo/ports.json": "[]", "docker/app.js": "1"} {
+		p := filepath.Join(src, filepath.FromSlash(rel))
+		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(p, []byte(data), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := copyTree(src, dst); err != nil {
+		t.Fatal(err)
+	}
+	for rel, want := range map[string]bool{"compose.yaml": true, "docker/app.js": true, ".nimbo": false, "docker/.nimbo": false} {
+		if _, err := os.Stat(filepath.Join(dst, filepath.FromSlash(rel))); (err == nil) != want {
+			t.Errorf("%s copied = %v, want %v", rel, err == nil, want)
+		}
+	}
+}

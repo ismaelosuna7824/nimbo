@@ -1,0 +1,670 @@
+description: Adds the Azure beginner challenges (storage secure defaults, naming and tagging, virtual network with NSGs)
+operations:
+  - op: upsert
+    kind: challenge
+    id: azure-storage-secure-defaults
+    data:
+      provider: azure
+      level: beginner
+      title: Lock down a storage account
+      summary: Fix a storage account that accepts plain HTTP, old TLS and anonymous blob reads.
+      minutes: 25
+      tags: [storage, security, encryption, tls]
+      runtime: design
+      problem: |
+        Your team created a storage account for user uploads by copying an old snippet. A review found three problems:
+        the account accepts unencrypted HTTP requests, still negotiates TLS 1.0, and lets anyone on the internet read
+        the `uploads` container without credentials.
+
+        Microsoft's storage security recommendations treat all three as baseline controls: require secure transfer,
+        set a minimum TLS version, and disallow anonymous read access unless you really serve public content.
+        Nothing here needs to be public, so fix the Terraform before it reaches a subscription.
+      requirements:
+        - "`azurerm_storage_account` sets `min_tls_version = \"TLS1_2\"`."
+        - "`azurerm_storage_account` sets `https_traffic_only_enabled = true` (secure transfer required)."
+        - "`azurerm_storage_account` sets `allow_nested_items_to_be_public = false`, and no container allows anonymous access (`container_access_type = \"private\"`)."
+        - The workflow validates and Nimbo's `bp_public_bucket` rule reports nothing.
+      hints:
+        - Open `main.tf` and read the storage account arguments one by one; each problem is a single argument.
+        - "Anonymous access has two layers: the account-level switch (`allow_nested_items_to_be_public`) and each container's `container_access_type`. Both must be closed."
+        - "TLS values in azurerm use the form `TLS1_2`, not `1.2`."
+      solution: |
+        Set the three account-level controls and make the container private:
+
+        ```hcl
+        resource "azurerm_storage_account" "uploads" {
+          # ...
+          min_tls_version                 = "TLS1_2"
+          https_traffic_only_enabled      = true
+          allow_nested_items_to_be_public = false
+        }
+
+        resource "azurerm_storage_container" "uploads" {
+          name                  = "uploads"
+          storage_account_id    = azurerm_storage_account.uploads.id
+          container_access_type = "private"
+        }
+        ```
+
+        **Why:** with secure transfer required, Azure Storage rejects requests over HTTP. TLS 1.0 and 1.1 lack modern
+        cipher suites, so the Well-Architected guide for Blob Storage recommends TLS 1.2 as the minimum. Disallowing
+        anonymous access at the account level means nobody can later flip a container to public by mistake; clients
+        authenticate with Microsoft Entra ID (or, if unavoidable, short-lived SAS tokens). Writing these values
+        explicitly keeps the intent visible in code even where newer accounts already default to them.
+      solutionFiles:
+        main.tf: |
+          resource "azurerm_resource_group" "main" {
+            name     = "rg-${local.name_prefix}"
+            location = var.location
+            tags     = local.common_tags
+          }
+
+          resource "azurerm_storage_account" "uploads" {
+            # Storage account names are 3-24 lowercase letters and digits.
+            name                            = substr("st${replace(local.name_prefix, "-", "")}uploads", 0, 24)
+            resource_group_name             = azurerm_resource_group.main.name
+            location                        = azurerm_resource_group.main.location
+            account_tier                    = "Standard"
+            account_replication_type        = "LRS"
+            min_tls_version                 = "TLS1_2"
+            https_traffic_only_enabled      = true
+            allow_nested_items_to_be_public = false
+            tags                            = local.common_tags
+          }
+
+          resource "azurerm_storage_container" "uploads" {
+            name                  = "uploads"
+            storage_account_id    = azurerm_storage_account.uploads.id
+            container_access_type = "private"
+          }
+      starter:
+        kind: terraform
+        cloud: azure
+        files:
+          versions.tf: |
+            terraform {
+              required_version = ">= 1.6"
+
+              required_providers {
+                azurerm = {
+                  source  = "hashicorp/azurerm"
+                  version = "~> 4.0"
+                }
+              }
+            }
+          providers.tf: |
+            provider "azurerm" {
+              features {}
+            }
+          variables.tf: |
+            variable "project" {
+              type        = string
+              default     = "nimbolearn"
+              description = "Project name: part of every resource name and the Project tag."
+            }
+
+            variable "environment" {
+              type        = string
+              default     = "dev"
+              description = "Deployment environment (dev, staging, prod): part of every resource name and the Environment tag."
+            }
+
+            variable "location" {
+              type        = string
+              default     = "eastus"
+              description = "Azure region of the resource group and its resources."
+            }
+          locals.tf: |
+            locals {
+              name_prefix = "${var.project}-${var.environment}"
+              common_tags = {
+                Project     = var.project
+                Environment = var.environment
+                ManagedBy   = "nimbo"
+              }
+            }
+          main.tf: |
+            resource "azurerm_resource_group" "main" {
+              name     = "rg-${local.name_prefix}"
+              location = var.location
+              tags     = local.common_tags
+            }
+
+            resource "azurerm_storage_account" "uploads" {
+              # Storage account names are 3-24 lowercase letters and digits.
+              name                            = substr("st${replace(local.name_prefix, "-", "")}uploads", 0, 24)
+              resource_group_name             = azurerm_resource_group.main.name
+              location                        = azurerm_resource_group.main.location
+              account_tier                    = "Standard"
+              account_replication_type        = "LRS"
+              min_tls_version                 = "TLS1_0"
+              https_traffic_only_enabled      = false
+              allow_nested_items_to_be_public = true
+              tags                            = local.common_tags
+            }
+
+            resource "azurerm_storage_container" "uploads" {
+              name                  = "uploads"
+              storage_account_id    = azurerm_storage_account.uploads.id
+              container_access_type = "blob"
+            }
+          outputs.tf: |
+            output "storage_account_name" {
+              value       = azurerm_storage_account.uploads.name
+              description = "Name of the uploads storage account."
+            }
+      checks:
+        - id: validate
+          label: The workflow validates
+          type: validate
+        - id: tls
+          label: Minimum TLS version is 1.2
+          type: has
+          has:
+            terraform:
+              type: azurerm_storage_account
+              where:
+                min_tls_version: TLS1_2
+        - id: https
+          label: Secure transfer (HTTPS only) is required
+          type: has
+          has:
+            terraform:
+              type: azurerm_storage_account
+              where:
+                https_traffic_only_enabled: true
+        - id: no-anonymous-account
+          label: The account disallows anonymous (public) blob access
+          type: has
+          has:
+            terraform:
+              type: azurerm_storage_account
+              where:
+                allow_nested_items_to_be_public: false
+        - id: no-public-containers
+          label: No container or account is publicly readable (bp_public_bucket)
+          type: rules_clean
+          rules_clean:
+            codes: [bp_public_bucket]
+            minSeverity: info
+      sources:
+        - title: Security recommendations for Blob Storage
+          url: https://learn.microsoft.com/en-us/azure/storage/blobs/security-recommendations
+        - title: Well-Architected Framework service guide — Azure Blob Storage
+          url: https://learn.microsoft.com/en-us/azure/well-architected/service-guides/azure-blob-storage
+        - title: azurerm_storage_account (azurerm 4.x)
+          url: https://registry.terraform.io/providers/hashicorp/azurerm/4.81.0/docs/resources/storage_account
+        - title: azurerm_storage_container (azurerm 4.x)
+          url: https://registry.terraform.io/providers/hashicorp/azurerm/4.81.0/docs/resources/storage_container
+
+  - op: upsert
+    kind: challenge
+    id: azure-naming-tagging
+    data:
+      provider: azure
+      level: beginner
+      title: Name and tag resources the Cloud Adoption Framework way
+      summary: Replace ad-hoc names, hardcoded regions and missing tags with a CAF naming and tagging convention.
+      minutes: 20
+      tags: [governance, naming, tagging, cost]
+      runtime: design
+      problem: |
+        Finance can't tell which team owns half of the subscription's bill, and nobody dares to delete
+        `myvnet` or `storage1234` because nobody knows what they belong to. On top of that, every resource has
+        `"eastus"` typed in by hand, so creating a second environment in another region means editing every file.
+
+        The Cloud Adoption Framework (CAF) recommends a naming convention built from a resource-type abbreviation,
+        the workload, the environment and the region, plus a tagging strategy so cost and ownership show up
+        in reports. Refactor this small workload to follow it.
+      requirements:
+        - "The resource group name starts with the CAF abbreviation `rg-` and the virtual network name with `vnet-`, followed by the workload and environment (for example `rg-${local.name_prefix}`)."
+        - Every taggable resource sets `tags` (for example `local.common_tags` with the project, environment and owner).
+        - No resource hardcodes a region literal in `location`; use `var.location` or the resource group's location.
+        - The workflow validates.
+      hints:
+        - "Add a `locals.tf` with `name_prefix = \"${var.project}-${var.environment}\"` and a `common_tags` map, then reuse both everywhere."
+        - "Child resources can take `location = azurerm_resource_group.main.location` so the region is decided in one place."
+        - "Storage account names can't contain hyphens: use `replace(local.name_prefix, \"-\", \"\")` after the `st` abbreviation."
+      solution: |
+        Introduce one place that builds names and tags, and derive every name and location from it:
+
+        ```hcl
+        locals {
+          name_prefix = "${var.project}-${var.environment}"
+          common_tags = {
+            project     = var.project
+            environment = var.environment
+            owner       = var.owner
+            managedby   = "terraform"
+          }
+        }
+
+        resource "azurerm_resource_group" "main" {
+          name     = "rg-${local.name_prefix}"
+          location = var.location
+          tags     = local.common_tags
+        }
+        ```
+
+        **Why:** most Azure resource names can't be changed after creation, so CAF suggests names that only hold
+        stable facts (type abbreviation such as `rg`, `vnet`, `st`; workload; environment; region; instance) and
+        puts everything else (owner, cost center, criticality) in tags. Tags feed cost reports and governance;
+        later you can enforce them with Azure Policy (see the expert landing-zone challenge). Taking the region
+        from a variable lets the same code deploy a second environment or region without edits.
+      solutionFiles:
+        variables.tf: |
+          variable "project" {
+            type        = string
+            default     = "shop"
+            description = "Workload name: part of every resource name and the project tag."
+          }
+
+          variable "environment" {
+            type        = string
+            default     = "dev"
+            description = "Deployment environment (dev, test, prod): part of every resource name and the environment tag."
+          }
+
+          variable "location" {
+            type        = string
+            default     = "eastus"
+            description = "Azure region of the resource group and its resources."
+          }
+
+          variable "owner" {
+            type        = string
+            default     = "platform-team"
+            description = "Team that owns the workload (owner tag)."
+          }
+        locals.tf: |
+          locals {
+            name_prefix = "${var.project}-${var.environment}"
+            common_tags = {
+              project     = var.project
+              environment = var.environment
+              owner       = var.owner
+              managedby   = "terraform"
+            }
+          }
+        main.tf: |
+          resource "azurerm_resource_group" "main" {
+            name     = "rg-${local.name_prefix}"
+            location = var.location
+            tags     = local.common_tags
+          }
+
+          resource "azurerm_virtual_network" "main" {
+            name                = "vnet-${local.name_prefix}-${var.location}"
+            resource_group_name = azurerm_resource_group.main.name
+            location            = azurerm_resource_group.main.location
+            address_space       = ["10.10.0.0/16"]
+            tags                = local.common_tags
+          }
+
+          resource "azurerm_storage_account" "data" {
+            name                            = substr("st${replace(local.name_prefix, "-", "")}data", 0, 24)
+            resource_group_name             = azurerm_resource_group.main.name
+            location                        = azurerm_resource_group.main.location
+            account_tier                    = "Standard"
+            account_replication_type        = "LRS"
+            min_tls_version                 = "TLS1_2"
+            allow_nested_items_to_be_public = false
+            tags                            = local.common_tags
+          }
+      starter:
+        kind: terraform
+        cloud: azure
+        files:
+          versions.tf: |
+            terraform {
+              required_version = ">= 1.6"
+
+              required_providers {
+                azurerm = {
+                  source  = "hashicorp/azurerm"
+                  version = "~> 4.0"
+                }
+              }
+            }
+          providers.tf: |
+            provider "azurerm" {
+              features {}
+            }
+          variables.tf: |
+            variable "project" {
+              type        = string
+              default     = "shop"
+              description = "Workload name."
+            }
+
+            variable "environment" {
+              type        = string
+              default     = "dev"
+              description = "Deployment environment (dev, test, prod)."
+            }
+          main.tf: |
+            resource "azurerm_resource_group" "main" {
+              name     = "myresourcegroup"
+              location = "eastus"
+            }
+
+            resource "azurerm_virtual_network" "main" {
+              name                = "myvnet"
+              resource_group_name = azurerm_resource_group.main.name
+              location            = "eastus"
+              address_space       = ["10.10.0.0/16"]
+            }
+
+            resource "azurerm_storage_account" "data" {
+              name                            = "storage1234"
+              resource_group_name             = azurerm_resource_group.main.name
+              location                        = "eastus"
+              account_tier                    = "Standard"
+              account_replication_type        = "LRS"
+              min_tls_version                 = "TLS1_2"
+              allow_nested_items_to_be_public = false
+            }
+      checks:
+        - id: validate
+          label: The workflow validates
+          type: validate
+        - id: rg-name
+          label: The resource group name starts with the CAF abbreviation rg-
+          type: has
+          has:
+            terraform:
+              type: azurerm_resource_group
+              where:
+                name:
+                  contains: rg-
+        - id: vnet-name
+          label: The virtual network name starts with the CAF abbreviation vnet-
+          type: has
+          has:
+            terraform:
+              type: azurerm_virtual_network
+              where:
+                name:
+                  contains: vnet-
+        - id: tags
+          label: Every resource is tagged (bp_missing_tags)
+          type: rules_clean
+          rules_clean:
+            codes: [bp_missing_tags]
+            minSeverity: info
+        - id: no-hardcoded-region
+          label: No hardcoded region (bp_hardcoded_region)
+          type: rules_clean
+          rules_clean:
+            codes: [bp_hardcoded_region]
+            minSeverity: info
+      sources:
+        - title: CAF — Define your naming convention
+          url: https://learn.microsoft.com/en-us/azure/cloud-adoption-framework/ready/azure-best-practices/resource-naming
+        - title: CAF — Abbreviation recommendations for Azure resources
+          url: https://learn.microsoft.com/en-us/azure/cloud-adoption-framework/ready/azure-best-practices/resource-abbreviations
+        - title: CAF — Define your tagging strategy
+          url: https://learn.microsoft.com/en-us/azure/cloud-adoption-framework/ready/azure-best-practices/resource-tagging
+        - title: Study guide for Exam AZ-900 (management and governance, purpose of tags)
+          url: https://learn.microsoft.com/en-us/credentials/certifications/resources/study-guides/az-900
+
+  - op: upsert
+    kind: challenge
+    id: azure-vnet-nsg
+    data:
+      provider: azure
+      level: beginner
+      title: Segment a virtual network and close SSH to the internet
+      summary: Split a VNet into subnets, attach an NSG to the workload subnet and replace public SSH with Azure Bastion.
+      minutes: 35
+      tags: [networking, security, nsg, bastion, segmentation]
+      prerequisites: [azure-naming-tagging]
+      runtime: design
+      problem: |
+        A small team runs its VMs in a virtual network with a single subnet. To make administration easy they
+        created a network security group (NSG) rule that allows SSH (port 22) from any source — and then forgot
+        to associate the NSG with the subnet at all, so it doesn't even filter anything.
+
+        Microsoft recommends associating NSGs with subnets, never exposing management ports to the internet,
+        and connecting to VMs through Azure Bastion, which needs its own dedicated subnet. Redesign the network.
+      requirements:
+        - The virtual network has at least two subnets, including one named exactly `AzureBastionSubnet`.
+        - "An `azurerm_subnet_network_security_group_association` attaches the NSG to the workload subnet."
+        - No NSG rule allows SSH/RDP or database ports from `*`, `Internet` or `0.0.0.0/0` (Nimbo's `bp_open_ingress` reports nothing).
+        - "An `azurerm_bastion_host` uses the `AzureBastionSubnet` and a Standard-SKU public IP."
+        - The workflow validates.
+      hints:
+        - NSG rules are evaluated by priority (lower number first) and the default rules already allow traffic inside the virtual network, so you can simply delete the public SSH rule.
+        - "If you want an explicit rule, use a service tag as source: `source_address_prefix = \"VirtualNetwork\"`."
+        - "Bastion (Basic SKU and above) needs a subnet called `AzureBastionSubnet` (/26 or larger) plus an `azurerm_public_ip` with `sku = \"Standard\"` and `allocation_method = \"Static\"`."
+      solution: |
+        1. Keep the workload subnet (`snet-app`) and add `AzureBastionSubnet` (10.20.255.0/26).
+        2. Remove the inbound `Allow` rule for port 22 from `*`; if you need SSH inside the network, allow it only from
+           the `VirtualNetwork` service tag (Bastion connects from inside the VNet).
+        3. Associate the NSG with `snet-app` using `azurerm_subnet_network_security_group_association`.
+        4. Add an `azurerm_public_ip` (Standard, Static) and an `azurerm_bastion_host` whose `ip_configuration` points to
+           `AzureBastionSubnet`.
+
+        **Why:** an NSG only filters traffic once it is associated with a subnet or NIC, and Microsoft recommends the
+        subnet level. Admin ports open to the internet are scanned and brute-forced continuously; Azure Bastion gives
+        RDP/SSH over TLS (443) from the portal or native client without any public IP on the VMs.
+      solutionFiles:
+        network.tf: |
+          resource "azurerm_virtual_network" "main" {
+            name                = "vnet-${local.name_prefix}"
+            resource_group_name = azurerm_resource_group.main.name
+            location            = azurerm_resource_group.main.location
+            address_space       = ["10.20.0.0/16"]
+            tags                = local.common_tags
+          }
+
+          resource "azurerm_subnet" "app" {
+            name                 = "snet-app"
+            resource_group_name  = azurerm_resource_group.main.name
+            virtual_network_name = azurerm_virtual_network.main.name
+            address_prefixes     = ["10.20.1.0/24"]
+          }
+
+          resource "azurerm_subnet" "bastion" {
+            # Azure Bastion requires this exact name and at least a /26.
+            name                 = "AzureBastionSubnet"
+            resource_group_name  = azurerm_resource_group.main.name
+            virtual_network_name = azurerm_virtual_network.main.name
+            address_prefixes     = ["10.20.255.0/26"]
+          }
+
+          resource "azurerm_network_security_group" "app" {
+            name                = "nsg-${local.name_prefix}-app"
+            resource_group_name = azurerm_resource_group.main.name
+            location            = azurerm_resource_group.main.location
+            tags                = local.common_tags
+
+            security_rule {
+              name                       = "allow-ssh-from-vnet"
+              priority                   = 100
+              direction                  = "Inbound"
+              access                     = "Allow"
+              protocol                   = "Tcp"
+              source_port_range          = "*"
+              destination_port_range     = "22"
+              source_address_prefix      = "VirtualNetwork"
+              destination_address_prefix = "*"
+            }
+          }
+
+          resource "azurerm_subnet_network_security_group_association" "app" {
+            subnet_id                 = azurerm_subnet.app.id
+            network_security_group_id = azurerm_network_security_group.app.id
+          }
+
+          resource "azurerm_public_ip" "bastion" {
+            name                = "pip-${local.name_prefix}-bastion"
+            resource_group_name = azurerm_resource_group.main.name
+            location            = azurerm_resource_group.main.location
+            allocation_method   = "Static"
+            sku                 = "Standard"
+            tags                = local.common_tags
+          }
+
+          resource "azurerm_bastion_host" "main" {
+            name                = "bas-${local.name_prefix}"
+            resource_group_name = azurerm_resource_group.main.name
+            location            = azurerm_resource_group.main.location
+            sku                 = "Standard"
+            tags                = local.common_tags
+
+            ip_configuration {
+              name                 = "configuration"
+              subnet_id            = azurerm_subnet.bastion.id
+              public_ip_address_id = azurerm_public_ip.bastion.id
+            }
+          }
+      starter:
+        kind: terraform
+        cloud: azure
+        files:
+          versions.tf: |
+            terraform {
+              required_version = ">= 1.6"
+
+              required_providers {
+                azurerm = {
+                  source  = "hashicorp/azurerm"
+                  version = "~> 4.0"
+                }
+              }
+            }
+          providers.tf: |
+            provider "azurerm" {
+              features {}
+            }
+          variables.tf: |
+            variable "project" {
+              type        = string
+              default     = "nimbolearn"
+              description = "Project name: part of every resource name."
+            }
+
+            variable "environment" {
+              type        = string
+              default     = "dev"
+              description = "Deployment environment (dev, test, prod)."
+            }
+
+            variable "location" {
+              type        = string
+              default     = "eastus"
+              description = "Azure region of the resource group and its resources."
+            }
+          locals.tf: |
+            locals {
+              name_prefix = "${var.project}-${var.environment}"
+              common_tags = {
+                project     = var.project
+                environment = var.environment
+                managedby   = "terraform"
+              }
+            }
+          main.tf: |
+            resource "azurerm_resource_group" "main" {
+              name     = "rg-${local.name_prefix}"
+              location = var.location
+              tags     = local.common_tags
+            }
+          network.tf: |
+            resource "azurerm_virtual_network" "main" {
+              name                = "vnet-${local.name_prefix}"
+              resource_group_name = azurerm_resource_group.main.name
+              location            = azurerm_resource_group.main.location
+              address_space       = ["10.20.0.0/16"]
+              tags                = local.common_tags
+            }
+
+            resource "azurerm_subnet" "app" {
+              name                 = "snet-app"
+              resource_group_name  = azurerm_resource_group.main.name
+              virtual_network_name = azurerm_virtual_network.main.name
+              address_prefixes     = ["10.20.1.0/24"]
+            }
+
+            resource "azurerm_network_security_group" "app" {
+              name                = "nsg-${local.name_prefix}-app"
+              resource_group_name = azurerm_resource_group.main.name
+              location            = azurerm_resource_group.main.location
+              tags                = local.common_tags
+
+              security_rule {
+                name                       = "allow-ssh"
+                priority                   = 100
+                direction                  = "Inbound"
+                access                     = "Allow"
+                protocol                   = "Tcp"
+                source_port_range          = "*"
+                destination_port_range     = "22"
+                source_address_prefix      = "*"
+                destination_address_prefix = "*"
+              }
+            }
+      checks:
+        - id: validate
+          label: The workflow validates
+          type: validate
+        - id: subnets
+          label: The virtual network has at least two subnets
+          type: has
+          has:
+            terraform:
+              type: azurerm_subnet
+              count:
+                min: 2
+        - id: nsg-associated
+          label: The NSG is associated with a subnet
+          type: has
+          has:
+            terraform:
+              type: azurerm_subnet_network_security_group_association
+              where:
+                subnet_id:
+                  ref: azurerm_subnet
+                network_security_group_id:
+                  ref: azurerm_network_security_group
+        - id: no-open-admin-ports
+          label: No admin or database port is open to the internet (bp_open_ingress)
+          type: rules_clean
+          rules_clean:
+            codes: [bp_open_ingress]
+            minSeverity: info
+        - id: bastion-subnet
+          label: A subnet named AzureBastionSubnet exists
+          type: has
+          has:
+            terraform:
+              type: azurerm_subnet
+              where:
+                name: AzureBastionSubnet
+        - id: bastion
+          label: Azure Bastion runs in AzureBastionSubnet
+          type: has
+          has:
+            terraform:
+              type: azurerm_bastion_host
+              where:
+                ip_configuration.subnet_id:
+                  ref: azurerm_subnet
+                ip_configuration.public_ip_address_id:
+                  ref: azurerm_public_ip
+      sources:
+        - title: Plan virtual networks
+          url: https://learn.microsoft.com/en-us/azure/virtual-network/virtual-network-vnet-plan-design-arm
+        - title: Network security groups overview
+          url: https://learn.microsoft.com/en-us/azure/virtual-network/network-security-groups-overview
+        - title: What is Azure Bastion?
+          url: https://learn.microsoft.com/en-us/azure/bastion/bastion-overview
+        - title: Azure Bastion configuration settings (AzureBastionSubnet size)
+          url: https://learn.microsoft.com/en-us/azure/bastion/configuration-settings
+        - title: Study guide for Exam AZ-104 (configure and manage virtual networks)
+          url: https://learn.microsoft.com/en-us/credentials/certifications/resources/study-guides/az-104
+        - title: azurerm_subnet_network_security_group_association (azurerm 4.x)
+          url: https://registry.terraform.io/providers/hashicorp/azurerm/4.81.0/docs/resources/subnet_network_security_group_association
+        - title: azurerm_bastion_host (azurerm 4.x)
+          url: https://registry.terraform.io/providers/hashicorp/azurerm/4.81.0/docs/resources/bastion_host

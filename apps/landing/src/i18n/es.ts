@@ -4,7 +4,7 @@ export const es: Strings = {
   meta: {
     title: "Nimbo — Diseña, despliega y prueba bajo carga infraestructura cloud en tu laptop",
     description:
-      "Nimbo es una app de escritorio gratuita para diseñar infraestructura cloud conectando nodos, exportar o importar Terraform, desplegar en una nube local privada (AWS, Azure, GCP, OCI), levantar proyectos de Docker Compose y Kubernetes en tu máquina y hacerles pruebas de carga, sin tocar una cuenta real.",
+      "Nimbo es una app de escritorio gratuita para diseñar infraestructura cloud conectando nodos, exportar o importar Terraform, desplegar en una nube local privada (AWS, Azure, GCP, OCI), levantar proyectos de Docker Compose y Kubernetes en tu máquina, hacerles pruebas de carga, revisar si están listos para producción y aprender con retos calificados, sin tocar una cuenta real.",
     ogImageAlt: "La mascota de Nimbo junto al titular: Diseña, despliega y prueba bajo carga infraestructura cloud en tu laptop.",
   },
   a11y: {
@@ -21,6 +21,7 @@ export const es: Strings = {
     how: "Cómo funciona",
     agents: "Agentes de IA",
     start: "Empezar",
+    learn: "Aprende",
     faq: "Preguntas",
     github: "GitHub",
     download: "Descargar",
@@ -102,6 +103,27 @@ export const es: Strings = {
           "Los overlays y archivos de values se vuelven entornos",
           "Autocompletado y revisiones desde el esquema de Kubernetes, con correcciones de un clic",
           "Convert to Kubernetes: un proyecto compose se vuelve manifiestos, Kustomize o un chart de Helm",
+        ],
+      },
+      readiness: {
+        eyebrow: "Listo para producción",
+        title: "Una puntuación de preparación respaldada por pruebas reales.",
+        body: "Los workspaces de Docker y Kubernetes tienen una puntuación de Readiness por entorno, con una fila por componente. Combina las revisiones de buenas prácticas con evidencia de tu máquina: pruebas de carga, escenarios de incidentes, un plan de capacidad y monitoreo. Cada hueco enlaza a la revisión, la prueba o la corrección que lo cierra.",
+        bullets: [
+          "Incidentes durante una prueba de carga —matar una réplica, tumbar o ralentizar una dependencia, vaciar la caché, un pico de tráfico— con el veredicto sobrevivió, degradado o falló",
+          "Planificador de capacidad: réplicas, nodos y costo mensual en AWS, Azure, Google Cloud y OCI con sus precios de lista, aplicado a un entorno con un clic",
+          "Monitoreo con un clic: Prometheus, Grafana y alertas, incluidas la tasa de errores HTTP 5xx y la latencia p95",
+          "Entornos desde compose.<env>.yaml y .env.<env>, overlays de Kustomize o values de Helm, para comparar y editar",
+        ],
+      },
+      learn: {
+        eyebrow: "Aprende",
+        title: "Rutas y retos que Nimbo califica de verdad.",
+        body: "Rutas de principiante a experto y 78 retos prácticos para AWS, Azure, Google Cloud, Oracle Cloud, Docker, Kubernetes y problemas comunes a todas las nubes, basados en la documentación oficial y las guías de certificación. Cada uno trae el problema, los requisitos, pistas y una solución. Pulsa Check my solution y Nimbo califica tu trabajo.",
+        bullets: [
+          "Los retos de Docker y Kubernetes corren en tu máquina: Nimbo los despliega y, según el objetivo, los llama, les hace pruebas de carga o los rompe a propósito; la mayoría de los de AWS corren en el emulador local",
+          "Los retos de Azure, Google Cloud y Oracle Cloud se califican sobre el diseño: validación, reglas de buenas prácticas y estructura",
+          "Tu progreso se guarda en una base de datos local; el contenido nuevo llega como migraciones aportadas por la comunidad",
         ],
       },
       sandbox: {
@@ -232,6 +254,11 @@ export const es: Strings = {
         a: "Con el servidor MCP integrado de Nimbo. Abre Ajustes → Agentes de IA y pulsa Instalar en Claude Code, Claude Desktop, Cursor, Codex, VS Code, Windsurf o Gemini CLI, o registra `nimbo mcp` a mano. Los cambios del agente aparecen en vivo en la app.",
       },
       {
+        id: "learn",
+        q: "¿Cómo se califican los retos de Aprende?",
+        a: "Cada reto muestra sus revisiones. Check my solution valida el workflow, ejecuta las reglas de buenas prácticas e inspecciona su estructura. Cuando un objetivo lo pide, como en los retos de Docker, Kubernetes y la mayoría de los de AWS, Nimbo despliega en local y llama al endpoint, lanza una prueba de carga o inyecta un incidente. Los retos de Azure, Google Cloud y Oracle Cloud se califican solo sobre el diseño: para ellos no se despliega nada.",
+      },
+      {
         id: "data",
         q: "¿Se envían mis datos a algún lado?",
         a: "La app es local-first: workflows, Conexiones y secretos se quedan en tu computadora (en ~/.nimbo). Este sitio web usa Google Analytics para Firebase solo si aceptas el aviso de cookies, y puedes cambiar tu elección cuando quieras desde “Configurar cookies” en el pie de página.",
@@ -250,6 +277,7 @@ export const es: Strings = {
     docsSetup: "Instalación",
     docsMcp: "Servidor MCP",
     docsArchitecture: "Arquitectura",
+    docsLearn: "Aporta retos",
     releases: "Versiones",
     poweredBy: "Nube local impulsada por",
     poweredByName: "los emuladores Floci",

@@ -25,6 +25,7 @@ const DURATION_MS = 2600
 export function ArcadeCelebration() {
   const arcade = useArcadeStore((s) => s.arcade)
   const celebration = useArcadeStore((s) => s.celebration)
+  const label = useArcadeStore((s) => s.celebrationLabel)
   // The celebration that already finished playing; a newer one is on screen.
   const [done, setDone] = useState(0)
 
@@ -45,7 +46,7 @@ export function ArcadeCelebration() {
         />
       ))}
       <AppLogo className="arcade-anim arcade-mascot" style={{ width: 72, height: 72 }} />
-      <span className="arcade-anim arcade-banner">Deployed!</span>
+      <span className="arcade-anim arcade-banner">{label}</span>
     </div>
   )
 }

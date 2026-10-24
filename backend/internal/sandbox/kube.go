@@ -14,6 +14,8 @@ import (
 	"time"
 
 	chartv2 "helm.sh/helm/v4/pkg/chart/v2"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	"github.com/ismaelosuna7824/nimbo/backend/internal/model"
 )
@@ -322,8 +324,75 @@ func (m *Manager) ensureKubeCluster(ctx context.Context, rs *runState, sb *sandb
 	if err != nil {
 		return nil, err
 	}
+	if err := kc.waitServiceIPs(ctx, serviceIPWait); err != nil {
+		return nil, err
+	}
 	say(fmt.Sprintf("Cluster ready: Kubernetes %s, API on 127.0.0.1:%d, ingress on http://127.0.0.1:%d (kubeconfig %s)", kc.version, node.APIPort, node.IngressPort, kc.kubeconfig))
 	return kc, nil
+}
+
+// Service ClusterIPs on a starting cluster. Since Kubernetes 1.34
+// (MultiCIDRServiceAllocator with DisableAllocatorDualWrite) the API server
+// allocates ClusterIPs from allocators it builds from the ServiceCIDR
+// objects its informer sees. Until the default ServiceCIDR "kubernetes" is
+// created, Ready and synced into that informer, every allocation fails with
+// `failed to allocate a serviceIP …: range is full` — yet /version already
+// answers, so a fresh cluster's first apply failed about 2 times in 3.
+// The `kubernetes` Service getting its ClusterIP is the signal: the API
+// server assigns it through the same allocator, which only hands out IPs
+// once it is Ready. A restarted cluster keeps that Service from its last
+// boot while the allocator resyncs, so applying a Service also retries
+// that exact error (applyWithRetry).
+const (
+	serviceIPWait  = time.Minute
+	serviceIPPoll  = 250 * time.Millisecond
+	serviceIPRetry = 30 * time.Second
+)
+
+// waitServiceIPs waits until the API server has given the default
+// `kubernetes` Service its ClusterIP, at most timeout.
+func (kc *kubeClient) waitServiceIPs(ctx context.Context, timeout time.Duration) error {
+	ctx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+	for {
+		svc, err := kc.cs.CoreV1().Services("default").Get(ctx, "kubernetes", metav1.GetOptions{})
+		if err == nil && svc.Spec.ClusterIP != "" {
+			return nil
+		}
+		select {
+		case <-ctx.Done():
+			if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+				return fmt.Errorf("the cluster could not allocate Service IPs within %s (the default kubernetes Service has no ClusterIP yet)", timeout)
+			}
+			return ctx.Err()
+		case <-time.After(serviceIPPoll):
+		}
+	}
+}
+
+// serviceIPNotReady reports the API server's error for a ClusterIP it
+// cannot allocate while its ServiceCIDR allocators start.
+func serviceIPNotReady(err error) bool {
+	return apierrors.IsInternalError(err) && strings.Contains(err.Error(), "failed to allocate a serviceIP") && strings.Contains(err.Error(), "range is full")
+}
+
+// applyWithRetry runs apply, retrying with backoff (200 ms doubling to 2 s)
+// while it fails with serviceIPNotReady, for at most limit.
+func applyWithRetry(ctx context.Context, limit time.Duration, apply func() error) error {
+	deadline := time.Now().Add(limit)
+	delay := 200 * time.Millisecond
+	for {
+		err := apply()
+		if err == nil || !serviceIPNotReady(err) || time.Now().Add(delay).After(deadline) {
+			return err
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(delay):
+		}
+		delay = min(2*delay, 2*time.Second)
+	}
 }
 
 // connectKube waits for the node's kubeconfig and API server, writes the

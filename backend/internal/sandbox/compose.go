@@ -367,7 +367,7 @@ func (m *Manager) prepareCompose(ctx context.Context, req ComposeRunRequest) (*c
 		if err != nil {
 			return nil, err
 		}
-		plan := planPorts(cfg, ownPorts(insp), saved, portProber{})
+		plan := planPorts(cfg, ownPorts(insp), saved, m.hostProber(ctx))
 		if len(plan.conflicts) > 0 && !req.RemapPorts {
 			return nil, &PortConflictError{Conflicts: plan.conflicts}
 		}
@@ -426,7 +426,7 @@ func relPath(f string) bool {
 // run log.
 func (m *Manager) composeSteps(ctx context.Context, rs *runState, cmd composeCmd, sub []string) error {
 	m.logLine(rs, "system", "$ docker compose -p "+cmd.project+" "+strings.Join(sub, " "))
-	code, err := m.composeExec(ctx, rs, cmd.args(sub...))
+	code, err := m.composeExec(ctx, rs, cmd.dir, cmd.args(sub...))
 	if err != nil {
 		return err
 	}
@@ -437,11 +437,15 @@ func (m *Manager) composeSteps(ctx context.Context, rs *runState, cmd composeCmd
 	return nil
 }
 
-// composeExec runs the docker CLI with args in the project directory. A
-// canceled ctx interrupts compose (SIGINT, so it stops what it started) and
-// kills it 15 s later.
-func (m *Manager) composeExec(ctx context.Context, rs *runState, args []string) (int, error) {
+// composeExec runs the docker CLI with args in dir, the workflow's files.
+// Compose v5 builds through buildx bake, which grants read access to the
+// working directory only: a build secret `file:` (or any local path) out
+// of the daemon's cwd failed with `additional privileges requested: pass
+// "--allow=fs.read=…"`. A canceled ctx interrupts compose (SIGINT, so it
+// stops what it started) and kills it 15 s later.
+func (m *Manager) composeExec(ctx context.Context, rs *runState, dir string, args []string) (int, error) {
 	cmd := exec.CommandContext(ctx, m.dockerBin(), args...)
+	cmd.Dir = dir
 	cmd.Env = composeEnv()
 	cmd.Cancel = func() error { return interrupt(cmd.Process) }
 	cmd.WaitDelay = 15 * time.Second
@@ -509,14 +513,23 @@ func (p configPort) proto() string {
 	return strings.ToLower(p.Protocol)
 }
 
-// fixedPort is the published host port, 0 when Docker chooses it (empty or
-// a range).
-func (p configPort) fixedPort() int {
-	n, err := strconv.Atoi(p.Published)
-	if err != nil || n <= 0 || n > 65535 {
-		return 0
+// fixedRange is the published host port, or the first port and size of a
+// published range ("3100-3101": 3100, 2); count 0 when Docker chooses the
+// port (empty published).
+func (p configPort) fixedRange() (start, count int) {
+	lo, hi, isRange := strings.Cut(p.Published, "-")
+	a, err := strconv.Atoi(lo)
+	if err != nil || a <= 0 || a > 65535 {
+		return 0, 0
 	}
-	return n
+	if !isRange {
+		return a, 1
+	}
+	b, err := strconv.Atoi(hi)
+	if err != nil || b < a || b > 65535 {
+		return 0, 0
+	}
+	return a, b - a + 1
 }
 
 func (c *composeConfig) services() []ComposeService {
@@ -532,6 +545,7 @@ func (c *composeConfig) services() []ComposeService {
 func (m *Manager) composeConfig(ctx context.Context, cmd composeCmd) (*composeConfig, error) {
 	cmd.override = ""
 	c := exec.CommandContext(ctx, m.dockerBin(), cmd.args("config", "--format", "json")...)
+	c.Dir = cmd.dir
 	c.Env = composeEnv()
 	var stderr strings.Builder
 	c.Stderr = &stderr
@@ -581,9 +595,13 @@ func overrideYAML(wfID string, cfg *composeConfig, remaps []model.PortRemap) []b
 		}
 		b.WriteString("    ports: !override\n")
 		for _, p := range svc.Ports {
+			start, count := p.fixedRange()
 			for _, r := range mine {
-				if r.ContainerPort == p.Target && r.Protocol == p.proto() && r.HostPort == p.fixedPort() {
+				if r.ContainerPort == p.Target && r.Protocol == p.proto() && r.HostPort == start && max(r.Count, 1) == count {
 					p.Published = strconv.Itoa(r.Port)
+					if count > 1 {
+						p.Published += "-" + strconv.Itoa(r.Port+count-1)
+					}
 					break
 				}
 			}

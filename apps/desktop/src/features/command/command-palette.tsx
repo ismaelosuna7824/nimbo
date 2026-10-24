@@ -10,6 +10,7 @@ import {
   FileCheck2Icon,
   FileCodeIcon,
   GaugeIcon,
+  GraduationCapIcon,
   HammerIcon,
   HomeIcon,
   ListChecksIcon,
@@ -68,6 +69,7 @@ import { useUiStore } from "../toolbar/ui-store"
 import { archiveWorkflow, closeWorkflow } from "../toolbar/workflow-actions"
 import { KIND_META } from "../connections/meta"
 import { useConnections, useConnectionsStore } from "../connections/store"
+import { useLearnStore } from "../learn/store"
 import { openSetupChecklist } from "../onboarding/store"
 import { useSettingsView } from "../settings/store"
 
@@ -400,6 +402,16 @@ function PaletteBody() {
               </CommandItem>
             )
           })}
+        </CommandGroup>
+        <CommandSeparator />
+        <CommandGroup heading="Learn">
+          <CommandItem
+            value="open learn roadmaps challenges tutorials courses aws azure gcp oracle docker kubernetes"
+            onSelect={() => run(() => useLearnStore.getState().openView({ challengeId: null }))}
+          >
+            <GraduationCapIcon />
+            Open Learn — roadmaps and challenges
+          </CommandItem>
         </CommandGroup>
         <CommandSeparator />
         <CommandGroup heading="Preferences">

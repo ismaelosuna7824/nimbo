@@ -1,0 +1,548 @@
+description: Adds the global operations challenges (observability with an SLO, cost awareness) with adaptations for every provider
+operations:
+  - op: upsert
+    kind: challenge
+    id: global-cost-awareness
+    data:
+      provider: global
+      level: beginner
+      title: Make costs visible and bounded
+      summary: Tag every resource, stop logs from piling up forever and get an alert before the bill surprises you.
+      minutes: 25
+      tags: [cost, finops, tagging, lifecycle, well-architected]
+      runtime: design
+      problem: |
+        A small team runs a web app's log pipeline: application logs go to a log group and archived log files to
+        a bucket. Nobody can tell which project the resources belong to, the log group keeps every line forever,
+        the bucket grows without limit and the first sign of overspending is the monthly invoice.
+
+        The cost pillars of all four frameworks start with the same habits: **attribute** every resource to an
+        owner (tags/labels), **expire or tier** data you no longer need, and **set budgets with alerts** so
+        spending is watched, not discovered.
+
+        Graded on **AWS** (Terraform, design checks).
+      requirements:
+        - "Every taggable resource carries cost-allocation tags (no `bp_missing_tags` finding); provider `default_tags` count."
+        - "The `/app/web` log group sets a retention (`retention_in_days`)."
+        - "The `logs` bucket has a lifecycle configuration that **expires** old objects."
+        - "An AWS **budget** for monthly cost sends a notification when a threshold is crossed."
+      hints:
+        - "`default_tags` in the `provider \"aws\"` block tags every resource the provider creates — the easiest way to cover them all (Project, Environment, Owner, CostCenter)."
+        - "`aws_s3_bucket_lifecycle_configuration` takes a `rule` with `id`, `status = \"Enabled\"`, a `filter {}` and an `expiration { days = ... }` (optionally a `transition` to a cheaper storage class first)."
+        - "`aws_budgets_budget` with `budget_type = \"COST\"`, `time_unit = \"MONTHLY\"`, a `limit_amount`/`limit_unit` and a `notification` block (`comparison_operator`, `threshold`, `threshold_type`, `notification_type`, `subscriber_email_addresses`)."
+      solution: |
+        1. **Attribution.** `default_tags` on the provider puts Project/Environment/Owner/CostCenter on every
+           resource; activate them as cost allocation tags and group spending by them.
+        2. **Data lifecycle.** A log group retention (30 days here) and an S3 lifecycle rule (move to Infrequent
+           Access after 30 days, delete after 365, clean up incomplete uploads) stop storage from growing forever.
+           Pick retention from real requirements (audits, debugging), not "keep everything".
+        3. **Guardrails.** A monthly cost budget with an alert at 80% of actual spend tells the owner while there
+           is still time to react; forecast-based alerts warn even earlier.
+
+        Cost awareness is a habit, not a one-off: review the cost reports by tag regularly and remove resources
+        nobody owns.
+      solutionFiles:
+        providers.tf: |
+          provider "aws" {
+            region = var.aws_region
+
+            # Cost allocation: every resource says whose it is.
+            default_tags {
+              tags = {
+                Project     = var.project
+                Environment = var.environment
+                Owner       = var.owner
+                CostCenter  = var.cost_center
+              }
+            }
+          }
+        variables.tf: |
+          variable "project" {
+            type        = string
+            default     = "weblogs"
+            description = "Project name: prefix of every resource name and the Project tag."
+          }
+
+          variable "environment" {
+            type        = string
+            default     = "prod"
+            description = "Environment tag (dev, staging, prod)."
+          }
+
+          variable "owner" {
+            type        = string
+            default     = "platform-team"
+            description = "Team that owns the resources (Owner tag)."
+          }
+
+          variable "cost_center" {
+            type        = string
+            default     = "cc-1234"
+            description = "Cost center the spending is charged to (CostCenter tag)."
+          }
+
+          variable "aws_region" {
+            type        = string
+            default     = "us-east-1"
+            description = "AWS region to deploy into."
+          }
+
+          variable "monthly_budget_usd" {
+            type        = string
+            default     = "50"
+            description = "Monthly cost budget in USD."
+          }
+
+          variable "budget_email" {
+            type        = string
+            default     = "platform-team@example.com"
+            description = "Who gets the budget alerts."
+          }
+        main.tf: |
+          resource "aws_cloudwatch_log_group" "web" {
+            name              = "/app/web"
+            retention_in_days = 30
+          }
+
+          resource "aws_s3_bucket" "logs" {
+            bucket_prefix = "${var.project}-archive-"
+          }
+
+          resource "aws_s3_bucket_server_side_encryption_configuration" "logs" {
+            bucket = aws_s3_bucket.logs.id
+
+            rule {
+              apply_server_side_encryption_by_default {
+                sse_algorithm = "AES256"
+              }
+            }
+          }
+
+          resource "aws_s3_bucket_public_access_block" "logs" {
+            bucket                  = aws_s3_bucket.logs.id
+            block_public_acls       = true
+            block_public_policy     = true
+            ignore_public_acls      = true
+            restrict_public_buckets = true
+          }
+
+          # Archives get cheaper after a month and disappear after a year.
+          resource "aws_s3_bucket_lifecycle_configuration" "logs" {
+            bucket = aws_s3_bucket.logs.id
+
+            rule {
+              id     = "archive-then-expire"
+              status = "Enabled"
+
+              filter {}
+
+              transition {
+                days          = 30
+                storage_class = "STANDARD_IA"
+              }
+
+              expiration {
+                days = 365
+              }
+
+              abort_incomplete_multipart_upload {
+                days_after_initiation = 7
+              }
+            }
+          }
+
+          # Alert the owner at 80% of the monthly budget.
+          resource "aws_budgets_budget" "monthly" {
+            name         = "${var.project}-monthly"
+            budget_type  = "COST"
+            limit_amount = var.monthly_budget_usd
+            limit_unit   = "USD"
+            time_unit    = "MONTHLY"
+
+            notification {
+              comparison_operator        = "GREATER_THAN"
+              threshold                  = 80
+              threshold_type             = "PERCENTAGE"
+              notification_type          = "ACTUAL"
+              subscriber_email_addresses = [var.budget_email]
+            }
+          }
+      starter:
+        kind: terraform
+        cloud: aws
+        files:
+          versions.tf: |
+            terraform {
+              required_version = ">= 1.6"
+
+              required_providers {
+                aws = {
+                  source  = "hashicorp/aws"
+                  version = "~> 6.0"
+                }
+              }
+            }
+          providers.tf: |
+            provider "aws" {
+              region = var.aws_region
+            }
+          variables.tf: |
+            variable "project" {
+              type        = string
+              default     = "weblogs"
+              description = "Project name: prefix of every resource name."
+            }
+
+            variable "aws_region" {
+              type        = string
+              default     = "us-east-1"
+              description = "AWS region to deploy into."
+            }
+          main.tf: |
+            resource "aws_cloudwatch_log_group" "web" {
+              name = "/app/web"
+            }
+
+            resource "aws_s3_bucket" "logs" {
+              bucket_prefix = "${var.project}-archive-"
+            }
+
+            resource "aws_s3_bucket_server_side_encryption_configuration" "logs" {
+              bucket = aws_s3_bucket.logs.id
+
+              rule {
+                apply_server_side_encryption_by_default {
+                  sse_algorithm = "AES256"
+                }
+              }
+            }
+
+            resource "aws_s3_bucket_public_access_block" "logs" {
+              bucket                  = aws_s3_bucket.logs.id
+              block_public_acls       = true
+              block_public_policy     = true
+              ignore_public_acls      = true
+              restrict_public_buckets = true
+            }
+      checks:
+        - id: valid
+          label: The configuration is valid
+          type: validate
+        - id: tags
+          label: Resources carry cost-allocation tags
+          type: rules_clean
+          rules_clean:
+            codes: [bp_missing_tags]
+            minSeverity: info
+        - id: log-retention
+          label: The log group has a retention
+          type: has
+          has:
+            terraform:
+              type: aws_cloudwatch_log_group
+              where:
+                retention_in_days:
+                  exists: true
+        - id: lifecycle
+          label: Old archives expire
+          type: has
+          has:
+            terraform:
+              type: aws_s3_bucket_lifecycle_configuration
+              where:
+                bucket:
+                  ref: aws_s3_bucket.logs
+                rule.expiration.days:
+                  exists: true
+        - id: budget
+          label: A monthly cost budget alerts the owner
+          type: has
+          has:
+            terraform:
+              type: aws_budgets_budget
+              where:
+                budget_type: COST
+                notification.threshold:
+                  exists: true
+      adaptations:
+        aws: |
+          `default_tags` plus **cost allocation tags** and **Cost Categories**, **AWS Budgets** with alerts,
+          CloudWatch Logs retention, S3 lifecycle rules (transition/expiration) and Cost Explorer reports.
+          Practice: `aws-backup-dr-cost`, `aws-lambda-least-privilege` (log retention).
+        azure: |
+          **Tags** enforced with Azure Policy, **Cost Management budgets** with action groups, Log Analytics
+          retention, Blob lifecycle management (cool/archive tiers, deletion). Practice: `azure-naming-tagging`,
+          `azure-landing-zone-governance`.
+        gcp: |
+          A consistent **labeling** policy (`default_labels` on the provider), **Cloud Billing budgets** with
+          alerts, Cloud Logging bucket retention and Cloud Storage **Object Lifecycle Management**. Practice:
+          `gcp-storage-retention-lifecycle`.
+        oci: |
+          **Compartments** per cost owner and **cost-tracking tags**, **Budgets** with alert rules, Object Storage
+          **lifecycle policies** and Logging retention; review Cost Analysis and terminate unused resources.
+          Practice: `oci-private-bucket-lifecycle`, `oci-cis-landing-zone`.
+        docker: |
+          Locally, cost is disk and memory: rotate container logs (`max-size`/`max-file`), cap memory with
+          `deploy.resources.limits`, prune unused images and volumes, and use small base images.
+        kubernetes: |
+          **Requests and limits** sized from measurements (requests drive node count), **ResourceQuotas** per
+          namespace, recommended/cost labels on every workload for chargeback, autoscaling down at quiet times.
+      sources:
+        - title: AWS Well-Architected — COST03-BP03 Identify cost attribution categories
+          url: https://docs.aws.amazon.com/wellarchitected/latest/framework/cost_monitor_usage_define_attribution.html
+        - title: AWS Well-Architected — COST04-BP01 Track resources over their lifetime
+          url: https://docs.aws.amazon.com/wellarchitected/latest/framework/cost_decomissioning_resources_track.html
+        - title: AWS Budgets — Managing your costs with AWS Budgets
+          url: https://docs.aws.amazon.com/cost-management/latest/userguide/budgets-managing-costs.html
+        - title: Amazon S3 — Managing the lifecycle of objects
+          url: https://docs.aws.amazon.com/AmazonS3/latest/userguide/object-lifecycle-mgmt.html
+        - title: Azure Well-Architected — Cost Optimization design principles
+          url: https://learn.microsoft.com/en-us/azure/well-architected/cost-optimization/principles
+        - title: Google Cloud Well-Architected — Foster a culture of cost awareness
+          url: https://cloud.google.com/architecture/framework/cost-optimization/foster-culture-cost-awareness
+        - title: Google Cloud Well-Architected — Optimize resource usage
+          url: https://cloud.google.com/architecture/framework/cost-optimization/optimize-resource-usage
+        - title: OCI Well-Architected — Track and manage usage and cost
+          url: https://docs.oracle.com/en/solutions/oci-best-practices/track-and-manage-usage-and-cost1.html
+        - title: Kubernetes — Resource quotas
+          url: https://kubernetes.io/docs/concepts/policy/resource-quotas/
+
+  - op: upsert
+    kind: challenge
+    id: global-observability-slo
+    data:
+      provider: global
+      level: advanced
+      title: Observe a service and hold it to an SLO
+      summary: Send traces, logs and metrics to an OpenTelemetry Collector, add a health signal and meet an availability SLO under load.
+      minutes: 50
+      tags: [observability, opentelemetry, slo, monitoring, logging, well-architected]
+      runtime: local
+      problem: |
+        The `web` service (podinfo, a small Go demo app instrumented with Prometheus metrics and
+        OpenTelemetry) runs in Docker, but nobody sees what it does: no health signal, no
+        telemetry pipeline and logs written with no size limit. When users complain, the team has nothing to
+        look at.
+
+        Observability means being able to ask *why* from the system's outputs: **metrics** (how much, how
+        fast), **logs** (what happened) and **traces** (where a request spent its time). Their purpose is the
+        user experience, expressed as **SLIs** (measurements from the user's point of view) and **SLOs**
+        (targets for them) that alerts and priorities are based on.
+
+        Graded on **Docker** (local, deployed, load tested). The service's SLO for this exercise: **fewer than
+        1% failed requests and a p95 latency under 1 second** at 20 requests/second.
+      requirements:
+        - "An `otel-collector` service runs the OpenTelemetry Collector image (`otel/opentelemetry-collector-contrib`) with a config that receives OTLP and scrapes the app's Prometheus metrics."
+        - "`web` exports telemetry to the collector: `OTEL_EXPORTER_OTLP_ENDPOINT` points at `otel-collector:4317` and podinfo's `--otel-service-name` flag is set (it enables trace and log export)."
+        - "`web` has a **healthcheck** (its `/healthz` endpoint), so Docker reports when it stops answering."
+        - "`web` logs are rotated (json-file with `max-size`; no `dk_log_rotation` finding)."
+        - "Deployed and loaded at 20 rps, `web` meets the SLO: error rate below 1% and p95 below 1000 ms."
+      hints:
+        - "OpenTelemetry SDKs read standard environment variables: `OTEL_EXPORTER_OTLP_ENDPOINT` (an `http://` gRPC endpoint means no TLS) and `OTEL_SERVICE_NAME`; podinfo also needs `--otel-service-name=<name>` on its command line to turn export on."
+        - "A Collector config has `receivers` (otlp, prometheus), `exporters` (debug prints to the container log) and `service.pipelines` wiring them per signal (traces, metrics, logs). Mount it at `/etc/otelcol-contrib/config.yaml`."
+        - "The podinfo image ships `podcli`: `healthcheck: {test: [\"CMD\", \"podcli\", \"check\", \"http\", \"localhost:9898/healthz\"], interval: 10s, timeout: 3s, retries: 3}`."
+        - "`logging: {driver: json-file, options: {max-size: \"10m\", max-file: \"3\"}}`."
+      solution: |
+        1. **A telemetry pipeline.** The OpenTelemetry Collector receives OTLP (traces and logs from the app) and
+           scrapes podinfo's Prometheus `/metrics`, then exports everything (here to its own log with the `debug`
+           exporter; in production to your backend). Apps speak one vendor-neutral protocol; the backend can
+           change without touching them.
+        2. **Instrumented app.** `OTEL_EXPORTER_OTLP_ENDPOINT=http://otel-collector:4317` and
+           `--otel-service-name=web` make podinfo export spans and logs tagged with `service.name=web`.
+        3. **Health signal.** A healthcheck on `/healthz` turns "the process runs" into "the service answers".
+        4. **Bounded logs.** `max-size`/`max-file` rotation keeps local logs from filling the disk; ship them
+           through the pipeline instead of keeping them forever.
+        5. **SLO.** Availability (failed requests < 1%) and latency (p95 < 1 s) are SLIs measured where users feel
+           them. The load check is the SLO test; in production you would compute them continuously from metrics,
+           alert on burning the error budget (symptoms), not on every CPU spike (causes).
+      solutionFiles:
+        compose.yaml: |
+          services:
+            web:
+              image: ghcr.io/stefanprodan/podinfo:6.15.0
+              # --otel-service-name turns on trace and log export (OTLP).
+              command: ["./podinfo", "--port=9898", "--otel-service-name=web"]
+              ports:
+                - "9898"
+              environment:
+                OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4317
+              healthcheck:
+                test: ["CMD", "podcli", "check", "http", "localhost:9898/healthz"]
+                interval: 10s
+                timeout: 3s
+                retries: 3
+                start_period: 5s
+              logging:
+                driver: json-file
+                options:
+                  max-size: "10m"
+                  max-file: "3"
+              depends_on:
+                - otel-collector
+
+            otel-collector:
+              image: otel/opentelemetry-collector-contrib:0.111.0
+              volumes:
+                - ./otel/config.yaml:/etc/otelcol-contrib/config.yaml:ro
+              logging:
+                driver: json-file
+                options:
+                  max-size: "10m"
+                  max-file: "3"
+        otel/config.yaml: |
+          # Receive OTLP from the app, scrape its Prometheus metrics and print
+          # everything to the collector's log (swap debug for your backend).
+          receivers:
+            otlp:
+              protocols:
+                grpc:
+                  endpoint: 0.0.0.0:4317
+            prometheus:
+              config:
+                scrape_configs:
+                  - job_name: web
+                    scrape_interval: 15s
+                    static_configs:
+                      - targets: ["web:9898"]
+
+          processors:
+            batch: {}
+
+          exporters:
+            debug:
+              verbosity: basic
+
+          service:
+            pipelines:
+              traces:
+                receivers: [otlp]
+                processors: [batch]
+                exporters: [debug]
+              metrics:
+                receivers: [otlp, prometheus]
+                processors: [batch]
+                exporters: [debug]
+              logs:
+                receivers: [otlp]
+                processors: [batch]
+                exporters: [debug]
+      starter:
+        kind: docker
+        files:
+          compose.yaml: |
+            services:
+              web:
+                image: ghcr.io/stefanprodan/podinfo:6.15.0
+                command: ["./podinfo", "--port=9898"]
+                ports:
+                  - "9898"
+                logging:
+                  driver: json-file
+      checks:
+        - id: valid
+          label: The compose project is valid
+          type: validate
+        - id: log-rotation
+          label: Container logs are rotated
+          type: rules_clean
+          rules_clean:
+            codes: [dk_log_rotation]
+            minSeverity: info
+        - id: collector
+          label: An OpenTelemetry Collector runs in the project
+          type: has
+          has:
+            compose:
+              image: otel/opentelemetry-collector
+        - id: otlp-endpoint
+          label: web exports OTLP to the collector
+          type: has
+          has:
+            compose:
+              service: web
+              where:
+                environment.OTEL_EXPORTER_OTLP_ENDPOINT:
+                  contains: otel-collector:4317
+        - id: service-name
+          label: web turns on telemetry export with a service name
+          type: has
+          has:
+            compose:
+              service: web
+              where:
+                command:
+                  contains: --otel-service-name
+        - id: healthcheck
+          label: web has a healthcheck
+          type: has
+          has:
+            compose:
+              service: web
+              where:
+                healthcheck.test:
+                  exists: true
+        - id: slo
+          label: "SLO at 20 rps: under 1% errors and p95 under 1 s"
+          type: load
+          load:
+            target:
+              service: web
+              port: 9898
+              path: /
+            spec:
+              mode: rps
+              stages:
+                - durationSec: 30
+                  target: 20
+            expect:
+              - metric: error_rate
+                op: lt
+                value: 0.01
+              - metric: p95_ms
+                op: lt
+                value: 1000
+      adaptations:
+        aws: |
+          **CloudWatch** metrics, Logs and alarms, **X-Ray**/CloudWatch Application Signals for traces and
+          **service level objectives**; the AWS Distro for OpenTelemetry collects OTLP. Alarm on symptoms tied to
+          KPIs. Practice: `aws-sqs-dead-letter-queue` (DLQ alarm).
+        azure: |
+          **Azure Monitor**: Application Insights (OpenTelemetry distro) for traces and requests, Log Analytics
+          workspaces for logs, metric alerts with action groups, and SLO-driven alerts and dashboards. Practice:
+          `azure-aks-baseline` (Container Insights).
+        gcp: |
+          **Cloud Monitoring** (metrics, uptime checks, **SLO monitoring** with error-budget burn-rate alerts),
+          Cloud Logging and **Cloud Trace**; the OpenTelemetry Collector exports to all three.
+        oci: |
+          **Monitoring** metrics with **alarms** per metric (tuned to avoid noise), **Logging** for service and
+          custom logs, **Application Performance Monitoring** for traces, health checks on load balancers.
+        docker: |
+          Healthchecks, rotated logs, Prometheus metrics endpoints and an **OpenTelemetry Collector** container as
+          the pipeline. Practice: `docker-observability`.
+        kubernetes: |
+          Readiness/liveness probes, **metrics-server** and Prometheus for metrics, node-level log collection, the
+          OpenTelemetry Collector (DaemonSet or Deployment, or the Operator) for traces, and alerts on SLO burn.
+          Practice: `kubernetes-health-probes`.
+      sources:
+        - title: OpenTelemetry — Observability primer (SLI, SLO, traces)
+          url: https://opentelemetry.io/docs/concepts/observability-primer/
+        - title: OpenTelemetry — Collector configuration
+          url: https://opentelemetry.io/docs/collector/configuration/
+        - title: OpenTelemetry — General SDK configuration
+          url: https://opentelemetry.io/docs/languages/sdk-configuration/general/
+        - title: Prometheus — Alerting practices
+          url: https://prometheus.io/docs/practices/alerting/
+        - title: AWS Well-Architected — REL06-BP01 Monitor all components for the workload
+          url: https://docs.aws.amazon.com/wellarchitected/latest/framework/rel_monitor_aws_resources_monitor_resources.html
+        - title: Azure Well-Architected — Designing a monitoring system
+          url: https://learn.microsoft.com/en-us/azure/well-architected/operational-excellence/observability
+        - title: Google Cloud Well-Architected — Set realistic targets for reliability
+          url: https://cloud.google.com/architecture/framework/reliability/set-targets
+        - title: Google Cloud Well-Architected — Detect potential failures by using observability
+          url: https://cloud.google.com/architecture/framework/reliability/observability
+        - title: OCI Well-Architected — Monitor your workload
+          url: https://docs.oracle.com/en/solutions/oci-best-practices/monitor-your-workload1.html
+        - title: Docker — JSON File logging driver
+          url: https://docs.docker.com/engine/logging/drivers/json-file/
+        - title: Kubernetes — Observability
+          url: https://kubernetes.io/docs/concepts/cluster-administration/observability/

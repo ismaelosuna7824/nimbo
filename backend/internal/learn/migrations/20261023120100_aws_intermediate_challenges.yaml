@@ -1,0 +1,1246 @@
+description: Adds the AWS intermediate challenges (HTTP API in front of Lambda, SQS dead-letter queue, Application Load Balancer with Auto Scaling)
+operations:
+  - op: upsert
+    kind: challenge
+    id: aws-http-api-lambda
+    data:
+      provider: aws
+      level: intermediate
+      title: Put an HTTP API in front of a Lambda function
+      summary: Publish GET /hello through an API Gateway HTTP API with a Lambda proxy integration, throttling and access logs.
+      minutes: 35
+      tags: [api-gateway, lambda, serverless, http-api, throttling]
+      prerequisites: [aws-lambda-least-privilege]
+      runtime: emulated
+      problem: |
+        The `hello` Lambda function is ready, with a least-privilege role and
+        a log group, but nothing can call it over HTTP. The frontend team
+        needs `GET /hello` on a public URL.
+
+        **Amazon API Gateway HTTP APIs** are the lightweight way to front
+        Lambda: an *integration* of type `AWS_PROXY` passes the whole request
+        to the function and returns its response; a *route* (`GET /hello`)
+        sends matching requests to that integration; a *stage* publishes the
+        API, and the special `$default` stage serves it at the root of the
+        API's URL. API Gateway also needs permission to invoke the function,
+        granted on the function side with a resource-based policy
+        (`aws_lambda_permission`). A public API should limit how fast clients
+        may call it (stage throttling) and record who called what (access
+        logs).
+
+        Add the API. When you check, Nimbo deploys it to the local AWS
+        emulator and calls `GET /hello` through it.
+      requirements:
+        - "An `aws_apigatewayv2_api` named `http` (`aws_apigatewayv2_api.http`) with `protocol_type = \"HTTP\"`."
+        - "An `aws_apigatewayv2_integration` of type `AWS_PROXY` to the `hello` function, with payload format version `2.0`."
+        - "An `aws_apigatewayv2_route` with route key `GET /hello` targeting that integration."
+        - "An `aws_apigatewayv2_stage` named `$default` with `auto_deploy = true`, default route throttling (`throttling_burst_limit` and `throttling_rate_limit`) and access logs sent to a CloudWatch log group with a retention period."
+        - "An `aws_lambda_permission` lets `apigateway.amazonaws.com` invoke the function, scoped with `source_arn` to this API's execution ARN."
+        - "No best-practice warnings, the workflow deploys and `GET /hello` through the API answers 200."
+      hints:
+        - "Start with the API and the integration: `integration_uri = aws_lambda_function.hello.invoke_arn`. HTTP APIs don't need an `integration_method` for Lambda proxy integrations."
+        - "A route's `target` has the form `\"integrations/${aws_apigatewayv2_integration.hello.id}\"`. The stage name is the literal string `\"$default\"`."
+        - "Throttling lives in the stage's `default_route_settings` block; access logging in `access_log_settings { destination_arn = aws_cloudwatch_log_group.api.arn, format = jsonencode({...}) }`. The permission's `source_arn` is `\"${aws_apigatewayv2_api.http.execution_arn}/*/*\"` (any stage, any route)."
+      solution: |
+        Five resources turn the function into an API (all in `api.tf`):
+
+        1. `aws_apigatewayv2_api.http` – the HTTP API.
+        2. `aws_apigatewayv2_integration.hello` – `AWS_PROXY` to the
+           function's `invoke_arn`, payload format `2.0` (the event shape
+           the function reads: `rawPath`, `requestContext.http`).
+        3. `aws_apigatewayv2_route.hello` – `GET /hello` →
+           `integrations/<id>`.
+        4. `aws_apigatewayv2_stage.default` – `$default` with
+           `auto_deploy`, so every change is published, plus throttling and
+           JSON access logs to `/aws/apigateway/<api>` kept 14 days.
+        5. `aws_lambda_permission.api` – `lambda:InvokeFunction` for
+           `apigateway.amazonaws.com`, limited by `source_arn` to this API so
+           no other API can invoke the function.
+
+        ```hcl
+        resource "aws_apigatewayv2_stage" "default" {
+          api_id      = aws_apigatewayv2_api.http.id
+          name        = "$default"
+          auto_deploy = true
+
+          default_route_settings {
+            throttling_burst_limit = 50
+            throttling_rate_limit  = 100
+          }
+
+          access_log_settings {
+            destination_arn = aws_cloudwatch_log_group.api.arn
+            format          = jsonencode({ requestId = "$context.requestId", routeKey = "$context.routeKey", status = "$context.status" })
+          }
+        }
+        ```
+
+        Why: throttling protects the backend and your bill from bursts (the
+        account-level limit is shared by every API in the Region), and access
+        logs are the operational-excellence pillar's first source of truth
+        about who called the API and how it answered.
+      solutionFiles:
+        api.tf: |
+          resource "aws_apigatewayv2_api" "http" {
+            name          = "${local.name_prefix}-http"
+            protocol_type = "HTTP"
+          }
+
+          # Lambda proxy integration: the whole request goes to the function.
+          resource "aws_apigatewayv2_integration" "hello" {
+            api_id                 = aws_apigatewayv2_api.http.id
+            integration_type       = "AWS_PROXY"
+            integration_uri        = aws_lambda_function.hello.invoke_arn
+            payload_format_version = "2.0"
+          }
+
+          resource "aws_apigatewayv2_route" "hello" {
+            api_id    = aws_apigatewayv2_api.http.id
+            route_key = "GET /hello"
+            target    = "integrations/${aws_apigatewayv2_integration.hello.id}"
+          }
+
+          resource "aws_cloudwatch_log_group" "api" {
+            name              = "/aws/apigateway/${local.name_prefix}-http"
+            retention_in_days = 14
+          }
+
+          # $default serves the API at the root of its URL; every change is
+          # deployed automatically.
+          resource "aws_apigatewayv2_stage" "default" {
+            api_id      = aws_apigatewayv2_api.http.id
+            name        = "$default"
+            auto_deploy = true
+
+            default_route_settings {
+              throttling_burst_limit = 50
+              throttling_rate_limit  = 100
+            }
+
+            access_log_settings {
+              destination_arn = aws_cloudwatch_log_group.api.arn
+              format = jsonencode({
+                requestId = "$context.requestId"
+                routeKey  = "$context.routeKey"
+                status    = "$context.status"
+                latency   = "$context.responseLatency"
+              })
+            }
+          }
+
+          # Only this API may invoke the function.
+          resource "aws_lambda_permission" "api" {
+            statement_id  = "AllowHttpApiInvoke"
+            action        = "lambda:InvokeFunction"
+            function_name = aws_lambda_function.hello.function_name
+            principal     = "apigateway.amazonaws.com"
+            source_arn    = "${aws_apigatewayv2_api.http.execution_arn}/*/*"
+          }
+        outputs.tf: |
+          output "function_name" {
+            value       = aws_lambda_function.hello.function_name
+            description = "Name of the hello function."
+          }
+
+          output "api_endpoint" {
+            value       = aws_apigatewayv2_api.http.api_endpoint
+            description = "Base URL of the HTTP API; GET <api_endpoint>/hello calls the function."
+          }
+      starter:
+        kind: terraform
+        cloud: aws
+        files:
+          versions.tf: &aws_versions_archive |
+            terraform {
+              required_version = ">= 1.6"
+
+              required_providers {
+                aws = {
+                  source  = "hashicorp/aws"
+                  version = "~> 6.0"
+                }
+                archive = {
+                  source  = "hashicorp/archive"
+                  version = "~> 2.0"
+                }
+              }
+            }
+          providers.tf: &aws_providers |
+            provider "aws" {
+              region = var.aws_region
+
+              default_tags {
+                tags = local.common_tags
+              }
+            }
+          locals.tf: &aws_locals |
+            locals {
+              name_prefix = "${var.project}-${var.environment}"
+              common_tags = {
+                Project     = var.project
+                Environment = var.environment
+                ManagedBy   = "nimbo"
+              }
+            }
+          variables.tf: &aws_variables |
+            variable "project" {
+              type        = string
+              default     = "learn"
+              description = "Project name: the first part of every resource name and the Project tag."
+
+              validation {
+                condition     = can(regex("^[a-z][a-z0-9-]{1,19}$", var.project))
+                error_message = "project must be 2-20 lowercase letters, digits or hyphens, starting with a letter."
+              }
+            }
+
+            variable "environment" {
+              type        = string
+              default     = "dev"
+              description = "Deployment environment (dev, staging, prod, …): part of every resource name and the Environment tag."
+
+              validation {
+                condition     = can(regex("^[a-z][a-z0-9-]{0,11}$", var.environment))
+                error_message = "environment must be 1-12 lowercase letters, digits or hyphens, starting with a letter."
+              }
+            }
+
+            variable "aws_region" {
+              type        = string
+              default     = "us-east-1"
+              description = "AWS region to deploy into."
+            }
+          main.tf: |
+            data "archive_file" "hello" {
+              type        = "zip"
+              output_path = "${path.module}/build/hello.zip"
+
+              source {
+                filename = "index.mjs"
+                content  = <<-EOT
+                  // Payload format 2.0: rawPath and requestContext.http.method.
+                  export const handler = async (event) => ({
+                    statusCode: 200,
+                    headers: { "content-type": "application/json" },
+                    body: JSON.stringify({
+                      message: "hello from Lambda",
+                      method: event?.requestContext?.http?.method ?? null,
+                      path: event?.rawPath ?? null,
+                    }),
+                  });
+                EOT
+              }
+            }
+
+            resource "aws_iam_role" "hello" {
+              name = "${local.name_prefix}-hello"
+              assume_role_policy = jsonencode({
+                Version = "2012-10-17"
+                Statement = [{
+                  Effect    = "Allow"
+                  Principal = { Service = "lambda.amazonaws.com" }
+                  Action    = "sts:AssumeRole"
+                }]
+              })
+            }
+
+            resource "aws_iam_role_policy" "hello_logs" {
+              name = "${local.name_prefix}-hello-logs"
+              role = aws_iam_role.hello.id
+              policy = jsonencode({
+                Version = "2012-10-17"
+                Statement = [{
+                  Effect   = "Allow"
+                  Action   = ["logs:CreateLogStream", "logs:PutLogEvents"]
+                  Resource = "${aws_cloudwatch_log_group.hello.arn}:*"
+                }]
+              })
+            }
+
+            resource "aws_lambda_function" "hello" {
+              function_name    = "${local.name_prefix}-hello"
+              role             = aws_iam_role.hello.arn
+              runtime          = "nodejs22.x"
+              handler          = "index.handler"
+              filename         = data.archive_file.hello.output_path
+              source_code_hash = data.archive_file.hello.output_base64sha256
+              timeout          = 10
+            }
+
+            resource "aws_cloudwatch_log_group" "hello" {
+              name              = "/aws/lambda/${aws_lambda_function.hello.function_name}"
+              retention_in_days = 14
+            }
+          outputs.tf: |
+            output "function_name" {
+              value       = aws_lambda_function.hello.function_name
+              description = "Name of the hello function."
+            }
+      checks:
+        - id: valid
+          label: The configuration is valid
+          type: validate
+        - id: http-api
+          label: "An HTTP API named aws_apigatewayv2_api.http"
+          type: has
+          has:
+            terraform:
+              type: aws_apigatewayv2_api
+              name: http
+              where:
+                protocol_type: HTTP
+        - id: proxy-integration
+          label: A Lambda proxy integration (payload 2.0) to the function
+          type: has
+          has:
+            terraform:
+              type: aws_apigatewayv2_integration
+              where:
+                integration_type: AWS_PROXY
+                payload_format_version: "2.0"
+                integration_uri: {ref: aws_lambda_function.hello}
+        - id: route
+          label: "The route GET /hello targets the integration"
+          type: has
+          has:
+            terraform:
+              type: aws_apigatewayv2_route
+              where:
+                route_key: GET /hello
+                target: {ref: aws_apigatewayv2_integration}
+        - id: default-stage
+          label: "An auto-deployed $default stage"
+          type: has
+          has:
+            terraform:
+              type: aws_apigatewayv2_stage
+              where:
+                name: $default
+                auto_deploy: true
+        - id: throttling
+          label: The stage throttles requests
+          type: has
+          has:
+            terraform:
+              type: aws_apigatewayv2_stage
+              where:
+                default_route_settings.throttling_burst_limit: {exists: true}
+                default_route_settings.throttling_rate_limit: {exists: true}
+        - id: access-logs
+          label: The stage writes access logs to a log group
+          type: has
+          has:
+            terraform:
+              type: aws_apigatewayv2_stage
+              where:
+                access_log_settings.destination_arn: {ref: aws_cloudwatch_log_group}
+        - id: invoke-permission
+          label: Only this API may invoke the function
+          type: has
+          has:
+            terraform:
+              type: aws_lambda_permission
+              where:
+                principal: apigateway.amazonaws.com
+                source_arn: {ref: aws_apigatewayv2_api.http}
+        - id: best-practices
+          label: No best-practice warnings
+          type: rules_clean
+          rules_clean:
+            prefixes: [bp_]
+            minSeverity: warning
+        - id: deploy
+          label: The API deploys to the local AWS emulator
+          type: deploy
+        - id: get-hello
+          label: "GET /hello through the API answers 200 from Lambda"
+          type: http
+          http:
+            service: aws_apigatewayv2_api.http
+            path: /hello
+            status: 200
+            contains: hello from Lambda
+      sources:
+        - title: Create AWS Lambda proxy integrations for HTTP APIs in API Gateway
+          url: https://docs.aws.amazon.com/apigateway/latest/developerguide/http-api-develop-integrations-lambda.html
+        - title: Create routes for HTTP APIs in API Gateway
+          url: https://docs.aws.amazon.com/apigateway/latest/developerguide/http-api-develop-routes.html
+        - title: Create stages for HTTP APIs in API Gateway
+          url: https://docs.aws.amazon.com/apigateway/latest/developerguide/http-api-stages.html
+        - title: Throttle requests to your HTTP APIs for better throughput in API Gateway
+          url: https://docs.aws.amazon.com/apigateway/latest/developerguide/http-api-throttling.html
+        - title: Configure logging for HTTP APIs in API Gateway
+          url: https://docs.aws.amazon.com/apigateway/latest/developerguide/http-api-logging.html
+        - title: Working with resource-based IAM policies in Lambda
+          url: https://docs.aws.amazon.com/lambda/latest/dg/access-control-resource-based.html
+        - title: "Terraform AWS provider: aws_apigatewayv2_stage"
+          url: https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/apigatewayv2_stage
+
+  - op: upsert
+    kind: challenge
+    id: aws-sqs-dead-letter-queue
+    data:
+      provider: aws
+      level: intermediate
+      title: Stop poison messages with an SQS dead-letter queue
+      summary: Give a Lambda queue consumer a dead-letter queue, a safe visibility timeout, partial batch responses and an alarm.
+      minutes: 35
+      tags: [sqs, lambda, decoupling, dead-letter-queue, cloudwatch]
+      prerequisites: [aws-lambda-least-privilege]
+      runtime: emulated
+      problem: |
+        Orders are queued in SQS and processed by the `worker` Lambda
+        function. Yesterday one malformed message got stuck: every time the
+        worker received it, the whole batch failed, so the nine good messages
+        next to it were retried with it, again and again, until the message
+        expired four days later. Nobody noticed.
+
+        Queues decouple producers from consumers, but a consumer must be able
+        to set failures aside. A **dead-letter queue (DLQ)** receives a
+        message after it has been received `maxReceiveCount` times without
+        being deleted (the *redrive policy*). **Partial batch responses**
+        (`ReportBatchItemFailures`) let the function report only the failed
+        messages, so the successful ones are deleted. The Lambda guide asks
+        for a queue **visibility timeout of at least six times the function
+        timeout**, so a message isn't handed to a second invocation while
+        the first is still retrying it. And a DLQ that nobody watches only
+        hides the problem: alarm on it.
+
+        Make the pipeline resilient. It deploys to the local AWS emulator
+        when you check.
+      requirements:
+        - "A dead-letter queue (`aws_sqs_queue`) keeps messages for 14 days (`message_retention_seconds = 1209600`, the maximum) and is encrypted (`sqs_managed_sse_enabled = true` or a KMS key)."
+        - "`aws_sqs_queue.jobs` has a `redrive_policy` (written with `jsonencode`) whose `deadLetterTargetArn` is the DLQ's ARN and that sets `maxReceiveCount`."
+        - "The visibility timeout of `jobs` is at least six times the function timeout of 30 seconds (`visibility_timeout_seconds` ≥ 180)."
+        - "The event source mapping reports partial batch failures (`function_response_types = [\"ReportBatchItemFailures\"]`) and the function returns `batchItemFailures`."
+        - "An `aws_cloudwatch_metric_alarm` fires when the DLQ has visible messages (`AWS/SQS` metric `ApproximateNumberOfMessagesVisible`)."
+        - "No best-practice warnings and the workflow deploys."
+      hints:
+        - "Create `aws_sqs_queue.dlq` first, then point `jobs` at it: `redrive_policy = jsonencode({ deadLetterTargetArn = aws_sqs_queue.dlq.arn, maxReceiveCount = 5 })`."
+        - "The function must catch errors per record and return `{ batchItemFailures: [{ itemIdentifier: record.messageId }] }` for the ones that failed; with `ReportBatchItemFailures` on the mapping, Lambda deletes the rest."
+        - "The alarm: `namespace = \"AWS/SQS\"`, `metric_name = \"ApproximateNumberOfMessagesVisible\"`, `dimensions = { QueueName = aws_sqs_queue.dlq.name }`, `statistic = \"Maximum\"`, `comparison_operator = \"GreaterThanThreshold\"`, `threshold = 0`."
+      solution: |
+        The reference adds a DLQ and changes four things on the consumer:
+
+        - **Redrive policy** on `jobs`: after 5 receives without a delete
+          the message moves to `dlq`. A value that is too low sends messages
+          to the DLQ after a single transient failure; 5 leaves room for
+          retries.
+        - **DLQ retention 14 days**: the expiration of a message is based on
+          its original enqueue time, so the DLQ keeps messages longer than
+          the source queue; you get time to inspect and redrive them. A
+          `aws_sqs_queue_redrive_allow_policy` lets only `jobs` use the DLQ.
+        - **Visibility timeout 180 s** = 6 × the 30 s function timeout.
+        - **Partial batch responses**: the handler catches errors per
+          record and the mapping sets `function_response_types`.
+        - **Alarm** on `ApproximateNumberOfMessagesVisible > 0` for the DLQ,
+          so a poison message pages someone instead of hiding.
+
+        ```hcl
+        resource "aws_sqs_queue" "jobs" {
+          name                       = "${local.name_prefix}-jobs"
+          visibility_timeout_seconds = 180
+          sqs_managed_sse_enabled    = true
+          redrive_policy = jsonencode({
+            deadLetterTargetArn = aws_sqs_queue.dlq.arn
+            maxReceiveCount     = 5
+          })
+        }
+        ```
+
+        When the fix is deployed, redrive messages back from the DLQ to the
+        source queue (console or `StartMessageMoveTask`) to process them.
+      solutionFiles:
+        main.tf: |
+          # Messages that failed maxReceiveCount times wait here for 14 days.
+          resource "aws_sqs_queue" "dlq" {
+            name                      = "${local.name_prefix}-jobs-dlq"
+            message_retention_seconds = 1209600
+            sqs_managed_sse_enabled   = true
+          }
+
+          resource "aws_sqs_queue" "jobs" {
+            name = "${local.name_prefix}-jobs"
+            # At least 6 x the function timeout (30 s).
+            visibility_timeout_seconds = 180
+            sqs_managed_sse_enabled    = true
+            redrive_policy = jsonencode({
+              deadLetterTargetArn = aws_sqs_queue.dlq.arn
+              maxReceiveCount     = 5
+            })
+          }
+
+          # Only the jobs queue may use the DLQ.
+          resource "aws_sqs_queue_redrive_allow_policy" "dlq" {
+            queue_url = aws_sqs_queue.dlq.id
+            redrive_allow_policy = jsonencode({
+              redrivePermission = "byQueue"
+              sourceQueueArns   = [aws_sqs_queue.jobs.arn]
+            })
+          }
+
+          data "archive_file" "worker" {
+            type        = "zip"
+            output_path = "${path.module}/build/worker.zip"
+
+            source {
+              filename = "index.mjs"
+              content  = <<-EOT
+                // Reports only the records that failed; Lambda deletes the rest.
+                export const handler = async (event) => {
+                  const batchItemFailures = [];
+                  for (const record of event.Records ?? []) {
+                    try {
+                      const order = JSON.parse(record.body);
+                      if (!order.id) throw new Error("order without id");
+                      console.log("processed order", order.id);
+                    } catch (err) {
+                      console.error("failed", record.messageId, err.message);
+                      batchItemFailures.push({ itemIdentifier: record.messageId });
+                    }
+                  }
+                  return { batchItemFailures };
+                };
+              EOT
+            }
+          }
+
+          resource "aws_iam_role" "worker" {
+            name = "${local.name_prefix}-worker"
+            assume_role_policy = jsonencode({
+              Version = "2012-10-17"
+              Statement = [{
+                Effect    = "Allow"
+                Principal = { Service = "lambda.amazonaws.com" }
+                Action    = "sts:AssumeRole"
+              }]
+            })
+          }
+
+          resource "aws_iam_role_policy" "worker" {
+            name = "${local.name_prefix}-worker"
+            role = aws_iam_role.worker.id
+            policy = jsonencode({
+              Version = "2012-10-17"
+              Statement = [
+                {
+                  Effect   = "Allow"
+                  Action   = ["sqs:ReceiveMessage", "sqs:DeleteMessage", "sqs:GetQueueAttributes", "sqs:ChangeMessageVisibility"]
+                  Resource = aws_sqs_queue.jobs.arn
+                },
+                {
+                  Effect   = "Allow"
+                  Action   = ["logs:CreateLogStream", "logs:PutLogEvents"]
+                  Resource = "${aws_cloudwatch_log_group.worker.arn}:*"
+                }
+              ]
+            })
+          }
+
+          resource "aws_lambda_function" "worker" {
+            function_name    = "${local.name_prefix}-worker"
+            role             = aws_iam_role.worker.arn
+            runtime          = "nodejs22.x"
+            handler          = "index.handler"
+            filename         = data.archive_file.worker.output_path
+            source_code_hash = data.archive_file.worker.output_base64sha256
+            timeout          = 30
+          }
+
+          resource "aws_cloudwatch_log_group" "worker" {
+            name              = "/aws/lambda/${aws_lambda_function.worker.function_name}"
+            retention_in_days = 14
+          }
+
+          resource "aws_lambda_event_source_mapping" "jobs" {
+            event_source_arn        = aws_sqs_queue.jobs.arn
+            function_name           = aws_lambda_function.worker.arn
+            batch_size              = 10
+            function_response_types = ["ReportBatchItemFailures"]
+            depends_on              = [aws_iam_role_policy.worker]
+          }
+
+          # A message in the DLQ needs a human: alarm as soon as one arrives.
+          resource "aws_cloudwatch_metric_alarm" "dlq_not_empty" {
+            alarm_name          = "${local.name_prefix}-jobs-dlq-not-empty"
+            alarm_description   = "Messages failed processing and were moved to the dead-letter queue."
+            namespace           = "AWS/SQS"
+            metric_name         = "ApproximateNumberOfMessagesVisible"
+            dimensions          = { QueueName = aws_sqs_queue.dlq.name }
+            statistic           = "Maximum"
+            period              = 60
+            evaluation_periods  = 1
+            comparison_operator = "GreaterThanThreshold"
+            threshold           = 0
+            treat_missing_data  = "notBreaching"
+          }
+        outputs.tf: |
+          output "queue_url" {
+            value       = aws_sqs_queue.jobs.id
+            description = "URL of the jobs queue (send orders here)."
+          }
+
+          output "dlq_url" {
+            value       = aws_sqs_queue.dlq.id
+            description = "URL of the dead-letter queue."
+          }
+      starter:
+        kind: terraform
+        cloud: aws
+        files:
+          versions.tf: *aws_versions_archive
+          providers.tf: *aws_providers
+          locals.tf: *aws_locals
+          variables.tf: *aws_variables
+          main.tf: |
+            resource "aws_sqs_queue" "jobs" {
+              name                       = "${local.name_prefix}-jobs"
+              visibility_timeout_seconds = 30
+              sqs_managed_sse_enabled    = true
+            }
+
+            data "archive_file" "worker" {
+              type        = "zip"
+              output_path = "${path.module}/build/worker.zip"
+
+              source {
+                filename = "index.mjs"
+                content  = <<-EOT
+                  // One bad record throws and fails the whole batch.
+                  export const handler = async (event) => {
+                    for (const record of event.Records ?? []) {
+                      const order = JSON.parse(record.body);
+                      if (!order.id) throw new Error("order without id");
+                      console.log("processed order", order.id);
+                    }
+                  };
+                EOT
+              }
+            }
+
+            resource "aws_iam_role" "worker" {
+              name = "${local.name_prefix}-worker"
+              assume_role_policy = jsonencode({
+                Version = "2012-10-17"
+                Statement = [{
+                  Effect    = "Allow"
+                  Principal = { Service = "lambda.amazonaws.com" }
+                  Action    = "sts:AssumeRole"
+                }]
+              })
+            }
+
+            resource "aws_iam_role_policy" "worker" {
+              name = "${local.name_prefix}-worker"
+              role = aws_iam_role.worker.id
+              policy = jsonencode({
+                Version = "2012-10-17"
+                Statement = [
+                  {
+                    Effect   = "Allow"
+                    Action   = ["sqs:ReceiveMessage", "sqs:DeleteMessage", "sqs:GetQueueAttributes", "sqs:ChangeMessageVisibility"]
+                    Resource = aws_sqs_queue.jobs.arn
+                  },
+                  {
+                    Effect   = "Allow"
+                    Action   = ["logs:CreateLogStream", "logs:PutLogEvents"]
+                    Resource = "${aws_cloudwatch_log_group.worker.arn}:*"
+                  }
+                ]
+              })
+            }
+
+            resource "aws_lambda_function" "worker" {
+              function_name    = "${local.name_prefix}-worker"
+              role             = aws_iam_role.worker.arn
+              runtime          = "nodejs22.x"
+              handler          = "index.handler"
+              filename         = data.archive_file.worker.output_path
+              source_code_hash = data.archive_file.worker.output_base64sha256
+              timeout          = 30
+            }
+
+            resource "aws_cloudwatch_log_group" "worker" {
+              name              = "/aws/lambda/${aws_lambda_function.worker.function_name}"
+              retention_in_days = 14
+            }
+
+            resource "aws_lambda_event_source_mapping" "jobs" {
+              event_source_arn = aws_sqs_queue.jobs.arn
+              function_name    = aws_lambda_function.worker.arn
+              batch_size       = 10
+              depends_on       = [aws_iam_role_policy.worker]
+            }
+          outputs.tf: |
+            output "queue_url" {
+              value       = aws_sqs_queue.jobs.id
+              description = "URL of the jobs queue (send orders here)."
+            }
+      checks:
+        - id: valid
+          label: The configuration is valid
+          type: validate
+        - id: redrive-to-dlq
+          label: The jobs queue redrives failed messages to another queue
+          type: has
+          has:
+            terraform:
+              type: aws_sqs_queue
+              name: jobs
+              where:
+                redrive_policy: {ref: aws_sqs_queue}
+        - id: max-receive-count
+          label: The redrive policy sets maxReceiveCount
+          type: has
+          has:
+            terraform:
+              type: aws_sqs_queue
+              name: jobs
+              where:
+                redrive_policy: {contains: maxReceiveCount}
+        - id: dlq-retention
+          label: The DLQ keeps messages for 14 days, encrypted
+          type: has
+          has:
+            terraform:
+              type: aws_sqs_queue
+              where:
+                message_retention_seconds: 1209600
+        - id: visibility-timeout
+          label: Visibility timeout is at least 6 x the function timeout
+          type: has
+          has:
+            terraform:
+              type: aws_sqs_queue
+              name: jobs
+              where:
+                visibility_timeout_seconds: {min: 180}
+        - id: partial-batch
+          label: The consumer reports partial batch failures
+          type: has
+          has:
+            terraform:
+              type: aws_lambda_event_source_mapping
+              where:
+                function_response_types: {contains: ReportBatchItemFailures}
+        - id: dlq-alarm
+          label: An alarm watches the DLQ for messages
+          type: has
+          has:
+            terraform:
+              type: aws_cloudwatch_metric_alarm
+              where:
+                namespace: AWS/SQS
+                metric_name: ApproximateNumberOfMessagesVisible
+        - id: unencrypted-queues
+          label: Every queue is encrypted
+          type: has
+          has:
+            terraform:
+              type: aws_sqs_queue
+              where:
+                sqs_managed_sse_enabled: false
+              count: {max: 0}
+        - id: best-practices
+          label: No best-practice warnings
+          type: rules_clean
+          rules_clean:
+            prefixes: [bp_]
+            minSeverity: warning
+        - id: deploy
+          label: The pipeline deploys to the local AWS emulator
+          type: deploy
+      sources:
+        - title: Using dead-letter queues in Amazon SQS
+          url: https://docs.aws.amazon.com/AWSSimpleQueueService/latest/SQSDeveloperGuide/sqs-dead-letter-queues.html
+        - title: Amazon SQS visibility timeout
+          url: https://docs.aws.amazon.com/AWSSimpleQueueService/latest/SQSDeveloperGuide/sqs-visibility-timeout.html
+        - title: Creating and configuring an Amazon SQS event source mapping
+          url: https://docs.aws.amazon.com/lambda/latest/dg/services-sqs-configure.html
+        - title: Handling errors for an SQS event source in Lambda
+          url: https://docs.aws.amazon.com/lambda/latest/dg/services-sqs-errorhandling.html
+        - title: Available CloudWatch metrics for Amazon SQS
+          url: https://docs.aws.amazon.com/AWSSimpleQueueService/latest/SQSDeveloperGuide/sqs-available-cloudwatch-metrics.html
+        - title: "Terraform AWS provider: aws_sqs_queue"
+          url: https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/sqs_queue
+
+  - op: upsert
+    kind: challenge
+    id: aws-alb-auto-scaling
+    data:
+      provider: aws
+      level: intermediate
+      title: Replace a single server with a load-balanced Auto Scaling group
+      summary: Move an app from one EC2 instance with SSH open to the world to an ALB and a self-healing Auto Scaling group across zones.
+      minutes: 45
+      tags: [ec2, alb, auto-scaling, high-availability, security-groups]
+      prerequisites: [aws-vpc-multi-az-subnets]
+      runtime: emulated
+      problem: |
+        The app runs on one EC2 instance in the default VPC. Its security
+        group allows SSH (22) and the app port (8080) from anywhere. When
+        the instance or its Availability Zone fails, the app is down until
+        someone rebuilds it by hand.
+
+        The standard AWS answer has three parts. An **Application Load
+        Balancer** is the one public entry point, spread over at least two
+        Availability Zones; its **target group** sends requests only to
+        targets that pass a health check. An **Auto Scaling group** keeps a
+        minimum number of identical instances (described by a **launch
+        template**) running across the zones' subnets, and with
+        `health_check_type = "ELB"` it also replaces instances the load
+        balancer reports unhealthy. **Security groups** chain: the app
+        servers accept traffic only from the load balancer's security group,
+        and nobody needs SSH (use Session Manager instead).
+
+        Rebuild the app tier. It deploys to the local AWS emulator when you
+        check (the listener is reachable inside the sandbox only, so the
+        grader checks the deployment, not an HTTP call).
+      requirements:
+        - "An `aws_lb` of type `application` in the default VPC's subnets (one per Availability Zone) with its own security group allowing HTTP from the internet."
+        - "An `aws_lb_target_group` on port 8080 whose health check calls `/health`, and an HTTP listener on port 80 forwarding to it."
+        - "An `aws_launch_template` for the app servers that requires IMDSv2 (`metadata_options { http_tokens = \"required\" }`)."
+        - "An `aws_autoscaling_group` with `min_size` of at least 2 (a number), `health_check_type = \"ELB\"` and the target group in `target_group_arns`."
+        - "The app servers' security group allows port 8080 only from the load balancer's security group; no rule opens SSH or other admin ports to the internet."
+        - "No standalone `aws_instance` remains, there are no `bp_open_ingress` or `net_single_az` findings, and the workflow deploys."
+      hints:
+        - "Keep the `data \"aws_vpc\"` and `data \"aws_subnets\"` lookups: `sort(data.aws_subnets.default.ids)` gives one default subnet per zone, which is exactly what both the ALB (`subnets`) and the ASG (`vpc_zone_identifier`) need."
+        - "Move the instance's `ami`, `instance_type`, `user_data` and security groups into an `aws_launch_template` (`image_id`, `vpc_security_group_ids`, `user_data = base64encode(...)`) and reference it from the ASG's `launch_template { id = ..., version = ... }` block."
+        - "In the app security group, replace `cidr_blocks = [\"0.0.0.0/0\"]` on 8080 with `security_groups = [aws_security_group.alb.id]` and delete the SSH rule. Give the ASG a `health_check_grace_period` (e.g. 120 s) so new instances have time to boot."
+      solution: |
+        The reference (`main.tf`) keeps the data lookups and builds:
+
+        - `aws_security_group.alb` (80 from anywhere) and
+          `aws_security_group.app` (8080 from the ALB's group only);
+        - `aws_lb.app` (application, `drop_invalid_header_fields`),
+          `aws_lb_target_group.app` (`/health`, 2 healthy / 2 unhealthy
+          checks every 10 s) and `aws_lb_listener.http` forwarding to it;
+        - `aws_launch_template.app` (AL2023, IMDSv2 required, the same
+          Python server as user data);
+        - `aws_autoscaling_group.app` (`min_size = 2`, `max_size = 4`,
+          `health_check_type = "ELB"`, grace period 120 s) registering its
+          instances with the target group.
+
+        ```hcl
+        resource "aws_autoscaling_group" "app" {
+          name                      = local.name_prefix
+          min_size                  = 2
+          max_size                  = 4
+          desired_capacity          = 2
+          vpc_zone_identifier       = local.subnet_ids
+          target_group_arns         = [aws_lb_target_group.app.arn]
+          health_check_type         = "ELB"
+          health_check_grace_period = 120
+
+          launch_template {
+            id      = aws_launch_template.app.id
+            version = aws_launch_template.app.latest_version
+          }
+        }
+        ```
+
+        Why: the reliability pillar asks for redundancy across Availability
+        Zones and automatic replacement of failed components; ELB health
+        checks make the group replace instances whose app is broken even when
+        the VM itself is fine. In production put the instances in private
+        subnets (the ALB stays public) and add a target tracking scaling
+        policy (e.g. 50 % average CPU) so the group follows demand.
+      solutionFiles:
+        main.tf: |
+          data "aws_vpc" "default" {
+            default = true
+          }
+
+          # One default subnet per Availability Zone.
+          data "aws_subnets" "default" {
+            filter {
+              name   = "vpc-id"
+              values = [data.aws_vpc.default.id]
+            }
+
+            filter {
+              name   = "default-for-az"
+              values = ["true"]
+            }
+          }
+
+          locals {
+            subnet_ids = sort(data.aws_subnets.default.ids)
+          }
+
+          # Amazon Linux 2023, the latest image AWS publishes for the region.
+          data "aws_ssm_parameter" "al2023" {
+            name = "/aws/service/ami-amazon-linux-latest/al2023-ami-kernel-default-x86_64"
+          }
+
+          resource "aws_security_group" "alb" {
+            name        = "${local.name_prefix}-alb"
+            description = "Load balancer: HTTP from anywhere"
+            vpc_id      = data.aws_vpc.default.id
+
+            ingress {
+              description = "HTTP"
+              from_port   = 80
+              to_port     = 80
+              protocol    = "tcp"
+              cidr_blocks = ["0.0.0.0/0"]
+            }
+
+            egress {
+              description = "Requests and health checks to the targets"
+              from_port   = 0
+              to_port     = 0
+              protocol    = "-1"
+              cidr_blocks = ["0.0.0.0/0"]
+            }
+          }
+
+          # The app port is reachable from the load balancer only; no SSH.
+          resource "aws_security_group" "app" {
+            name        = "${local.name_prefix}-app"
+            description = "App servers: port 8080 from the load balancer only"
+            vpc_id      = data.aws_vpc.default.id
+
+            ingress {
+              description     = "Requests and health checks from the load balancer"
+              from_port       = 8080
+              to_port         = 8080
+              protocol        = "tcp"
+              security_groups = [aws_security_group.alb.id]
+            }
+
+            egress {
+              description = "Outbound for package installs"
+              from_port   = 0
+              to_port     = 0
+              protocol    = "-1"
+              cidr_blocks = ["0.0.0.0/0"]
+            }
+          }
+
+          resource "aws_lb" "app" {
+            name                       = local.name_prefix
+            load_balancer_type         = "application"
+            internal                   = false
+            security_groups            = [aws_security_group.alb.id]
+            subnets                    = local.subnet_ids
+            drop_invalid_header_fields = true
+          }
+
+          # Requests go only to targets that answer /health with 200.
+          resource "aws_lb_target_group" "app" {
+            name                 = local.name_prefix
+            port                 = 8080
+            protocol             = "HTTP"
+            target_type          = "instance"
+            vpc_id               = data.aws_vpc.default.id
+            deregistration_delay = 30
+
+            health_check {
+              path                = "/health"
+              matcher             = "200"
+              interval            = 10
+              timeout             = 5
+              healthy_threshold   = 2
+              unhealthy_threshold = 2
+            }
+          }
+
+          resource "aws_lb_listener" "http" {
+            load_balancer_arn = aws_lb.app.arn
+            port              = 80
+            protocol          = "HTTP"
+
+            default_action {
+              type             = "forward"
+              target_group_arn = aws_lb_target_group.app.arn
+            }
+          }
+
+          resource "aws_launch_template" "app" {
+            name_prefix            = "${local.name_prefix}-app-"
+            image_id               = data.aws_ssm_parameter.al2023.value
+            instance_type          = var.instance_type
+            vpc_security_group_ids = [aws_security_group.app.id]
+
+            # IMDSv2 only.
+            metadata_options {
+              http_endpoint = "enabled"
+              http_tokens   = "required"
+            }
+
+            tag_specifications {
+              resource_type = "instance"
+              tags          = merge(local.common_tags, { Name = "${local.name_prefix}-app" })
+            }
+
+            user_data = base64encode(local.user_data)
+          }
+
+          # Keeps two healthy servers across the zones and replaces any the
+          # load balancer reports unhealthy.
+          resource "aws_autoscaling_group" "app" {
+            name                      = local.name_prefix
+            min_size                  = 2
+            max_size                  = 4
+            desired_capacity          = 2
+            vpc_zone_identifier       = local.subnet_ids
+            target_group_arns         = [aws_lb_target_group.app.arn]
+            health_check_type         = "ELB"
+            health_check_grace_period = 120
+
+            launch_template {
+              id      = aws_launch_template.app.id
+              version = aws_launch_template.app.latest_version
+            }
+          }
+        outputs.tf: |
+          output "load_balancer_dns_name" {
+            value       = aws_lb.app.dns_name
+            description = "DNS name of the Application Load Balancer."
+          }
+
+          output "autoscaling_group" {
+            value       = aws_autoscaling_group.app.name
+            description = "Name of the Auto Scaling group of app servers."
+          }
+      starter:
+        kind: terraform
+        cloud: aws
+        files:
+          versions.tf: &aws_versions |
+            terraform {
+              required_version = ">= 1.6"
+
+              required_providers {
+                aws = {
+                  source  = "hashicorp/aws"
+                  version = "~> 6.0"
+                }
+              }
+            }
+          providers.tf: *aws_providers
+          locals.tf: |
+            locals {
+              name_prefix = "${var.project}-${var.environment}"
+              common_tags = {
+                Project     = var.project
+                Environment = var.environment
+                ManagedBy   = "nimbo"
+              }
+
+              # A small Python service on port 8080: /health answers ok, every
+              # other path answers with the server's host name.
+              user_data = <<-EOT
+                #!/bin/bash
+                set -euo pipefail
+                mkdir -p /opt/app
+                cat > /opt/app/server.py <<'PY'
+                import json, socket
+                from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+                class Handler(BaseHTTPRequestHandler):
+                    def do_GET(self):
+                        body = {"status": "ok"} if self.path == "/health" else {"server": socket.gethostname(), "path": self.path}
+                        payload = json.dumps(body).encode()
+                        self.send_response(200)
+                        self.send_header("content-type", "application/json")
+                        self.send_header("content-length", str(len(payload)))
+                        self.end_headers()
+                        self.wfile.write(payload)
+                ThreadingHTTPServer(("0.0.0.0", 8080), Handler).serve_forever()
+                PY
+                nohup python3 /opt/app/server.py >/var/log/app.log 2>&1 &
+              EOT
+            }
+          variables.tf: |
+            variable "project" {
+              type        = string
+              default     = "learn"
+              description = "Project name: the first part of every resource name and the Project tag."
+
+              validation {
+                condition     = can(regex("^[a-z][a-z0-9-]{1,19}$", var.project))
+                error_message = "project must be 2-20 lowercase letters, digits or hyphens, starting with a letter."
+              }
+            }
+
+            variable "environment" {
+              type        = string
+              default     = "dev"
+              description = "Deployment environment (dev, staging, prod, …): part of every resource name and the Environment tag."
+
+              validation {
+                condition     = can(regex("^[a-z][a-z0-9-]{0,11}$", var.environment))
+                error_message = "environment must be 1-12 lowercase letters, digits or hyphens, starting with a letter."
+              }
+            }
+
+            variable "aws_region" {
+              type        = string
+              default     = "us-east-1"
+              description = "AWS region to deploy into."
+            }
+
+            variable "instance_type" {
+              type        = string
+              default     = "t3.micro"
+              description = "EC2 instance type of the app servers (x86_64)."
+            }
+          main.tf: |
+            data "aws_vpc" "default" {
+              default = true
+            }
+
+            data "aws_subnets" "default" {
+              filter {
+                name   = "vpc-id"
+                values = [data.aws_vpc.default.id]
+              }
+
+              filter {
+                name   = "default-for-az"
+                values = ["true"]
+              }
+            }
+
+            locals {
+              subnet_ids = sort(data.aws_subnets.default.ids)
+            }
+
+            data "aws_ssm_parameter" "al2023" {
+              name = "/aws/service/ami-amazon-linux-latest/al2023-ami-kernel-default-x86_64"
+            }
+
+            # Admin and app ports open to the whole internet.
+            resource "aws_security_group" "web" {
+              name        = "${local.name_prefix}-web"
+              description = "Web server"
+              vpc_id      = data.aws_vpc.default.id
+
+              ingress {
+                description = "SSH"
+                from_port   = 22
+                to_port     = 22
+                protocol    = "tcp"
+                cidr_blocks = ["0.0.0.0/0"]
+              }
+
+              ingress {
+                description = "App"
+                from_port   = 8080
+                to_port     = 8080
+                protocol    = "tcp"
+                cidr_blocks = ["0.0.0.0/0"]
+              }
+
+              egress {
+                description = "All outbound traffic"
+                from_port   = 0
+                to_port     = 0
+                protocol    = "-1"
+                cidr_blocks = ["0.0.0.0/0"]
+              }
+            }
+
+            # One server in one Availability Zone.
+            resource "aws_instance" "web" {
+              ami                    = data.aws_ssm_parameter.al2023.value
+              instance_type          = var.instance_type
+              subnet_id              = local.subnet_ids[0]
+              vpc_security_group_ids = [aws_security_group.web.id]
+              user_data              = local.user_data
+              tags                   = { Name = "${local.name_prefix}-web" }
+            }
+          outputs.tf: |
+            output "instance_id" {
+              value       = aws_instance.web.id
+              description = "ID of the web server."
+            }
+      checks:
+        - id: valid
+          label: The configuration is valid
+          type: validate
+        - id: application-load-balancer
+          label: An Application Load Balancer is the entry point
+          type: has
+          has:
+            terraform:
+              type: aws_lb
+              where:
+                load_balancer_type: application
+                security_groups: {ref: aws_security_group}
+        - id: health-check
+          label: "The target group health-checks /health"
+          type: has
+          has:
+            terraform:
+              type: aws_lb_target_group
+              where:
+                port: 8080
+                health_check.path: /health
+        - id: listener
+          label: A listener forwards to the target group
+          type: has
+          has:
+            terraform:
+              type: aws_lb_listener
+              where:
+                default_action.target_group_arn: {ref: aws_lb_target_group}
+        - id: imdsv2
+          label: The launch template requires IMDSv2
+          type: has
+          has:
+            terraform:
+              type: aws_launch_template
+              where:
+                metadata_options.http_tokens: required
+        - id: auto-scaling-group
+          label: An Auto Scaling group keeps at least 2 servers healthy behind the ALB
+          type: has
+          has:
+            terraform:
+              type: aws_autoscaling_group
+              where:
+                min_size: {min: 2}
+                health_check_type: ELB
+                target_group_arns: {ref: aws_lb_target_group}
+                launch_template.id: {ref: aws_launch_template}
+        - id: app-from-alb-only
+          label: App servers accept traffic from the load balancer's security group
+          type: has
+          has:
+            terraform:
+              type: aws_security_group
+              where:
+                ingress.security_groups: {ref: aws_security_group}
+        - id: no-single-instance
+          label: No standalone EC2 instance remains
+          type: has
+          has:
+            terraform:
+              type: aws_instance
+              count: {max: 0}
+        - id: exposure-findings
+          label: No admin ports open to the internet and no single-zone load balancer
+          type: rules_clean
+          rules_clean:
+            codes: [bp_open_ingress, net_single_az]
+            minSeverity: warning
+        - id: deploy
+          label: The app tier deploys to the local AWS emulator
+          type: deploy
+      sources:
+        - title: Use Elastic Load Balancing to distribute incoming application traffic in your Auto Scaling group
+          url: https://docs.aws.amazon.com/autoscaling/ec2/userguide/autoscaling-load-balancer.html
+        - title: Health checks for instances in an Auto Scaling group
+          url: https://docs.aws.amazon.com/autoscaling/ec2/userguide/ec2-auto-scaling-health-checks.html
+        - title: Health checks for Application Load Balancer target groups
+          url: https://docs.aws.amazon.com/elasticloadbalancing/latest/application/target-group-health-checks.html
+        - title: Application Load Balancers
+          url: https://docs.aws.amazon.com/elasticloadbalancing/latest/application/application-load-balancers.html
+        - title: Use IMDSv2
+          url: https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/configuring-IMDS-new-instances.html
+        - title: Security group rules for different use cases
+          url: https://docs.aws.amazon.com/vpc/latest/userguide/security-group-rules.html
+        - title: "Terraform AWS provider: aws_autoscaling_group"
+          url: https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/autoscaling_group

@@ -1,0 +1,1146 @@
+description: Adds the global reliability challenges (high availability across zones, backups and recovery objectives, autoscaling on the right signal, zero-downtime deployments) with adaptations for every provider
+operations:
+  - op: upsert
+    kind: challenge
+    id: global-multi-zone-ha
+    data:
+      provider: global
+      level: intermediate
+      title: Survive the loss of a zone
+      summary: Run a stateless web tier as several replicas spread across zones, with a disruption budget.
+      minutes: 30
+      tags: [reliability, high-availability, zones, kubernetes, well-architected]
+      runtime: design
+      problem: |
+        The storefront's web tier runs as **one replica** in production. A node upgrade, a crashed pod or the
+        failure of the data center (zone) it runs in takes the whole shop offline, even though the cloud region
+        has several independent zones available.
+
+        The frameworks agree on the fix: remove single points of failure by running **redundant instances
+        distributed across fault domains** (Availability Zones on AWS and Azure, zones on Google Cloud,
+        availability and fault domains on OCI) and keep enough of them up during planned maintenance.
+
+        Graded on **Kubernetes** (design checks on the `prod` Kustomize overlay): the starter has a `web`
+        Deployment with a single replica.
+      requirements:
+        - "In `prod`, the `web` Deployment runs at least **3 replicas** (no `k8s_single_replica` finding)."
+        - "The pod template spreads replicas across zones with a `topologySpreadConstraints` entry on `topology.kubernetes.io/zone` (no `k8s_topology_spread` finding)."
+        - "A **PodDisruptionBudget** selects the `web` pods and still allows one eviction (no `k8s_pdb` finding)."
+      hints:
+        - "Change only `overlays/prod`: the `replicas:` field of a kustomization sets the replica count, and a patch file can add `topologySpreadConstraints` to the pod template."
+        - "Spread on zones *and* nodes: one constraint with `topologyKey: topology.kubernetes.io/zone`, another with `kubernetes.io/hostname`. `whenUnsatisfiable: ScheduleAnyway` keeps pods schedulable on clusters with fewer zones."
+        - "`minAvailable: 2` with 3 replicas (or `maxUnavailable: 1`) lets node drains evict one pod at a time while two keep serving."
+      solution: |
+        High availability across zones has three parts:
+
+        1. **Redundancy:** 3 replicas, so losing one still leaves capacity (and with 3 zones, one per zone).
+        2. **Placement:** `topologySpreadConstraints` with `topology.kubernetes.io/zone` (the well-known zone
+           label set on nodes by cloud providers) and `maxSkew: 1` keeps the replicas balanced across zones; a
+           second constraint on `kubernetes.io/hostname` keeps them on different nodes.
+        3. **Planned disruptions:** a PodDisruptionBudget (`minAvailable: 2`) stops voluntary evictions — node
+           drains, upgrades — from taking more than one replica down at a time, without blocking them entirely.
+
+        On a cloud provider the same pattern is a zone-redundant service: instances in several zones behind a
+        load balancer that health-checks them, with zone-redundant data stores.
+      solutionFiles:
+        overlays/prod/kustomization.yaml: |
+          # Production: three replicas spread over zones and nodes, protected
+          # by a PodDisruptionBudget, in the shop-prod namespace.
+          apiVersion: kustomize.config.k8s.io/v1beta1
+          kind: Kustomization
+          namespace: shop-prod
+          resources:
+            - ../../base
+            - namespace.yaml
+            - pdb.yaml
+          replicas:
+            - name: web
+              count: 3
+          patches:
+            - path: spread.yaml
+        overlays/prod/pdb.yaml: |
+          apiVersion: policy/v1
+          kind: PodDisruptionBudget
+          metadata:
+            name: web
+          spec:
+            minAvailable: 2
+            selector:
+              matchLabels:
+                app: web
+        overlays/prod/spread.yaml: |
+          apiVersion: apps/v1
+          kind: Deployment
+          metadata:
+            name: web
+          spec:
+            template:
+              spec:
+                topologySpreadConstraints:
+                  - maxSkew: 1
+                    topologyKey: topology.kubernetes.io/zone
+                    whenUnsatisfiable: ScheduleAnyway
+                    labelSelector:
+                      matchLabels:
+                        app: web
+                  - maxSkew: 1
+                    topologyKey: kubernetes.io/hostname
+                    whenUnsatisfiable: ScheduleAnyway
+                    labelSelector:
+                      matchLabels:
+                        app: web
+      starter:
+        kind: kubernetes
+        kubernetes:
+          sources:
+            - kind: kustomize
+              path: base
+              environments:
+                prod: overlays/prod
+        files:
+          base/kustomization.yaml: |
+            apiVersion: kustomize.config.k8s.io/v1beta1
+            kind: Kustomization
+            resources:
+              - deployment.yaml
+              - service.yaml
+          base/deployment.yaml: |
+            apiVersion: apps/v1
+            kind: Deployment
+            metadata:
+              name: web
+            spec:
+              replicas: 1
+              selector:
+                matchLabels:
+                  app: web
+              template:
+                metadata:
+                  labels:
+                    app: web
+                spec:
+                  securityContext:
+                    runAsNonRoot: true
+                    runAsUser: 101
+                  automountServiceAccountToken: false
+                  containers:
+                    - name: nginx
+                      image: nginxinc/nginx-unprivileged:1.30-alpine
+                      ports:
+                        - name: http
+                          containerPort: 8080
+                      readinessProbe:
+                        httpGet:
+                          path: /
+                          port: http
+                        periodSeconds: 5
+                      livenessProbe:
+                        httpGet:
+                          path: /
+                          port: http
+                        periodSeconds: 20
+                      resources:
+                        requests:
+                          cpu: 50m
+                          memory: 64Mi
+                        limits:
+                          memory: 128Mi
+          base/service.yaml: |
+            apiVersion: v1
+            kind: Service
+            metadata:
+              name: web
+            spec:
+              selector:
+                app: web
+              ports:
+                - name: http
+                  port: 80
+                  targetPort: http
+          overlays/prod/kustomization.yaml: |
+            # Production: the storefront in the shop-prod namespace.
+            apiVersion: kustomize.config.k8s.io/v1beta1
+            kind: Kustomization
+            namespace: shop-prod
+            resources:
+              - ../../base
+              - namespace.yaml
+          overlays/prod/namespace.yaml: |
+            apiVersion: v1
+            kind: Namespace
+            metadata:
+              name: shop-prod
+      checks:
+        - id: valid
+          label: The prod overlay renders
+          type: validate
+          environment: prod
+        - id: redundancy-rules
+          label: Replicas, spread and disruption budget follow the rules
+          type: rules_clean
+          environment: prod
+          rules_clean:
+            codes: [k8s_single_replica, k8s_topology_spread, k8s_pdb]
+            minSeverity: warning
+        - id: three-replicas
+          label: web runs at least 3 replicas in prod
+          type: has
+          environment: prod
+          has:
+            kubernetes:
+              kind: Deployment
+              name: web
+              where:
+                spec.replicas:
+                  min: 3
+        - id: zone-spread
+          label: Replicas are spread across zones
+          type: has
+          environment: prod
+          has:
+            kubernetes:
+              kind: Deployment
+              name: web
+              where:
+                spec.template.spec.topologySpreadConstraints.*.topologyKey: topology.kubernetes.io/zone
+        - id: pdb
+          label: A PodDisruptionBudget protects the web pods
+          type: has
+          environment: prod
+          has:
+            kubernetes:
+              kind: PodDisruptionBudget
+              where:
+                spec.selector.matchLabels.app: web
+      adaptations:
+        aws: |
+          Spread instances over **multiple Availability Zones**: an Auto Scaling group whose subnets cover 2–3
+          AZs behind an Application Load Balancer with health checks, and Multi-AZ data stores (RDS Multi-AZ,
+          DynamoDB is multi-AZ by design). On EKS, the same spread constraints apply. Practice:
+          `aws-alb-auto-scaling`, `aws-rds-multi-az`, `aws-vpc-multi-az-subnets`.
+        azure: |
+          Use **availability zones**: zone-redundant services (zone-redundant App Service plans, ZRS/GZRS
+          storage, zone-redundant SQL) or VM scale sets across zones 1–3 behind a Standard Load Balancer. AKS
+          node pools can span zones. Practice: `azure-aks-baseline`, `azure-storage-data-protection`.
+        gcp: |
+          Use **regional** resources: regional managed instance groups that distribute VMs across zones, regional
+          GKE clusters, Cloud SQL with high availability (a standby in another zone), behind a load balancer with
+          health checks. Practice: `gcp-cloud-sql-private-ip`.
+        oci: |
+          Distribute instances across **availability domains** (in multi-AD regions) and **fault domains**
+          (within an AD) — an instance pool placed in several ADs/FDs behind a load balancer. Practice:
+          `oci-lb-instance-pool-autoscaling`.
+        docker: |
+          A single Docker host is one failure domain: replicas behind a load balancer survive a crashed container
+          (with healthchecks and `restart:`), but not a lost host. Zone-level availability needs an orchestrator
+          across several hosts. Practice: `docker-lb-health-checks`.
+        kubernetes: |
+          Several replicas, `topologySpreadConstraints` (or pod anti-affinity) on `topology.kubernetes.io/zone`,
+          a PodDisruptionBudget, and a node pool spanning zones on the managed cluster. Practice:
+          `kubernetes-zero-downtime-prod`.
+      sources:
+        - title: AWS Well-Architected — REL10-BP01 Deploy the workload to multiple locations
+          url: https://docs.aws.amazon.com/wellarchitected/latest/framework/rel_fault_isolation_multiaz_region_system.html
+        - title: Azure Well-Architected — Designing for redundancy
+          url: https://learn.microsoft.com/en-us/azure/well-architected/reliability/redundancy
+        - title: Google Cloud Well-Architected — Build highly available systems through resource redundancy
+          url: https://cloud.google.com/architecture/framework/reliability/build-highly-available-systems
+        - title: OCI Well-Architected — Design for scalability (distribute traffic across availability domains)
+          url: https://docs.oracle.com/en/solutions/oci-best-practices/design-scalability1.html
+        - title: OCI — Regions and availability domains
+          url: https://docs.oracle.com/en-us/iaas/Content/General/Concepts/regions.htm
+        - title: Kubernetes — Running in multiple zones
+          url: https://kubernetes.io/docs/setup/best-practices/multiple-zones/
+        - title: Kubernetes — Pod topology spread constraints
+          url: https://kubernetes.io/docs/concepts/scheduling-eviction/topology-spread-constraints/
+        - title: Kubernetes — Specifying a disruption budget for your application
+          url: https://kubernetes.io/docs/tasks/run-application/configure-pdb/
+
+  - op: upsert
+    kind: challenge
+    id: global-backup-recovery
+    data:
+      provider: global
+      level: intermediate
+      title: Meet a recovery point objective
+      summary: Protect an orders table and an invoices bucket so data can be restored within a 1-hour RPO.
+      minutes: 40
+      tags: [reliability, backup, disaster-recovery, rpo, rto, well-architected]
+      runtime: design
+      problem: |
+        The business has set recovery objectives for the order system: **RPO 1 hour** (lose at most one hour of
+        data) and **RTO 4 hours** (be back within four hours). Today the orders table has no backups at all,
+        nothing stops someone from deleting it, and an overwritten invoice in the bucket is gone forever.
+
+        **RPO** is the maximum acceptable time since the last recovery point; **RTO** is the maximum acceptable
+        time to restore service. Backup choices follow from them: continuous backups (point-in-time recovery)
+        meet tight RPOs, scheduled copies in a separate vault protect against mistakes and compromised
+        accounts, and only regular restore tests prove the RTO.
+
+        Graded on **AWS** (Terraform, design checks).
+      requirements:
+        - "The `orders` DynamoDB table has **point-in-time recovery** enabled (RPO of minutes)."
+        - "The table has **deletion protection** enabled."
+        - "The `invoices` bucket has **versioning** enabled, so overwritten or deleted objects can be recovered."
+        - "An **AWS Backup plan** takes scheduled backups into a backup vault and keeps them at least 7 days."
+        - "A **backup selection** assigns the `orders` table to that plan."
+      hints:
+        - "PITR is a nested block: `point_in_time_recovery { enabled = true }`. Deletion protection is the `deletion_protection_enabled` argument."
+        - "Versioning has its own resource: `aws_s3_bucket_versioning` with `versioning_configuration { status = \"Enabled\" }`."
+        - "AWS Backup needs a vault (`aws_backup_vault`), a plan with a `rule` (`schedule` as a cron expression, `lifecycle { delete_after = 35 }`) and an `aws_backup_selection` whose role has the `AWSBackupServiceRolePolicyForBackup` managed policy."
+      solution: |
+        Start from the objectives, then pick mechanisms that meet them:
+
+        1. **RPO 1 hour → continuous backups.** DynamoDB point-in-time recovery restores the table to any second
+           in the retention window (up to 35 days), far inside the RPO.
+        2. **Prevent the incident.** `deletion_protection_enabled = true` stops accidental table deletion;
+           S3 versioning keeps previous versions of invoices.
+        3. **Independent copies.** An AWS Backup plan writes scheduled recovery points to a backup vault with its
+           own access policy and retention (`delete_after = 35`). Copying to another Region or account
+           (`copy_action`) protects against regional events and compromised accounts.
+        4. **Prove the RTO.** Backups that were never restored are a hope, not a plan: schedule restore tests and
+           time them against the 4-hour RTO.
+      solutionFiles:
+        main.tf: |
+          resource "aws_dynamodb_table" "orders" {
+            name                        = "${var.project}-orders"
+            billing_mode                = "PAY_PER_REQUEST"
+            hash_key                    = "id"
+            deletion_protection_enabled = true
+
+            attribute {
+              name = "id"
+              type = "S"
+            }
+
+            server_side_encryption {
+              enabled = true
+            }
+
+            # Continuous backups: restore to any second of the last 35 days.
+            point_in_time_recovery {
+              enabled = true
+            }
+          }
+
+          resource "aws_s3_bucket" "invoices" {
+            bucket_prefix = "${var.project}-invoices-"
+          }
+
+          resource "aws_s3_bucket_server_side_encryption_configuration" "invoices" {
+            bucket = aws_s3_bucket.invoices.id
+
+            rule {
+              apply_server_side_encryption_by_default {
+                sse_algorithm = "AES256"
+              }
+            }
+          }
+
+          resource "aws_s3_bucket_public_access_block" "invoices" {
+            bucket                  = aws_s3_bucket.invoices.id
+            block_public_acls       = true
+            block_public_policy     = true
+            ignore_public_acls      = true
+            restrict_public_buckets = true
+          }
+
+          # Overwritten or deleted invoices stay recoverable.
+          resource "aws_s3_bucket_versioning" "invoices" {
+            bucket = aws_s3_bucket.invoices.id
+
+            versioning_configuration {
+              status = "Enabled"
+            }
+          }
+        backup.tf: |
+          # Scheduled, independent recovery points kept in their own vault.
+          resource "aws_backup_vault" "main" {
+            name = "${var.project}-vault"
+          }
+
+          resource "aws_backup_plan" "daily" {
+            name = "${var.project}-daily"
+
+            rule {
+              rule_name         = "daily"
+              target_vault_name = aws_backup_vault.main.name
+              schedule          = "cron(0 3 * * ? *)"
+
+              lifecycle {
+                delete_after = 35
+              }
+            }
+          }
+
+          resource "aws_iam_role" "backup" {
+            name = "${var.project}-backup"
+            assume_role_policy = jsonencode({
+              Version = "2012-10-17"
+              Statement = [{
+                Effect    = "Allow"
+                Principal = { Service = "backup.amazonaws.com" }
+                Action    = "sts:AssumeRole"
+              }]
+            })
+          }
+
+          resource "aws_iam_role_policy_attachment" "backup" {
+            role       = aws_iam_role.backup.name
+            policy_arn = "arn:aws:iam::aws:policy/service-role/AWSBackupServiceRolePolicyForBackup"
+          }
+
+          resource "aws_iam_role_policy_attachment" "restore" {
+            role       = aws_iam_role.backup.name
+            policy_arn = "arn:aws:iam::aws:policy/service-role/AWSBackupServiceRolePolicyForRestores"
+          }
+
+          resource "aws_backup_selection" "orders" {
+            name         = "${var.project}-orders"
+            plan_id      = aws_backup_plan.daily.id
+            iam_role_arn = aws_iam_role.backup.arn
+            resources    = [aws_dynamodb_table.orders.arn]
+          }
+      starter:
+        kind: terraform
+        cloud: aws
+        files:
+          versions.tf: |
+            terraform {
+              required_version = ">= 1.6"
+
+              required_providers {
+                aws = {
+                  source  = "hashicorp/aws"
+                  version = "~> 6.0"
+                }
+              }
+            }
+          providers.tf: |
+            provider "aws" {
+              region = var.aws_region
+
+              default_tags {
+                tags = {
+                  Project   = var.project
+                  ManagedBy = "nimbo"
+                }
+              }
+            }
+          variables.tf: |
+            variable "project" {
+              type        = string
+              default     = "orders"
+              description = "Project name: prefix of every resource name and the Project tag."
+            }
+
+            variable "aws_region" {
+              type        = string
+              default     = "us-east-1"
+              description = "AWS region to deploy into."
+            }
+          main.tf: |
+            resource "aws_dynamodb_table" "orders" {
+              name         = "${var.project}-orders"
+              billing_mode = "PAY_PER_REQUEST"
+              hash_key     = "id"
+
+              attribute {
+                name = "id"
+                type = "S"
+              }
+
+              server_side_encryption {
+                enabled = true
+              }
+            }
+
+            resource "aws_s3_bucket" "invoices" {
+              bucket_prefix = "${var.project}-invoices-"
+            }
+
+            resource "aws_s3_bucket_server_side_encryption_configuration" "invoices" {
+              bucket = aws_s3_bucket.invoices.id
+
+              rule {
+                apply_server_side_encryption_by_default {
+                  sse_algorithm = "AES256"
+                }
+              }
+            }
+
+            resource "aws_s3_bucket_public_access_block" "invoices" {
+              bucket                  = aws_s3_bucket.invoices.id
+              block_public_acls       = true
+              block_public_policy     = true
+              ignore_public_acls      = true
+              restrict_public_buckets = true
+            }
+      checks:
+        - id: valid
+          label: The configuration is valid
+          type: validate
+        - id: pitr
+          label: The orders table has point-in-time recovery
+          type: has
+          has:
+            terraform:
+              type: aws_dynamodb_table
+              name: orders
+              where:
+                point_in_time_recovery.enabled: true
+        - id: deletion-protection
+          label: The orders table has deletion protection
+          type: has
+          has:
+            terraform:
+              type: aws_dynamodb_table
+              name: orders
+              where:
+                deletion_protection_enabled: true
+        - id: versioning
+          label: The invoices bucket keeps previous versions
+          type: has
+          has:
+            terraform:
+              type: aws_s3_bucket_versioning
+              where:
+                bucket:
+                  ref: aws_s3_bucket.invoices
+                versioning_configuration.status: Enabled
+        - id: backup-plan
+          label: A backup plan runs on a schedule and keeps recovery points 7+ days
+          type: has
+          has:
+            terraform:
+              type: aws_backup_plan
+              where:
+                rule.schedule:
+                  exists: true
+                rule.target_vault_name:
+                  ref: aws_backup_vault
+                rule.lifecycle.delete_after:
+                  min: 7
+        - id: backup-selection
+          label: The orders table is assigned to the backup plan
+          type: has
+          has:
+            terraform:
+              type: aws_backup_selection
+              where:
+                resources:
+                  ref: aws_dynamodb_table.orders
+      adaptations:
+        aws: |
+          **AWS Backup** plans and vaults (cross-Region/cross-account copies with `copy_action`), DynamoDB and RDS
+          **point-in-time recovery**, RDS automated backups (`backup_retention_period`), S3 versioning and
+          replication; AWS Elastic Disaster Recovery for servers. Practice: `aws-rds-multi-az`, `aws-backup-dr-cost`.
+        azure: |
+          **Azure Backup** (Recovery Services or Backup vaults with backup policies), Azure SQL automated backups
+          with point-in-time restore, Storage soft delete, versioning and GZRS replication, Azure Site Recovery for
+          VMs. Practice: `azure-storage-data-protection`.
+        gcp: |
+          **Backup and DR Service**, Cloud SQL automated backups with point-in-time recovery, Cloud Storage object
+          versioning and retention policies, and persistent disk snapshot schedules. Practice:
+          `gcp-cloud-sql-private-ip`, `gcp-storage-retention-lifecycle`.
+        oci: |
+          Block volume **backup policies** (and cross-region copies), Object Storage versioning and replication,
+          automatic backups for Autonomous/Base Database, and **Full Stack Disaster Recovery** for orchestrated
+          failover. Practice: `oci-autonomous-db-private-endpoint`.
+        docker: |
+          Data lives in **named volumes**; back them up by running a throwaway container that mounts the volume
+          and archives it (`docker run --rm --volumes-from ... tar`), or use the database's own dump tool
+          (`pg_dump`) on a schedule, and store the archives off the host. Test restores into a fresh volume.
+        kubernetes: |
+          Stateful data sits in PersistentVolumes: use **VolumeSnapshots** (CSI) or the managed disk's backup
+          service, database-native backups (or an operator) for consistency, and keep manifests in Git so the
+          cluster state itself is reproducible.
+      sources:
+        - title: AWS Well-Architected — REL13-BP01 Define recovery objectives for downtime and data loss
+          url: https://docs.aws.amazon.com/wellarchitected/latest/framework/rel_planning_for_recovery_objective_defined_recovery.html
+        - title: AWS Well-Architected — REL09-BP01 Identify and back up all data
+          url: https://docs.aws.amazon.com/wellarchitected/latest/framework/rel_backing_up_data_identified_backups_data.html
+        - title: AWS Well-Architected — REL09-BP04 Perform periodic recovery of the data
+          url: https://docs.aws.amazon.com/wellarchitected/latest/framework/rel_backing_up_data_periodic_recovery_testing_data.html
+        - title: Amazon DynamoDB — Point-in-time backups
+          url: https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/Point-in-time-recovery.html
+        - title: AWS Backup — Create a backup plan
+          url: https://docs.aws.amazon.com/aws-backup/latest/devguide/creating-a-backup-plan.html
+        - title: Azure Well-Architected — Defining reliability targets (RTO, RPO)
+          url: https://learn.microsoft.com/en-us/azure/well-architected/reliability/metrics
+        - title: Azure Well-Architected — Disaster recovery
+          url: https://learn.microsoft.com/en-us/azure/well-architected/reliability/disaster-recovery
+        - title: Google Cloud Well-Architected — Perform testing for recovery from data loss
+          url: https://cloud.google.com/architecture/framework/reliability/perform-testing-for-recovery-from-data-loss
+        - title: OCI Well-Architected — Back up your data
+          url: https://docs.oracle.com/en/solutions/oci-best-practices/back-your-data1.html
+        - title: OCI Well-Architected — Plan your disaster recovery strategy
+          url: https://docs.oracle.com/en/solutions/oci-best-practices/plan-your-disaster-recovery-strategy.html
+        - title: Docker — Volumes (back up, restore, or migrate data volumes)
+          url: https://docs.docker.com/engine/storage/volumes/
+
+  - op: upsert
+    kind: challenge
+    id: global-autoscaling-signal
+    data:
+      provider: global
+      level: advanced
+      title: Autoscale on the signal that saturates
+      summary: Fix an autoscaler that watches memory for a CPU-bound API and can't compute utilization.
+      minutes: 40
+      tags: [reliability, performance, autoscaling, hpa, well-architected]
+      prerequisites: [global-multi-zone-ha]
+      runtime: design
+      problem: |
+        The `checkout` API spends its time hashing and signing payment payloads: under load it **runs out of
+        CPU** long before memory changes. Its production autoscaler, however, scales on **memory utilization**,
+        and the containers declare no resource requests — so utilization can't even be computed. During a sale
+        the API saturated, latency exploded and the autoscaler never added a pod.
+
+        Autoscaling works only when it follows the metric that actually limits the workload, with sensible
+        bounds: a floor that keeps redundancy, a ceiling that caps cost and protects dependencies.
+
+        Graded on **Kubernetes** (design checks on the `prod` Kustomize overlay).
+      requirements:
+        - "Every container of `checkout` requests CPU and memory (no `k8s_no_requests` or `k8s_hpa_no_requests` finding)."
+        - "The `checkout` HorizontalPodAutoscaler scales on **CPU** utilization, not memory."
+        - "The CPU target is between 50% and 80% average utilization (headroom while new pods start)."
+        - "`minReplicas` is at least 2, so scaling in never removes redundancy."
+      hints:
+        - "Utilization is measured **relative to the request**: an HPA on CPU utilization needs `resources.requests.cpu` on every container of the target."
+        - "In `autoscaling/v2`, a metric is `{type: Resource, resource: {name: cpu, target: {type: Utilization, averageUtilization: 70}}}`."
+        - "Keep `maxReplicas` as a deliberate cap, and consider `behavior.scaleDown.stabilizationWindowSeconds` so the replica count doesn't flap."
+      solution: |
+        1. **Measure the right thing.** A CPU-bound service saturates on CPU; scaling on memory reacts late or
+           never. Pick the metric that rises with load and degrades the user experience (CPU here; queue depth
+           for workers; request rate or latency through custom metrics for I/O-bound services).
+        2. **Give the controller a baseline.** Set `requests.cpu`/`requests.memory` on the container: the HPA
+           divides usage by the request to get utilization, and the scheduler packs pods by requests.
+        3. **Target with headroom.** `averageUtilization: 70` scales out before pods are pegged, leaving room for
+           the minutes new pods need to start.
+        4. **Bound it.** `minReplicas: 2` keeps redundancy at night; `maxReplicas` caps cost and protects the
+           database behind the API; a scale-down stabilization window avoids flapping.
+
+        Validate the choice with a load test: replicas should rise as CPU crosses the target while latency stays
+        within the objective.
+      solutionFiles:
+        base/deployment.yaml: |
+          apiVersion: apps/v1
+          kind: Deployment
+          metadata:
+            name: checkout
+          spec:
+            replicas: 1
+            selector:
+              matchLabels:
+                app: checkout
+            template:
+              metadata:
+                labels:
+                  app: checkout
+              spec:
+                securityContext:
+                  runAsNonRoot: true
+                  runAsUser: 101
+                automountServiceAccountToken: false
+                containers:
+                  - name: api
+                    image: nginxinc/nginx-unprivileged:1.30-alpine
+                    ports:
+                      - name: http
+                        containerPort: 8080
+                    readinessProbe:
+                      httpGet:
+                        path: /
+                        port: http
+                      periodSeconds: 5
+                    livenessProbe:
+                      httpGet:
+                        path: /
+                        port: http
+                      periodSeconds: 20
+                    # Utilization = usage / request: the HPA needs these.
+                    resources:
+                      requests:
+                        cpu: 200m
+                        memory: 64Mi
+                      limits:
+                        memory: 128Mi
+        overlays/prod/hpa.yaml: |
+          # CPU is what saturates checkout: scale out at 70% of the request,
+          # keep 2 replicas minimum and cap at 10.
+          apiVersion: autoscaling/v2
+          kind: HorizontalPodAutoscaler
+          metadata:
+            name: checkout
+          spec:
+            scaleTargetRef:
+              apiVersion: apps/v1
+              kind: Deployment
+              name: checkout
+            minReplicas: 2
+            maxReplicas: 10
+            metrics:
+              - type: Resource
+                resource:
+                  name: cpu
+                  target:
+                    type: Utilization
+                    averageUtilization: 70
+            behavior:
+              scaleDown:
+                stabilizationWindowSeconds: 300
+      starter:
+        kind: kubernetes
+        kubernetes:
+          sources:
+            - kind: kustomize
+              path: base
+              environments:
+                prod: overlays/prod
+        files:
+          base/kustomization.yaml: |
+            apiVersion: kustomize.config.k8s.io/v1beta1
+            kind: Kustomization
+            resources:
+              - deployment.yaml
+              - service.yaml
+          base/deployment.yaml: |
+            apiVersion: apps/v1
+            kind: Deployment
+            metadata:
+              name: checkout
+            spec:
+              replicas: 1
+              selector:
+                matchLabels:
+                  app: checkout
+              template:
+                metadata:
+                  labels:
+                    app: checkout
+                spec:
+                  securityContext:
+                    runAsNonRoot: true
+                    runAsUser: 101
+                  automountServiceAccountToken: false
+                  containers:
+                    - name: api
+                      image: nginxinc/nginx-unprivileged:1.30-alpine
+                      ports:
+                        - name: http
+                          containerPort: 8080
+                      readinessProbe:
+                        httpGet:
+                          path: /
+                          port: http
+                        periodSeconds: 5
+                      livenessProbe:
+                        httpGet:
+                          path: /
+                          port: http
+                        periodSeconds: 20
+          base/service.yaml: |
+            apiVersion: v1
+            kind: Service
+            metadata:
+              name: checkout
+            spec:
+              selector:
+                app: checkout
+              ports:
+                - name: http
+                  port: 80
+                  targetPort: http
+          overlays/prod/kustomization.yaml: |
+            # Production: checkout in the pay-prod namespace with an autoscaler.
+            apiVersion: kustomize.config.k8s.io/v1beta1
+            kind: Kustomization
+            namespace: pay-prod
+            resources:
+              - ../../base
+              - namespace.yaml
+              - hpa.yaml
+          overlays/prod/namespace.yaml: |
+            apiVersion: v1
+            kind: Namespace
+            metadata:
+              name: pay-prod
+          overlays/prod/hpa.yaml: |
+            apiVersion: autoscaling/v2
+            kind: HorizontalPodAutoscaler
+            metadata:
+              name: checkout
+            spec:
+              scaleTargetRef:
+                apiVersion: apps/v1
+                kind: Deployment
+                name: checkout
+              minReplicas: 1
+              maxReplicas: 10
+              metrics:
+                - type: Resource
+                  resource:
+                    name: memory
+                    target:
+                      type: Utilization
+                      averageUtilization: 80
+      checks:
+        - id: valid
+          label: The prod overlay renders
+          type: validate
+          environment: prod
+        - id: requests
+          label: Containers request CPU and memory for the autoscaler
+          type: rules_clean
+          environment: prod
+          rules_clean:
+            codes: [k8s_no_requests, k8s_hpa_no_requests]
+            minSeverity: warning
+        - id: cpu-metric
+          label: The autoscaler scales on CPU
+          type: has
+          environment: prod
+          has:
+            kubernetes:
+              kind: HorizontalPodAutoscaler
+              name: checkout
+              where:
+                spec.metrics.*.resource.name: cpu
+        - id: no-memory-metric
+          label: Memory is not the scaling signal
+          type: has
+          environment: prod
+          has:
+            kubernetes:
+              kind: HorizontalPodAutoscaler
+              where:
+                spec.metrics.*.resource.name: memory
+              count:
+                max: 0
+        - id: cpu-target
+          label: The utilization target leaves headroom (50–80%)
+          type: has
+          environment: prod
+          has:
+            kubernetes:
+              kind: HorizontalPodAutoscaler
+              name: checkout
+              where:
+                spec.metrics.*.resource.target.averageUtilization:
+                  min: 50
+                  max: 80
+        - id: min-replicas
+          label: Scaling in keeps at least 2 replicas
+          type: has
+          environment: prod
+          has:
+            kubernetes:
+              kind: HorizontalPodAutoscaler
+              name: checkout
+              where:
+                spec.minReplicas:
+                  min: 2
+      adaptations:
+        aws: |
+          **EC2 Auto Scaling** target tracking on the metric that saturates (average CPU, ALB
+          `RequestCountPerTarget`), **Application Auto Scaling** for ECS services, DynamoDB and Lambda provisioned
+          concurrency; scale queue workers on SQS backlog per instance. Practice: `aws-alb-auto-scaling`.
+        azure: |
+          **Azure Monitor autoscale** rules on VM scale sets and App Service plans (CPU, memory, queue length,
+          custom metrics) with minimum/maximum instance counts; AKS combines the HPA with the cluster autoscaler.
+          Practice: `azure-aks-baseline`.
+        gcp: |
+          **Managed instance group autoscaler** with a CPU utilization target, load-balancing serving capacity or
+          Cloud Monitoring metrics (for example Pub/Sub backlog); Cloud Run scales on concurrent requests per
+          instance; GKE uses the HPA and cluster autoscaler.
+        oci: |
+          **Instance pool autoscaling**: metric-based policies on CPU or memory utilization with
+          minimum/maximum instances, or schedule-based policies for predictable peaks. Practice:
+          `oci-lb-instance-pool-autoscaling`.
+        docker: |
+          Compose doesn't autoscale: `deploy.replicas` is fixed. Size replicas and limits from a load test, and
+          move to an orchestrator (Kubernetes, a managed container service) when load varies.
+        kubernetes: |
+          **HorizontalPodAutoscaler** (`autoscaling/v2`) on CPU/memory utilization (needs requests) or custom and
+          external metrics; the cluster autoscaler adds nodes when pods can't be scheduled. Practice:
+          `kubernetes-resources-and-hpa`, and `kubernetes-autoscale-signal` to watch it scale under real load.
+      sources:
+        - title: AWS Well-Architected — REL07-BP01 Use automation when obtaining or scaling resources
+          url: https://docs.aws.amazon.com/wellarchitected/latest/framework/rel_adapt_to_changes_autoscale_adapt.html
+        - title: Azure Well-Architected — Designing a reliable scaling strategy
+          url: https://learn.microsoft.com/en-us/azure/well-architected/reliability/scaling
+        - title: Azure Monitor — Autoscale overview
+          url: https://learn.microsoft.com/en-us/azure/azure-monitor/autoscale/autoscale-overview
+        - title: Google Cloud Well-Architected — Take advantage of horizontal scalability
+          url: https://cloud.google.com/architecture/framework/reliability/horizontal-scalability
+        - title: Google Cloud — Autoscaling groups of instances
+          url: https://cloud.google.com/compute/docs/autoscaler
+        - title: OCI — Autoscaling instance pools
+          url: https://docs.oracle.com/en-us/iaas/Content/Compute/Tasks/autoscalinginstancepools.htm
+        - title: Kubernetes — Horizontal Pod Autoscaling
+          url: https://kubernetes.io/docs/tasks/run-application/horizontal-pod-autoscale/
+        - title: Kubernetes — Resource management for pods and containers
+          url: https://kubernetes.io/docs/concepts/configuration/manage-resources-containers/
+
+  - op: upsert
+    kind: challenge
+    id: global-zero-downtime-deploy
+    data:
+      provider: global
+      level: advanced
+      title: Deploy without downtime
+      summary: Turn a stop-everything rollout into a rolling update that only sends traffic to ready pods.
+      minutes: 35
+      tags: [reliability, deployments, rolling-update, probes, well-architected]
+      prerequisites: [global-multi-zone-ha]
+      runtime: design
+      problem: |
+        Every release of the `api` causes a short outage. Its production Deployment runs 3 replicas but uses
+        the **Recreate** strategy — all old pods stop before any new one starts — and its containers have **no
+        readiness probe**, so new pods receive traffic before they can answer.
+
+        The frameworks call for **safe deployment strategies**: change a little at a time (rolling, canary,
+        blue/green), keep serving capacity during the change, and only route users to instances that passed
+        their health checks, so a bad version can be stopped and rolled back before everyone is affected.
+
+        Graded on **Kubernetes** (design checks on the `prod` Kustomize overlay).
+      requirements:
+        - "The `api` Deployment uses a **RollingUpdate** that never removes a pod before its replacement is ready: `maxUnavailable: 0` (no `k8s_rollout_strategy` finding)."
+        - "Every serving container has a **readinessProbe** (no `k8s_no_readiness_probe` finding)."
+      hints:
+        - "Recreate is only needed when two versions can't run side by side (for example a ReadWriteOnce volume)."
+        - "`strategy: {type: RollingUpdate, rollingUpdate: {maxUnavailable: 0, maxSurge: 1}}` starts one new pod, waits until it is Ready, then removes an old one."
+        - "Ready means the readiness probe passes: `readinessProbe: {httpGet: {path: /, port: http}, periodSeconds: 5}`. Without it, a pod counts as ready as soon as its process starts."
+      solution: |
+        1. **Rolling instead of Recreate.** `RollingUpdate` with `maxUnavailable: 0` and `maxSurge: 1` keeps all 3
+           replicas serving while one extra new pod starts; capacity never drops during the rollout.
+        2. **Readiness gates traffic.** The Service only routes to pods whose readiness probe passes, and the
+           rollout only proceeds when the new pod is Ready. A broken version stalls the rollout instead of taking
+           traffic, and `kubectl rollout undo` brings the previous ReplicaSet back.
+        3. **Keep going safer.** `minReadySeconds` waits a little longer before counting a pod as available, a
+           PodDisruptionBudget protects capacity during node drains, and canary or blue/green releases (two
+           Deployments behind traffic splitting) limit the blast radius further.
+      solutionFiles:
+        base/deployment.yaml: |
+          apiVersion: apps/v1
+          kind: Deployment
+          metadata:
+            name: api
+          spec:
+            replicas: 1
+            selector:
+              matchLabels:
+                app: api
+            # One new pod at a time, never fewer ready pods than replicas.
+            strategy:
+              type: RollingUpdate
+              rollingUpdate:
+                maxUnavailable: 0
+                maxSurge: 1
+            minReadySeconds: 5
+            template:
+              metadata:
+                labels:
+                  app: api
+              spec:
+                securityContext:
+                  runAsNonRoot: true
+                  runAsUser: 101
+                automountServiceAccountToken: false
+                containers:
+                  - name: api
+                    image: nginxinc/nginx-unprivileged:1.30-alpine
+                    ports:
+                      - name: http
+                        containerPort: 8080
+                    # Traffic only reaches pods that answer.
+                    readinessProbe:
+                      httpGet:
+                        path: /
+                        port: http
+                      periodSeconds: 5
+                    livenessProbe:
+                      httpGet:
+                        path: /
+                        port: http
+                      periodSeconds: 20
+                    resources:
+                      requests:
+                        cpu: 50m
+                        memory: 64Mi
+                      limits:
+                        memory: 128Mi
+        overlays/prod/kustomization.yaml: |
+          # Production: three api replicas in the api-prod namespace, kept
+          # available during node drains by a PodDisruptionBudget.
+          apiVersion: kustomize.config.k8s.io/v1beta1
+          kind: Kustomization
+          namespace: api-prod
+          resources:
+            - ../../base
+            - namespace.yaml
+            - pdb.yaml
+          replicas:
+            - name: api
+              count: 3
+        overlays/prod/pdb.yaml: |
+          apiVersion: policy/v1
+          kind: PodDisruptionBudget
+          metadata:
+            name: api
+          spec:
+            maxUnavailable: 1
+            selector:
+              matchLabels:
+                app: api
+      starter:
+        kind: kubernetes
+        kubernetes:
+          sources:
+            - kind: kustomize
+              path: base
+              environments:
+                prod: overlays/prod
+        files:
+          base/kustomization.yaml: |
+            apiVersion: kustomize.config.k8s.io/v1beta1
+            kind: Kustomization
+            resources:
+              - deployment.yaml
+              - service.yaml
+          base/deployment.yaml: |
+            apiVersion: apps/v1
+            kind: Deployment
+            metadata:
+              name: api
+            spec:
+              replicas: 1
+              selector:
+                matchLabels:
+                  app: api
+              strategy:
+                type: Recreate
+              template:
+                metadata:
+                  labels:
+                    app: api
+                spec:
+                  securityContext:
+                    runAsNonRoot: true
+                    runAsUser: 101
+                  automountServiceAccountToken: false
+                  containers:
+                    - name: api
+                      image: nginxinc/nginx-unprivileged:1.30-alpine
+                      ports:
+                        - name: http
+                          containerPort: 8080
+                      resources:
+                        requests:
+                          cpu: 50m
+                          memory: 64Mi
+                        limits:
+                          memory: 128Mi
+          base/service.yaml: |
+            apiVersion: v1
+            kind: Service
+            metadata:
+              name: api
+            spec:
+              selector:
+                app: api
+              ports:
+                - name: http
+                  port: 80
+                  targetPort: http
+          overlays/prod/kustomization.yaml: |
+            # Production: three api replicas in the api-prod namespace.
+            apiVersion: kustomize.config.k8s.io/v1beta1
+            kind: Kustomization
+            namespace: api-prod
+            resources:
+              - ../../base
+              - namespace.yaml
+            replicas:
+              - name: api
+                count: 3
+          overlays/prod/namespace.yaml: |
+            apiVersion: v1
+            kind: Namespace
+            metadata:
+              name: api-prod
+      checks:
+        - id: valid
+          label: The prod overlay renders
+          type: validate
+          environment: prod
+        - id: rollout-rules
+          label: Rollouts keep serving and pods have readiness probes
+          type: rules_clean
+          environment: prod
+          rules_clean:
+            codes: [k8s_rollout_strategy, k8s_no_readiness_probe]
+            minSeverity: warning
+        - id: rolling-update
+          label: The rolling update never removes a pod before its replacement is ready
+          type: has
+          environment: prod
+          has:
+            kubernetes:
+              kind: Deployment
+              name: api
+              where:
+                spec.strategy.rollingUpdate.maxUnavailable: 0
+        - id: readiness
+          label: The api container has a readiness probe
+          type: has
+          environment: prod
+          has:
+            kubernetes:
+              kind: Deployment
+              name: api
+              where:
+                spec.template.spec.containers.api.readinessProbe:
+                  exists: true
+      adaptations:
+        aws: |
+          **CodeDeploy** blue/green or canary for ECS and Lambda (traffic shifting with automatic rollback on
+          alarms), rolling updates or **instance refresh** for Auto Scaling groups behind an ALB whose target
+          health checks gate traffic.
+        azure: |
+          **App Service deployment slots** (deploy to staging, warm up, swap), revision traffic splitting in
+          Container Apps, rolling upgrades of VM scale sets with health probes; progressive exposure and feature
+          flags per the safe deployment guidance.
+        gcp: |
+          **Rolling updates** of managed instance groups (`maxSurge`/`maxUnavailable`) with health checks, Cloud
+          Run **revisions with traffic splitting** for canaries, and Cloud Deploy canary or blue/green strategies.
+        oci: |
+          Update instance pools behind a load balancer whose health checks gate traffic, use OCI DevOps deployment
+          strategies (rolling, canary, blue/green) and make frequent, small, tested deployments.
+        docker: |
+          `docker compose up` replaces containers in place. Put a load balancer with health checks in front of
+          several replicas so a restarting one is skipped, and use `healthcheck:` so dependants wait for
+          readiness. Practice: `docker-lb-health-checks`.
+        kubernetes: |
+          Deployment `RollingUpdate` (`maxUnavailable: 0`, `maxSurge: 1`), readiness probes, `minReadySeconds`, a
+          PodDisruptionBudget and `kubectl rollout undo`; canaries with two Deployments or a service mesh/Gateway
+          traffic split. Practice: `kubernetes-zero-downtime-prod`, `kubernetes-readiness-probe`,
+          `kubernetes-health-probes`.
+      sources:
+        - title: AWS Well-Architected — OPS06-BP03 Employ safe deployment strategies
+          url: https://docs.aws.amazon.com/wellarchitected/latest/framework/ops_mit_deploy_risks_deploy_mgmt_sys.html
+        - title: AWS Well-Architected — REL08-BP05 Deploy changes with automation
+          url: https://docs.aws.amazon.com/wellarchitected/latest/framework/rel_tracking_change_management_automated_changemgmt.html
+        - title: Azure Well-Architected — Safe deployment practices
+          url: https://learn.microsoft.com/en-us/azure/well-architected/operational-excellence/safe-deployments
+        - title: Google Cloud Well-Architected — Automate and manage change
+          url: https://cloud.google.com/architecture/framework/operational-excellence/automate-and-manage-change
+        - title: OCI Well-Architected — Plan your deployment strategy
+          url: https://docs.oracle.com/en/solutions/oci-best-practices/plan-your-deployment-strategy1.html
+        - title: Kubernetes — Deployments
+          url: https://kubernetes.io/docs/concepts/workloads/controllers/deployment/
+        - title: Kubernetes — Performing a rolling update
+          url: https://kubernetes.io/docs/tutorials/kubernetes-basics/update/update-intro/
+        - title: Kubernetes — Configure liveness, readiness and startup probes
+          url: https://kubernetes.io/docs/tasks/configure-pod-container/configure-liveness-readiness-startup-probes/

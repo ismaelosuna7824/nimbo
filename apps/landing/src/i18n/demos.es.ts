@@ -16,6 +16,8 @@ export const demosEs: DemoStrings = {
     architecture: "Vistas Build y Architecture",
     docker: "Workspaces de Docker",
     kubernetes: "Workspaces de Kubernetes",
+    readiness: "Listo para producción",
+    learn: "Rutas y retos de Aprende",
   },
   common: {
     local: "Local",
@@ -173,6 +175,20 @@ export const demosEs: DemoStrings = {
     windowTitle: "Shop on Kubernetes",
     cluster: "Clúster local",
     convert: "Compose → K8s",
+  },
+  readiness: {
+    label:
+      "La pestaña Readiness de un workspace de Docker en Nimbo: la puntuación del entorno prod con las de fiabilidad, rendimiento, resiliencia, monitoreo, seguridad e higiene, una fila por servicio con sus revisiones, prueba de carga, incidentes y plan de capacidad, y la lista de pendientes. Después una prueba de carga con un incidente: se mata una réplica de la API a mitad de la prueba y el veredicto dice si el servicio sobrevivió, con la ventana del fallo sombreada en las gráficas.",
+    windowTitle: "Notes API · prod",
+    score: "Readiness",
+    incident: "Incidente",
+  },
+  learn: {
+    label:
+      "La página Learn de Nimbo: la ruta de Docker de principiante a experto, con sus pasos, los retos enlazados y la documentación oficial. Después el workflow de un reto tras Check my solution: el problema, los requisitos y los objetivos calificados, aprobados después de que Nimbo desplegara el proyecto, matara una réplica durante una prueba de carga y midiera la tasa de errores.",
+    windowTitle: "Learn · Docker",
+    roadmap: "Ruta",
+    challenge: "Reto",
   },
   modes: {
     label:

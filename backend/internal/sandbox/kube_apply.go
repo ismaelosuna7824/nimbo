@@ -461,7 +461,7 @@ func (m *Manager) applySources(ctx context.Context, rs *runState, kc *kubeClient
 				}
 			}
 			ref := kubeRef{APIVersion: str(obj, "apiVersion"), Kind: str(obj, "kind"), Namespace: ns, Name: name, Source: src.Index}
-			if err := kc.applyObject(ctx, obj); err != nil {
+			if err := applyWithRetry(ctx, serviceIPRetry, func() error { return kc.applyObject(ctx, obj) }); err != nil {
 				return nil, fmt.Errorf("apply %s: %s", ref.nodeID(), apiMessage(err))
 			}
 			m.logLine(rs, "stdout", ref.nodeID()+" applied")

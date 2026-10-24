@@ -39,10 +39,12 @@ interface ArcadeState {
   crt: boolean
   /** Bumped on each successful deploy; the celebration replays when it changes. */
   celebration: number
+  /** Banner of the current celebration ("Deployed!", "Challenge complete!"). */
+  celebrationLabel: string
   setArcade: (on: boolean) => void
   setCrt: (on: boolean) => void
   /** Plays the mascot's deploy celebration (only drawn while Arcade is on). */
-  celebrate: () => void
+  celebrate: (label?: string) => void
 }
 
 const initialArcade = read(STYLE_KEY) === "arcade"
@@ -54,6 +56,7 @@ export const useArcadeStore = create<ArcadeState>((set, get) => ({
   arcade: initialArcade,
   crt: initialCrt,
   celebration: 0,
+  celebrationLabel: "Deployed!",
   setArcade: (on) => {
     write(STYLE_KEY, on ? "arcade" : null)
     apply(on, get().crt)
@@ -64,7 +67,7 @@ export const useArcadeStore = create<ArcadeState>((set, get) => ({
     apply(get().arcade, on)
     set({ crt: on })
   },
-  celebrate: () => set((s) => ({ celebration: s.celebration + 1 })),
+  celebrate: (label = "Deployed!") => set((s) => ({ celebration: s.celebration + 1, celebrationLabel: label })),
 }))
 
 /** True while the Arcade (8-bit) style is on. */

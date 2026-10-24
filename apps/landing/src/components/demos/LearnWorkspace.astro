@@ -1,0 +1,28 @@
+---
+/** The Learn page's Docker roadmap, then a challenge workflow whose goals Nimbo graded. */
+import type { Lang } from "../../i18n"
+import challenge from "../../assets/screens/learn-challenge.png"
+import roadmap from "../../assets/screens/learn-roadmap.png"
+import { demoStrings } from "./lib/strings"
+import ScreenCycle from "./ScreenCycle.astro"
+
+interface Props {
+  lang: Lang
+  class?: string
+}
+
+const { lang, class: className } = Astro.props
+const s = demoStrings(lang).learn
+---
+
+<ScreenCycle
+  id="learn"
+  lang={lang}
+  label={s.label}
+  title={s.windowTitle}
+  class={className}
+  shots={[
+    { src: roadmap, label: s.roadmap },
+    { src: challenge, label: s.challenge },
+  ]}
+/>
