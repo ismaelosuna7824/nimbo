@@ -795,6 +795,102 @@ func TestRenameNode(t *testing.T) {
 	}
 }
 
+// TestRenameDeployedNodeMoved replays what the API does on a rename: a
+// `moved` block only when the old address is deployed. Every result must be
+// valid for Terraform: no source still declared in the configuration, no
+// self-move, one source per destination.
+func TestRenameDeployedNodeMoved(t *testing.T) {
+	moves := func(wf *model.Workflow) []string {
+		t.Helper()
+		addrs, to := map[string]bool{}, map[string]bool{}
+		for i := range wf.Nodes {
+			addrs[Address(&wf.Nodes[i])] = true
+		}
+		got := []string{}
+		for _, b := range wf.Other {
+			if b.Type != "moved" {
+				continue
+			}
+			f, d := getAttrValue(&b.Body, "from"), getAttrValue(&b.Body, "to")
+			if addrs[f] || f == d || to[d] {
+				t.Errorf("invalid moved block %s -> %s among %v", f, d, wf.Other)
+			}
+			to[d] = true
+			got = append(got, f+" -> "+d)
+		}
+		return got
+	}
+	rename := func(wf *model.Workflow, id, name string, deployed ...string) []string {
+		t.Helper()
+		n := &wf.Nodes[slices.IndexFunc(wf.Nodes, func(n model.Node) bool { return n.ID == id })]
+		from := Address(n)
+		if err := RenameNode(wf, id, name); err != nil {
+			t.Fatal(err)
+		}
+		if slices.Contains(deployed, from) {
+			AddMoved(wf, model.MovedAddress{From: from, To: Address(n)})
+		}
+		return moves(wf)
+	}
+	newWf := func() *model.Workflow {
+		return &model.Workflow{Nodes: []model.Node{
+			{ID: "q", Kind: model.KindResource, Type: "aws_sqs_queue", Name: "old"},
+			{ID: "m", Kind: model.KindModule, Type: "module", Name: "net"},
+		}}
+	}
+	check := func(step string, got []string, want ...string) {
+		t.Helper()
+		if want == nil {
+			want = []string{}
+		}
+		if !reflect.DeepEqual(got, want) {
+			t.Errorf("%s: moved = %q, want %q", step, got, want)
+		}
+	}
+
+	// Deployed at old: renames before the next deploy collapse into one
+	// block from the deployed address; renaming back removes it.
+	wf := newWf()
+	check("old -> mid", rename(wf, "q", "mid", "aws_sqs_queue.old"), "aws_sqs_queue.old -> aws_sqs_queue.mid")
+	check("mid -> new", rename(wf, "q", "new", "aws_sqs_queue.old"), "aws_sqs_queue.old -> aws_sqs_queue.new")
+	check("new -> old", rename(wf, "q", "old", "aws_sqs_queue.old"))
+
+	// Not deployed: no block.
+	check("undeployed", rename(wf, "q", "fresh"))
+
+	// Deployed at mid with an applied old -> mid: the new rename chains.
+	wf = newWf()
+	rename(wf, "q", "mid", "aws_sqs_queue.old")
+	check("chain", rename(wf, "q", "new", "aws_sqs_queue.mid"),
+		"aws_sqs_queue.old -> aws_sqs_queue.mid", "aws_sqs_queue.mid -> aws_sqs_queue.new")
+	check("chain back", rename(wf, "q", "mid", "aws_sqs_queue.mid"), "aws_sqs_queue.old -> aws_sqs_queue.mid")
+
+	// Deployed at the destination of an applied rename: renaming back
+	// replaces the old block instead of forming a cycle.
+	wf = newWf()
+	rename(wf, "q", "new", "aws_sqs_queue.old")
+	check("revert deployed", rename(wf, "q", "old", "aws_sqs_queue.new"), "aws_sqs_queue.new -> aws_sqs_queue.old")
+
+	// Module calls move as a whole.
+	check("module", rename(wf, "m", "vpc", "module.net"), "aws_sqs_queue.new -> aws_sqs_queue.old", "module.net -> module.vpc")
+
+	// Adding the same move twice keeps one block.
+	AddMoved(wf, model.MovedAddress{From: "module.net", To: "module.vpc"})
+	check("duplicate", moves(wf), "aws_sqs_queue.new -> aws_sqs_queue.old", "module.net -> module.vpc")
+
+	files, err := Export(wf, ExportOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var code strings.Builder
+	for _, src := range files {
+		code.Write(src)
+	}
+	if !strings.Contains(code.String(), "moved {\n  from = module.net\n  to   = module.vpc\n}") {
+		t.Errorf("export misses the moved block:\n%s", code.String())
+	}
+}
+
 func TestExportClientValues(t *testing.T) {
 	wf := &model.Workflow{
 		Terraform: &model.Body{},

@@ -370,6 +370,93 @@ func TestPatchNodeFile(t *testing.T) {
 	}
 }
 
+// stubDeployedState makes resources the sandbox state of workflow wfID
+// without Terraform: a state file plus the saved `terraform show -json` of
+// that exact file version.
+func stubDeployedState(t *testing.T, e *testEnv, wfID, resources string) {
+	t.Helper()
+	work := filepath.Join(e.home, "workflows", wfID, "work")
+	tfstate := filepath.Join(work, "terraform.tfstate")
+	writeFile(t, filepath.Join(work, ".terraform", "terraform.tfstate"), "{}")
+	writeFile(t, tfstate, `{"version":4}`)
+	info, err := os.Stat(tfstate)
+	if err != nil {
+		t.Fatal(err)
+	}
+	show, err := json.Marshal(map[string]any{
+		"modTime": info.ModTime().UnixNano(), "size": info.Size(),
+		"show": json.RawMessage(`{"values":{"root_module":{"resources":` + resources + `}}}`),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeFile(t, filepath.Join(work, ".nimbo", "state-show.json"), string(show))
+}
+
+func TestRenameDeployedNodeAddsMoved(t *testing.T) {
+	// A docker that does not exist: the stubbed state must come from the cache.
+	e := newEnvDocker(t, filepath.Join(t.TempDir(), "no-docker"))
+	wf := e.createEmpty("Renames")
+	var added struct {
+		NodeID string `json:"nodeId"`
+	}
+	e.mustCall(http.StatusCreated, "POST", "/workflows/"+wf.ID+"/nodes", map[string]string{"type": "aws_sqs_queue", "name": "jobs"}, &added)
+	jobs := added.NodeID
+	e.mustCall(http.StatusCreated, "POST", "/workflows/"+wf.ID+"/nodes", map[string]string{"type": "aws_sqs_queue", "name": "spare"}, &added)
+	spare := added.NodeID
+	stubDeployedState(t, e, wf.ID, `[{"address":"aws_sqs_queue.jobs[0]","mode":"managed","type":"aws_sqs_queue","name":"jobs","index":0,"values":{}}]`)
+
+	code := func() string {
+		t.Helper()
+		var tf struct {
+			Files map[string]string `json:"files"`
+		}
+		e.mustCall(http.StatusOK, "GET", "/workflows/"+wf.ID+"/terraform", nil, &tf)
+		var all strings.Builder
+		for _, src := range tf.Files {
+			all.WriteString(src)
+		}
+		return all.String()
+	}
+	rename := func(id, name string) {
+		t.Helper()
+		e.mustCall(http.StatusOK, "PATCH", "/workflows/"+wf.ID+"/nodes/"+id, map[string]string{"name": name}, nil)
+	}
+
+	rename(jobs, "work")
+	if got := code(); !strings.Contains(got, "moved {\n  from = aws_sqs_queue.jobs\n  to   = aws_sqs_queue.work\n}") {
+		t.Fatalf("renaming a deployed resource adds no moved block:\n%s", got)
+	}
+	rename(spare, "extra")
+	if got := code(); strings.Count(got, "moved {") != 1 {
+		t.Fatalf("renaming an undeployed resource must not add a moved block:\n%s", got)
+	}
+	rename(jobs, "jobs")
+	if got := code(); strings.Contains(got, "moved") {
+		t.Fatalf("renaming back must remove the moved block:\n%s", got)
+	}
+}
+
+func TestInstanceOf(t *testing.T) {
+	for _, c := range []struct {
+		addr, node string
+		want       bool
+	}{
+		{"aws_sqs_queue.jobs", "aws_sqs_queue.jobs", true},
+		{"aws_sqs_queue.jobs[0]", "aws_sqs_queue.jobs", true},
+		{`aws_sqs_queue.jobs["a"]`, "aws_sqs_queue.jobs", true},
+		{"aws_sqs_queue.jobs_dlq", "aws_sqs_queue.jobs", false},
+		{"module.net.aws_vpc.this", "module.net", true},
+		{`module.net["a"].aws_vpc.this`, "module.net", true},
+		{"module.network.aws_vpc.this", "module.net", false},
+		{"module.net.aws_sqs_queue.jobs", "aws_sqs_queue.jobs", false},
+	} {
+		if got := instanceOf(c.addr, c.node); got != c.want {
+			t.Errorf("instanceOf(%q, %q) = %v", c.addr, c.node, got)
+		}
+	}
+}
+
 func TestImportDirWithAssetsAndExport(t *testing.T) {
 	e := newEnv(t)
 	src := t.TempDir()

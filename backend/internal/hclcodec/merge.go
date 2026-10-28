@@ -197,7 +197,9 @@ func keepAutoFiles(prev, next *model.Workflow, resourceFile func(string) string)
 // RenameNode sets the name of a node and rewrites every reference to its old
 // address (node bodies, depends_on, variables, outputs, locals, providers,
 // `moved` destinations and other top-level blocks; `moved`/`removed` sources
-// keep naming historical addresses). It does not normalize wf.
+// keep naming historical addresses). A `moved` block left moving an address
+// to itself (renaming back to its source) is dropped. It adds no `moved`
+// block for the rename itself (see AddMoved) and does not normalize wf.
 func RenameNode(wf *model.Workflow, nodeID, newName string) error {
 	var node *model.Node
 	for i := range wf.Nodes {
@@ -238,6 +240,7 @@ func RenameNode(wf *model.Workflow, nodeID, newName string) error {
 		rw(&wf.Providers[i].Body)
 	}
 	rw(&model.Body{Attrs: wf.Locals})
+	other := wf.Other[:0]
 	for i := range wf.Other {
 		b := &wf.Other[i]
 		switch b.Type {
@@ -248,12 +251,38 @@ func RenameNode(wf *model.Workflow, nodeID, newName string) error {
 					a.Value.Expr = renameInExpr(a.Value.Expr, node, newName)
 				}
 			}
+			if to := compactExpr(getAttrValue(&b.Body, "to")); to != "" && to == compactExpr(getAttrValue(&b.Body, "from")) {
+				continue
+			}
 		default:
 			rw(&b.Body)
 		}
+		other = append(other, *b)
 	}
+	wf.Other = other
 	node.Name = newName
 	return nil
+}
+
+// AddMoved records that the resource or module call at m.From now lives at
+// m.To (a `moved` block), e.g. after renaming a deployed node. A block in
+// the opposite direction is dropped instead (renaming back), an identical
+// one is kept once, and other blocks already moving something to m.To are
+// pointed at m.From so they chain (old -> from -> to) instead of declaring
+// two sources for one address.
+func AddMoved(wf *model.Workflow, m model.MovedAddress) {
+	for i := range wf.Other {
+		b := &wf.Other[i]
+		if b.Type != "moved" || compactExpr(getAttrValue(&b.Body, "to")) != m.To || compactExpr(getAttrValue(&b.Body, "from")) == m.From {
+			continue
+		}
+		for j := range b.Body.Attrs {
+			if a := &b.Body.Attrs[j]; a.Name == "to" {
+				a.Value = model.Value{Expr: m.From}
+			}
+		}
+	}
+	addMoved(wf, m)
 }
 
 func renameInBody(b *model.Body, target *model.Node, newName string) {

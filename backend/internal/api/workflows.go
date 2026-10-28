@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"net/http"
@@ -523,6 +524,15 @@ func (s *Server) patchNode(w http.ResponseWriter, r *http.Request) error {
 	if err := decode(w, r, maxImportBody, &p); err != nil {
 		return err
 	}
+	var deployed []string
+	if p.Name != nil {
+		// Read before taking the workflow lock: a cold state cache runs
+		// `terraform show`.
+		var err error
+		if deployed, err = s.renameDeployed(r.Context(), r.PathValue("id"), r.PathValue("nodeId"), *p.Name); err != nil {
+			return err
+		}
+	}
 	wf, err := s.mutate(r.PathValue("id"), func(wf *model.Workflow) ([]model.Diagnostic, error) {
 		n, err := findNode(wf, r.PathValue("nodeId"))
 		if err != nil {
@@ -552,8 +562,14 @@ func (s *Server) patchNode(w http.ResponseWriter, r *http.Request) error {
 			n.Body = *p.Body
 		}
 		if p.Name != nil && *p.Name != n.Name {
+			from := hclcodec.Address(n)
 			if err := hclcodec.RenameNode(wf, n.ID, *p.Name); err != nil {
 				return nil, errorf(http.StatusConflict, "%v", err)
+			}
+			// A deployed resource or module call keeps its infrastructure: the
+			// next plan moves it instead of destroying and recreating it.
+			if slices.ContainsFunc(deployed, func(a string) bool { return instanceOf(a, from) }) {
+				hclcodec.AddMoved(wf, model.MovedAddress{From: from, To: hclcodec.Address(n)})
 			}
 		}
 		if p.File != nil {
@@ -572,6 +588,37 @@ func (s *Server) patchNode(w http.ResponseWriter, r *http.Request) error {
 		return err
 	}
 	return ok(w, wf)
+}
+
+// renameDeployed returns the deployed resource instance addresses of a
+// Terraform workflow's sandbox when renaming node to name changes its
+// address (nil otherwise, and for docker and Kubernetes workflows).
+func (s *Server) renameDeployed(ctx context.Context, wfID, nodeRef, name string) ([]string, error) {
+	wf, err := s.cfg.Store.Get(wfID)
+	if err != nil {
+		return nil, err
+	}
+	n, err := findNode(wf, nodeRef)
+	if err != nil || n.Name == name || n.Kind == model.KindData || wf.IsDocker() || wf.IsKubernetes() {
+		return nil, nil // errors surface in the mutation
+	}
+	st, err := s.cfg.Sandbox.State(ctx, wf)
+	if err != nil {
+		return nil, fmt.Errorf("read the deployed state to keep %s on rename: %w", hclcodec.Address(n), err)
+	}
+	addrs := make([]string, 0, len(st.Resources))
+	for _, r := range st.Resources {
+		addrs = append(addrs, r.Address)
+	}
+	return addrs, nil
+}
+
+// instanceOf reports whether the resource instance address addr belongs to
+// the resource or module call at node address: itself, one of its
+// count/for_each instances, or (module calls) a resource inside it.
+func instanceOf(addr, node string) bool {
+	rest, ok := strings.CutPrefix(addr, node)
+	return ok && (rest == "" || rest[0] == '[' || rest[0] == '.')
 }
 
 func (s *Server) deleteNode(w http.ResponseWriter, r *http.Request) error {
