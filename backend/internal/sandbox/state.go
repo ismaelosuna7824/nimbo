@@ -42,11 +42,19 @@ func (m *Manager) State(ctx context.Context, wf *model.Workflow) (*model.Deploye
 	if _, err := os.Stat(filepath.Join(work, ".terraform")); err != nil {
 		return emptyState(wf.ID), nil
 	}
-	key := stateKey{mod: info.ModTime(), size: info.Size()}
+	key := stateKey{mod: info.ModTime().UnixNano(), size: info.Size()}
 	m.mu.Lock()
 	cached, hit := m.stateCache[wf.ID]
 	m.mu.Unlock()
+	if !hit || cached.key != key {
+		// A restarted engine has no memory cache: the copy saved next to the state saves the Terraform container
+		// (seconds) when the app reopens the last workflow.
+		cached, hit = readStateShow(work)
+	}
 	if hit && cached.key == key {
+		m.mu.Lock()
+		m.stateCache[wf.ID] = cached
+		m.mu.Unlock()
 		return m.stateFrom(cached.raw, wf, info)
 	}
 	raw, err := m.showJSON(ctx, wf.ID)
@@ -57,10 +65,49 @@ func (m *Manager) State(ctx context.Context, wf *model.Workflow) (*model.Deploye
 	if err != nil {
 		return nil, err
 	}
+	entry := stateEntry{key: key, raw: raw}
 	m.mu.Lock()
-	m.stateCache[wf.ID] = stateEntry{key: key, raw: raw}
+	m.stateCache[wf.ID] = entry
 	m.mu.Unlock()
+	writeStateShow(work, entry)
 	return st, nil
+}
+
+// stateShowFile keeps the last `terraform show -json` of the workdir's state, with the state version it came from.
+const stateShowFile = ".nimbo/state-show.json"
+
+type stateShowDisk struct {
+	ModTime int64           `json:"modTime"` // terraform.tfstate mtime, Unix nanoseconds
+	Size    int64           `json:"size"`
+	Show    json.RawMessage `json:"show"`
+}
+
+func readStateShow(work string) (stateEntry, bool) {
+	src, err := os.ReadFile(filepath.Join(work, filepath.FromSlash(stateShowFile)))
+	if err != nil {
+		return stateEntry{}, false
+	}
+	var d stateShowDisk
+	if json.Unmarshal(src, &d) != nil || len(d.Show) == 0 {
+		return stateEntry{}, false
+	}
+	return stateEntry{key: stateKey{mod: d.ModTime, size: d.Size}, raw: d.Show}, true
+}
+
+// writeStateShow is best effort: without it the next engine start runs `terraform show` again.
+func writeStateShow(work string, e stateEntry) {
+	src, err := json.Marshal(stateShowDisk{ModTime: e.key.mod, Size: e.key.size, Show: e.raw})
+	if err != nil {
+		return
+	}
+	p := filepath.Join(work, filepath.FromSlash(stateShowFile))
+	if os.MkdirAll(filepath.Dir(p), 0o700) != nil {
+		return
+	}
+	tmp := p + ".tmp"
+	if os.WriteFile(tmp, src, 0o600) == nil {
+		_ = os.Rename(tmp, p)
+	}
 }
 
 // showJSON runs `terraform show -json [file]` in the workflow's workdir,
@@ -107,7 +154,7 @@ func (m *Manager) showJSON(ctx context.Context, wfID string, file ...string) ([]
 
 // stateKey identifies a version of terraform.tfstate.
 type stateKey struct {
-	mod  time.Time
+	mod  int64 // mtime, Unix nanoseconds
 	size int64
 }
 
