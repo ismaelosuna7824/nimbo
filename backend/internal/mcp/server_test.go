@@ -65,7 +65,7 @@ func sessionURL(t *testing.T) (*sdk.ClientSession, *events.Hub, string) {
 
 	ctx := context.Background()
 	serverT, clientT := sdk.NewInMemoryTransports()
-	ss, err := NewServer(srv.URL, "test").Connect(ctx, serverT, nil)
+	ss, err := NewServer(FixedEndpoint(srv.URL), "test").Connect(ctx, serverT, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

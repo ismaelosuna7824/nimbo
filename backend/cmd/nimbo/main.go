@@ -351,23 +351,20 @@ func mcpCmd(args []string) error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	url := ""
-	if data, err := os.ReadFile(daemonPath(home)); err == nil {
-		var df daemonFile
-		if json.Unmarshal(data, &df) == nil && df.URL != "" && reachable(df.URL) {
-			url = df.URL
-		}
+	if migrated {
+		logger.Warn("migrated legacy data directory", "home", home)
 	}
-	if url == "" {
-		if migrated {
-			logger.Warn("migrated legacy data directory", "home", home)
-		}
+	link := &daemonLink{home: home, logger: logger, start: func() (string, func(), error) {
 		d, err := startDaemon(home, "127.0.0.1:0", migrated, logger)
 		if err != nil {
-			return fmt.Errorf("start in-process daemon: %w", err)
+			return "", nil, err
 		}
-		defer d.shutdown()
-		url = d.url
+		return d.url, d.shutdown, nil
+	}}
+	defer link.close()
+	// Resolve now so a broken data directory fails at startup, not on the first tool call.
+	if _, err := link.URL(ctx); err != nil {
+		return err
 	}
-	return mcp.Run(ctx, url, version)
+	return mcp.Run(ctx, link, version)
 }

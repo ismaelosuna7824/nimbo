@@ -60,7 +60,7 @@ func TestDeployConfirmDestroy(t *testing.T) {
 
 	ctx := context.Background()
 	serverT, clientT := sdk.NewInMemoryTransports()
-	ss, err := NewServer(daemon.URL, "test").Connect(ctx, serverT, nil)
+	ss, err := NewServer(FixedEndpoint(daemon.URL), "test").Connect(ctx, serverT, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"strings"
@@ -14,14 +15,28 @@ import (
 	"github.com/ismaelosuna7824/nimbo/backend/internal/model"
 )
 
+// Endpoint gives the daemon URL (http://127.0.0.1:PORT) for each request: the desktop app's engine can start or stop
+// while an agent session lasts, and the agent must follow the engine the app uses.
+type Endpoint interface {
+	URL(ctx context.Context) (string, error)
+	// Unreachable reports that url refused the connection, so the next URL looks for another daemon.
+	Unreachable(url string)
+}
+
+// FixedEndpoint always targets one daemon.
+type FixedEndpoint string
+
+func (e FixedEndpoint) URL(context.Context) (string, error) { return string(e), nil }
+func (FixedEndpoint) Unreachable(string)                    {}
+
 // client calls the nimbo REST API.
 type client struct {
-	base string // http://127.0.0.1:PORT/api/v1
+	ep   Endpoint
 	http *http.Client
 }
 
-func newClient(baseURL string) *client {
-	return &client{base: strings.TrimRight(baseURL, "/") + "/api/v1", http: &http.Client{}}
+func newClient(ep Endpoint) *client {
+	return &client{ep: ep, http: &http.Client{}}
 }
 
 // apiError is a non-2xx daemon response.
@@ -57,26 +72,44 @@ func isNotFound(err error) bool {
 }
 
 func (c *client) do(ctx context.Context, method, path string, body, out any) error {
-	var rd io.Reader
+	var payload []byte
 	if body != nil {
 		data, err := json.Marshal(body)
 		if err != nil {
 			return err
 		}
-		rd = bytes.NewReader(data)
+		payload = data
 	}
-	req, err := http.NewRequestWithContext(ctx, method, c.base+path, rd)
-	if err != nil {
-		return err
-	}
-	// Lets the daemon tell the desktop app that an AI agent (not the user in
-	// the app) created a workflow, so the app can offer to open it.
-	req.Header.Set(model.ClientHeader, model.ClientMCP)
-	if body != nil {
-		req.Header.Set("Content-Type", "application/json")
-	}
-	res, err := c.http.Do(req)
-	if err != nil {
+	var res *http.Response
+	for attempt := 0; ; attempt++ {
+		base, err := c.ep.URL(ctx)
+		if err != nil {
+			return fmt.Errorf("nimbo daemon unreachable: %w", err)
+		}
+		var rd io.Reader
+		if payload != nil {
+			rd = bytes.NewReader(payload)
+		}
+		req, err := http.NewRequestWithContext(ctx, method, strings.TrimRight(base, "/")+"/api/v1"+path, rd)
+		if err != nil {
+			return err
+		}
+		// Lets the daemon tell the desktop app that an AI agent (not the user in
+		// the app) created a workflow, so the app can offer to open it.
+		req.Header.Set(model.ClientHeader, model.ClientMCP)
+		if body != nil {
+			req.Header.Set("Content-Type", "application/json")
+		}
+		res, err = c.http.Do(req)
+		if err == nil {
+			break
+		}
+		// A refused connection never reached a daemon, so retrying once against the one now running is safe.
+		var op *net.OpError
+		if attempt == 0 && errors.As(err, &op) && op.Op == "dial" {
+			c.ep.Unreachable(base)
+			continue
+		}
 		return fmt.Errorf("nimbo daemon unreachable: %w", err)
 	}
 	defer res.Body.Close()

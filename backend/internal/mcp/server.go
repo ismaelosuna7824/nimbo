@@ -81,18 +81,18 @@ Prompts: create_infrastructure, plan_structure, extend_workflow, import_terrafor
 
 Nodes are referenced by address (aws_sqs_queue.jobs) or ID. Workflows by ID, exact name or "current". Runs and load tests wait for completion by default.`
 
-// NewServer returns an MCP server whose tools call the daemon at baseURL
-// (e.g. "http://127.0.0.1:7788").
-func NewServer(baseURL, version string) *sdk.Server {
+// NewServer returns an MCP server whose tools call the daemon ep resolves
+// (e.g. FixedEndpoint("http://127.0.0.1:7788")).
+func NewServer(ep Endpoint, version string) *sdk.Server {
 	s := sdk.NewServer(&sdk.Implementation{Name: "nimbo", Title: "Nimbo", Version: version}, &sdk.ServerOptions{
 		Instructions: instructions,
 		Capabilities: &sdk.ServerCapabilities{},
 	})
-	newRegistry(newClient(baseURL)).installOn(s)
+	newRegistry(newClient(ep)).installOn(s)
 	return s
 }
 
 // Run serves MCP over stdin/stdout until the client disconnects or ctx ends.
-func Run(ctx context.Context, baseURL, version string) error {
-	return NewServer(baseURL, version).Run(ctx, &sdk.StdioTransport{})
+func Run(ctx context.Context, ep Endpoint, version string) error {
+	return NewServer(ep, version).Run(ctx, &sdk.StdioTransport{})
 }
