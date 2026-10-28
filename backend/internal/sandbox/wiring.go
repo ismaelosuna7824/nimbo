@@ -245,7 +245,10 @@ func providerSettings(c model.Cloud, body model.Body, azurermVersion string) (at
 			{"secret_key", hclString("test")},
 			{"skip_credentials_validation", "true"},
 			{"skip_metadata_api_check", "true"},
-			{"skip_requesting_account_id", "true"},
+			// The provider asks floci's STS for the account ID: resources that build their ID from it (Glue
+			// catalog databases and tables "<account>:<name>", …) got ":<name>" when it was skipped, which the
+			// next refresh refuses ("unexpected format for ID").
+			{"skip_requesting_account_id", "false"},
 			{"s3_use_path_style", "true"},
 		}
 		nullIfSet("profile", "token", "shared_config_files", "shared_credentials_files")

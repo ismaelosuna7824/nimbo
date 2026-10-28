@@ -80,7 +80,7 @@ func TestWiringAWSAliasesAndBackend(t *testing.T) {
 	for name, want := range map[string]string{
 		"skip_credentials_validation": "true",
 		"skip_metadata_api_check":     "true",
-		"skip_requesting_account_id":  "true",
+		"skip_requesting_account_id":  "false",
 		"s3_use_path_style":           "true",
 		"access_key":                  `"test"`,
 		"secret_key":                  `"test"`,
