@@ -27,6 +27,7 @@ flowchart LR
 | `backend/internal/catalog` | catalog | Embedded provider schemas, curated metadata, Floci support map, connection recipes, templates, schema validation |
 | `backend/internal/lint` | lint | Best-practice checks (`bp_*` info/warning diagnostics with why + fix), run on every save after schema validation; see "Best-practice checks" below |
 | `backend/internal/compliance` | compliance | Security benchmarks (CIS Foundations per cloud, CIS Docker, CIS Kubernetes) mapped onto the best-practice rules, grading of a design, attestations of manual controls, Markdown report; see "Compliance" below |
+| `backend/internal/wellarch` | wellarch | Curated Well-Architected guidance per platform (AWS, Azure, GCP, OCI, Docker, Kubernetes) by pillar, cross-referenced to rule codes; see "Well-Architected" below |
 | `backend/internal/netcheck` | netcheck | Network model of a workflow (deployed state or statically evaluated design), `net_*` configuration checks, reachability analyzer and live probes; see "netcheck" below |
 | `backend/internal/sandbox` | sandbox | Per-workflow Docker sandbox, Terraform runs in containers, deployed state |
 | `backend/internal/loadtest` | loadtest | Load engine, presets, target suggestions, results persistence |
@@ -657,6 +658,42 @@ submodule, each wrapping one resource), `bp_sensitive_not_marked` 3 (2),
 (terraform-aws-lambda's complete example calls the module ~15 times: about
 59 instances), every other rule 0. The 22 Terraform templates and a fresh workflow with every popular
 starter of each cloud have 0 findings (`lint` tests).
+
+Well-Architected rules (`lint/rules_wellarch.go`, categories `reliability`, `performance`, `cost`, `operations`; see
+[WELL_ARCHITECTED.md](WELL_ARCHITECTED.md)). Every `bp_*` rule carries `Pillars` (security, reliability, performance,
+cost, operations; most relevant first) from a per-category default plus per-rule overrides (`lint.go`
+`categoryPillars`, `rulePillars`). Production-only practices are opt-in so the local-sandbox templates stay clean;
+`GET /workflows/{id}/well-architected` runs them all. Attributes that are expressions Nimbo can't evaluate never fire;
+a scaling target, alarm or redrive linked through a variable, local, data source or module output counts as present.
+These rules are not in the corpus noise counts above (not re-measured yet).
+
+| Rule | Severity | Default | Trigger |
+|---|---|---|---|
+| `bp_rds_backup_retention` | warning | on | `aws_db_instance` with `backup_retention_period = 0` (replicas and Aurora skipped; unset = AWS's 1-day default) |
+| `bp_sqs_dlq` | info | on | `aws_sqs_queue` consumed by a Lambda event source mapping without `redrive_policy` / `aws_sqs_queue_redrive_policy` |
+| `bp_lambda_stream_on_failure` | info | on | Kinesis / DynamoDB / MSK event source mappings without `destination_config.on_failure` |
+| `bp_dynamodb_autoscaling` | info | on | `PROVISIONED` `aws_dynamodb_table` without an `aws_appautoscaling_target` |
+| `bp_ebs_gp3` | info | on | Explicit `gp2` on EBS volumes, instance / launch template block devices, `aws_db_instance.storage_type` |
+| `bp_rds_deletion_protection` | info | opt-in | `aws_db_instance` / `aws_rds_cluster` without `deletion_protection = true` |
+| `bp_rds_storage_autoscaling` | info | opt-in | `aws_db_instance` without `max_allocated_storage` |
+| `bp_dynamodb_pitr` | info | opt-in | `aws_dynamodb_table` without point-in-time recovery |
+| `bp_s3_versioning` | info | opt-in | `aws_s3_bucket` without enabled `aws_s3_bucket_versioning` (website buckets skipped) |
+| `bp_elasticache_failover` | info | opt-in | `aws_elasticache_replication_group` without automatic failover / Multi-AZ |
+| `bp_lambda_async_failure` | info | opt-in | Lambda invoked asynchronously (S3, SNS, EventBridge, Scheduler) without a DLQ or on-failure destination |
+| `bp_asg_single_az` / `bp_asg_single_instance` | info | opt-in | Auto Scaling group in one subnet/AZ; load-balanced group with `max_size` ≤ 1 |
+| `bp_ecs_circuit_breaker` / `bp_ecs_autoscaling` | info | opt-in | `aws_ecs_service` without a deployment circuit breaker; without an `aws_appautoscaling_target` (DAEMON skipped) |
+| `bp_cloudwatch_alarms` | info | opt-in | Lambda, RDS or load balancer with no `aws_cloudwatch_metric_alarm` on it |
+| `bp_ecs_container_insights` | info | opt-in | `aws_ecs_cluster` without Container Insights |
+| `bp_azure_db_ha` / `bp_azure_db_geo_backup` | info | opt-in | Flexible servers / `azurerm_mssql_database` without zone-redundant HA; without geo-redundant backup |
+| `bp_azure_storage_replication` | info | opt-in | `azurerm_storage_account` with `LRS` |
+| `bp_azure_zones` | info | opt-in | VM scale sets and AKS node pools with fewer than 2 `zones` |
+| `bp_azure_autoscale` | info | opt-in | S/P/I service plans and VMSS without `azurerm_monitor_autoscale_setting`; AKS pools without auto-scaling |
+| `bp_gcp_sql_ha` | info | opt-in | `google_sql_database_instance` not `REGIONAL` |
+| `bp_gcp_gke_regional` / `bp_gcp_gke_autoscaling` | info | opt-in | Zonal GKE cluster; node pool without `autoscaling` (Autopilot skipped) |
+| `bp_gcp_mig_autoscaling` | info | opt-in | Managed instance group without an autoscaler |
+| `bp_gcp_cloud_run_max_instances` | info | opt-in | `google_cloud_run_v2_service` without `scaling.max_instance_count` |
+| `bp_oci_db_backups` | info | opt-in | DB system / MySQL DB system with automatic backups off |
+| `bp_oci_instance_pool_autoscaling` | info | opt-in | `oci_core_instance_pool` without an autoscaling configuration |
 
 CIS OCI rules (`lint/rules_cis_oci.go`, backing `compliance/cis_oci.go`, CIS OCI Foundations v3.1.1 `cis-oci-3.1`):
 warnings `bp_oci_ssh_open`, `bp_oci_rdp_open` (security list / NSG ingress from 0.0.0.0/0 or ::/0, protocol all or TCP
@@ -2583,6 +2620,25 @@ canvases on top of their stable node objects (same array back when off;
 the reachability highlight wins on the Terraform canvas). It refetches on
 saves while shown (`use-shown-version.ts`) and when Settings change.
 
+### Well-Architected (`internal/wellarch`, `api/well_architected.go`, `mcp/wellarch.go`)
+
+Every lint, compose and kuberules rule carries `Pillars` (security,
+reliability, performance, cost, operations; most relevant first).
+`wellarch.Get(platform)` returns a platform's `Guide` (framework, sources,
+practices per pillar with the rule codes that check them).
+
+`GET /workflows/{id}/well-architected` re-derives the workflow with
+`gradingDiagnostics` (the compliance path) under settings that enable every
+rule — opt-in and user-disabled ones included — so Terraform gets lint +
+netcheck, docker the compose rules, Kubernetes kuberules. Each finding is
+listed once, under the first pillar of its rule (`net_*` findings use a
+table in the api layer: addressing/routing → reliability, exposure →
+security; rule-less codes → operations). A pillar is `ok` (no findings),
+`advice` (info only) or `risk` (warnings or errors). The workflow's own
+diagnostics still follow the user's settings. MCP:
+`well_architected_guidance`, `review_well_architected`, prompt
+`design_well_architected`. See [WELL_ARCHITECTED.md](WELL_ARCHITECTED.md).
+
 ### Kubernetes environments (`internal/kube/environments.go`, `envsettings.go`, `envcompare.go`)
 
 Environments are files on top of a source's base: a Kustomize overlay
@@ -3498,6 +3554,8 @@ Docker; the desktop onboarding wizard (`GET /setup`) and `nimbo doctor`
 | `PUT /workflows/{id}/compliance/attestations/{framework}/{control}` | `{note, by?}` → `Attestation{note, by?, at}`; manual controls only (400 for automatic ones or an empty note, 404 unknown control) |
 | `DELETE /workflows/{id}/compliance/attestations/{framework}/{control}` | → 204 (also when there was none) |
 | `GET /workflows/{id}/compliance/report?framework=&format=md` | → `text/markdown` attachment `<workflow>-<framework>-<date>.md` (framework: default the first that applies; 400 for another format) |
+| `GET /workflows/{id}/well-architected` | → `{workflowId, platforms, pillars: [{pillar, findings: (Diagnostic + title)[], counts: {error?, warning, info}, status}], guidance: [{platform, name, framework, sources}], note}`: every rule's findings grouped by pillar in `model.Pillars` order; status `ok`, `advice` or `risk`. See "Well-Architected" |
+| `GET /well-architected/{platform}` | → `wellarch.Guide` (`aws`, `azure`, `gcp`, `oci`, `docker`, `kubernetes`; 404 otherwise) |
 | `POST /workflows/{id}/modules/extract/preview` | `{nodeIds, name}` → `ModuleExtraction{name, source, inputs: ModuleIO[], outputs: ModuleIO[], moved: {from,to}[], providers, dependsOn, files}`; nothing is saved. 400 with the reason when the selection cannot be extracted, 409 when `modules/<name>` exists |
 | `POST /workflows/{id}/modules/extract` | `{nodeIds, name}` → `Workflow` (`hclcodec.ExtractModule`; the module files are written to the workflow's assets at `modules/<name>/`; same errors as the preview) |
 | `POST /workflows/{id}/modules/{nodeId}/inline` | → `Workflow` (`hclcodec.InlineModule`; then the module's `*.tf` and `README.md` are deleted, other files stay). 400 for non-local modules, count/for_each, clashes, whole-module references; 409 when another local module also calls the directory |

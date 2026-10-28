@@ -109,6 +109,7 @@ func registerTools(r *registry, t *tools) {
 	registerMonitoringTools(r, t)
 	registerReadinessTools(r, t)
 	registerComplianceTools(r, t)
+	registerWellArchitectedTools(r, t)
 	registerCapacityTools(r, t)
 	registerLearnTools(r, t)
 	registerChallengeTools(r, t)

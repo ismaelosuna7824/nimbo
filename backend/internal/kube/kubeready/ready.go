@@ -137,6 +137,8 @@ var reliability = []readiness.Check{
 		Pass: "Replicas are spread over nodes."},
 	{ID: "wiring", Title: "Services and references", Codes: []string{"k8s_selector_mismatch", "k8s_service_port", "k8s_ingress_backend", "k8s_unknown_ref", "k8s_deprecated_api", "k8s_pvc_storage_class", "k8s_local_image"},
 		Pass: "Services, Ingresses and references point at objects of the workflow."},
+	{ID: "storage", Title: "Persistent data", Codes: []string{"k8s_ephemeral_data"},
+		Pass: "Databases and brokers keep their data on PersistentVolumeClaims."},
 }
 
 var security = []readiness.Check{
@@ -162,7 +164,7 @@ var hygiene = []readiness.Check{
 }
 
 // scalingCodes are the rules the autoscaling item is made of.
-var scalingCodes = []string{"k8s_hpa_no_requests"}
+var scalingCodes = []string{"k8s_hpa_no_requests", "k8s_no_hpa"}
 
 func init() {
 	// The manifests item holds every error rule (the API server or the

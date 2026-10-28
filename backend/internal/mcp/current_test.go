@@ -165,7 +165,7 @@ func TestPrompts(t *testing.T) {
 		t.Fatal(err)
 	}
 	cat := PromptCatalog()
-	if len(res.Prompts) != len(cat) || len(cat) != 8 {
+	if len(res.Prompts) != len(cat) || len(cat) != 9 {
 		t.Fatalf("server lists %d prompts, catalog %d", len(res.Prompts), len(cat))
 	}
 	for i, p := range res.Prompts {
@@ -206,6 +206,13 @@ func TestPrompts(t *testing.T) {
 	}
 	if got := text("create_kubernetes_app", map[string]string{"request": "an API with PostgreSQL"}); !strings.Contains(got, "an API with PostgreSQL") || !strings.Contains(got, "review_kubernetes") || !strings.Contains(got, "readiness") {
 		t.Fatalf("create_kubernetes_app: %s", got)
+	}
+	if got := text("design_well_architected", map[string]string{"goal": "a highly available orders API", "platform": "azure"}); !strings.Contains(got, "a highly available orders API") || !strings.Contains(got, "Platform: azure") ||
+		!strings.Contains(got, "well_architected_guidance") || !strings.Contains(got, "review_well_architected") || !strings.Contains(got, "production parity") || !strings.Contains(got, "run_load_test") {
+		t.Fatalf("design_well_architected: %s", got)
+	}
+	if got := text("design_well_architected", map[string]string{"goal": "a shop"}); !strings.Contains(got, "default to aws") {
+		t.Fatalf("design_well_architected default platform: %s", got)
 	}
 	if _, err := cs.GetPrompt(ctx, &sdk.GetPromptParams{Name: "import_terraform_folder"}); err == nil || !strings.Contains(err.Error(), `"dir"`) {
 		t.Fatalf("missing required argument: %v", err)

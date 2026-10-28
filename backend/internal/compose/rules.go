@@ -29,7 +29,7 @@ const (
 )
 
 func rule(code, title, category string, sev model.Severity, description, docs, why string) Rule {
-	return Rule{model.BestPracticeRule{Code: code, Title: title, Category: category, Severity: sev, Description: description, Docs: docs}, why}
+	return Rule{model.BestPracticeRule{Code: code, Title: title, Category: category, Severity: sev, Description: description, Docs: docs, Pillars: rulePillars[code]}, why}
 }
 
 func optIn(r Rule) Rule {

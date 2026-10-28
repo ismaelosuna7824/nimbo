@@ -567,6 +567,16 @@ func DataCategory(image string) string {
 	return ""
 }
 
+// DataPaths are the directories where an image that holds data (see
+// dataServiceOf) keeps it; nil for other images and for images whose
+// data directory is unknown.
+func DataPaths(image string) []string {
+	if d := dataServiceOf(image); d != nil {
+		return d.paths
+	}
+	return nil
+}
+
 // dataServiceOf recognizes an image that holds data (nil otherwise): the
 // palette's databases, caches and brokers, else official images by name.
 func dataServiceOf(image string) *dataService {

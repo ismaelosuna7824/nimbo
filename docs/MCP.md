@@ -92,6 +92,7 @@ commands (e.g. `/mcp__nimbo__extend_workflow` in Claude Code).
 | `test_deployed_service` | `connection?` | Connections flow with explicit user confirmation before any traffic |
 | `create_docker_stack` | `request` | Template or `create_workflow kind "docker"` → data services from the palette → app services (starters or your Dockerfiles) → `connect_services` (service_healthy) → the Docker practices below → `review_docker` → `deploy` → endpoints + smoke load test + `get_docker_metrics` → `production_readiness` (for production) → summary |
 | `create_kubernetes_app` | `request` | Template, `convert_to_kubernetes` or `create_workflow kind "kubernetes"` → palette objects (images, charts, starters) → `connect_kubernetes` → the Kubernetes practices → `review_kubernetes` per environment → `deploy` → endpoints + smoke load test → `production_readiness` → summary |
+| `design_well_architected` | `goal`, `platform?` | `well_architected_guidance` → plan → build with secure, reliable and scalable defaults per pillar → `review_well_architected` (fix warnings, explain what stays) → `validate`/`deploy` locally → load test, failure scenarios and `production_readiness` where available → per-pillar summary |
 
 ## Recommended loop
 
@@ -698,6 +699,24 @@ Example: "Does this design meet CIS AWS?" → `compliance_report` → fix the
 violated controls' findings with the edit tools → `compliance_report` again;
 tell the user which manual controls they need to check and attest.
 
+## Well-Architected (pillar guidance and review)
+
+Agents design along the pillars AWS Well-Architected, Azure Well-Architected,
+the Google Cloud Architecture Framework and OCI Well-Architected share:
+security, reliability, performance (including scaling), cost and operations.
+Call `well_architected_guidance` at the start of a design and
+`review_well_architected` before finishing; prompt `design_well_architected`
+walks the loop. See [WELL_ARCHITECTED.md](WELL_ARCHITECTED.md).
+
+| Tool | Inputs | What it does |
+|---|---|---|
+| `well_architected_guidance` | `platform` (`aws`, `azure`, `gcp`, `oci`, `docker`, `kubernetes`; `azurerm`, `google`, `k8s`… accepted), `pillar?` | The platform's framework, sources and, per pillar, a summary and practices (title, why, how with resource types/attributes or compose/Kubernetes fields, the Nimbo rule codes that check it) |
+| `review_well_architected` | `workflow` | Runs every rule (opt-in ones and rules turned off in Settings included; Terraform also the `net_*` network checks) and groups findings by their rule's main pillar: status `ok` / `advice` (info only) / `risk` (warnings or errors), counts, findings (severity, code, rule title, node, file:line, why, fix, docs), the frameworks that apply, a summary and next steps |
+
+Production-only practices (multi-AZ, deletion protection, long backup
+retention) are info in a local sandbox: agents mention them and apply them
+when the user wants production parity.
+
 ## Access (permissions)
 
 Read and edit permissions structurally instead of writing policy JSON, role
@@ -813,6 +832,8 @@ Conventions).
 | `start_challenge` | `challenge`, `name?` | New workflow from a challenge's starter, linked to it |
 | `check_challenge` | `workflow`, `wait?` | Grade a challenge workflow for real (static checks, deploy, http, load, scenarios, readiness); per-check measurements, passed, score |
 | `compliance_report` | `workflow`, `framework?`, `markdown?` | Read-only pre-audit of the design against its platforms' CIS benchmarks: summary, counts, open controls with findings and guidance; `markdown` returns the exportable report |
+| `well_architected_guidance` | `platform`, `pillar?` | Well-Architected practices of a platform per pillar (why, how, rule codes); call before designing |
+| `review_well_architected` | `workflow` | Every rule's findings grouped by pillar with status ok/advice/risk; call before finishing, fix warnings first |
 | `get_access` | `workflow`, `node` | Structured permissions of a node (AWS policy statements, Azure role assignment, GCP IAM member/binding, OCI policy statements, Kubernetes RBAC) with least-privilege warnings |
 | `set_access` | `workflow`, `node`, provider structure | Write a node's permissions back from that structure; read-only parts are kept verbatim |
 | `grant_access` | `workflow`, `identity`, `resource`, `level?` | Give an identity Read/Write/Manage on a resource in the provider's model (lists the options without `level`) |

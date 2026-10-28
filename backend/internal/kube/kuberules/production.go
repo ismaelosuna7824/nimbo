@@ -368,3 +368,81 @@ func (c *checker) checkImageDigests() {
 		}
 	}
 }
+
+// checkEphemeralData: a Deployment or StatefulSet running a database or
+// message broker image should keep its data on a PersistentVolumeClaim;
+// in the container filesystem or an emptyDir every restart, rollout or
+// reschedule starts empty. (hostPath keeps data on the node and is
+// k8s_host_path.)
+func (c *checker) checkEphemeralData() {
+	for _, w := range c.workloads {
+		if w.o.kind != "Deployment" && w.o.kind != "StatefulSet" || c.persistent(w) {
+			continue
+		}
+		for _, ct := range w.containers() {
+			img := str(ct.n, "image")
+			paths := compose.DataPaths(img)
+			if cat := compose.DataCategory(img); !ct.serves(w) || cat != "database" && cat != "messaging" || len(paths) == 0 {
+				continue
+			}
+			fix := fmt.Sprintf("Mount a PersistentVolumeClaim on %s (a persistentVolumeClaim volume, or volumeClaimTemplates in a StatefulSet).", paths[0])
+			if w.o.kind == "StatefulSet" {
+				fix = fmt.Sprintf("Add spec.volumeClaimTemplates (e.g. {metadata: {name: data}, spec: {accessModes: [ReadWriteOnce], resources: {requests: {storage: 1Gi}}}}) and mount it on %s.", paths[0])
+			}
+			c.diag(model.SeverityWarning, "k8s_ephemeral_data", w.o, field(ct.path, "image"),
+				fmt.Sprintf("%s %s runs %s without a PersistentVolumeClaim: its data is lost when the pod restarts or moves", w.label(), ct.label(), img), fix)
+			break
+		}
+	}
+}
+
+// persistent reports whether w's pods keep data beyond their lifetime:
+// claim templates, a persistentVolumeClaim volume or a hostPath.
+func (c *checker) persistent(w *workload) bool {
+	if len(items(w.o.node, "spec", "volumeClaimTemplates")) > 0 {
+		return true
+	}
+	for _, v := range items(w.pod, "volumes") {
+		if get(v, "persistentVolumeClaim") != nil || get(v, "hostPath") != nil {
+			return true
+		}
+	}
+	return false
+}
+
+// checkAutoscaling (opt-in): in production-like environments a stateless
+// Deployment running 2+ replicas with cpu requests is ready for a
+// HorizontalPodAutoscaler; a fixed replica count is sized for the peak
+// (idle capacity) or for the average (overload at the peak).
+func (c *checker) checkAutoscaling() {
+	if !prodLike(c.in.env) {
+		return
+	}
+	for _, w := range c.workloads {
+		if w.o.kind != "Deployment" || c.hpaFor(w) != nil || c.stateful(w) {
+			continue
+		}
+		n := c.minReplicas(w)
+		if n < 2 {
+			continue // a single replica is k8s_single_replica
+		}
+		defaults, _ := c.limitRangeDefaults(w.o.namespace)
+		requests := false
+		for _, ct := range w.containers() {
+			if !ct.serves(w) {
+				continue
+			}
+			if len(missingRequests(ct.n, defaults, "cpu")) > 0 {
+				requests = false
+				break
+			}
+			requests = true
+		}
+		if !requests {
+			continue // missing requests are k8s_no_requests
+		}
+		c.diag(model.SeverityInfo, "k8s_no_hpa", w.o, "spec.replicas",
+			fmt.Sprintf("%s runs a fixed %d replicas in %s: no HorizontalPodAutoscaler scales it", w.label(), n, c.in.env),
+			fmt.Sprintf("Add a HorizontalPodAutoscaler: {spec: {scaleTargetRef: {apiVersion: apps/v1, kind: Deployment, name: %s}, minReplicas: %d, maxReplicas: %d, metrics: [{type: Resource, resource: {name: cpu, target: {type: Utilization, averageUtilization: 70}}}]}}.", w.o.name, n, 2*n))
+	}
+}

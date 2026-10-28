@@ -69,7 +69,7 @@ Steps:
 5. Wire nodes: list_connection_options, then connect with the best recipe (it adds IAM policies, permissions, event mappings).
 6. Fix every error diagnostic (update_node) and every best_practices finding an edit returns. Organize before deploying: each logical group with several resources becomes a local module with extract_module (dry_run=true first; snake_case name after the group: network, data, orders_api), called from the root through its inputs and outputs. Modules: never a single resource, no provider blocks, no nesting below the first level, every resource reachable from an output, environment-specific inputs without defaults, units in names (ram_size_gb), positive booleans (enable_x).
 7. Environments (when the user wants more than one): set_environment per environment with its non-secret values (secrets as secret env vars TF_VAR_<name> with secret_keys, never as values); with two or more the layout is environments (update_workflow layout to change it). Never use terraform.workspace.
-8. Call review_terraform: read its structure (states, resources per state, modules, nesting, backend) and fix the findings (warnings first), then validate.
+8. Call review_terraform: read its structure (states, resources per state, modules, nesting, backend) and fix the findings (warnings first), then review_well_architected for the per-pillar view (security, reliability, performance, cost, operations) and fix its warnings; then validate.
 9. deploy into the local sandbox; on failure read the log tail, fix and redeploy.
 10. list_load_targets and run_load_test with preset smoke to prove it works.
 11. Summarize for the user: the structure (workflows/layers, modules, environments and layout), what was built (nodes and how they connect), deployed endpoints/outputs, smoke-test latency and error rate, best-practice findings you deliberately left (and why), and next steps (e.g. a load test or export_terraform).
@@ -101,6 +101,44 @@ Steps:
 7. get_endpoints and try_endpoint on the Services and Ingress URLs, then list_load_targets + run_load_test with preset smoke. With an HPA in the deployed environment, run_load_test with preset autoscale and read its autoscaling verdict (late: lower the CPU target or raise minReplicas; maxed: raise maxReplicas; no_metrics: set cpu requests).
 8. production_readiness: resolve its open items per environment (add_monitoring for monitoring, a load test in each production-like environment for scaling, run_load_test with a scenario for resilience, plan_capacity) or tell the user which stay open.
 9. Summarize: objects and how they connect, URLs, health and smoke-test results, the readiness status per environment, findings left open and why, and how to stop it (destroy, kubernetes_cluster stop).`, req), nil
+	})
+
+	r.addPrompt(&sdk.Prompt{
+		Name:        "design_well_architected",
+		Title:       "Design Well-Architected",
+		Description: "Design infrastructure (Terraform on AWS, Azure, GCP or OCI, Docker Compose or Kubernetes) along the provider's Well-Architected pillars: secure, reliable and scalable defaults, reviewed per pillar and proven locally.",
+		Arguments: []*sdk.PromptArgument{
+			{Name: "goal", Description: "what to build, e.g. \"a highly available orders API with PostgreSQL\"", Required: true},
+			{Name: "platform", Description: "aws, azure, gcp, oci, docker or kubernetes (default: inferred from the goal or the open workflow, else aws)"},
+		},
+	}, func(a map[string]string) (string, error) {
+		goal, err := required(a, "goal")
+		if err != nil {
+			return "", err
+		}
+		platform := strings.TrimSpace(a["platform"])
+		if platform == "" {
+			platform = "infer it from the goal or the open workflow (get_open_workflow); default to aws"
+		}
+		return fmt.Sprintf(`Design this with the Nimbo tools, following the Well-Architected pillars (security, reliability, performance, cost, operations): %s
+Platform: %s.
+
+Steps:
+1. well_architected_guidance for the platform (every cloud the design uses): read each pillar's practices and the rule codes that check them. Tell the user in a few lines which practices shape the design.
+2. Plan the structure (plan_structure for Terraform; the create_docker_stack / create_kubernetes_app recipes for local workspaces): logical groups, environments, what is public and what stays private.
+3. Build with secure, reliable and scalable defaults:
+   - Security: least-privilege IAM scoped to the resources used, encryption at rest and in transit, private data tiers (no 0.0.0.0/0 to admin/database ports, databases unpublished or on 127.0.0.1, internal networks), secrets in secret stores/.env/Secrets, non-root containers.
+   - Reliability: health checks, backups with retention, restart policies or readiness/liveness probes, depends_on service_healthy, PodDisruptionBudgets; production-only practices (multi-AZ, deletion protection, long backup retention) are advice in the local sandbox: mention them and apply them when the user wants production parity.
+   - Performance and scaling: autoscaling (auto scaling groups, HPAs) or replicas sized from load tests, resource requests/limits, caches and queues to absorb spikes.
+   - Cost: right-sized instances and limits, lifecycle/retention policies, no idle capacity.
+   - Operations: tags/labels, log retention, monitoring (add_monitoring for docker/Kubernetes), everything as code with pinned versions.
+   Fix every error diagnostic and best_practices finding the edits return.
+4. review_well_architected: fix warnings (and errors) first, then the info that fits the goal; call it again until the risk pillars are clean. Explain every finding you leave and why.
+5. validate and deploy locally (Floci sandbox for Terraform, docker compose, or the workflow's k3s cluster); on failure read the logs, fix and redeploy.
+6. Prove it: list_load_targets + run_load_test (smoke, then load); for docker/Kubernetes, list_scenarios and run_load_test with a failure scenario (kill_replica, dependency_down) and production_readiness; plan_capacity for the target load where available.
+7. Summarize per pillar: what the design does for it, review status, findings left open and why, load-test and scenario results, and what production would add.
+
+Nothing touches a real cloud: everything runs locally.`, goal, platform), nil
 	})
 
 	r.addPrompt(&sdk.Prompt{

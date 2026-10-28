@@ -1498,7 +1498,7 @@ type BestPracticeSettings struct {
 type BestPracticeRule struct {
 	Code        string   `json:"code"` // "bp_*" (Terraform) or "dk_*" (docker)
 	Title       string   `json:"title"`
-	Category    string   `json:"category"` // inputs | versions | hardcoding | tagging | naming | security | structure | docker-build | docker-compose | docker-security
+	Category    string   `json:"category"` // inputs | versions | hardcoding | tagging | naming | security | structure | reliability | performance | cost | operations | docker-* | kubernetes-*
 	Severity    Severity `json:"severity"` // default severity (some findings of a rule may be lower)
 	Description string   `json:"description"`
 	// Docs links to the documentation of the practice.
@@ -1506,7 +1506,24 @@ type BestPracticeRule struct {
 	// DefaultOff rules only run when listed in EnabledRules (opt-in checks
 	// that would be noisy for most projects).
 	DefaultOff bool `json:"defaultOff,omitempty"`
+	// Pillars are the Well-Architected pillars the practice serves (AWS Well-Architected, Azure Well-Architected,
+	// Google Cloud Architecture Framework and OCI share them), most relevant first.
+	Pillars []Pillar `json:"pillars,omitempty"`
 }
+
+// Pillar is a Well-Architected pillar shared by the cloud frameworks.
+type Pillar string
+
+const (
+	PillarSecurity    Pillar = "security"
+	PillarReliability Pillar = "reliability"
+	PillarPerformance Pillar = "performance" // performance efficiency, including scaling
+	PillarCost        Pillar = "cost"
+	PillarOperations  Pillar = "operations" // operational excellence: observability, automation, change safety
+)
+
+// Pillars lists every pillar in display order.
+var Pillars = []Pillar{PillarSecurity, PillarReliability, PillarPerformance, PillarCost, PillarOperations}
 
 // AgentClient is an AI agent application Nimbo can register its MCP server
 // with (GET /agents).
