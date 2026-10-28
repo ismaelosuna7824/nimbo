@@ -16,6 +16,10 @@ import { SETTINGS_KEY, useSettings } from "./store"
 /** Display order and labels of the rule categories. */
 const CATEGORIES: { id: BestPracticeRule["category"]; label: string }[] = [
   { id: "security", label: "Security" },
+  { id: "reliability", label: "Reliability" },
+  { id: "performance", label: "Performance & scaling" },
+  { id: "cost", label: "Cost" },
+  { id: "operations", label: "Operations" },
   { id: "inputs", label: "Variables & outputs" },
   { id: "versions", label: "Versions" },
   { id: "hardcoding", label: "Hardcoded values" },

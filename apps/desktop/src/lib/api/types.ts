@@ -1798,6 +1798,10 @@ export interface BestPracticeRule {
     | "docker-build"
     | "docker-compose"
     | "docker-security"
+    | "reliability"
+    | "performance"
+    | "cost"
+    | "operations"
     | "kubernetes"
     | "kubernetes-reliability"
     | "kubernetes-security"
@@ -1810,6 +1814,8 @@ export interface BestPracticeRule {
   docs?: string
   /** Opt-in: only runs when listed in enabledRules. */
   defaultOff?: boolean
+  /** Well-Architected pillars the practice serves, most relevant first. */
+  pillars?: ("security" | "reliability" | "performance" | "cost" | "operations")[]
 }
 
 /** An AI agent app Nimbo can register its MCP server with (GET /agents). */
