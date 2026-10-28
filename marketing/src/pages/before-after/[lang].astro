@@ -26,7 +26,7 @@ const crop = (inset: string) => `object-view-box: inset(${inset})`;
 <html lang={lang}>
   <head>
     <meta charset="utf-8" />
-    <title>Nimbo: before → after ({lang})</title>
+    <title>Nimbo v0.13.0 ({lang})</title>
   </head>
   <body>
     <main class="cs-deck">
@@ -34,7 +34,7 @@ const crop = (inset: string) => `object-view-box: inset(${inset})`;
       <section class="cs-slide cs-center" data-slide="01-cover">
         <div class="cs-brand"><Mascot size={104} tile /></div>
         <p class="cs-wordmark">{t.cover.kicker}</p>
-        <h1 class="cs-hero">Nimbo: {t.before.toLowerCase()} <span class="cs-arrow">→</span> <span class="cs-accent">{t.after.toLowerCase()}</span></h1>
+        <h1 class="cs-hero" set:html={t.cover.title} />
         <p class="cs-sub" style="max-width: 860px; font-size: 28px" set:html={t.cover.sub} />
         <figure class="cs-shot cs-after cs-cover-shot">
           <img src={shot("mac-titlebar-full")} alt="" />
@@ -197,6 +197,7 @@ const crop = (inset: string) => `object-view-box: inset(${inset})`;
       <section class="cs-slide cs-center" data-slide="10-closing" style="justify-content: center; padding-bottom: 64px">
         <div class="cs-brand"><Mascot size={150} tile /></div>
         <p class="cs-hero" style="margin-top: 34px; font-size: 80px" set:html={t.closing.title} />
+        <p class="cs-sub" style="max-width: 900px; margin-top: 18px; font-size: 26px; text-align: center" set:html={t.closing.everything} />
         <p class="cs-badges">{t.closing.badges}</p>
         <ul class="cs-links">
           <li><Icon name="github" size={28} /><span>github.com/ismaelosuna7824/nimbo</span></li>

@@ -9,7 +9,7 @@ export const LANGS: readonly Lang[] = ["en", "es"];
 export interface CarouselCopy {
   before: string;
   after: string;
-  cover: { kicker: string; sub: string };
+  cover: { kicker: string; title: string; sub: string };
   editor: { kicker: string; title: string; note: string };
   toolbar: { kicker: string; title: string; toolbarNote: string; dockerNote: string };
   inspector: { kicker: string; title: string; sub: string };
@@ -18,7 +18,7 @@ export interface CarouselCopy {
   compliance: { kicker: string; title: string; sub: string };
   cicd: { kicker: string; title: string; items: string[] };
   nav: { kicker: string; title: string; sub: string; stats: { value: string; label: string }[]; note: string };
-  closing: { title: string; badges: string; foot: string };
+  closing: { title: string; everything: string; badges: string; foot: string };
   newTag: string;
 }
 
@@ -28,8 +28,9 @@ export const COPY: Record<Lang, CarouselCopy> = {
     after: "After",
     newTag: "New",
     cover: {
-      kicker: "What changed",
-      sub: "Same workflows. A redesigned editor, new navigation, and new tools to plan, break, audit and ship what you design.",
+      kicker: "New release",
+      title: "Nimbo <span class=\"cs-accent\">v0.13.0</span>",
+      sub: "What's new: a redesigned app, the plan on the canvas, live traffic and failure tests, CIS compliance and CI/CD export.",
     },
     editor: {
       kicker: "Before / after · Terraform editor",
@@ -89,7 +90,8 @@ export const COPY: Record<Lang, CarouselCopy> = {
       note: "Plus far fewer renders and API requests while you edit.",
     },
     closing: {
-      title: "Try <span class=\"cs-accent\">Nimbo</span>",
+      title: "Try <span class=\"cs-accent\">Nimbo v0.13.0</span>",
+      everything: "Design visually · deploy locally (AWS, Azure, GCP, OCI, Docker, Kubernetes) · load-test · real Terraform in and out · Learn · AI agents via MCP",
       badges: "Free · macOS · Windows · Linux",
       foot: "Open source · MIT · feedback and contributions welcome",
     },
@@ -99,8 +101,9 @@ export const COPY: Record<Lang, CarouselCopy> = {
     after: "Después",
     newTag: "Nuevo",
     cover: {
-      kicker: "Qué cambió",
-      sub: "Los mismos workflows. Un editor rediseñado, navegación nueva y herramientas nuevas para planear, romper, auditar y publicar lo que diseñas.",
+      kicker: "Nueva versión",
+      title: "Nimbo <span class=\"cs-accent\">v0.13.0</span>",
+      sub: "Lo nuevo: la app rediseñada, el plan en el canvas, tráfico en vivo y pruebas de fallos, cumplimiento CIS y exportación a CI/CD.",
     },
     editor: {
       kicker: "Antes / después · Editor de Terraform",
@@ -160,7 +163,8 @@ export const COPY: Record<Lang, CarouselCopy> = {
       note: "Y muchos menos renders y peticiones a la API mientras editas.",
     },
     closing: {
-      title: "Prueba <span class=\"cs-accent\">Nimbo</span>",
+      title: "Prueba <span class=\"cs-accent\">Nimbo v0.13.0</span>",
+      everything: "Diseña visualmente · despliega en local (AWS, Azure, GCP, OCI, Docker, Kubernetes) · pruebas de carga · Terraform real de ida y vuelta · Learn · agentes de IA por MCP",
       badges: "Gratis · macOS · Windows · Linux",
       foot: "Código abierto · MIT · comentarios y contribuciones bienvenidos",
     },
