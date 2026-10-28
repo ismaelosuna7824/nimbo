@@ -66,6 +66,7 @@ var rulePillars = map[string][]model.Pillar{
 	"bp_no_remote_backend":    {model.PillarReliability, model.PillarOperations},
 	"bp_state_too_large":      {model.PillarOperations, model.PillarPerformance},
 	"bp_workspace_branching":  {model.PillarOperations, model.PillarReliability},
+	"bp_count_over_list":      {model.PillarReliability, model.PillarOperations},
 
 	"bp_rds_minor_upgrade":          {model.PillarSecurity, model.PillarOperations},
 	"bp_rds_multi_az":               {model.PillarReliability},
@@ -197,6 +198,9 @@ var rules = []rule{
 	{documented(info("bp_workspace_branching", "No terraform.workspace branching", CategoryStructure,
 		"Expressions don't depend on terraform.workspace; environments get their own values and state instead of CLI workspaces."),
 		"https://developer.hashicorp.com/terraform/language/state/workspaces#when-not-to-use-multiple-workspaces"), checkWorkspaceBranching},
+	{documented(info("bp_count_over_list", "Lists use for_each, not count", CategoryReliability,
+		"Resources and module calls that create one instance per element of a list use for_each instead of count = length(list) with list[count.index], so removing or reordering an element doesn't destroy and recreate the instances after it."),
+		"https://developer.hashicorp.com/terraform/language/meta-arguments/count#when-to-use-for_each-instead-of-count"), checkCountOverList},
 }
 
 // info builds a rule's metadata with its pillars: rulePillars, else its
