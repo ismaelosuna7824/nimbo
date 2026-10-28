@@ -76,7 +76,7 @@ export default function App() {
           <NavRail />
           {/* `contain: layout` makes this the containing block of fixed descendants: the pages (fixed inset-0) and the
               editor's fixed sidebar fill the area right of the rail (and below the title bar) instead of the window.
-              In the macOS frame it is an inset panel with a rounded corner under the title bar, which clips them too. */}
+              In the desktop frame it is an inset panel with a rounded corner under the title bar, which clips them too. */}
           <div
             className={cn(
               "relative min-w-0 flex-1 [contain:layout]",

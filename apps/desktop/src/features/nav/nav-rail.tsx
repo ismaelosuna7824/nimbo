@@ -88,7 +88,7 @@ export function NavRail() {
   return (
     <nav
       aria-label="Main"
-      // With the macOS frame the content panel draws its own edge (see App); otherwise the rail does.
+      // With the desktop frame the content panel draws its own edge (see App); otherwise the rail does.
       className={cn(
         "relative z-50 flex w-13 shrink-0 flex-col items-center gap-1 bg-rail py-2 text-sidebar-foreground",
         !CUSTOM_TITLE_BAR && "border-r",
@@ -101,7 +101,7 @@ export function NavRail() {
       <OpenWorkflows editorShown={section === "workflow"} />
 
       <div className="mt-auto flex flex-col items-center gap-1 pt-1">
-        {/* The macOS frame has a command bar in the title bar: the rail doesn't repeat it there. */}
+        {/* The desktop frame has a command bar in the title bar: the rail doesn't repeat it there. */}
         {!CUSTOM_TITLE_BAR && (
           <RailItem label="Search" kbd={`${MOD_KEY} K`} icon={SearchIcon} onSelect={() => useUiStore.getState().setCommandOpen(true)} />
         )}

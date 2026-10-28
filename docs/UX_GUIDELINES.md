@@ -117,12 +117,14 @@ actions keep a visible label.
 Tokens live in `apps/desktop/src/index.css`; shared canvas card styles in `components/canvas-card.tsx`. Use them
 instead of one-off colors, shadows or radii.
 
-- **Window frame (macOS desktop app):** no native title bar. The traffic lights float over a 38px strip in the rail's
-  color (`features/nav/title-bar.tsx`), so rail and title bar read as one frame around the content, which is an
-  inset panel with a rounded top-left corner. The strip holds the command bar: it names the active workspace (its
-  icon and title, or the page shown) and opens ⌘K (the rail's Search item is hidden there); the strip drags the
-  window and zooms on double click. Full-window layers outside the app frame start below it
-  (`--app-top`). Windows, Linux and the browser keep their native frame and the rail's Search item.
+- **Window frame (desktop app, every OS):** no native title bar. A 38px strip in the rail's color
+  (`features/nav/title-bar.tsx`) makes rail and title bar read as one frame around the content, which is an inset
+  panel with a rounded top-left corner. On macOS the traffic lights float over its left end; on Windows and Linux the
+  window is undecorated (`tauri.windows.conf.json`, `tauri.linux.conf.json`) and the strip draws minimize, maximize
+  and close on its right end. The strip holds the command bar: it names the active workspace (its icon and title, or
+  the page shown) and opens ⌘K / Ctrl K (the rail's Search item is hidden there); the strip drags the window,
+  maximizes on double click and stays usable while a modal dialog is open. Full-window layers outside the app frame
+  start below it (`--app-top`). The browser keeps its own frame and the rail's Search item.
 
 - **Surfaces.** Neutrals carry a faint violet-blue tint. Lowest to highest: rail (`bg-rail`) < canvas (`bg-canvas`)
   < pages and panels (`bg-background`, `bg-sidebar`) < cards (`bg-card`) < popovers and dialogs (`bg-popover`).

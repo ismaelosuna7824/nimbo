@@ -69,8 +69,8 @@
  * Shadows come in three levels (--elevation-1..3): resting controls, cards, floating layers.
  */
 :root {
-    /* macOS desktop app: height of the custom title bar; --app-top is how far full-window layers (the setup wizard)
-       start from the top, so the traffic lights and the drag area stay visible over them. */
+    /* Desktop app: height of the custom title bar; --app-top is how far full-window layers (the setup wizard)
+       start from the top, so the window controls and the drag area stay visible over them. */
     --titlebar-h: 38px;
     --app-top: 0px;
     --background: oklch(0.992 0.002 280);
