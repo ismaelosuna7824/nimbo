@@ -30,6 +30,12 @@ type RunRequest struct {
 	Files       map[string][]byte // hclcodec.Export output
 	AssetsDir   string            // copied into the workdir before the run ("" = none)
 	Environment *model.Environment
+	// ConfirmDestroy (apply): the user agreed to what the plan of a run
+	// that ended RunNeedsConfirmation destroys, so that saved plan is
+	// applied as is. ConfirmRun names that run ("" = the workflow's newest
+	// run when it waits for confirmation).
+	ConfirmDestroy bool
+	ConfirmRun     string
 }
 
 type runState struct {
@@ -38,6 +44,11 @@ type runState struct {
 	cancel    context.CancelFunc
 	container string // current Terraform container
 	canceled  bool
+	// applied: the apply itself succeeded; a cancel after it (during the
+	// post-deploy check) leaves the run succeeded.
+	applied bool
+	// confirmed is the needs_confirmation run a confirmed apply applies.
+	confirmed *model.Run
 	secrets   []string
 	done      chan struct{}
 }
@@ -100,6 +111,15 @@ func (m *Manager) Run(ctx context.Context, req RunRequest) (*model.Run, error) {
 		cancel()
 		return nil, ErrRunActive
 	}
+	if req.Action == model.ActionApply && req.ConfirmDestroy {
+		confirmed, err := m.pendingRun(wfID, req.ConfirmRun)
+		if err != nil {
+			m.mu.Unlock()
+			cancel()
+			return nil, err
+		}
+		rs.confirmed = confirmed
+	}
 	sb.active = rs
 	m.runs[rs.run.ID] = rs
 	snap := m.snapshot(rs, false)
@@ -156,9 +176,12 @@ func (m *Manager) execute(ctx context.Context, rs *runState, steps func(context.
 	rs.run.EndedAt = &end
 	var final string
 	switch {
-	case rs.canceled:
+	case rs.canceled && !rs.applied:
 		rs.run.Status = model.RunCanceled
 		final = "Run canceled."
+	case errors.Is(err, errNeedsConfirmation):
+		rs.run.Status = model.RunNeedsConfirmation
+		final = fmt.Sprintf("Nothing was applied: the plan destroys %d deployed resource(s) (replace or delete). Review them and confirm to apply exactly this plan.", len(rs.run.Destructive))
 	case err != nil:
 		rs.run.Status = model.RunFailed
 		rs.run.Error = err.Error()
@@ -270,8 +293,9 @@ func (m *Manager) runSteps(ctx context.Context, rs *runState, req RunRequest) er
 		args = []string{"plan", "-input=false", "-no-color", "-out=" + planFile}
 		defer os.Remove(filepath.Join(work, filepath.FromSlash(planFile)))
 	case model.ActionApply:
-		args = []string{"apply", "-auto-approve", "-input=false", "-no-color"}
+		return m.applySteps(ctx, rs, req, work, env, userEnv)
 	case model.ActionDestroy:
+		removePendingPlans(work) // they describe a state the destroy ends
 		args = []string{"destroy", "-auto-approve", "-input=false", "-no-color"}
 	}
 	m.logLine(rs, "system", "$ terraform "+strings.Join(args, " "))
@@ -286,7 +310,7 @@ func (m *Manager) runSteps(ctx context.Context, rs *runState, req RunRequest) er
 	if req.Action == model.ActionPlan {
 		// The plan itself succeeded: without the per-resource changes the run
 		// still reports the summary.
-		changes, err := m.readPlan(ctx, wf)
+		changes, err := m.readPlanFile(ctx, wf, planFile)
 		if err != nil {
 			if ctx.Err() != nil {
 				return ctx.Err()
@@ -425,6 +449,12 @@ func (m *Manager) ensurePluginCache(ctx context.Context) error {
 // terraform runs one Terraform command in a container joined to the pod and
 // streams its output into the run log. It returns the exit code.
 func (m *Manager) terraform(ctx context.Context, rs *runState, step string, env, userEnv []string, tfArgs ...string) (int, error) {
+	return m.terraformTo(ctx, rs, step, env, userEnv, func(stream, line string) { m.logLine(rs, stream, line) }, tfArgs...)
+}
+
+// terraformTo is terraform with each output line handed to out (called
+// from two goroutines, stdout and stderr) instead of the run log.
+func (m *Manager) terraformTo(ctx context.Context, rs *runState, step string, env, userEnv []string, out func(stream, line string), tfArgs ...string) (int, error) {
 	if err := ctx.Err(); err != nil {
 		return 0, err
 	}
@@ -479,7 +509,7 @@ func (m *Manager) terraform(ctx context.Context, rs *runState, step string, env,
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			scanLines(r, func(line string) { m.logLine(rs, stream, line) })
+			scanLines(r, func(line string) { out(stream, line) })
 		}()
 	}
 	wg.Wait()

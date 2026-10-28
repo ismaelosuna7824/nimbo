@@ -21,7 +21,7 @@ Recommended loop:
 3. add_node for each resource; set attributes as HCL expressions (strings must be quoted: "\"my-bucket\"").
 4. list_connection_options + connect to wire nodes (curated recipes add IAM policies, event source mappings, permissions). References between nodes are what create edges.
 5. Check diagnostics returned by every edit (get_workflow shows all); fix errors with update_node. Fix the best_practices findings an edit returns right away.
-6. validate, then deploy (terraform apply into the local sandbox). Read the log tail on failure, fix, and retry.
+6. validate, then deploy (terraform apply into the local sandbox). Read the log tail on failure, fix, and retry. A deploy whose plan would delete or replace already-deployed resources applies nothing and returns status needs_confirmation with the list (destructive: address, action, the attributes forcing each replacement): show it to the user and call deploy again with confirm_destroy=true only after they agree; it applies exactly that plan (if the workflow changed since, it returns a new list to confirm). A deploy's drift lists resources that still change right after it (every deploy would change them again): fix them with each item's hint.
 7. list_load_targets, then run_load_test (start with preset smoke, then load/stress) and report latency, throughput, error rate and threshold results.
 8. export_terraform to a directory when the user wants the code. get_terraform shows it inline; apply_terraform_code edits by code (every block stays in the file you write it in).
 

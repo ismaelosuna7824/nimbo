@@ -22,11 +22,13 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip"
 import { errorMessage } from "@/components/errors"
 import { api } from "@/lib/api/client"
-import type { PlanSummary, Run, RunAction } from "@/lib/api/types"
+import type { PlanSummary, Run, RunAction, WorkflowNode } from "@/lib/api/types"
 import { cn } from "@/lib/utils"
 import { useWorkflowStore } from "@/state/workflow-store"
 import { latestPlan } from "@/features/plan/plan"
 import { showPlanOnCanvas } from "@/features/plan/plan-store"
+import { watchApply } from "@/features/toolbar/actions"
+import { useUiStore } from "@/features/toolbar/ui-store"
 import { StatusBadge } from "../components/status-badge"
 import { editWorkflow } from "../lib/edit"
 import { durationBetween, formatDuration, formatRelative } from "../lib/format"
@@ -94,6 +96,7 @@ export function DeployTab() {
       const run = await api.startRun(workflow.id, action, workflow.activeEnvironment)
       const s = useWorkflowStore.getState()
       if (!s.runs.some((r) => r.id === run.id)) useWorkflowStore.setState({ runs: [run, ...s.runs] })
+      if (action === "apply") watchApply(run.id)
       setSelectedRunId(run.id)
       setView("logs")
     } catch (err) {
@@ -237,7 +240,12 @@ export function DeployTab() {
         </div>
         <TabsContent value="logs" className="min-h-0">
           {selectedRun ? (
-            <RunLog key={selectedRun.id} run={selectedRun} />
+            <div className="flex h-full min-h-0 flex-col">
+              <RunFindings run={selectedRun} />
+              <div className="min-h-0 flex-1">
+                <RunLog key={selectedRun.id} run={selectedRun} />
+              </div>
+            </div>
           ) : (
             <Empty className="h-full">
               <EmptyHeader>
@@ -318,4 +326,70 @@ function RunRow({ run, selected, onSelect }: { run: Run; selected: boolean; onSe
       </div>
     </button>
   )
+}
+
+/** A node's name on the canvas, when the address still belongs to one. */
+function nodeName(nodes: WorkflowNode[] | undefined, nodeId: string | undefined) {
+  const node = nodeId ? nodes?.find((n) => n.id === nodeId) : undefined
+  return node ? (node.label ?? node.name) : undefined
+}
+
+/**
+ * What a finished apply leaves to do, above its log: confirm a deploy that would destroy existing resources
+ * (needs_confirmation), or resources that still change right after a successful deploy (drift). Both are warnings.
+ */
+function RunFindings({ run }: { run: Run }) {
+  const nodes = useWorkflowStore((s) => s.workflow?.nodes)
+  if (run.action !== "apply") return null
+  if (run.status === "needs_confirmation" && run.destructive && run.destructive.length > 0) {
+    const n = run.destructive.length
+    return (
+      <div
+        className="m-2 mb-0 flex shrink-0 items-center gap-2 rounded-md border border-amber-500/40 bg-amber-500/10 p-2 text-xs text-amber-800 dark:text-amber-300"
+        data-testid="deploy-needs-confirmation"
+      >
+        <TriangleAlert className="size-3.5 shrink-0" />
+        <span className="min-w-0 flex-1">
+          Waiting for your confirmation: this deploy would destroy {n} resource{n === 1 ? "" : "s"}.
+        </span>
+        <Button size="xs" variant="outline" onClick={() => useUiStore.getState().setConfirmDeployRun(run.id)}>
+          Review…
+        </Button>
+      </div>
+    )
+  }
+  if (run.status === "succeeded" && run.drift && run.drift.length > 0) {
+    return (
+      <div
+        className="m-2 mb-0 flex max-h-40 shrink-0 gap-2 overflow-y-auto rounded-md border border-amber-500/40 bg-amber-500/10 p-2 text-xs text-amber-800 dark:text-amber-300"
+        data-testid="deploy-drift"
+      >
+        <TriangleAlert className="mt-0.5 size-3.5 shrink-0" />
+        <div className="flex min-w-0 flex-1 flex-col gap-1">
+          <p className="font-medium">These resources still change after deploy:</p>
+          <ul className="flex flex-col gap-1">
+            {run.drift.map((d) => {
+              const label = nodeName(nodes, d.nodeId)
+              return (
+                <li key={d.address} className="min-w-0">
+                  <span className="flex min-w-0 items-baseline gap-1.5">
+                    {label && <span className="shrink-0 font-medium">{label}</span>}
+                    <span className="min-w-0 truncate font-mono text-[11px]" title={d.address}>
+                      {d.address}
+                    </span>
+                    {d.attributes.length > 0 && (
+                      <span className="min-w-0 truncate font-mono text-[11px] opacity-80">{d.attributes.join(", ")}</span>
+                    )}
+                  </span>
+                  <span className="opacity-80">{d.hint}</span>
+                </li>
+              )
+            })}
+          </ul>
+          <p className="opacity-80">The next deploy would change them again.</p>
+        </div>
+      </div>
+    )
+  }
+  return null
 }

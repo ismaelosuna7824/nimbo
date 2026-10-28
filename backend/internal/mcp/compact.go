@@ -438,21 +438,32 @@ type runView struct {
 	ExitCode    int                `json:"exit_code"`
 	Plan        *model.PlanSummary `json:"plan,omitempty"`
 	Error       string             `json:"error,omitempty"`
-	Log         []string           `json:"log_tail,omitempty"`
-	Deployed    *stateView         `json:"deployed,omitempty"`
-	Hint        string             `json:"hint,omitempty"`
+	// Destructive: a needs_confirmation deploy's deletes and replacements.
+	Destructive []model.DestructiveChange `json:"destructive,omitempty"`
+	// Drift: resources a succeeded deploy still changes.
+	Drift    []model.DriftChange `json:"drift,omitempty"`
+	Log      []string            `json:"log_tail,omitempty"`
+	Deployed *stateView          `json:"deployed,omitempty"`
+	Hint     string              `json:"hint,omitempty"`
 }
 
 const logTail = 60
 
 func viewRun(r *model.Run) runView {
-	v := runView{ID: r.ID, Action: r.Action, Environment: r.Environment, Status: r.Status, ExitCode: r.ExitCode, Plan: r.Plan, Error: r.Error}
+	v := runView{ID: r.ID, Action: r.Action, Environment: r.Environment, Status: r.Status, ExitCode: r.ExitCode, Plan: r.Plan, Error: r.Error,
+		Destructive: r.Destructive, Drift: r.Drift}
 	lines := r.Log
 	if len(lines) > logTail {
 		lines = lines[len(lines)-logTail:]
 	}
 	for _, l := range lines {
 		v.Log = append(v.Log, l.Text)
+	}
+	switch {
+	case r.Status == model.RunNeedsConfirmation:
+		v.Hint = fmt.Sprintf("Nothing was applied: this deploy would delete or replace %d deployed resource(s) (see destructive; their data in the sandbox is lost). Show the list to the user and ask; only after they agree call deploy again with confirm_destroy=true, which applies exactly this plan.", len(r.Destructive))
+	case len(r.Drift) > 0:
+		v.Hint = fmt.Sprintf("Deployed, but %d resource(s) still change right after the deploy (see drift), so every deploy would change them again: fix them with each item's hint.", len(r.Drift))
 	}
 	return v
 }

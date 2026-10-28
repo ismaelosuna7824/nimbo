@@ -19,6 +19,7 @@ const STATUS: Record<RunStatus | SandboxState | LoadTestStatus, { tone: Tone; la
   succeeded: { tone: "ok", label: "Succeeded" },
   failed: { tone: "bad", label: "Failed" },
   canceled: { tone: "idle", label: "Canceled" },
+  needs_confirmation: { tone: "warn", label: "Needs confirmation" },
   absent: { tone: "idle", label: "Not created" },
   starting: { tone: "busy", label: "Starting" },
   stopped: { tone: "idle", label: "Stopped" },

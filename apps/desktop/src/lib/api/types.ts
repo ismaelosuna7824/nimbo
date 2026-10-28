@@ -728,7 +728,11 @@ export interface SandboxStatus {
 export type RunAction = "validate" | "plan" | "apply" | "destroy" | ComposeRunAction | KubeClusterRunAction
 /** Kubernetes workspaces: lifecycle of the workflow's local cluster (up/down/restart are shared with docker). */
 export type KubeClusterRunAction = "cluster-stop" | "cluster-start" | "cluster-delete"
-export type RunStatus = "queued" | "running" | "succeeded" | "failed" | "canceled"
+/**
+ * needs_confirmation: an apply run whose plan would delete or replace resources that exist in the sandbox; nothing
+ * was applied (terminal, not a failure). A confirmed apply (confirmDestroy) applies exactly its saved plan.
+ */
+export type RunStatus = "queued" | "running" | "succeeded" | "failed" | "canceled" | "needs_confirmation"
 
 export interface LogLine {
   t: string
@@ -777,6 +781,32 @@ export interface PlannedChange {
   attributes?: AttributeChange[]
 }
 
+/** A resource instance the plan of an apply would destroy (delete, or replace = destroy and re-create). */
+export interface DestructiveChange {
+  address: string
+  nodeId?: string
+  action: "delete" | "replace"
+  /** Terraform's action_reason: "replace_because_cannot_update", "replace_because_tainted", "replace_by_request",
+   *  "delete_because_no_resource_config" (removed from the canvas), "delete_because_no_module",
+   *  "delete_because_count_index", "delete_because_each_key", … */
+  cause?: string
+  /** Replace: the attributes whose change forces it (top-level names). */
+  reasons?: string[]
+}
+
+/** A resource that the plan right after a successful apply still wants to change (perpetual diff). */
+export interface DriftChange {
+  address: string
+  nodeId?: string
+  /** Usually "update", can be "replace". */
+  action: PlanAction
+  /** Changed top-level attribute names. */
+  attributes: string[]
+  cause: "json_normalization" | "dynamic_value" | "default_tags" | "other"
+  /** One sentence fix suggestion (English, ready to show). */
+  hint: string
+}
+
 export interface Run {
   id: string
   workflowId: string
@@ -798,6 +828,13 @@ export interface Run {
   workload?: string
   removeVolumes?: boolean
   deleteCluster?: boolean
+  /** needs_confirmation apply runs: what the plan would destroy (kept in lists and run.status events). */
+  destructive?: DestructiveChange[]
+  /** Succeeded apply runs: resources the post-deploy check plan still changes ("the next deploy would change them
+   *  again"). Absent when the check found nothing, was skipped or could not run. */
+  drift?: DriftChange[]
+  /** A confirmed apply: the needs_confirmation run whose saved plan it applied. */
+  planRunId?: string
 }
 
 export interface DeployedResource {

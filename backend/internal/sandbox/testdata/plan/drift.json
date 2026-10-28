@@ -1,0 +1,111 @@
+{
+  "format_version": "1.2",
+  "terraform_version": "1.14.0",
+  "resource_changes": [
+    {
+      "address": "aws_iam_policy.read",
+      "mode": "managed",
+      "type": "aws_iam_policy",
+      "name": "read",
+      "provider_name": "registry.terraform.io/hashicorp/aws",
+      "change": {
+        "actions": ["update"],
+        "before": {"arn": "arn:aws:iam::000000000000:policy/read", "name": "read", "policy": "{\"Statement\":[{\"Action\":\"s3:GetObject\",\"Effect\":\"Allow\",\"Resource\":\"*\"}],\"Version\":\"2012-10-17\"}"},
+        "after": {"arn": "arn:aws:iam::000000000000:policy/read", "name": "read", "policy": "{\n  \"Version\": \"2012-10-17\",\n  \"Statement\": [{\"Effect\": \"Allow\", \"Action\": [\"s3:GetObject\"], \"Resource\": \"*\"}]\n}\n"},
+        "after_unknown": {},
+        "before_sensitive": {},
+        "after_sensitive": {}
+      }
+    },
+    {
+      "address": "aws_ssm_parameter.deployed_at",
+      "mode": "managed",
+      "type": "aws_ssm_parameter",
+      "name": "deployed_at",
+      "provider_name": "registry.terraform.io/hashicorp/aws",
+      "change": {
+        "actions": ["update"],
+        "before": {"name": "/app/deployed_at", "type": "String", "value": "2026-10-28T10:00:00Z"},
+        "after": {"name": "/app/deployed_at", "type": "String"},
+        "after_unknown": {"value": true},
+        "before_sensitive": {},
+        "after_sensitive": {}
+      }
+    },
+    {
+      "address": "aws_s3_bucket.assets",
+      "mode": "managed",
+      "type": "aws_s3_bucket",
+      "name": "assets",
+      "provider_name": "registry.terraform.io/hashicorp/aws",
+      "change": {
+        "actions": ["update"],
+        "before": {"bucket": "assets", "tags": {"Team": "web"}, "tags_all": {"Team": "web", "Env": "dev"}},
+        "after": {"bucket": "assets", "tags": {"Team": "web", "Env": "dev"}, "tags_all": {"Team": "web", "Env": "dev"}},
+        "after_unknown": {"tags": {}, "tags_all": {}},
+        "before_sensitive": {"tags": {}, "tags_all": {}},
+        "after_sensitive": {"tags": {}, "tags_all": {}}
+      }
+    },
+    {
+      "address": "aws_sqs_queue.jobs",
+      "mode": "managed",
+      "type": "aws_sqs_queue",
+      "name": "jobs",
+      "provider_name": "registry.terraform.io/hashicorp/aws",
+      "change": {
+        "actions": ["update"],
+        "before": {"name": "jobs", "kms_data_key_reuse_period_seconds": 300, "visibility_timeout_seconds": 30},
+        "after": {"name": "jobs", "kms_data_key_reuse_period_seconds": 0, "visibility_timeout_seconds": 30},
+        "after_unknown": {},
+        "before_sensitive": {},
+        "after_sensitive": {}
+      }
+    },
+    {
+      "address": "aws_sns_topic.gone",
+      "mode": "managed",
+      "type": "aws_sns_topic",
+      "name": "gone",
+      "provider_name": "registry.terraform.io/hashicorp/aws",
+      "change": {
+        "actions": ["create"],
+        "before": null,
+        "after": {"name": "gone"},
+        "after_unknown": {"arn": true, "id": true},
+        "before_sensitive": false,
+        "after_sensitive": {}
+      }
+    },
+    {
+      "address": "aws_s3_bucket.logs",
+      "mode": "managed",
+      "type": "aws_s3_bucket",
+      "name": "logs",
+      "provider_name": "registry.terraform.io/hashicorp/aws",
+      "change": {
+        "actions": ["no-op"],
+        "before": {"bucket": "logs"},
+        "after": {"bucket": "logs"},
+        "after_unknown": {},
+        "before_sensitive": {},
+        "after_sensitive": {}
+      }
+    },
+    {
+      "address": "data.aws_caller_identity.me",
+      "mode": "data",
+      "type": "aws_caller_identity",
+      "name": "me",
+      "provider_name": "registry.terraform.io/hashicorp/aws",
+      "change": {
+        "actions": ["read"],
+        "before": null,
+        "after": {},
+        "after_unknown": {"account_id": true},
+        "before_sensitive": false,
+        "after_sensitive": {}
+      }
+    }
+  ]
+}

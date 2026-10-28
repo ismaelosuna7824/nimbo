@@ -50,7 +50,7 @@ func registerTools(r *registry, t *tools) {
 
 	r.group = groupEditing
 	addTool(r, "add_node", "Add node", "Add a resource, data source or module node. Curated starters prefill required attributes and may add helper nodes (e.g. a Lambda adds its IAM role and archive). Optional attributes are HCL expressions keyed by attribute path, e.g. {\"bucket\": \"\\\"my-bucket\\\"\", \"tags\": \"{ env = var.env }\", \"versioning.enabled\": \"true\"}. Strings must be quoted HCL strings.", t.addNode)
-	addTool(r, "update_node", "Update node", "Edit a node: set attributes (attribute path -> HCL expression; nested block paths like \"versioning.enabled\" or \"rule[0].id\" create blocks as needed), unset attributes or blocks, rename it (references elsewhere are rewritten) and/or move it to another root .tf file (file: \"network.tf\"; \"auto\" returns it to Nimbo's recommended layout). Returns the node and current diagnostics.", t.updateNode)
+	addTool(r, "update_node", "Update node", "Edit a node: set attributes (attribute path -> HCL expression; nested block paths like \"versioning.enabled\" or \"rule[0].id\" create blocks as needed), unset attributes or blocks, rename it (references elsewhere are rewritten; a deployed resource or module call gets a moved block so the next deploy keeps it instead of destroying and recreating it) and/or move it to another root .tf file (file: \"network.tf\"; \"auto\" returns it to Nimbo's recommended layout). Returns the node and current diagnostics.", t.updateNode)
 	addTool(r, "remove_node", "Remove node", "Remove a node. References to it in other nodes become diagnostics that should be fixed.", t.removeNode)
 	addTool(r, "list_connection_options", "List connection options", "List the ways two nodes can be connected (recipes). Source is the upstream node being referenced (e.g. a queue), target the node that will reference it (e.g. a Lambda). Curated recipes also add helper resources such as event source mappings, permissions or IAM policies.", t.listConnectionOptions)
 	addTool(r, "connect", "Connect nodes", "Connect two nodes with a recipe ID from list_connection_options. Returns nodes that were added or changed and diagnostics.", t.connect)
@@ -77,7 +77,7 @@ func registerTools(r *registry, t *tools) {
 	addTool(r, "sandbox_reset", "Reset sandbox", "Wipe the sandbox's emulator state and Terraform state (everything deployed is gone).", t.sandboxAction("reset"))
 	addTool(r, "validate", "Validate", "Run `terraform validate` in the sandbox and wait for the result (status, last log lines).", t.runAction(model.ActionValidate))
 	addTool(r, "plan", "Plan", "Run `terraform plan` against the sandbox and wait for the result (planned add/change/destroy counts, last log lines).", t.runAction(model.ActionPlan))
-	addTool(r, "deploy", "Deploy", "Terraform workflows: run `terraform apply` against the local sandbox and wait; on success returns the deployed resources (ids, ARNs, URLs) and outputs. Docker workflows: `docker compose up` (build, wait for healthy) in the workflow's own project and return the container status; remap_ports publishes on free host ports when the compose ports are taken. Kubernetes workflows: create/start the workflow's local k3s cluster, build and load the local images, apply every source for the environment (server-side apply / helm upgrade --install), wait for rollouts and return the cluster status (workloads, port-forwards, Ingress URLs, problems).", t.runAction(model.ActionApply))
+	addTool(r, "deploy", "Deploy", "Terraform workflows: plan, then apply exactly that plan against the local sandbox and wait; on success returns the deployed resources (ids, ARNs, URLs), outputs and drift (resources that still change right after the deploy, with a fix hint each). When the plan would delete or replace already-deployed resources nothing is applied: status needs_confirmation with destructive (address, action delete/replace, reasons = attributes forcing the replacement). Show that list to the user and call deploy again with confirm_destroy=true ONLY after the user explicitly agreed; never set it on your own. Docker workflows: `docker compose up` (build, wait for healthy) in the workflow's own project and return the container status; remap_ports publishes on free host ports when the compose ports are taken. Kubernetes workflows: create/start the workflow's local k3s cluster, build and load the local images, apply every source for the environment (server-side apply / helm upgrade --install), wait for rollouts and return the cluster status (workloads, port-forwards, Ingress URLs, problems).", t.runAction(model.ActionApply))
 	addTool(r, "destroy", "Destroy", "Terraform workflows: run `terraform destroy` against the sandbox. Docker workflows: `docker compose down` of the workflow's project (remove_volumes also deletes its named volumes). Kubernetes workflows: delete what deploy applied (remove_volumes also deletes PersistentVolumeClaims, delete_cluster the cluster).", t.runAction(model.ActionDestroy))
 	addTool(r, "get_run", "Get run", "Get a Terraform run's status and last log lines (use after a run tool returned while still running).", t.getRun)
 	addTool(r, "get_deployed_state", "Get deployed state", "Terraform workflows: what is deployed in the sandbox, resources with key values (id, arn, name, url) and outputs; pass address to get every value of matching resources. Docker workflows: the compose project's containers per service (state, health, published host ports, port remaps). Kubernetes workflows: the cluster, each workload's rollout and pods (restarts, OOM kills, crash loops), port-forwards, Ingress URLs, problems and warning events.", t.getDeployedState)
@@ -1060,6 +1060,8 @@ type runIn struct {
 	Workflow    string `json:"workflow,omitempty" jsonschema:"workflow ID or name; omit or \"current\" for the workflow open in the Nimbo app"`
 	Environment string `json:"environment,omitempty" jsonschema:"environment name; defaults to the active environment (Terraform and Kubernetes workflows)"`
 	WaitSeconds int    `json:"wait_seconds,omitempty" jsonschema:"max seconds to wait for completion (default 600); the run keeps going after that, poll with get_run"`
+	// Terraform deploy only.
+	ConfirmDestroy bool `json:"confirm_destroy,omitempty" jsonschema:"Terraform deploy: apply the plan of the last deploy that returned needs_confirmation, deleting/replacing the resources it listed. Set it ONLY after the user explicitly agreed to that list"`
 	// Docker workflows only.
 	RemapPorts    bool `json:"remap_ports,omitempty" jsonschema:"docker deploy: publish on free host ports when the compose ports are taken (the compose files stay unchanged)"`
 	RemoveVolumes bool `json:"remove_volumes,omitempty" jsonschema:"docker/Kubernetes destroy: also delete the named volumes / PersistentVolumeClaims (their data is lost)"`
@@ -1068,7 +1070,7 @@ type runIn struct {
 }
 
 func terminalRun(s model.RunStatus) bool {
-	return s == model.RunSucceeded || s == model.RunFailed || s == model.RunCanceled
+	return s == model.RunSucceeded || s == model.RunFailed || s == model.RunCanceled || s == model.RunNeedsConfirmation
 }
 
 // dockerAction is the compose action a Terraform run tool stands for in a
@@ -1090,6 +1092,9 @@ func (t *tools) runAction(action model.RunAction) func(context.Context, runIn) (
 			return nil, err
 		}
 		body := map[string]any{"action": action, "environment": in.Environment}
+		if action == model.ActionApply && in.ConfirmDestroy {
+			body["confirmDestroy"] = true
+		}
 		if wf.IsKubernetes() {
 			a, ok := dockerAction(action)
 			if !ok {

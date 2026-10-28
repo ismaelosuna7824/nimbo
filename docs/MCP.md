@@ -103,7 +103,19 @@ commands (e.g. `/mcp__nimbo__extend_workflow` in Claude Code).
 5. Fix diagnostics returned by every edit (`update_node`).
    Group a concern with many resources, or one that repeats, into a local
    module: `extract_module` (`dry_run: true` first) — see "Modules" below.
-6. `validate` → `deploy`.
+6. `validate` → `deploy`. A deploy whose plan would delete or replace
+   resources already in the sandbox applies nothing: it returns status
+   `needs_confirmation` with `destructive` (address, `action`
+   delete/replace, `reasons` = attributes forcing the replacement, `cause`).
+   Show the list to the user and call `deploy` again with
+   `confirm_destroy: true` only after they agree: it applies exactly that
+   plan (if the workflow changed since, it returns a new list to confirm).
+   A succeeded deploy may return `drift`: resources that still change right
+   after it (every deploy would change them again), each with a `cause` and
+   a `hint` (JSON policy normalization → `jsonencode()` /
+   `aws_iam_policy_document`; `timestamp()`/`uuid()` → a variable or
+   `ignore_changes`; tags repeating provider `default_tags`; otherwise
+   `lifecycle { ignore_changes }`).
 7. `get_endpoints` → `try_endpoint` to show the user how to call what was
    deployed (URLs, queue URLs, snippets) and smoke test it.
 8. `list_load_targets` → `run_load_test` (start with `smoke`).
@@ -813,7 +825,7 @@ Conventions).
 | `import_terraform` | `dir?` \| `files?`, `projects?`, `name?` | Import Terraform as new workflows (default: the root only; `projects` from the scan, `"."` = root); an environments tree becomes one workflow with its environments |
 | `export_terraform` | `workflow`, `dir`, `environments?`, `ci?`, `smoke?` | Write Terraform + assets to a directory in the workflow's layout (single root, or `modules/<service>` + `environments/<env>/` roots; see Structure); `environments` adds each environment's values and `.env.example`. Docker and Kubernetes workflows write their files as they are. `ci`: `none` (default), `github` (`.github/workflows/<name>.yml`) or `gitlab` (`.gitlab-ci.yml`), a ready-to-use pipeline (checks, a plan/render per environment on pull requests, gated per-environment deploys from the default branch) whose header and a README section list the secrets and variables to set; `smoke` adds an HTTP check of each environment's `SMOKE_URL` after every deploy (see ARCHITECTURE.md, "CI/CD pipeline export") |
 | `sandbox_status` / `sandbox_start` / `sandbox_stop` / `sandbox_reset` | `workflow` | Manage the local Floci sandbox |
-| `validate` / `plan` / `deploy` / `destroy` | `workflow`, `environment?`, `wait_seconds?` | Terraform runs in the sandbox; status, plan summary, last 60 log lines, deployed resources after `deploy` |
+| `validate` / `plan` / `deploy` / `destroy` | `workflow`, `environment?`, `wait_seconds?`, `confirm_destroy?` (deploy) | Terraform runs in the sandbox; status, plan summary, last 60 log lines, deployed resources after `deploy`. `deploy` plans and applies that exact plan; a plan deleting/replacing deployed resources returns `needs_confirmation` + `destructive` instead, applied by `deploy` with `confirm_destroy: true` once the user agreed; `drift` lists resources that still change after a deploy, with fix hints |
 | `get_run` | `run` | Status and log tail of a run |
 | `get_deployed_state` | `workflow`, `address?` | Deployed resources (key values; all values for matching `address`) and outputs |
 | `get_endpoints` | `workflow` | How to use what is deployed: sandbox address/env, and per resource a plain summary, host URLs, identifiers, the first ready-to-run snippet and its `try_endpoint` actions |

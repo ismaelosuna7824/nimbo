@@ -270,9 +270,28 @@ func MergeImported(prev, next *model.Workflow, resourceFile func(string) string)
 
 // RenameNode sets a node's name and rewrites every reference to its old
 // address (bodies, depends_on, outputs, locals, providers, moved.to; not
-// moved.from/removed.from). Errors on unknown node, invalid name or taken
-// address. Node IDs are unchanged; call Normalize afterwards.
+// moved.from/removed.from); a moved block left moving an address to itself
+// is dropped. Errors on unknown node, invalid name or taken address. Node
+// IDs are unchanged; call Normalize afterwards. It adds no moved block for
+// the rename: AddMoved does (the API, when the old address is deployed).
 func RenameNode(wf *model.Workflow, nodeID, newName string) error
+
+// AddMoved adds `moved { from = m.From  to = m.To }`; a block in the
+// opposite direction is dropped instead, a duplicate kept once, and blocks
+// already moving something to m.To are re-pointed to m.From (a chain).
+//
+// Renaming a deployed node: PATCH .../nodes/{id} with a new name reads the
+// sandbox state (cached) first; when the old address of a resource or
+// module call has instances there (aws_x.old, aws_x.old[0], aws_x.old["k"],
+// module.old.*), it adds moved old -> new so the next plan moves it instead
+// of destroying and recreating it (MCP update_node renames the same way).
+// Undeployed nodes get none. Successive renames before a deploy collapse
+// into one block from the deployed address (RenameNode rewrites moved.to);
+// renaming back removes it; renaming again after a deploy chains (old ->
+// mid, mid -> new). Data sources never get one. Resources inside local
+// modules are edited as code, not renamed on the canvas, so their moved
+// blocks are the user's.
+func AddMoved(wf *model.Workflow, m model.MovedAddress)
 
 // Summarize parses one directory's *.tf files (cheap; used by folder scans):
 // resource/data counts, module calls (constant source/version), providers,
@@ -634,6 +653,7 @@ through:
 | `bp_no_remote_backend` | info | ≥ 2 environments exported in the single layout (`hclcodec.ResolveLayout`: `layout: "single"`, or auto falling back because the workflow can't be split, the reason then in the fix) and no `backend`/`cloud` block: every environment would share one local state. The environments layout writes a `backend.tf` per environment, so a workflow in it needs no backend block and is not flagged |
 | `bp_state_too_large` | info ≥ 50, warning ≥ 100 | Managed resource instances in one state: the root plus local modules, constant `count`/`for_each` expanded, conditionals with an empty branch (`var.create ? 1 : 0`) counted as absent, other unknown sizes once; registry modules not counted |
 | `bp_workspace_branching` | info | `terraform.workspace` in any expression of the root or a local module (one finding listing the places) |
+| `bp_count_over_list` | info (category `reliability`, pillars reliability + operations; on by default; not in the corpus noise counts below) | A resource or module call (root or local module; data sources skipped) with `count = length(L)` whose body indexes the same `L` with `count.index` (`L[count.index]`, `element(L, count.index)`, also inside templates and nested blocks; compared whitespace-insensitively). `L` is a variable, a local or a literal list; lists read from resources, data sources or module outputs are skipped (they may be unknown at plan time, where `for_each` can't be used). Toggles (`var.create ? 1 : 0`), constant counts and lists only counted (`cidrsubnet(…, count.index)`) are not flagged. Why: removing or reordering an element shifts every later index, so those instances are destroyed and recreated. Fix: `for_each = toset(L)` / `each.value` (a map keyed by a stable id for objects) plus `moved` blocks from `addr[i]` to `addr["<element>"]`, spelled out exactly when `L` is a literal list, a local with a literal value or a variable with a literal default of distinct strings. The AWS learn solutions' `count = length(local.azs)` subnets get it as an info finding; their `rules_clean` checks are code-specific or `minSeverity: warning`, so they stay passing |
 
 Noise, measured with `go test -tags corpus ./internal/tfqa/ -run
 TestCorpusBestPractices` on the 48 public corpus roots (2026-10-18; the
@@ -923,6 +943,8 @@ type RunRequest struct {
     Files map[string][]byte       // hclcodec.Export output
     AssetsDir string              // copied into the workdir before the run ("" = none)
     Environment *model.Environment
+    ConfirmDestroy bool  // apply: the user agreed to what a needs_confirmation run destroys
+    ConfirmRun     string // that run ("" = the workflow's newest apply/destroy run when it waits)
 }
 func (m *Manager) Runs(wfID string) []model.Run   // newest first, without Log
 func (m *Manager) GetRun(id string) (*model.Run, bool)
@@ -941,6 +963,7 @@ func (m *Manager) Instances(ctx context.Context, wfID string) (map[string]Instan
 func (m *Manager) ExecInstance(ctx context.Context, wfID, instanceID, script string, timeout time.Duration) (output string, exitCode int, err error) // docker exec sh -c; output trimmed, ≤ 8 KB; err only for docker failures/timeout
 // Sandboxes keep running when the daemon exits; Status rediscovers them from container labels/names.
 var ErrRunActive error // Run while another run of the workflow is active; Stop/Reset during a run
+var ErrNotPending error // Run with ConfirmRun naming a run that is not an apply waiting for confirmation
 ```
 
 Sandbox behavior notes:
@@ -991,6 +1014,44 @@ Sandbox behavior notes:
   succeeds with its summary). `Run.WorkflowVersion` is the workflow's
   `updatedAt` the run started from. `Changes` (like `Log`) is only in
   `GET /runs/{id}` and the persisted run, not in lists or `run.status`.
+- Deploy guard (`apply.go`): an apply never runs `apply -auto-approve`. It
+  plans to `.nimbo/pending-<run>.tfplan`, reads the plan (`parsePlan`) into
+  `Run.Changes`, and applies that same file when nothing is destroyed. When
+  the plan deletes or replaces managed resource instances (a plan only does
+  that to instances in the refreshed state; data reads, creates and `forget`
+  never count) the run applies nothing and ends with status
+  `needs_confirmation` (terminal, not a failure; `Run.Plan` has the planned
+  counts) and `Run.Destructive []DestructiveChange{address, nodeId, action
+  (delete|replace), cause (Terraform's action_reason), reasons (top-level
+  attributes forcing the replacement)}`, kept in lists and `run.status`. The
+  plan file stays until confirmed or superseded. An apply with
+  `ConfirmDestroy` takes the named run (or the newest apply/destroy run when it
+  waits; validate/plan runs in between don't supersede it) and applies its
+  file as is (`Run.PlanRunID`), so exactly the reviewed changes happen; when
+  the configuration changed since (a SHA-256 of the exported files and the
+  environment's tfvars, saved as `.nimbo/pending-<run>.config`; card moves
+  don't count), the environment differs from that run's, or the file is
+  gone, it logs why, plans again and asks again if still destructive.
+  Pending plans are deleted by the next unconfirmed apply, any
+  destroy and `Reset` (they hold variable values, secrets included). If the
+  plan can't be read, only a summary with 0 to destroy lets the apply go on.
+  Destroy runs and sandbox reset keep their own confirmations and are not
+  guarded.
+- Post-deploy check (perpetual diffs): after a succeeded apply whose summary
+  changed something, the run plans once more (`-detailed-exitcode`, refresh
+  on, ≤ 5 min, output kept out of the log, saved to `.nimbo/check.tfplan` and
+  deleted after) and records what it would still change as `Run.Drift
+  []DriftChange{address, nodeId, action, attributes, cause, hint}` (lists and
+  `run.status` keep it), plus one warning line in the log ("the next deploy
+  would change them again"). `cause`: `json_normalization` (a changed
+  attribute holds a JSON document: use `jsonencode()` /
+  `aws_iam_policy_document`), `dynamic_value` (an attribute unknown again or
+  the node uses `timestamp()`/`uuid()`/`bcrypt(`: a variable or
+  `ignore_changes`), `default_tags` (`tags`/`tags_all` with provider
+  `default_tags`: set each tag once), `other` (`ignore_changes` on the listed
+  attributes; recreated/deleted resources get their own hint). The check
+  never fails the run: errors, timeouts and a cancel during it are logged as
+  "Post-deploy check skipped" and the run stays succeeded.
 - Each emulator gets `<PREFIX>_DOCKER_RESOURCE_NAMESPACE=nimbo-<wf>` so
   sandboxes sharing the Docker daemon never clean up each other's spawned
   containers; spawned volumes are found by the `floci_namespace` label, plus
@@ -1134,6 +1195,22 @@ the chip's × turns it off; opening another workflow resets it.
 - The chip's popover: counts per action, the outdated reason with "Plan
   again", and "Not on the canvas" (changes without a card, e.g. the delete of
   a removed node).
+
+### Deploy confirmation and drift (`apps/desktop/src/features/toolbar`, Deploy tab)
+
+- A Terraform apply that ends `needs_confirmation` (sandbox "Deploy guard")
+  opens `DeployConfirmDialog` (`deploy-confirm-dialog.tsx`, the
+  `destroy-dialog.tsx` pattern) when this window started it (`watchApply` in
+  `actions.ts`); the Deploy tab shows an amber notice with "Review…" for any
+  such run (MCP-started ones too). The dialog lists `run.destructive` grouped
+  by `groupDestructive` (`deploy-confirm.ts`) into "Replace (destroy and
+  re-create)" with the forcing attributes and "Delete" with a readable cause
+  (`causeLabel`); Cancel starts nothing, the destructive button
+  (`confirmLabel`: "Deploy and replace/delete/destroy N") re-requests apply
+  with `{confirmDestroy: true, confirmRunId}`.
+- A succeeded apply with `run.drift` shows an amber "These resources still
+  change after deploy" finding in the Deploy tab (attributes and hint per
+  resource, "The next deploy would change them again."); never red.
 
 ### loadtest
 
@@ -3526,7 +3603,7 @@ Docker; the desktop onboarding wizard (`GET /setup`) and `nimbo doctor`
 | `POST /workflows/{id}/archive` | → `Workflow` with `archived: true`. Stops the sandbox keeping all state (docker workflows: compose down, named volumes kept) (409 while a run is active; proceeds without Docker); runs (except a docker `down`), load tests and `sandbox/start` then answer 409 `workflow is archived` |
 | `POST /workflows/{id}/unarchive` | → `Workflow` (restored; the sandbox starts again on the next deploy) |
 | `POST /workflows/{id}/nodes` | `{kind, type, name?, position}` → `{workflow, nodeId}` (new nodes whose 248×84 card, plus 24px gap, overlaps another card move to the nearest free grid slot) |
-| `PATCH /workflows/{id}/nodes/{nodeId}` | `{name?, label?, position?, positioned?, parent?, body?, file?}` → `Workflow` (`file`: root `.tf` file to write the node to, `""` = recommended layout; invalid names → 400) |
+| `PATCH /workflows/{id}/nodes/{nodeId}` | `{name?, label?, position?, positioned?, parent?, body?, file?}` → `Workflow` (`file`: root `.tf` file to write the node to, `""` = recommended layout; invalid names → 400; renaming a deployed resource/module call adds a `moved` block, see AddMoved) |
 | `DELETE /workflows/{id}/nodes/{nodeId}` | → `Workflow` (references to it become diagnostics) |
 | `GET /workflows/{id}/connections?source=&target=` | → `ConnectionRecipe[]` |
 | `POST /workflows/{id}/connections` | `{source, target, recipeId}` → `Workflow` (helper nodes are moved off other cards the same way) |
@@ -3574,9 +3651,9 @@ Docker; the desktop onboarding wizard (`GET /setup`) and `nimbo doctor`
 | `PATCH /workflows/{id}/compose/stages/{nodeId}` | `{from}` → `Workflow` (rewrites that stage's FROM image) |
 | `GET /workflows/{id}/sandbox` | → `SandboxStatus` (400 for docker workflows, as `sandbox/{action}` and `state`) |
 | `POST /workflows/{id}/sandbox/start` / `stop` / `reset` | → `SandboxStatus` |
-| `POST /workflows/{id}/runs` | `{action, environment?}` → `Run` (starts sandbox if needed; environment defaults to the active one, 404 if unknown; plan/apply → 400 + diagnostics while error diagnostics other than `net_*` exist; 409 while another run is active). Docker workflows: `{action: up\|down\|build\|pull\|restart, service?, removeVolumes?, remapPorts?, timeoutSec?}` → 201 `Run` (`service`, `removeVolumes` echoed); up with busy fixed host ports and no `remapPorts` → 409 `{code: "port_conflict", conflicts: PortConflict[]}`; invalid compose files or unknown service → 400; no compose plugin → 503 `compose_missing`; Terraform actions on docker workflows and compose actions on Terraform ones → 400 |
+| `POST /workflows/{id}/runs` | `{action, environment?, confirmDestroy?, confirmRunId?}` → `Run` (starts sandbox if needed; environment defaults to the active one, 404 if unknown; plan/apply → 400 + diagnostics while error diagnostics other than `net_*` exist; 409 while another run is active). Apply plans first and ends `needs_confirmation` (with `destructive`) when the plan deletes or replaces deployed resources; `confirmDestroy: true` applies the saved plan of the `needs_confirmation` run `confirmRunId` (default: the workflow's newest apply/destroy run when it waits), see sandbox "Deploy guard"; a `confirmRunId` that is not such a run → 400. Docker workflows: `{action: up\|down\|build\|pull\|restart, service?, removeVolumes?, remapPorts?, timeoutSec?}` → 201 `Run` (`service`, `removeVolumes` echoed); up with busy fixed host ports and no `remapPorts` → 409 `{code: "port_conflict", conflicts: PortConflict[]}`; invalid compose files or unknown service → 400; no compose plugin → 503 `compose_missing`; Terraform actions on docker workflows and compose actions on Terraform ones → 400 |
 | `GET /workflows/{id}/runs` | → `Run[]` |
-| `GET /runs/{runId}` | → `Run` (with log; plan runs also `changes`, see sandbox "Planned changes") |
+| `GET /runs/{runId}` | → `Run` (with log; plan and apply runs also `changes`, see sandbox "Planned changes"; `destructive`, `drift` and `planRunId` are in lists too, see "Deploy guard") |
 | `POST /runs/{runId}/cancel` | → 204 |
 | `GET /workflows/{id}/state` | → `DeployedState` |
 | `GET /workflows/{id}/compose/status` | docker workflows → `ComposeStatus{workflowId, project, state, services: {name, nodeId, state, health?, image?, containers: {id, name, state, health?, exitCode, restarts, image, imageId, startedAt?, ports: {container, protocol, hostIp, host, url?}[]}[]}[], remaps: PortRemap[], message?, updatedAt}`; the same body arrives as `compose.status` events on changes. 400 for Terraform workflows |

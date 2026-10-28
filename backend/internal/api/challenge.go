@@ -325,6 +325,9 @@ func (c challengeRuntime) Deploy(ctx context.Context, wfID string) (string, erro
 			run = r
 		}
 	}
+	if run.Status == model.RunNeedsConfirmation {
+		return run.ID, fmt.Errorf("the deploy would destroy %d deployed resource(s); review and confirm it in the Deploy tab", len(run.Destructive))
+	}
 	if run.Status != model.RunSucceeded {
 		return run.ID, fmt.Errorf("%s (see the Deploy tab)", cmp.Or(run.Error, string(run.Action)+" "+string(run.Status)))
 	}

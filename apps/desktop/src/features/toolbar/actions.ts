@@ -43,7 +43,7 @@ const KUBE_ACTION: Partial<Record<RunAction, KubeRunRequest["action"]>> = {
   "cluster-delete": "cluster-delete",
 }
 
-export type RunOptions = { showLog?: boolean } & Omit<ComposeRunRequest, "action"> &
+export type RunOptions = { showLog?: boolean; confirmRunId?: string } & Omit<ComposeRunRequest, "action"> &
   Pick<KubeRunRequest, "workload" | "deleteCluster">
 
 /**
@@ -52,7 +52,7 @@ export type RunOptions = { showLog?: boolean } & Omit<ComposeRunRequest, "action
  * cluster of a Kubernetes workspace (Deploy = up, Destroy = down).
  */
 export async function runAction(action: RunAction, opts: RunOptions = {}) {
-  const { showLog = true, workload, deleteCluster, ...compose } = opts
+  const { showLog = true, workload, deleteCluster, confirmRunId, ...compose } = opts
   const store = useWorkflowStore.getState()
   const wf = store.workflow
   if (!wf) return
@@ -80,7 +80,14 @@ export async function runAction(action: RunAction, opts: RunOptions = {}) {
         })
       : composeAction
         ? await api.startComposeRun(wf.id, { action: composeAction, ...compose })
-        : await api.startRun(wf.id, action, useWorkflowStore.getState().workflow?.activeEnvironment)
+        : await api.startRun(
+            wf.id,
+            action,
+            useWorkflowStore.getState().workflow?.activeEnvironment,
+            // Terraform apply: confirmRunId applies exactly the saved plan of that needs_confirmation run.
+            action === "apply" && confirmRunId ? { confirmDestroy: true, confirmRunId } : undefined,
+          )
+    if (action === "apply" && !kube && !docker) watchApply(run.id)
     const s = useWorkflowStore.getState()
     if (!s.runs.some((r) => r.id === run.id)) useWorkflowStore.setState({ runs: [run, ...s.runs] })
     if (showLog) store.showBottom("deploy")
@@ -104,6 +111,25 @@ export async function runAction(action: RunAction, opts: RunOptions = {}) {
     }
     toast.error(`${RUN_LABEL[action]} couldn't start`, { description: errorMessage(err) })
   }
+}
+
+/**
+ * Remembers a Terraform apply this window started: if it ends needs_confirmation (its plan would delete or replace
+ * existing resources), the Deploy confirmation dialog opens on its own.
+ */
+export function watchApply(runId: string) {
+  useUiStore.getState().setWatchedApply(runId)
+  checkWatchedApply()
+}
+
+/** Opens the Deploy confirmation once the watched apply needs it; forgets the apply once it ended otherwise. */
+export function checkWatchedApply() {
+  const ui = useUiStore.getState()
+  if (!ui.watchedApply) return
+  const run = useWorkflowStore.getState().runs.find((r) => r.id === ui.watchedApply)
+  if (!run || run.status === "queued" || run.status === "running") return
+  ui.setWatchedApply(null)
+  if (run.status === "needs_confirmation") ui.setConfirmDeployRun(run.id)
 }
 
 /** compose up refused because fixed host ports are taken: say which and offer to publish on free ones instead. */

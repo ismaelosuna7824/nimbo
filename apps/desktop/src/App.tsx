@@ -13,6 +13,7 @@ import { FeatureDialogs } from "@/features/panels/dialogs/feature-dialogs"
 import { SettingsHost } from "@/features/settings/settings-view"
 import { useSettingsView } from "@/features/settings/store"
 import { DestroyDialog } from "@/features/toolbar/destroy-dialog"
+import { DeployConfirmDialog } from "@/features/toolbar/deploy-confirm-dialog"
 import { useUiStore } from "@/features/toolbar/ui-store"
 import { UpdateNotifier } from "@/features/updates/update-notifier"
 import { preloadLastKind } from "@/features/workspaces/code"
@@ -126,6 +127,7 @@ export default function App() {
       <FeatureDialogs />
       <CommandPalette />
       <DestroyDialog />
+      <DeployConfirmDialog />
       <OnboardingHost />
       <UpdateNotifier />
       <AgentWorkflowNotifier />

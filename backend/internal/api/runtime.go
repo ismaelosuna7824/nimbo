@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"os"
 
@@ -150,12 +151,17 @@ func (s *Server) startRun(w http.ResponseWriter, r *http.Request) error {
 		assets = ""
 	}
 	run, err := s.cfg.Sandbox.Run(context.WithoutCancel(r.Context()), sandbox.RunRequest{
-		Workflow:    wf,
-		Action:      req.Action,
-		Files:       files,
-		AssetsDir:   assets,
-		Environment: env,
+		Workflow:       wf,
+		Action:         req.Action,
+		Files:          files,
+		AssetsDir:      assets,
+		Environment:    env,
+		ConfirmDestroy: req.ConfirmDestroy,
+		ConfirmRun:     req.ConfirmRunID,
 	})
+	if errors.Is(err, sandbox.ErrNotPending) {
+		return errorf(http.StatusBadRequest, "%v: only a deploy that is waiting for confirmation can be confirmed; deploy again to review the current changes", err)
+	}
 	if err != nil {
 		return err
 	}

@@ -272,8 +272,13 @@ export const api = {
   sandbox: (id: string) => request<SandboxStatus>("GET", `/workflows/${id}/sandbox`),
   sandboxAction: (id: string, action: "start" | "stop" | "reset") =>
     request<SandboxStatus>("POST", `/workflows/${id}/sandbox/${action}`),
-  startRun: (id: string, action: RunAction, environment?: string) =>
-    request<Run>("POST", `/workflows/${id}/runs`, { action, environment }),
+  /** Terraform runs. Apply with confirmDestroy applies the saved plan of confirmRunId (a needs_confirmation run). */
+  startRun: (
+    id: string,
+    action: RunAction,
+    environment?: string,
+    confirm?: { confirmDestroy?: boolean; confirmRunId?: string },
+  ) => request<Run>("POST", `/workflows/${id}/runs`, { action, environment, ...confirm }),
   runs: (id: string) => request<Run[]>("GET", `/workflows/${id}/runs`),
   run: (runId: string) => request<Run>("GET", `/runs/${runId}`),
   cancelRun: (runId: string) => request<void>("POST", `/runs/${runId}/cancel`),

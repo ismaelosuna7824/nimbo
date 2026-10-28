@@ -711,6 +711,11 @@ const (
 	RunSucceeded RunStatus = "succeeded"
 	RunFailed    RunStatus = "failed"
 	RunCanceled  RunStatus = "canceled"
+	// RunNeedsConfirmation: an apply planned first and the plan would
+	// delete or replace resource instances that exist in the sandbox
+	// (Run.Destructive); nothing was applied. Applying it takes a new apply
+	// with confirmDestroy. Terminal, not a failure.
+	RunNeedsConfirmation RunStatus = "needs_confirmation"
 )
 
 // LogLine is one line of run output.
@@ -781,6 +786,41 @@ type AttributeChange struct {
 // apply.
 const UnknownValue = "(known after apply)"
 
+// DestructiveChange is a resource instance the plan of an apply would
+// destroy: delete it, or replace it (destroy and re-create).
+type DestructiveChange struct {
+	Address string     `json:"address"`
+	NodeID  string     `json:"nodeId,omitempty"`
+	Action  PlanAction `json:"action"` // PlanDelete | PlanReplace
+	// Cause is Terraform's action_reason ("replace_because_cannot_update",
+	// "delete_because_no_resource_config", …).
+	Cause string `json:"cause,omitempty"`
+	// Reasons (replace) are the top-level attributes whose change forces
+	// the replacement.
+	Reasons []string `json:"reasons,omitempty"`
+}
+
+// Drift causes (DriftChange.Cause).
+const (
+	DriftJSONNormalization = "json_normalization" // the provider rewrites a JSON document (policies)
+	DriftDynamicValue      = "dynamic_value"      // timestamp(), uuid(), … yield a new value every plan
+	DriftDefaultTags       = "default_tags"       // tags repeating the provider's default_tags
+	DriftOther             = "other"
+)
+
+// DriftChange is a resource the plan right after a successful apply still
+// changes (a perpetual diff): every deploy would change it again.
+type DriftChange struct {
+	Address string     `json:"address"`
+	NodeID  string     `json:"nodeId,omitempty"`
+	Action  PlanAction `json:"action"`
+	// Attributes are the changed top-level attribute names.
+	Attributes []string `json:"attributes"`
+	Cause      string   `json:"cause"` // Drift*
+	// Hint is how to make the configuration stable, one sentence.
+	Hint string `json:"hint"`
+}
+
 // Run is one Terraform invocation against a sandbox.
 type Run struct {
 	ID          string       `json:"id"`
@@ -793,9 +833,19 @@ type Run struct {
 	EndedAt     *time.Time   `json:"endedAt,omitempty"`
 	ExitCode    int          `json:"exitCode"`
 	Plan        *PlanSummary `json:"plan,omitempty"`
-	// Changes (plan runs) are the resource instances of the saved plan;
-	// omitted in list responses.
+	// Changes (plan and apply runs) are the resource instances of the saved
+	// plan; omitted in list responses.
 	Changes []PlannedChange `json:"changes,omitempty"`
+	// Destructive (needs_confirmation apply runs) is what the plan would
+	// destroy.
+	Destructive []DestructiveChange `json:"destructive,omitempty"`
+	// Drift (succeeded apply runs) lists the resources the post-deploy
+	// check plan still changes; empty when it found nothing, was skipped
+	// (the apply changed nothing) or could not run.
+	Drift []DriftChange `json:"drift,omitempty"`
+	// PlanRunID (confirmed apply runs) is the needs_confirmation run whose
+	// saved plan this run applied.
+	PlanRunID string `json:"planRunId,omitempty"`
 	// WorkflowVersion is the workflow's updatedAt the run was started from:
 	// a plan describes that version only.
 	WorkflowVersion *time.Time `json:"workflowVersion,omitempty"`

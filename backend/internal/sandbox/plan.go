@@ -17,10 +17,10 @@ import (
 // values, secrets included.
 const planFile = ".nimbo/plan.tfplan"
 
-// readPlan maps the plan saved by the run that just finished onto wf's
-// nodes.
-func (m *Manager) readPlan(ctx context.Context, wf *model.Workflow) ([]model.PlannedChange, error) {
-	raw, err := m.showJSON(ctx, wf.ID, planFile)
+// readPlanFile maps the plan a run saved as file (relative to the
+// workdir) onto wf's nodes.
+func (m *Manager) readPlanFile(ctx context.Context, wf *model.Workflow, file string) ([]model.PlannedChange, error) {
+	raw, err := m.showJSON(ctx, wf.ID, file)
 	if err != nil {
 		return nil, err
 	}

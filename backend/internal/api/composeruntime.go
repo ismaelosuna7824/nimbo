@@ -18,12 +18,18 @@ import (
 )
 
 // runRequest is the body of POST /workflows/{id}/runs: Terraform actions
-// use Environment, docker compose actions Service/RemoveVolumes/RemapPorts,
-// Kubernetes actions Environment (up), Workload (restart), RemoveVolumes
-// and DeleteCluster (down); TimeoutSec bounds compose and Kubernetes waits.
+// use Environment (apply also ConfirmDestroy/ConfirmRunID), docker compose
+// actions Service/RemoveVolumes/RemapPorts, Kubernetes actions Environment
+// (up), Workload (restart), RemoveVolumes and DeleteCluster (down);
+// TimeoutSec bounds compose and Kubernetes waits.
 type runRequest struct {
 	Action      model.RunAction `json:"action"`
 	Environment string          `json:"environment"`
+	// Terraform apply (sandbox.RunRequest): apply the saved plan of the
+	// needs_confirmation run ConfirmRunID ("" = the workflow's newest run)
+	// whose deletes and replacements the user agreed to.
+	ConfirmDestroy bool   `json:"confirmDestroy"`
+	ConfirmRunID   string `json:"confirmRunId"`
 	// Compose runs (sandbox.ComposeRunRequest).
 	Service       string `json:"service"`
 	RemoveVolumes bool   `json:"removeVolumes"`

@@ -706,6 +706,7 @@ func (m *Manager) reset(ctx context.Context, sb *sandbox) error {
 		return err
 	}
 	work := m.WorkDir(wfID)
+	removePendingPlans(work) // planned against the state wiped below
 	for _, name := range []string{"terraform.tfstate", "terraform.tfstate.backup", "terraform.tfstate.d"} {
 		if err := os.RemoveAll(filepath.Join(work, name)); err != nil {
 			return err
