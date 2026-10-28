@@ -226,9 +226,10 @@ function Snippets({ snippets }: { snippets: Snippet[] }) {
 
 /**
  * Inspector version: identifiers, the first address and snippet, and a link
- * to the full card (with "Try it") in the Endpoints tab.
+ * to the full card (with "Try it") in the Endpoints tab. `extra` sits right
+ * after the identifiers (the inspector's other live values).
  */
-export function CompactResourceCard({ resource: r }: { resource: ResourceAccess }) {
+export function CompactResourceCard({ resource: r, extra }: { resource: ResourceAccess; extra?: ReactNode }) {
   const endpoint = r.endpoints?.[0]
   const snippet = r.snippets[0]
   return (
@@ -252,6 +253,7 @@ export function CompactResourceCard({ resource: r }: { resource: ResourceAccess 
       {r.fields.map((f) => (
         <FieldRow key={f.label} field={f} compact />
       ))}
+      {extra}
       {snippet && (
         <div className="relative rounded-md border">
           <div className="flex items-center border-b px-2 py-0.5 text-[11px] text-muted-foreground">

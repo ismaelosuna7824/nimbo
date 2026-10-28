@@ -1,5 +1,5 @@
 import { ArrowRightIcon, BrickWallIcon, ExpandIcon, GlobeIcon, HardDriveIcon, LinkIcon, RouteIcon, ShieldIcon, ShieldPlusIcon, SplitIcon, VariableIcon } from "lucide-react"
-import { useState } from "react"
+import { memo, useState } from "react"
 import { K8sIcon } from "@/components/k8s-icons/k8s-icon"
 import { Button } from "@/components/ui/button"
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog"
@@ -52,8 +52,11 @@ const NEEDS_INPUT: Record<string, true> = { route: true, volume: true, expose: t
 
 const PORT_RE = /^\d{1,5}$/
 
-/** Ways to connect two Kubernetes objects; routes, mounts, new Services and env wiring ask for their details. */
-export function KubeConnectDialog({
+/**
+ * Ways to connect two Kubernetes objects; routes, mounts, new Services and env wiring ask for their details.
+ * Memoized: the canvas re-renders on every edit, the closed dialog doesn't (pass stable callbacks).
+ */
+export const KubeConnectDialog = memo(function KubeConnectDialog({
   pending,
   onPick,
   onClose,
@@ -127,7 +130,7 @@ export function KubeConnectDialog({
       </DialogContent>
     </Dialog>
   )
-}
+})
 
 function End({ end }: { end: PendingKubeEnd }) {
   return (

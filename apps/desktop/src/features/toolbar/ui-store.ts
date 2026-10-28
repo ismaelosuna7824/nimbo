@@ -11,6 +11,9 @@ interface UiState {
   setCommandOpen: (open: boolean) => void
   setConfirmDestroy: (open: boolean) => void
   setConvertKubernetes: (open: boolean) => void
+  /** Home shown over the open workflow (the rail's Home): the workflow stays open underneath. */
+  homeOpen: boolean
+  setHomeOpen: (open: boolean) => void
 }
 
 export const useUiStore = create<UiState>((set) => ({
@@ -22,4 +25,6 @@ export const useUiStore = create<UiState>((set) => ({
   setCommandOpen: (commandOpen) => set({ commandOpen }),
   setConfirmDestroy: (confirmDestroy) => set({ confirmDestroy }),
   setConvertKubernetes: (convertKubernetes) => set({ convertKubernetes }),
+  homeOpen: false,
+  setHomeOpen: (homeOpen) => set({ homeOpen }),
 }))

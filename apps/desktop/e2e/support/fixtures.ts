@@ -75,8 +75,14 @@ export class App {
     }
   }
 
+  /** A workflow card on Home (the page's main landmark, so the rail's items never match). */
   workflowCard(name: string) {
-    return this.page.getByRole("button", { name: new RegExp(`^${escapeRegExp(name)}\\b`) })
+    return this.page.getByRole("main").getByRole("button", { name: new RegExp(`^${escapeRegExp(name)}\\b`) })
+  }
+
+  /** An item of the navigation rail: Home, the open workflow (by its name), Learn, Connections, Search, Settings. */
+  rail(name: string) {
+    return this.page.getByRole("navigation", { name: "Main" }).getByRole("button", { name, exact: true })
   }
 
   async openWorkflow(name: string) {

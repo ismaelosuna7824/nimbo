@@ -1,6 +1,5 @@
 import { useEffect } from "react"
-import { ArrowLeft, BotIcon, BoxesIcon, DatabaseIcon, InfoIcon, ListChecksIcon, ShieldCheckIcon, SlidersHorizontalIcon } from "lucide-react"
-import { Button } from "@/components/ui/button"
+import { BotIcon, BoxesIcon, DatabaseIcon, InfoIcon, ListChecksIcon, ShieldCheckIcon, SlidersHorizontalIcon } from "lucide-react"
 import { Separator } from "@/components/ui/separator"
 import { openSetupChecklist } from "@/features/onboarding/store"
 import { AboutSection } from "@/features/updates/about-section"
@@ -27,7 +26,6 @@ export function SettingsView() {
   const section = useSettingsView((s) => s.section)
   const setSection = useSettingsView((s) => s.setSection)
   const closeView = useSettingsView((s) => s.closeView)
-  const workflowName = useWorkflowStore((s) => s.workflow?.name)
 
   // Opening or closing a workflow (palette) navigates away from this page.
   useEffect(
@@ -37,14 +35,19 @@ export function SettingsView() {
       }),
     [closeView],
   )
+  // Escape leaves the page, like Learn (a dialog or menu inside handles its own Escape first).
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape" && !e.defaultPrevented) closeView()
+    }
+    window.addEventListener("keydown", onKey)
+    return () => window.removeEventListener("keydown", onKey)
+  }, [closeView])
 
   return (
     <div className="fixed inset-0 z-40 flex flex-col bg-background">
-      <header className="flex h-12 shrink-0 items-center gap-2 border-b px-3">
-        <Button size="sm" variant="ghost" onClick={closeView}>
-          <ArrowLeft /> {workflowName ? `Back to ${workflowName}` : "Home"}
-        </Button>
-        <h1 className="ml-1 font-heading text-sm font-semibold">Settings</h1>
+      <header className="flex h-12 shrink-0 items-center gap-2 border-b px-4">
+        <h1 className="font-heading text-sm font-semibold">Settings</h1>
       </header>
       <div className="grid min-h-0 flex-1 grid-cols-[15rem_minmax(0,1fr)]">
         <nav className="flex flex-col gap-0.5 border-r p-2" aria-label="Settings sections">

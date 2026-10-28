@@ -16,6 +16,7 @@ import type {
   ConvertKubernetesRequest,
   ConvertKubernetesResponse,
   EnvCompare,
+  ExportPipeline,
   EnvironmentsView,
   EnvSettings,
   MonitoringRequest,
@@ -38,6 +39,8 @@ import type {
   KubeStatus,
   WorkflowKind,
   WorkflowReadiness,
+  WorkflowCompliance,
+  ComplianceAttestation,
   CodeProblem,
   CodeWorkspace,
   FunctionSignature,
@@ -71,6 +74,7 @@ import type {
   LoadTestRun,
   LoadTestSpec,
   ScenarioCatalog,
+  LiveTraffic,
   McpCatalog,
   McpCommand,
   NetworkSummary,
@@ -176,8 +180,6 @@ export const api = {
   providers: () => request<ProviderInfo[]>("GET", "/catalog/providers"),
   categories: (cloud?: string) => request<string[]>("GET", `/catalog/categories${qs({ cloud })}`),
   resources: (q: CatalogQuery) => request<ResourceSummary[]>("GET", `/catalog/resources${qs({ ...q })}`),
-  schema: (kind: NodeKind, type: string) =>
-    request<ResourceSchema>("GET", `/catalog/resources/${kind}/${encodeURIComponent(type)}`),
   templates: () => request<Template[]>("GET", "/catalog/templates"),
   loadPresets: () => request<LoadProfile[]>("GET", "/catalog/load-presets"),
   /** Every resource and data type of every provider (utility ones included), compact. */
@@ -237,10 +239,10 @@ export const api = {
   /** Problems of one file being edited; `files` holds it and any other unsaved files. */
   checkCode: (id: string, path: string, files: Record<string, string>) =>
     request<{ problems: CodeProblem[] }>("POST", `/workflows/${id}/terraform/check`, { path, files }),
-  exportTo: (id: string, dir: string, environments: boolean) =>
-    request<{ dir: string; files: string[] }>("POST", `/workflows/${id}/export`, { dir, environments }),
-  exportZipUrl: (id: string, environments: boolean) =>
-    `${baseUrl}/api/v1/workflows/${id}/export.zip${qs({ environments })}`,
+  exportTo: (id: string, dir: string, environments: boolean, pipeline: ExportPipeline) =>
+    request<{ dir: string; files: string[] }>("POST", `/workflows/${id}/export`, { dir, environments, ...pipeline }),
+  exportZipUrl: (id: string, environments: boolean, pipeline: ExportPipeline) =>
+    `${baseUrl}/api/v1/workflows/${id}/export.zip${qs({ environments, ...pipeline })}`,
   /** Lists the Terraform projects of a folder (modules used by others are skipped). */
   scanImport: (source: ImportSource) => request<ImportScan>("POST", "/import/scan", source),
   /** Imports projects of a folder, one workflow each, local modules included. */
@@ -301,6 +303,8 @@ export const api = {
   stopLoadTest: (runId: string) => request<void>("POST", `/loadtests/${runId}/stop`),
   /** Incident scenarios a load test of the workflow can inject (active environment). */
   scenarios: (id: string) => request<ScenarioCatalog>("GET", `/workflows/${id}/scenarios`),
+  /** Requests each service/workload receives now, from the workflow's Prometheus (docker and Kubernetes). */
+  traffic: (id: string) => request<LiveTraffic>("GET", `/workflows/${id}/traffic`),
 
   // capacity plans sized from load tests (latest plan kept per environment)
   planCapacity: (id: string, req: CapacityRequest) => request<CapacityPlan>("POST", `/workflows/${id}/capacity-plan`, req),
@@ -440,6 +444,23 @@ export const api = {
   addMonitoring: (id: string, body?: MonitoringRequest) => request<MonitoringResult>("POST", `/workflows/${id}/monitoring`, body),
   /** Production readiness of every environment of a docker or Kubernetes workflow (each opened on its own). */
   readiness: (id: string) => request<WorkflowReadiness>("GET", `/workflows/${id}/readiness`),
+
+  // compliance: a pre-audit of the design against the security benchmarks of its platforms (never a certification)
+  /** Frameworks for the workflow's platforms and its grade against each (just `framework` when given). */
+  compliance: (id: string, framework?: string) =>
+    request<WorkflowCompliance>("GET", `/workflows/${id}/compliance${qs({ framework })}`),
+  /** Marks a manual control as done; the note goes into the report. */
+  attestControl: (id: string, framework: string, control: string, note: string) =>
+    request<ComplianceAttestation>(
+      "PUT",
+      `/workflows/${id}/compliance/attestations/${encodeURIComponent(framework)}/${encodeURIComponent(control)}`,
+      { note },
+    ),
+  unattestControl: (id: string, framework: string, control: string) =>
+    request<void>("DELETE", `/workflows/${id}/compliance/attestations/${encodeURIComponent(framework)}/${encodeURIComponent(control)}`),
+  /** Markdown report of one framework (a download: Content-Disposition names the file). */
+  complianceReportUrl: (id: string, framework: string) =>
+    `${baseUrl}/api/v1/workflows/${id}/compliance/report${qs({ framework, format: "md" })}`,
 
   // environments of docker and Kubernetes workflows (files: overlays, values files, compose overrides, .env.<env>)
   listEnvironments: (id: string) => request<EnvironmentsView>("GET", `/workflows/${id}/environments`),

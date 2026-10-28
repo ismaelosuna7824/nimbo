@@ -36,10 +36,10 @@ export function EditPane({ environment }: { environment: string }) {
 
 function EnvironmentSettings({ environment }: { environment: string }) {
   const workflowId = useWorkflowStore((s) => s.workflow!.id)
-  const updatedAt = useWorkflowStore((s) => s.workflow!.updatedAt)
+  const version = useWorkflowStore((s) => s.version)
   const [target, setTarget] = useState<string | null>(null)
   const settings = useQuery({
-    queryKey: ["environment-settings", workflowId, environment, target ?? "", updatedAt],
+    queryKey: ["environment-settings", workflowId, environment, target ?? "", version],
     queryFn: () => api.environmentSettings(workflowId, environment, target ?? undefined),
     placeholderData: keepPreviousData,
   })

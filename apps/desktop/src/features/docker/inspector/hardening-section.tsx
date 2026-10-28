@@ -12,6 +12,7 @@ import type { ComposeNode, ServicePatch } from "@/lib/api/types"
 import { cn } from "@/lib/utils"
 import { useWorkflowStore } from "@/state/workflow-store"
 import { patchService } from "../actions"
+import { InspectorSection } from "@/features/inspector/inspector-section"
 import { CommitInput } from "./fields"
 import { withScope } from "./service-patch"
 import {
@@ -36,9 +37,9 @@ import {
 const FINDINGS = ["dk_root_user", "dk_hardening", "dk_privileged", "dk_docker_sock", "dk_no_init", "dk_secret_env"]
 
 /**
- * Least privilege for a service's container: non-root user, no capabilities, read-only filesystem, no privilege
- * escalation, an init process, no privileged mode or Docker socket, and secrets mounted as files instead of
- * environment variables.
+ * The "Security" section of a service: least privilege for its container — non-root user, no capabilities, read-only
+ * filesystem, no privilege escalation, an init process, no privileged mode or Docker socket, and secrets mounted as
+ * files instead of environment variables. The score stays on the heading so it reads even while collapsed.
  */
 export function HardeningSection({
   node,
@@ -67,15 +68,17 @@ export function HardeningSection({
   const candidates = secretCandidates(svc, isSecretKey)
 
   return (
-    <section className="flex flex-col gap-2.5" data-testid="docker-hardening">
-      <div className="flex items-center gap-2">
-        <ShieldCheckIcon className="size-3.5 text-emerald-600 dark:text-emerald-400" />
-        <h3 className="text-xs font-semibold">Hardening</h3>
-        <div className="h-px flex-1 bg-border" />
+    <InspectorSection
+      id="docker:security"
+      title="Security"
+      icon={<ShieldCheckIcon className="size-3.5 text-emerald-600 dark:text-emerald-400" />}
+      action={
         <Badge variant={passed === items.length ? "secondary" : "outline"} data-testid="docker-hardening-score">
           {passed}/{items.length}
         </Badge>
-      </div>
+      }
+      data-testid="docker-hardening"
+    >
       <div className="flex items-center gap-2">
         <Progress value={(passed / items.length) * 100} className="h-1.5 flex-1" aria-label="Hardening score" />
         <span className="text-[11px] text-muted-foreground">
@@ -259,7 +262,7 @@ export function HardeningSection({
           </div>
         </div>
       )}
-    </section>
+    </InspectorSection>
   )
 }
 

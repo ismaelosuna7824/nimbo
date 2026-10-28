@@ -16,9 +16,9 @@ import { cellDiffers, visibleGroups } from "./model"
 /** Every environment rendered on its own, side by side per workload: what each one changes from the base. */
 export function ComparePane({ active }: { active: string }) {
   const workflowId = useWorkflowStore((s) => s.workflow!.id)
-  const updatedAt = useWorkflowStore((s) => s.workflow!.updatedAt)
+  const version = useWorkflowStore((s) => s.version)
   const compare = useQuery({
-    queryKey: ["environments-compare", workflowId, updatedAt],
+    queryKey: ["environments-compare", workflowId, version],
     queryFn: () => api.compareEnvironments(workflowId),
     placeholderData: keepPreviousData,
   })

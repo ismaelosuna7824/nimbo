@@ -1,15 +1,19 @@
 import { useQuery } from "@tanstack/react-query"
 import { KeyRoundIcon } from "lucide-react"
-import { useCallback, type ReactNode } from "react"
+import { useCallback } from "react"
 import { toast } from "sonner"
 import { errorMessage } from "@/components/errors"
 import { Skeleton } from "@/components/ui/skeleton"
 import { api } from "@/lib/api/client"
 import type { AccessEdit, WorkflowNode } from "@/lib/api/types"
 import { useWorkflowStore } from "@/state/workflow-store"
+import { InspectorSection } from "../inspector/inspector-section"
 import { ACCESS_EDITORS } from "./editors"
 import { AccessWarnings, LeastPrivilegeOk, ReadOnlySource, RelatedLinks } from "./parts"
 import { accessSupported } from "./support"
+
+// Constant: section headings are memoized on their props.
+const ICON = <KeyRoundIcon className="size-3.5 text-amber-500" />
 
 const accessKeys = {
   view: (workflowId: string, nodeId: string, version: string) => ["access", workflowId, nodeId, version] as const,
@@ -20,24 +24,20 @@ const accessKeys = {
  * (statements, role, members, policy sentences), least-privilege warnings, and read-only code for anything that can't
  * be shown visually.
  */
-export function AccessSection({
-  node,
-  section: Section,
-}: {
-  node: WorkflowNode
-  section: (props: { title: string; icon?: ReactNode; children: ReactNode }) => ReactNode
-}) {
+export function AccessSection({ node }: { node: WorkflowNode }) {
   const workflowId = useWorkflowStore((s) => s.workflow!.id)
-  const updatedAt = useWorkflowStore((s) => s.workflow!.updatedAt)
+  const version = useWorkflowStore((s) => s.version)
   const setWorkflow = useWorkflowStore((s) => s.setWorkflow)
   const select = useWorkflowStore((s) => s.select)
   const file = useWorkflowStore((s) => node.file ?? s.workflow!.nodeFiles?.[node.id])
   const supported = accessSupported(node)
-  // Saved edits from anywhere (inspector, code, MCP, grants) change updatedAt and refresh the view.
+  // Saved edits from anywhere (inspector, code, MCP, grants) change the content version and refresh the view;
+  // selecting the node again reuses the answer for its version.
   const query = useQuery({
-    queryKey: accessKeys.view(workflowId, node.id, updatedAt),
+    queryKey: accessKeys.view(workflowId, node.id, version),
     queryFn: () => api.access(workflowId, node.id),
     enabled: supported,
+    staleTime: Infinity,
     placeholderData: (prev, prevQuery) => (prevQuery?.queryKey[2] === node.id ? prev : undefined),
     retry: false,
   })
@@ -60,7 +60,7 @@ export function AccessSection({
   const view = query.data
   const Editor = view ? ACCESS_EDITORS[view.provider] : undefined
   return (
-    <Section title="Access" icon={<KeyRoundIcon className="size-3.5 text-amber-500" />}>
+    <InspectorSection id="access" title="Access" icon={ICON}>
       <div className="flex flex-col gap-3" data-testid="access-section">
         {query.isPending && !view ? (
           <div className="flex flex-col gap-2">
@@ -82,6 +82,6 @@ export function AccessSection({
           </>
         ) : null}
       </div>
-    </Section>
+    </InspectorSection>
   )
 }

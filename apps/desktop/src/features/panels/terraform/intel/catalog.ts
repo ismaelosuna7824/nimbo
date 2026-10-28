@@ -1,7 +1,7 @@
 // Client cache of the catalog data completion runs on: the type index, the
 // built-in functions and schemas fetched on demand (batched, kept for the
 // session; the catalog is embedded in the daemon and never changes while it
-// runs).
+// runs). The canvas and the inspector read their node schemas through it too.
 
 import { api } from "@/lib/api/client"
 import type { FunctionSignature, ResourceSchema, SchemaKind, TypeInfo } from "@/lib/api/types"

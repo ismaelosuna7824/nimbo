@@ -39,6 +39,9 @@
   --chart-5: #b06a05;
   --radius: 0rem;
   --sidebar: #ebe6d8;
+  /* The canvas and the rail sit on the arcade backdrop and sidebar. */
+  --canvas: var(--background);
+  --rail: var(--sidebar);
   --sidebar-foreground: #19143a;
   --sidebar-primary: #6a2fd0;
   --sidebar-primary-foreground: #ffffff;
@@ -110,6 +113,8 @@
   --chart-4: #a3e635;
   --chart-5: #fbbf24;
   --sidebar: #0f0f28;
+  --canvas: var(--background);
+  --rail: var(--sidebar);
   --sidebar-foreground: #eceaff;
   --sidebar-primary: #a66bff;
   --sidebar-primary-foreground: #12002e;
@@ -345,6 +350,7 @@
 [data-style="arcade"] [data-slot="toggle-group"] {
   box-shadow: 0 0 0 2px var(--arcade-edge);
   gap: 0;
+  padding: 0;
 }
 [data-style="arcade"] [data-slot="toggle-group-item"] {
   border-width: 0 !important;
@@ -352,7 +358,8 @@
   background: var(--card);
   font-weight: 600;
 }
-[data-style="arcade"] [data-slot="toggle-group-item"][data-state="on"] {
+/* aria-checked/aria-pressed too: items wrapped in a tooltip trigger carry the tooltip's data-state instead of "on". */
+[data-style="arcade"] [data-slot="toggle-group-item"]:is([data-state="on"], [aria-checked="true"], [aria-pressed="true"]) {
   background: var(--primary);
   color: var(--primary-foreground);
   box-shadow: inset 2px 2px 0 0 var(--arcade-lo);
@@ -579,10 +586,13 @@
   outline: 2px dashed var(--primary);
   outline-offset: 4px;
 }
-/* The cloud color bar: a full-height stepped strip. */
+/* The cloud color: a full-height stepped strip on the left (the default look draws a top hairline). */
 [data-style="arcade"] [data-slot="node-accent"] {
-  inset-block: 0;
+  inset: 0 auto 0 0;
   width: 6px;
+  height: auto;
+  opacity: 1;
+  mask-image: none;
   background-image: repeating-linear-gradient(to bottom, transparent 0 6px, rgb(0 0 0 / 0.38) 6px 8px) !important;
 }
 /* Resource icons (canvas cards, inspector, palette) on a dark sprite tile, like the workflow icon tile. */

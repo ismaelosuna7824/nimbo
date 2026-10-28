@@ -41,15 +41,16 @@ function loadFonts() {
 /** Derives, lays out and decorates the open workflow's Architecture diagram. */
 export function useScene(): Scene | null {
   const wf = useWorkflowStore((s) => s.workflow) as Workflow
+  const version = useWorkflowStore((s) => s.version)
   const loadTests = useWorkflowStore((s) => s.loadTests)
   const connections = useConnections().data
   const schemas = useNodeSchemas(wf.nodes)
 
   // Module calls are drawn as what they create: their content comes from the module files (read again
-  // whenever the workflow is saved, as module files change with it).
+  // whenever the workflow's content is saved, as module files change with it).
   const hasModules = wf.nodes.some((n) => n.kind === "module")
   const moduleTree = useQuery({
-    queryKey: ["module-tree", wf.id, wf.updatedAt],
+    queryKey: ["module-tree", wf.id, version],
     queryFn: () => api.moduleTree(wf.id),
     enabled: hasModules,
     placeholderData: (previous) => previous,

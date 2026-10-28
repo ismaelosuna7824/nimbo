@@ -10,7 +10,11 @@ test("shows the generated Terraform in the file viewer", async ({ app, api }) =>
   await app.gotoHome()
   await app.openWorkflow("Terraform view")
 
+  // Guided opens on the canvas alone: the dock is down to its tab strip until a tab is picked.
   const panel = app.bottomPanel("Code")
+  await expect(app.page.getByRole("button", { name: "Expand panel" })).toBeVisible()
+  await expect(panel.getByText("Read-only")).toBeHidden()
+  await app.bottomTab("Code").click()
   await expect(app.bottomTab("Code")).toHaveAttribute("aria-selected", "true")
   await expect(panel.getByText("Read-only")).toBeVisible()
   await expect(panel.getByRole("tab", { name: "main.tf" })).toHaveAttribute("aria-selected", "true")

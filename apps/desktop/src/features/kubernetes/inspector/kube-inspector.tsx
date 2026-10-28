@@ -1,12 +1,14 @@
 import { keepPreviousData, useQuery } from "@tanstack/react-query"
-import { Code2Icon, FileTextIcon, MousePointerClickIcon, RadioIcon, RotateCwIcon, Trash2Icon } from "lucide-react"
+import { Code2Icon, FileTextIcon, FlameIcon, MousePointerClickIcon, RadioIcon, RotateCwIcon, Trash2Icon } from "lucide-react"
 import { K8sIcon } from "@/components/k8s-icons/k8s-icon"
 import { TechIcon } from "@/components/tech-icons/tech-icon"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Empty, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from "@/components/ui/empty"
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip"
-import { CommitInput, Section } from "@/features/docker/inspector/fields"
+import { CommitInput } from "@/features/docker/inspector/fields"
+import { InspectorBody, InspectorSection } from "@/features/inspector/inspector-section"
+import { openFailureTest } from "@/features/live/live-store"
 import { DiagnosticRow } from "@/features/panels/components/diagnostic-row"
 import { revealFiles } from "@/features/panels/terraform/reveal-files"
 import { api } from "@/lib/api/client"
@@ -18,7 +20,7 @@ import { podDot } from "../canvas/model"
 import { ChartInspector } from "./chart-inspector"
 import { KubeFieldsContext, useFieldAccess } from "./kube-fields"
 import { BudgetForm, ClaimForm, DataForm, HpaForm, IngressForm, NamespaceForm, ServiceForm } from "./object-forms"
-import { KubeAccessPanel, WorkloadIdentity } from "./rbac-forms"
+import { KubeAccessPanel } from "./rbac-forms"
 import { isRbacNode } from "./rbac-model"
 import { WorkloadForm } from "./workload-form"
 
@@ -46,7 +48,7 @@ function NodeInspector({ node }: { node: KubeNode }) {
     <KubeFieldsContext value={{ node, fields: fields.data?.fields }}>
       <div className="flex h-full flex-col" data-testid="k8s-inspector" data-node={node.id}>
         <Header node={node} status={status} />
-        <div className="flex min-h-0 flex-1 flex-col gap-5 overflow-y-auto p-4">
+        <InspectorBody>
           {diagnostics.length > 0 && (
             <div className="-mx-3 flex flex-col rounded-lg border">
               {diagnostics.map((d, i) => (
@@ -62,10 +64,7 @@ function NodeInspector({ node }: { node: KubeNode }) {
           )}
           {status && status.state !== "absent" && <Live status={status} />}
           {node.workload ? (
-            <>
-              <WorkloadForm node={node} />
-              <WorkloadIdentity node={node} />
-            </>
+            <WorkloadForm node={node} />
           ) : isRbacNode(node) ? (
             <KubeAccessPanel node={node} />
           ) : node.kind === "Service" && node.service ? (
@@ -85,7 +84,7 @@ function NodeInspector({ node }: { node: KubeNode }) {
           ) : (
             <Facts node={node} />
           )}
-        </div>
+        </InspectorBody>
       </div>
     </KubeFieldsContext>
   )
@@ -140,6 +139,16 @@ function Header({ node, status }: { node: KubeNode; status?: KubeWorkloadStatus 
               Open {node.file}
               {node.line ? `:${node.line}` : ""}
             </TooltipContent>
+          </Tooltip>
+        )}
+        {(node.kind === "Deployment" || node.kind === "StatefulSet") && (
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button variant="ghost" size="icon-sm" aria-label="Test a failure…" data-testid="k8s-inspector-failure" onClick={() => openFailureTest(node.id)}>
+                <FlameIcon />
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent>Test a failure: break it under load and watch the impact</TooltipContent>
           </Tooltip>
         )}
         {restartable && (
@@ -200,7 +209,7 @@ const TONE: Record<string, string> = {
 /** Pods of a workload on the local cluster: phase, readiness, restarts and why they are unhappy. */
 function Live({ status }: { status: KubeWorkloadStatus }) {
   return (
-    <Section title="Live" icon={<RadioIcon className="size-3.5 text-sky-500" />}>
+    <InspectorSection id="k8s:live" title="Live" icon={<RadioIcon className="size-3.5 text-sky-500" />}>
       <p className="text-xs" data-testid="k8s-inspector-rollout">
         {status.ready}/{status.desired} ready{status.rollout ? ` · ${status.rollout}` : ""}
       </p>
@@ -232,7 +241,7 @@ function Live({ status }: { status: KubeWorkloadStatus }) {
           })}
         </ul>
       )}
-    </Section>
+    </InspectorSection>
   )
 }
 
@@ -249,7 +258,7 @@ function Facts({ node }: { node: KubeNode }) {
     ["File", node.file && `${node.file}${node.line ? `:${node.line}` : ""}`],
   ]
   return (
-    <Section title="Details" icon={<FileTextIcon className="size-3.5" />}>
+    <InspectorSection id="k8s:details" title="Details" icon={<FileTextIcon className="size-3.5" />}>
       <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 text-xs">
         {facts
           .filter(([, v]) => v)
@@ -268,7 +277,7 @@ function Facts({ node }: { node: KubeNode }) {
           Open in code
         </Button>
       )}
-    </Section>
+    </InspectorSection>
   )
 }
 

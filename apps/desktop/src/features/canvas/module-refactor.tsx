@@ -1,6 +1,6 @@
 import { useQuery } from "@tanstack/react-query"
 import { ArrowRightIcon, PackageIcon, PackageOpenIcon, TriangleAlertIcon } from "lucide-react"
-import { useEffect, useState } from "react"
+import { memo, useEffect, useState } from "react"
 import { toast } from "sonner"
 import { errorMessage } from "@/components/errors"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
@@ -54,15 +54,15 @@ function suggestName(wf: Workflow, ids: string[]) {
   return name
 }
 
-/** The extract and inline dialogs; mount once inside the canvas. */
-export function ModuleRefactorDialogs() {
+/** The extract and inline dialogs; mount once inside the canvas (memoized: canvas updates don't re-render them). */
+export const ModuleRefactorDialogs = memo(function ModuleRefactorDialogs() {
   return (
     <>
       <ExtractModuleDialog />
       <InlineModuleDialog />
     </>
   )
-}
+})
 
 function ExtractModuleDialog() {
   const ids = useModuleRefactor((s) => s.extract)
@@ -81,6 +81,7 @@ function ExtractModuleForm({ ids, wf }: { ids: string[]; wf: Workflow }) {
   const [name, setName] = useState(() => suggestName(wf, ids))
   const [debounced, setDebounced] = useState(name)
   const [busy, setBusy] = useState(false)
+  const version = useWorkflowStore((s) => s.version)
 
   useEffect(() => {
     const t = setTimeout(() => setDebounced(name.trim()), 300)
@@ -89,7 +90,7 @@ function ExtractModuleForm({ ids, wf }: { ids: string[]; wf: Workflow }) {
 
   const valid = MODULE_NAME.test(name.trim())
   const preview = useQuery({
-    queryKey: ["module-extract-preview", wf.id, wf.updatedAt, ids, debounced],
+    queryKey: ["module-extract-preview", wf.id, version, ids, debounced],
     queryFn: () => api.previewExtractModule(wf.id, { nodeIds: ids, name: debounced }),
     enabled: MODULE_NAME.test(debounced),
     retry: false,

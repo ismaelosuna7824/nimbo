@@ -18,7 +18,7 @@ import {
   XIcon,
 } from "lucide-react"
 import { useTheme } from "next-themes"
-import { Fragment, useEffect, useMemo, useState } from "react"
+import { Fragment, memo, useEffect, useMemo, useState } from "react"
 import { errorMessage } from "@/components/errors"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
@@ -38,14 +38,15 @@ import { openInlineModule } from "./module-refactor-store"
 const nodeTypes = { resource: ResourceNode }
 const edgeTypes = { ref: RefEdge }
 
-/** Full-canvas overlay showing what is inside a module call. Mount inside the canvas. */
-export function ModuleOverlay() {
+/** Full-canvas overlay showing what is inside a module call. Mount inside the canvas (memoized: canvas updates don't re-render it). */
+export const ModuleOverlay = memo(function ModuleOverlay() {
   const nodeId = useModuleView((s) => s.nodeId)
   const path = useModuleView((s) => s.path)
   const setPath = useModuleView((s) => s.setPath)
   const close = useModuleView((s) => s.close)
   // Only follows the workflow while the overlay is open.
   const wf = useWorkflowStore((s) => (nodeId ? s.workflow : null))
+  const version = useWorkflowStore((s) => (nodeId ? s.version : ""))
   const node = wf?.nodes.find((n) => n.id === nodeId)
 
   // The module disappeared (deleted, workflow switched): nothing to show.
@@ -66,7 +67,7 @@ export function ModuleOverlay() {
 
   const nested = path.map((p) => `module.${p}`).join(".")
   const view = useQuery({
-    queryKey: ["module-view", wf?.id, nodeId, nested, wf?.updatedAt],
+    queryKey: ["module-view", wf?.id, nodeId, nested, version],
     queryFn: () => api.moduleView(wf!.id, nodeId!, nested || undefined),
     enabled: !!wf && !!node,
     retry: false,
@@ -170,7 +171,7 @@ export function ModuleOverlay() {
       </div>
     </div>
   )
-}
+})
 
 function ModuleMessage({ title, message, remote }: { title: string; message: string; remote?: boolean }) {
   return (

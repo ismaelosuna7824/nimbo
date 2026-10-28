@@ -3,7 +3,8 @@ import { useContext } from "react"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import { Checkbox } from "@/components/ui/checkbox"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
-import { CommitInput, ListEditor, SecretInput, Section } from "@/features/docker/inspector/fields"
+import { CommitInput, ListEditor, SecretInput } from "@/features/docker/inspector/fields"
+import { InspectorSection } from "@/features/inspector/inspector-section"
 import type { KubeNode, KubeRoute, KubeServicePort } from "@/lib/api/types"
 import { useWorkflowStore } from "@/state/workflow-store"
 import { patchObject } from "../actions"
@@ -41,7 +42,7 @@ export function ServiceForm({ node }: { node: KubeNode }) {
           <AlertDescription>Traffic to this Service goes nowhere. Drag from it to a workload on the canvas to point the selector at that workload's pods.</AlertDescription>
         </Alert>
       )}
-      <Section title="Service" icon={<PlugIcon className="size-3.5" />}>
+      <InspectorSection id="k8s:service" title="Service" icon={<PlugIcon className="size-3.5" />}>
         <KField path="spec.type" label="Type" display={svc.type}>
           <Select value={svc.type} onValueChange={(type) => patch({ "spec.type": type })} disabled={svc.type === "ExternalName"}>
             <SelectTrigger size="sm" className="h-8 w-full text-xs" aria-label="Service type">
@@ -77,8 +78,8 @@ export function ServiceForm({ node }: { node: KubeNode }) {
             )}
           />
         </KList>
-      </Section>
-      <Section title="Selector" icon={<LinkIcon className="size-3.5" />}>
+      </InspectorSection>
+      <InspectorSection id="k8s:selector" title="Selector" icon={<LinkIcon className="size-3.5" />}>
         <KList path="spec.selector" display={selector.map((s) => `${s.key}=${s.value}`).join(", ")}>
           <ListEditor<Pair>
             items={selector}
@@ -97,7 +98,7 @@ export function ServiceForm({ node }: { node: KubeNode }) {
           />
         </KList>
         <p className="text-[11px] text-muted-foreground">Connecting the Service to a workload on the canvas sets this for you.</p>
-      </Section>
+      </InspectorSection>
     </div>
   )
 }
@@ -113,15 +114,15 @@ export function IngressForm({ node }: { node: KubeNode }) {
   const cls = routes.find((r) => r.class)?.class ?? ""
   if (node.kind !== "Ingress") {
     return (
-      <Section title="Routes" icon={<RouteIcon className="size-3.5" />}>
+      <InspectorSection id="k8s:routes" title="Routes" icon={<RouteIcon className="size-3.5" />}>
         <RouteList routes={routes} />
         <p className="text-[11px] text-muted-foreground">Edit {node.kind} rules in code.</p>
-      </Section>
+      </InspectorSection>
     )
   }
   return (
     <div className="flex flex-col gap-5">
-      <Section title="Ingress" icon={<RouteIcon className="size-3.5" />}>
+      <InspectorSection id="k8s:ingress" title="Ingress" icon={<RouteIcon className="size-3.5" />}>
         <KField path="spec.ingressClassName" label="Class" htmlFor="k8s-ingress-class" display={cls} hint="traefik is the local cluster's default; nginx works as an alias.">
           <CommitInput id="k8s-ingress-class" className="font-mono" value={cls} placeholder="default class" onCommit={(v) => (v ? patch({ "spec.ingressClassName": v }) : patch(undefined, ["spec.ingressClassName"]))} />
         </KField>
@@ -168,7 +169,7 @@ export function IngressForm({ node }: { node: KubeNode }) {
             HTTPS (TLS) for {hosts.length ? hosts.join(", ") : "its hosts (add a host first)"}
           </label>
         </KList>
-      </Section>
+      </InspectorSection>
     </div>
   )
 }
@@ -195,7 +196,7 @@ export function HpaForm({ node }: { node: KubeNode }) {
   const select = useWorkflowStore((st) => st.select)
   const intRe = /^\d+$/
   return (
-    <Section title="Autoscaling" icon={<ExpandIcon className="size-3.5" />}>
+    <InspectorSection id="k8s:autoscaling" title="Autoscaling" icon={<ExpandIcon className="size-3.5" />}>
       <p className="text-xs">
         Scales{" "}
         {target ? (
@@ -234,7 +235,7 @@ export function HpaForm({ node }: { node: KubeNode }) {
         Needs requests on the containers for the resources it watches (CPU is the usual signal: memory rarely drops when load does); the local cluster runs
         metrics-server.
       </p>
-    </Section>
+    </InspectorSection>
   )
 }
 
@@ -242,7 +243,7 @@ export function ClaimForm({ node }: { node: KubeNode }) {
   const st = node.storage ?? {}
   const patch = (set?: Record<string, unknown>, unset?: string[]) => void patchObject(node, set, unset)
   return (
-    <Section title="Storage" icon={<HardDriveIcon className="size-3.5" />}>
+    <InspectorSection id="k8s:claim" title="Storage" icon={<HardDriveIcon className="size-3.5" />}>
       <div className="grid grid-cols-2 gap-2">
         <KField path="spec.resources.requests.storage" label="Size" htmlFor="k8s-pvc-size" display={st.size}>
           <CommitInput id="k8s-pvc-size" className="font-mono" value={st.size ?? ""} placeholder="1Gi" validate={(v) => (/^\d+(\.\d+)?(Ki|Mi|Gi|Ti)?$/.test(v) ? undefined : "e.g. 1Gi")} onCommit={(v) => patch({ "spec.resources.requests.storage": v })} />
@@ -252,7 +253,7 @@ export function ClaimForm({ node }: { node: KubeNode }) {
         </KField>
       </div>
       {st.accessModes && st.accessModes.length > 0 && <p className="font-mono text-[11px] text-muted-foreground">{st.accessModes.join(", ")}</p>}
-    </Section>
+    </InspectorSection>
   )
 }
 
@@ -295,7 +296,7 @@ export function NamespaceForm({ node }: { node: KubeNode }) {
   }
   const level = labels[POD_SECURITY_LABEL] ?? ""
   return (
-    <Section title="Namespace" icon={<ShieldCheckIcon className="size-3.5" />}>
+    <InspectorSection id="k8s:namespace" title="Namespace" icon={<ShieldCheckIcon className="size-3.5" />}>
       <KField path="metadata.labels" label="Pod Security (enforce)" htmlFor="k8s-ns-pod-security" display={level} hint={POD_SECURITY_HINT[level]}>
         <Select value={level || "none"} onValueChange={(v) => write(withPodSecurity(labels, v === "none" ? "" : v))}>
           <SelectTrigger id="k8s-ns-pod-security" size="sm" className="h-8 w-full text-xs" aria-label="Pod Security level" data-testid="k8s-ns-pod-security">
@@ -315,7 +316,7 @@ export function NamespaceForm({ node }: { node: KubeNode }) {
       <KList path="metadata.labels" display={Object.entries(labels).map(([k, v]) => `${k}=${v}`).join(", ")}>
         <PairsEditor pairs={toPairs(labels)} empty="No labels." placeholder="team" onChange={write} />
       </KList>
-    </Section>
+    </InspectorSection>
   )
 }
 
@@ -337,7 +338,7 @@ export function BudgetForm({ node }: { node: KubeNode }) {
   )
   return (
     <div className="flex flex-col gap-5">
-      <Section title="Disruption budget" icon={<ShieldCheckIcon className="size-3.5" />}>
+      <InspectorSection id="k8s:budget" title="Disruption budget" navLabel="Budget" icon={<ShieldCheckIcon className="size-3.5" />}>
         <div className="grid grid-cols-2 gap-2">
           <KField path={`spec.${mode}`} label="Rule" htmlFor="k8s-pdb-mode" display={mode}>
             <Select value={mode} onValueChange={(m) => value && write(m as BudgetMode, value)}>
@@ -355,8 +356,8 @@ export function BudgetForm({ node }: { node: KubeNode }) {
           </KField>
         </div>
         <p className="text-[11px] text-muted-foreground">Max unavailable 1 lets node drains move pods one at a time; a minimum equal to the replicas blocks every eviction.</p>
-      </Section>
-      <Section title="Selector" icon={<LinkIcon className="size-3.5" />}>
+      </InspectorSection>
+      <InspectorSection id="k8s:selector" title="Selector" icon={<LinkIcon className="size-3.5" />}>
         <KList path="spec.selector.matchLabels" display={Object.entries(selector).map(([k, v]) => `${k}=${v}`).join(", ")}>
           <PairsEditor
             pairs={toPairs(selector)}
@@ -368,7 +369,7 @@ export function BudgetForm({ node }: { node: KubeNode }) {
         <p className="text-[11px] text-muted-foreground" data-testid="k8s-pdb-selected">
           {selected.length ? `Protects ${selected.map((n) => `${n.kind} ${n.name}`).join(", ")}.` : "Selects no workload: use the labels of a workload's pods."}
         </p>
-      </Section>
+      </InspectorSection>
     </div>
   )
 }
@@ -386,7 +387,7 @@ export function DataForm({ node }: { node: KubeNode }) {
     if (Object.keys(p.set ?? {}).length || p.unset?.length) void patchObject(node, p.set, p.unset?.length ? p.unset : undefined)
   }
   return (
-    <Section title={secret ? "Secret keys" : "Keys"} icon={<KeyRoundIcon className="size-3.5" />}>
+    <InspectorSection id="k8s:data" title={secret ? "Secret keys" : "Keys"} icon={<KeyRoundIcon className="size-3.5" />}>
       <KList path={secret ? "stringData" : "data"} display={(node.data ?? []).join(", ")}>
         <ListEditor<DataEntry>
           items={entries}
@@ -420,6 +421,6 @@ export function DataForm({ node }: { node: KubeNode }) {
           ? "Values are written to your files as plain text under stringData and never shown here: keep real credentials out of git."
           : "Not for credentials: keep passwords and tokens in a Secret."}
       </p>
-    </Section>
+    </InspectorSection>
   )
 }

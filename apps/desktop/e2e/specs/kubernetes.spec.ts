@@ -213,6 +213,7 @@ test("the Architecture view of a Kubernetes workflow shows cluster, namespace, e
 
 test("converts a Docker workflow to Kubernetes", async ({ app, api, page }) => {
   await app.openNew(api, "Compose shop", "docker-node-postgres-redis")
+  await page.getByRole("button", { name: "Workflow actions" }).click()
   await page.getByTestId("convert-kubernetes").click()
   const dialog = page.getByTestId("convert-kubernetes-dialog")
   await expect(dialog).toBeVisible()

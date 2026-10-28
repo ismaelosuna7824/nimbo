@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react"
+import { useMemo, useState } from "react"
 import { useMutation } from "@tanstack/react-query"
 import {
   ArrowDownIcon,
@@ -107,9 +107,6 @@ export function ReachabilityDialog() {
   const open = useReachability((s) => s.open)
   const seq = useReachability((s) => s.seq)
   const workflowId = useWorkflowStore((s) => s.workflow?.id)
-
-  // Never carry the dialog (and its highlight) over to another workflow.
-  useEffect(() => closeReachability, [workflowId])
 
   return (
     <Sheet open={open && !!workflowId} onOpenChange={(o) => !o && closeReachability()} modal={false}>

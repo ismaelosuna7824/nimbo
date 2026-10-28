@@ -1,4 +1,5 @@
 import { useMemo } from "react"
+import { useShallow } from "zustand/react/shallow"
 import { CircleAlert, Globe, Play, Plug, Rocket, Route, ScrollText, Zap } from "lucide-react"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
@@ -40,12 +41,20 @@ export function WorkflowTargetStep({
   resolved: WorkflowTarget
   pro: boolean
 }) {
-  const nodes = useWorkflowStore((s) => s.workflow!.nodes)
-  const composeNodes = useWorkflowStore((s) => s.workflow!.compose?.graph.nodes)
-  const kubeNodes = useWorkflowStore((s) => s.workflow!.kubernetes?.graph.nodes)
   const kind = useWorkflowStore((s) => s.workflow!.kind)
   const docker = kind === "docker"
   const kube = kind === "kubernetes"
+  // Labels and the network flag, not the nodes: this tab stays mounted, and every inspector keystroke replaces them.
+  const labels = useWorkflowStore(
+    useShallow((s): Record<string, string> =>
+      kube
+        ? Object.fromEntries((s.workflow!.kubernetes?.graph.nodes ?? []).map((n) => [n.id, `${n.kind} ${n.name}`]))
+        : docker
+          ? Object.fromEntries((s.workflow!.compose?.graph.nodes ?? []).filter((n) => n.kind === "service").map((n) => [n.id, n.name]))
+          : nodeLabelById(s.workflow!.nodes),
+    ),
+  )
+  const networkResources = useWorkflowStore((s) => hasNetworkResources(s.workflow!.nodes))
   // Docker workspaces: running services stand for deployed resources, published ports for the emulator address;
   // Kubernetes workspaces: running workloads, and the first port-forward / ingress address.
   const deployedCount = useWorkflowStore((s) =>
@@ -61,15 +70,6 @@ export function WorkflowTargetStep({
       : docker
         ? firstPublishedUrl(s.compose)
         : s.sandbox?.emulators.find((e) => e.state === "running")?.url,
-  )
-  const labels = useMemo(
-    () =>
-      kube
-        ? Object.fromEntries((kubeNodes ?? []).map((n) => [n.id, `${n.kind} ${n.name}`]))
-        : docker
-          ? Object.fromEntries((composeNodes ?? []).filter((n) => n.kind === "service").map((n) => [n.id, n.name]))
-          : nodeLabelById(nodes),
-    [kube, docker, kubeNodes, composeNodes, nodes],
   )
   const accessResources = useEndpoints().data?.resources
   const { suggested: targets, loading } = resolved
@@ -144,7 +144,7 @@ export function WorkflowTargetStep({
                   a function, a queue, a bucket or a table. Add one and deploy again, or test a service you already have with
                   Custom HTTP or a Connection.
                 </p>
-                {hasNetworkResources(nodes) && (
+                {networkResources && (
                   <p className="mt-2">
                     Want to know who can reach what in your network instead?{" "}
                     <Button variant="link" size="xs" className="h-auto px-0" onClick={() => void openReachability()}>

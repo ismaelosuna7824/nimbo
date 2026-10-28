@@ -1,31 +1,26 @@
 import { isTauri } from "@tauri-apps/api/core"
 import { listen } from "@tauri-apps/api/event"
 import {
-  ActivityIcon,
+  ChevronDownIcon,
   CircleAlertIcon,
   CloudCheckIcon,
   CloudUploadIcon,
   DownloadIcon,
+  EllipsisIcon,
   FileCheck2Icon,
-  GraduationCapIcon,
+  GaugeIcon,
   ListChecksIcon,
   PanelRightIcon,
-  SearchIcon,
+  RadarIcon,
+  ScrollTextIcon,
   Trash2Icon,
   UploadIcon,
-  EllipsisIcon,
-  MoonIcon,
-  SettingsIcon,
-  SunIcon,
+  XIcon,
 } from "lucide-react"
-import { useEffect, useState } from "react"
-import { Checkbox } from "@/components/ui/checkbox"
+import { lazy, Suspense, useEffect } from "react"
+import { useOnceTrue } from "@/components/lazy-module"
 import { TechIcon } from "@/components/tech-icons/tech-icon"
 import { ThemedIcon } from "@/components/arcade/themed-icon"
-import { ThemeToggle } from "@/components/theme-toggle"
-import { SettingsButton } from "@/features/settings/settings-button"
-import { useSettingsView } from "@/features/settings/store"
-import { useTheme } from "next-themes"
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -35,16 +30,6 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu"
 import { useSyncedState } from "@/components/use-synced-state"
-import {
-  AlertDialog,
-  AlertDialogAction,
-  AlertDialogCancel,
-  AlertDialogContent,
-  AlertDialogDescription,
-  AlertDialogFooter,
-  AlertDialogHeader,
-  AlertDialogTitle,
-} from "@/components/ui/alert-dialog"
 import { Button } from "@/components/ui/button"
 import { Kbd } from "@/components/ui/kbd"
 import { Separator } from "@/components/ui/separator"
@@ -55,9 +40,7 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip
 import type { UserMode } from "@/state/workflow-store"
 import { useWorkflowStore } from "@/state/workflow-store"
 import { cn } from "@/lib/utils"
-import { ConvertKubernetesDialog } from "@/features/docker/convert-kubernetes-dialog"
-import { MonitoringAction } from "@/features/monitoring/monitoring-action"
-import { useLearnStore } from "@/features/learn/store"
+import { hasMonitoring, openMonitoringDialog, useMonitoringDialog } from "@/features/monitoring/monitoring-store"
 import { formatRelative } from "../panels/lib/format"
 import { closeFocusedFileTab } from "../panels/terraform/close-file-tab"
 import { MOD_KEY, runAction, useRunBusy } from "./actions"
@@ -65,50 +48,11 @@ import { SandboxChip } from "./sandbox-chip"
 import { useUiStore } from "./ui-store"
 import { closeWorkflow } from "./workflow-actions"
 
-/** The header's secondary actions (import, export, Learn, theme, settings) as one menu when the header is narrow. */
-function MoreActions({ exportLabel, onImport, onExport }: { exportLabel: string; onImport: () => void; onExport: () => void }) {
-  const { resolvedTheme, setTheme } = useTheme()
-  const openSettings = useSettingsView((s) => s.openView)
-  const dark = resolvedTheme !== "light"
-  return (
-    <DropdownMenu>
-      <Tooltip>
-        <TooltipTrigger asChild>
-          <DropdownMenuTrigger asChild>
-            <Button variant="ghost" size="icon-sm" className="@5xl:hidden" aria-label="More actions" data-testid="topbar-more">
-              <EllipsisIcon />
-            </Button>
-          </DropdownMenuTrigger>
-        </TooltipTrigger>
-        <TooltipContent>More: import, export, Learn, theme, settings</TooltipContent>
-      </Tooltip>
-      <DropdownMenuContent align="end" className="w-60">
-        <DropdownMenuItem onSelect={onImport}>
-          <UploadIcon />
-          Import a project
-        </DropdownMenuItem>
-        <DropdownMenuItem onSelect={onExport}>
-          <DownloadIcon />
-          {exportLabel}
-        </DropdownMenuItem>
-        <DropdownMenuSeparator />
-        <DropdownMenuItem onSelect={() => useLearnStore.getState().openView({ challengeId: null })}>
-          <GraduationCapIcon />
-          Learn: roadmaps and challenges
-        </DropdownMenuItem>
-        <DropdownMenuItem onSelect={() => setTheme(dark ? "light" : "dark")}>
-          {dark ? <SunIcon /> : <MoonIcon />}
-          {dark ? "Light theme" : "Dark theme"}
-        </DropdownMenuItem>
-        <DropdownMenuItem onSelect={() => openSettings()}>
-          <SettingsIcon />
-          Settings
-          <DropdownMenuShortcut>{MOD_KEY} ,</DropdownMenuShortcut>
-        </DropdownMenuItem>
-      </DropdownMenuContent>
-    </DropdownMenu>
-  )
-}
+// The container workspaces' dialogs load the first time they open.
+const MonitoringDialog = lazy(() => import("@/features/monitoring/monitoring-dialog").then((m) => ({ default: m.MonitoringDialog })))
+const ConvertKubernetesDialog = lazy(() =>
+  import("@/features/docker/convert-kubernetes-dialog").then((m) => ({ default: m.ConvertKubernetesDialog })),
+)
 
 function WorkflowName() {
   const name = useWorkflowStore((s) => s.workflow?.name ?? "")
@@ -199,77 +143,201 @@ function ProblemsBadge() {
   const showBottom = useWorkflowStore((s) => s.showBottom)
   const errors = (diagnostics ?? []).filter((d) => d.severity === "error").length
   const warnings = (diagnostics ?? []).filter((d) => d.severity === "warning").length
+  const count = errors + warnings
   return (
     <Tooltip>
       <TooltipTrigger asChild>
         <Button
           variant="ghost"
-          size="sm"
+          size={count > 0 ? "sm" : "icon-sm"}
           onClick={() => showBottom("problems")}
+          aria-label={count > 0 ? `${count} problem${count === 1 ? "" : "s"}` : "No problems"}
           className={cn(errors > 0 ? "text-destructive" : warnings > 0 ? "text-amber-600 dark:text-amber-400" : "text-muted-foreground")}
         >
-          {errors + warnings > 0 ? <ThemedIcon icon={CircleAlertIcon} pixel="warning" /> : <ThemedIcon icon={ListChecksIcon} pixel="list" />}
-          {errors + warnings}
+          {count > 0 ? <ThemedIcon icon={CircleAlertIcon} pixel="warning" /> : <ThemedIcon icon={ListChecksIcon} pixel="list" />}
+          {/* A zero is noise: the count only shows when there is something to look at. */}
+          {count > 0 && count}
         </Button>
       </TooltipTrigger>
       <TooltipContent>
-        {errors} error{errors === 1 ? "" : "s"}, {warnings} warning{warnings === 1 ? "" : "s"}
+        {count === 0
+          ? "No problems"
+          : `${errors} error${errors === 1 ? "" : "s"}, ${warnings} warning${warnings === 1 ? "" : "s"}`}
       </TooltipContent>
     </Tooltip>
   )
 }
 
-function IconAction({ label, onClick, children, kbd }: { label: string; onClick: () => void; children: React.ReactNode; kbd?: string }) {
-  return (
-    <Tooltip>
-      <TooltipTrigger asChild>
-        <Button variant="ghost" size="icon-sm" onClick={onClick} aria-label={label}>
-          {children}
-        </Button>
-      </TooltipTrigger>
-      <TooltipContent>
-        {label}
-        {kbd && <Kbd className="ml-1.5">{kbd}</Kbd>}
-      </TooltipContent>
-    </Tooltip>
-  )
+/** What the destroy action is called in each kind of workspace (menu item; the confirmation dialog explains it). */
+function destroyLabel(kind: string | undefined) {
+  if (kind === "docker") return "Stop and remove the containers…"
+  if (kind === "kubernetes") return "Delete what Deploy applied…"
+  return "Destroy everything in the sandbox…"
 }
 
-/** Docker workspaces: turns the compose project into a new Kubernetes workflow (manifests, Kustomize or Helm). */
-function ConvertKubernetesAction() {
-  const workflow = useWorkflowStore((s) => s.workflow)
-  const open = useUiStore((s) => s.convertKubernetes)
-  const setOpen = useUiStore((s) => s.setConvertKubernetes)
-  if (!workflow) return null
+/**
+ * Deploy as a split button: the primary action, and next to it a menu with the rest of the run lifecycle (Validate
+ * and Plan for Terraform, the run log) and, last, apart and red, the destructive one. One button in the bar instead
+ * of five, and destroy can't be hit by a slip of the pointer: it takes opening the menu and a confirmation.
+ */
+function DeployButton() {
+  const kind = useWorkflowStore((s) => s.workflow?.kind)
+  const terraform = kind !== "docker" && kind !== "kubernetes"
+  const showBottom = useWorkflowStore((s) => s.showBottom)
+  const busy = useRunBusy()
   return (
-    <>
+    <div className="flex items-center">
       <Tooltip>
         <TooltipTrigger asChild>
-          <Button variant="ghost" size="sm" aria-label="Convert to Kubernetes" data-testid="convert-kubernetes" onClick={() => setOpen(true)}>
-            <TechIcon icon="kubernetes" size={16} />
-            <span className="hidden 2xl:inline">To Kubernetes</span>
+          <Button size="sm" className="rounded-r-none" disabled={busy} onClick={() => void runAction("apply")}>
+            {busy ? <Spinner /> : <ThemedIcon icon={CloudUploadIcon} glyph="rocket" />}
+            Deploy
           </Button>
         </TooltipTrigger>
-        <TooltipContent>Convert to Kubernetes: a new workflow with manifests, Kustomize or a Helm chart</TooltipContent>
+        <TooltipContent>
+          {kind === "kubernetes"
+            ? "Apply every source to this workflow's local Kubernetes cluster (creates it when needed)"
+            : kind === "docker"
+              ? "Build and start every service on this machine (docker compose up)"
+              : "Create everything in your local sandbox"}
+        </TooltipContent>
       </Tooltip>
-      <ConvertKubernetesDialog workflow={workflow} open={open} onOpenChange={setOpen} />
+      <DropdownMenu>
+        <DropdownMenuTrigger asChild>
+          <Button size="sm" className="rounded-l-none border-l border-primary-foreground/20 px-1.5" aria-label="More deploy actions">
+            <ChevronDownIcon />
+          </Button>
+        </DropdownMenuTrigger>
+        <DropdownMenuContent align="end" className="w-72">
+          {terraform && (
+            <>
+              <DropdownMenuItem disabled={busy} onSelect={() => void runAction("validate")}>
+                <FileCheck2Icon />
+                Validate
+                <span className="ml-auto text-xs text-muted-foreground">check for mistakes</span>
+              </DropdownMenuItem>
+              <DropdownMenuItem disabled={busy} onSelect={() => void runAction("plan")}>
+                <ListChecksIcon />
+                Plan
+                <span className="ml-auto text-xs text-muted-foreground">preview changes</span>
+              </DropdownMenuItem>
+            </>
+          )}
+          <DropdownMenuItem onSelect={() => showBottom("deploy")}>
+            <ScrollTextIcon />
+            Runs and logs
+          </DropdownMenuItem>
+          <DropdownMenuSeparator />
+          <DropdownMenuItem variant="destructive" disabled={busy} onSelect={() => useUiStore.getState().setConfirmDestroy(true)}>
+            <Trash2Icon />
+            {destroyLabel(kind)}
+          </DropdownMenuItem>
+        </DropdownMenuContent>
+      </DropdownMenu>
+    </div>
+  )
+}
+
+/**
+ * The workflow's secondary actions, out of the bar: import and export, and for container workspaces monitoring and
+ * the Kubernetes conversion (their dialogs are rendered here too). Learn, theme and Settings are in the navigation rail.
+ */
+function WorkflowMenu() {
+  // The kind and the monitoring flag, not the workflow: the bar re-renders the menu on every edit otherwise.
+  const open = useWorkflowStore((s) => s.workflow !== null)
+  const kind = useWorkflowStore((s) => s.workflow?.kind)
+  const monitored = useWorkflowStore((s) => hasMonitoring(s.workflow))
+  const openDialog = useWorkflowStore((s) => s.openDialog)
+  const setConvertOpen = useUiStore((s) => s.setConvertKubernetes)
+  // Terraform workflows have no kind: guard on the workflow being open, not on the kind.
+  if (!open) return null
+  const docker = kind === "docker"
+  const containers = docker || kind === "kubernetes"
+  return (
+    <>
+      <DropdownMenu>
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <DropdownMenuTrigger asChild>
+              <Button variant="ghost" size="icon-sm" aria-label="Workflow actions" data-testid="topbar-more">
+                <EllipsisIcon />
+              </Button>
+            </DropdownMenuTrigger>
+          </TooltipTrigger>
+          <TooltipContent>Import, export{containers ? ", monitoring" : ""} and more</TooltipContent>
+        </Tooltip>
+        <DropdownMenuContent align="end" className="w-64">
+          <DropdownMenuItem onSelect={() => openDialog("import")}>
+            <UploadIcon />
+            Import a project…
+          </DropdownMenuItem>
+          <DropdownMenuItem onSelect={() => openDialog("export")}>
+            <DownloadIcon />
+            {containers ? "Export the project files…" : "Export Terraform…"}
+          </DropdownMenuItem>
+          {containers && (
+            <>
+              <DropdownMenuSeparator />
+              <DropdownMenuItem data-testid="add-monitoring" onSelect={openMonitoringDialog}>
+                <RadarIcon className={monitored ? "text-emerald-600 dark:text-emerald-400" : undefined} />
+                {monitored ? "Monitoring: Grafana, Prometheus, alerts…" : "Add monitoring…"}
+              </DropdownMenuItem>
+            </>
+          )}
+          {docker && (
+            <DropdownMenuItem data-testid="convert-kubernetes" onSelect={() => setConvertOpen(true)}>
+              <TechIcon icon="kubernetes" size={16} />
+              Convert to Kubernetes…
+            </DropdownMenuItem>
+          )}
+          <DropdownMenuSeparator />
+          <DropdownMenuItem onSelect={() => void closeWorkflow()}>
+            <XIcon />
+            Close workflow
+            <DropdownMenuShortcut>{MOD_KEY} W</DropdownMenuShortcut>
+          </DropdownMenuItem>
+        </DropdownMenuContent>
+      </DropdownMenu>
+      {containers && <ContainerDialogs docker={docker} />}
     </>
   )
 }
 
+/** The container workspaces' dialogs: they read the whole workflow, so only those workspaces pay for following it. */
+function ContainerDialogs({ docker }: { docker: boolean }) {
+  const workflow = useWorkflowStore((s) => s.workflow)
+  const convertOpen = useUiStore((s) => s.convertKubernetes)
+  const setConvertOpen = useUiStore((s) => s.setConvertKubernetes)
+  // Mounted from the first open on, so later closes still animate.
+  const monitoringUsed = useOnceTrue(useMonitoringDialog((s) => s.open))
+  const convertUsed = useOnceTrue(docker && convertOpen)
+  if (!workflow) return null
+  return (
+    <>
+      {monitoringUsed && (
+        <Suspense fallback={null}>
+          <MonitoringDialog workflow={workflow} />
+        </Suspense>
+      )}
+      {docker && convertUsed && (
+        <Suspense fallback={null}>
+          <ConvertKubernetesDialog workflow={workflow} open={convertOpen} onOpenChange={setConvertOpen} />
+        </Suspense>
+      )}
+    </>
+  )
+}
+
+/**
+ * The editor's bar, kept to what a workflow needs at a glance: its name and save state on the left; on the right the
+ * experience level, the sandbox, Test and Deploy, the problems count, the workflow menu and the inspector toggle.
+ */
 export function TopBar() {
-  const kind = useWorkflowStore((s) => s.workflow?.kind)
-  const docker = kind === "docker"
-  const kube = kind === "kubernetes"
   const mode = useWorkflowStore((s) => s.mode)
   const setMode = useWorkflowStore((s) => s.setMode)
-  const openDialog = useWorkflowStore((s) => s.openDialog)
   const showBottom = useWorkflowStore((s) => s.showBottom)
   const inspectorOpen = useUiStore((s) => s.inspectorOpen)
   const setInspectorOpen = useUiStore((s) => s.setInspectorOpen)
-  const setCommandOpen = useUiStore((s) => s.setCommandOpen)
-  const setConfirmDestroy = useUiStore((s) => s.setConfirmDestroy)
-  const busy = useRunBusy()
 
   // ⌘W / Ctrl+W closes the focused file tab of the Code panel, else the workflow. On macOS the native menu owns ⌘W
   // and emits close-workflow instead.
@@ -293,7 +361,7 @@ export function TopBar() {
   }, [])
 
   return (
-    <header className="@container flex h-12 shrink-0 items-center gap-2 border-b px-2">
+    <header className="flex h-12 shrink-0 items-center gap-2 border-b px-2">
       <div className="flex min-w-0 flex-1 items-center gap-1 overflow-hidden">
         <SidebarTrigger />
         <Separator orientation="vertical" className="mx-1 h-5" />
@@ -301,23 +369,7 @@ export function TopBar() {
         <SaveState />
       </div>
 
-      <div className="flex shrink-0 items-center gap-2">
-        <Tooltip>
-          <TooltipTrigger asChild>
-            <Button
-              variant="outline"
-              size="sm"
-              className="justify-start text-muted-foreground 2xl:w-48"
-              aria-label="Search or run a command"
-              onClick={() => setCommandOpen(true)}
-            >
-              <ThemedIcon icon={SearchIcon} pixel="search" />
-              <span className="hidden 2xl:inline">Search or run…</span>
-              <Kbd className="ml-auto">{MOD_KEY} K</Kbd>
-            </Button>
-          </TooltipTrigger>
-          <TooltipContent className="2xl:hidden">Search resources, actions and workflows</TooltipContent>
-        </Tooltip>
+      <div className="flex shrink-0 items-center gap-1.5">
         <ToggleGroup
           type="single"
           variant="outline"
@@ -340,169 +392,37 @@ export function TopBar() {
           </Tooltip>
         </ToggleGroup>
         <SandboxChip />
-      </div>
-
-      <div className="flex flex-1 items-center justify-end gap-1">
         <Separator orientation="vertical" className="mx-1 h-5" />
-        {(docker || kube) && <MonitoringAction />}
-        {docker && <ConvertKubernetesAction />}
-        {!docker && !kube && (
-          <>
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <Button variant="ghost" size="sm" disabled={busy} aria-label="Validate" onClick={() => void runAction("validate")}>
-                  <ThemedIcon icon={FileCheck2Icon} pixel="check" />
-                  <span className="hidden 2xl:inline">Validate</span>
-                </Button>
-              </TooltipTrigger>
-              <TooltipContent>Check the Terraform for mistakes</TooltipContent>
-            </Tooltip>
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <Button variant="ghost" size="sm" disabled={busy} aria-label="Plan" onClick={() => void runAction("plan")}>
-                  <ThemedIcon icon={ListChecksIcon} pixel="list" />
-                  <span className="hidden 2xl:inline">Plan</span>
-                </Button>
-              </TooltipTrigger>
-              <TooltipContent>Preview what a deploy would change</TooltipContent>
-            </Tooltip>
-          </>
-        )}
-        <Tooltip>
-          <TooltipTrigger asChild>
-            <Button size="sm" disabled={busy} onClick={() => void runAction("apply")}>
-              {busy ? <Spinner /> : <ThemedIcon icon={CloudUploadIcon} glyph="rocket" />}
-              Deploy
-            </Button>
-          </TooltipTrigger>
-          <TooltipContent>
-            {kube
-              ? "Apply every source to this workflow's local Kubernetes cluster (creates it when needed)"
-              : docker
-                ? "Build and start every service on this machine (docker compose up)"
-                : "Create everything in your local sandbox"}
-          </TooltipContent>
-        </Tooltip>
-        <IconAction
-          label={
-            kube
-              ? "Delete what Deploy applied to the local cluster"
-              : docker
-                ? "Stop and remove the containers (docker compose down)"
-                : "Destroy everything in the sandbox"
-          }
-          onClick={() => setConfirmDestroy(true)}
-        >
-          <ThemedIcon icon={Trash2Icon} pixel="trash" />
-        </IconAction>
         <Tooltip>
           <TooltipTrigger asChild>
             <Button variant="outline" size="sm" aria-label="Load test" onClick={() => showBottom("loadtest")}>
-              <ThemedIcon icon={ActivityIcon} glyph="bolt" />
-              <span className="hidden 2xl:inline">Test</span>
+              <ThemedIcon icon={GaugeIcon} glyph="bolt" />
+              Test
             </Button>
           </TooltipTrigger>
           <TooltipContent>Send traffic to what you deployed and watch it hold up</TooltipContent>
         </Tooltip>
+        <DeployButton />
         <Separator orientation="vertical" className="mx-1 h-5" />
         <ProblemsBadge />
-        {/* Wide headers show these as icons; narrow ones (small windows, open sidebar/inspector) fold them into More so
-            the workflow name and the run actions keep their room. */}
-        <div className="hidden items-center gap-1 @5xl:flex">
-          <IconAction label="Import a project (Terraform, Docker Compose or Kubernetes)" onClick={() => openDialog("import")}>
-            <ThemedIcon icon={UploadIcon} pixel="upload" />
-          </IconAction>
-          <IconAction label={docker || kube ? "Export the project files" : "Export Terraform"} onClick={() => openDialog("export")}>
-            <ThemedIcon icon={DownloadIcon} pixel="download" />
-          </IconAction>
-          <IconAction label="Learn: roadmaps and challenges" onClick={() => useLearnStore.getState().openView({ challengeId: null })}>
-            <ThemedIcon icon={GraduationCapIcon} pixel="star" />
-          </IconAction>
-          <ThemeToggle />
-          <SettingsButton />
-        </div>
-        <MoreActions exportLabel={docker || kube ? "Export the project files" : "Export Terraform"} onImport={() => openDialog("import")} onExport={() => openDialog("export")} />
-        <IconAction label={inspectorOpen ? "Hide inspector" : "Show inspector"} onClick={() => setInspectorOpen(!inspectorOpen)} kbd={`${MOD_KEY} I`}>
-          <ThemedIcon icon={PanelRightIcon} pixel="panel" />
-        </IconAction>
+        <WorkflowMenu />
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <Button
+              variant="ghost"
+              size="icon-sm"
+              aria-label={inspectorOpen ? "Hide inspector" : "Show inspector"}
+              onClick={() => setInspectorOpen(!inspectorOpen)}
+            >
+              <ThemedIcon icon={PanelRightIcon} pixel="panel" />
+            </Button>
+          </TooltipTrigger>
+          <TooltipContent>
+            {inspectorOpen ? "Hide inspector" : "Show inspector"}
+            <Kbd className="ml-1.5">{MOD_KEY} I</Kbd>
+          </TooltipContent>
+        </Tooltip>
       </div>
     </header>
-  )
-}
-
-export function DestroyDialog() {
-  const open = useUiStore((s) => s.confirmDestroy)
-  const setOpen = useUiStore((s) => s.setConfirmDestroy)
-  const name = useWorkflowStore((s) => s.workflow?.name)
-  const kind = useWorkflowStore((s) => s.workflow?.kind)
-  const docker = kind === "docker"
-  const kube = kind === "kubernetes"
-  const [removeVolumes, setRemoveVolumes] = useState(false)
-  const [deleteCluster, setDeleteCluster] = useState(false)
-  return (
-    <AlertDialog
-      open={open}
-      onOpenChange={(o) => {
-        setOpen(o)
-        // Deleting data is opt-in every time.
-        if (!o) {
-          setRemoveVolumes(false)
-          setDeleteCluster(false)
-        }
-      }}
-    >
-      <AlertDialogContent>
-        <AlertDialogHeader>
-          <AlertDialogTitle>
-            {docker ? `Stop “${name}”?` : kube ? `Remove “${name}” from the cluster?` : `Destroy everything in “${name}”?`}
-          </AlertDialogTitle>
-          <AlertDialogDescription>
-            {docker
-              ? "docker compose down stops and removes this workspace's containers and networks. Your compose files stay untouched and you can deploy again at any time."
-              : kube
-                ? "Deletes every object Deploy applied (and uninstalls Helm releases) from this workflow's local cluster. Your manifests stay untouched and you can deploy again at any time."
-                : "Terraform will delete every deployed resource from your local sandbox. Your design stays untouched and you can deploy again at any time."}
-          </AlertDialogDescription>
-        </AlertDialogHeader>
-        {docker && (
-          <label className="flex items-center gap-2 text-sm">
-            <Checkbox checked={removeVolumes} onCheckedChange={(c) => setRemoveVolumes(c === true)} />
-            Also delete the volumes (database data and other saved files)
-          </label>
-        )}
-        {kube && (
-          <div className="flex flex-col gap-2">
-            <label className="flex items-center gap-2 text-sm">
-              <Checkbox
-                checked={removeVolumes}
-                onCheckedChange={(c) => setRemoveVolumes(c === true)}
-                data-testid="kube-remove-volumes"
-              />
-              Also delete the PersistentVolumeClaims (database data and other saved files)
-            </label>
-            <label className="flex items-center gap-2 text-sm">
-              <Checkbox
-                checked={deleteCluster}
-                onCheckedChange={(c) => setDeleteCluster(c === true)}
-                data-testid="kube-delete-cluster"
-              />
-              Also delete the cluster (the next Deploy creates a fresh one)
-            </label>
-          </div>
-        )}
-        <AlertDialogFooter>
-          <AlertDialogCancel>Cancel</AlertDialogCancel>
-          <AlertDialogAction
-            variant="destructive"
-            data-testid="destroy-confirm"
-            onClick={() =>
-              void runAction("destroy", docker ? { removeVolumes } : kube ? { removeVolumes, deleteCluster } : {})
-            }
-          >
-            {docker ? "Stop and remove" : kube ? (deleteCluster ? "Remove and delete cluster" : "Remove") : "Destroy"}
-          </AlertDialogAction>
-        </AlertDialogFooter>
-      </AlertDialogContent>
-    </AlertDialog>
   )
 }

@@ -39,3 +39,10 @@ export async function openReachability(preset: ReachabilityPreset = {}) {
 export function closeReachability() {
   useReachability.setState({ open: false, highlight: null })
 }
+
+// Never carry the dialog (and its canvas highlight) over to another workflow, or past closing this one. Done here, not
+// in a dialog effect: the dialog mounts lazily on its first open, and an effect cleanup would also run on that first
+// mount under StrictMode and close it straight away.
+useWorkflowStore.subscribe((s, prev) => {
+  if (s.workflow?.id !== prev.workflow?.id && useReachability.getState().open) closeReachability()
+})

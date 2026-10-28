@@ -17,14 +17,13 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu"
 import { SidebarMenu, SidebarMenuButton, SidebarMenuItem } from "@/components/ui/sidebar"
-import { api } from "@/lib/api/client"
 import type { WorkflowSummary } from "@/lib/api/types"
 import { useWorkflowStore } from "@/state/workflow-store"
 import { contentCount, DockerBadge } from "../docker/badge"
 import { KubernetesBadge } from "../kubernetes/badge"
 import { MOD_KEY, openWorkflow } from "./actions"
 import { DeleteWorkflowDialog } from "./delete-workflow-dialog"
-import { archiveWorkflow, closeWorkflow, duplicateWorkflow } from "./workflow-actions"
+import { archiveWorkflow, closeWorkflow, duplicateWorkflow, workflowListQuery } from "./workflow-actions"
 
 const RECENT_LIMIT = 12
 
@@ -33,7 +32,7 @@ export function WorkflowSwitcher() {
     useShallow((s) => s.workflow && { id: s.workflow.id, name: s.workflow.name, icon: s.workflow.icon, kind: s.workflow.kind }),
   )
   const openDialog = useWorkflowStore((s) => s.openDialog)
-  const workflows = useQuery({ queryKey: ["workflows"], queryFn: api.listWorkflows })
+  const workflows = useQuery(workflowListQuery)
   const [deleting, setDeleting] = useState<WorkflowSummary | null>(null)
   const [iconFor, setIconFor] = useState<IconTarget | null>(null)
   const recent = (workflows.data ?? []).filter((w) => !w.archived).slice(0, RECENT_LIMIT)

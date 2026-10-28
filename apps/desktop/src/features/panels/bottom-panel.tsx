@@ -1,5 +1,18 @@
 import { lazy, memo, Suspense, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react"
-import { ChevronDown, ChevronUp, ClipboardCheck, Code2, Gauge, Layers, Plug, Rocket, SlidersHorizontal, TriangleAlert, Trophy } from "lucide-react"
+import {
+  ChevronDown,
+  ChevronUp,
+  ClipboardCheck,
+  Code2,
+  Gauge,
+  Layers,
+  ListChecks,
+  Plug,
+  Rocket,
+  ShieldCheck,
+  SlidersHorizontal,
+  Trophy,
+} from "lucide-react"
 import { ThemedIcon } from "@/components/arcade/themed-icon"
 import type { PixelIconName } from "@/components/arcade/pixel-icons"
 import { Badge } from "@/components/ui/badge"
@@ -10,6 +23,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip"
 import { cn } from "@/lib/utils"
 import { useWorkflowStore, type BottomTab } from "@/state/workflow-store"
+import { usePlanToast } from "@/features/plan/plan-toast"
 import { DeployTab } from "./deploy/deploy-tab"
 import { useDeployToast } from "./endpoints/deploy-toast"
 import { ProblemsTab } from "./problems/problems-tab"
@@ -30,6 +44,9 @@ const KubeEnvironmentsTab = lazy(() =>
   import("@/features/kubernetes/environments/environments-tab").then((m) => ({ default: m.KubeEnvironmentsTab })),
 )
 const ChallengeTab = lazy(() => import("@/features/challenges/challenge-tab").then((m) => ({ default: m.ChallengeTab })))
+const ComplianceTab = lazy(() =>
+  import("@/features/compliance/compliance-tab").then((m) => ({ default: m.ComplianceTab })),
+)
 const TAB_FALLBACK = (
   <div className="flex h-full items-center justify-center">
     <Spinner />
@@ -44,8 +61,11 @@ const TABS: { id: BottomTab; label: string; icon: typeof Code2; pixel: PixelIcon
   { id: "deploy", label: "Deploy", icon: Rocket, pixel: "rocket" },
   { id: "endpoints", label: "Endpoints", icon: Plug, pixel: "plug" },
   { id: "loadtest", label: "Load test", icon: Gauge, pixel: "gauge" },
-  { id: "problems", label: "Problems", icon: TriangleAlert, pixel: "warning" },
+  // A neutral icon: the tab is always there, so a warning sign on it would alarm even with nothing wrong. The count
+  // badge next to the label carries the signal (red only for errors).
+  { id: "problems", label: "Problems", icon: ListChecks, pixel: "list" },
   { id: "readiness", label: "Readiness", icon: ClipboardCheck, pixel: "check" },
+  { id: "compliance", label: "Compliance", icon: ShieldCheck, pixel: "check" },
 ]
 
 /**
@@ -82,6 +102,7 @@ export function BottomPanel() {
   )
 
   useDeployToast()
+  usePlanToast()
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if ((e.metaKey || e.ctrlKey) && !e.shiftKey && !e.altKey && e.key.toLowerCase() === "j") {
@@ -275,6 +296,12 @@ const TabBody = memo(function TabBody({ tab, kind }: { tab: BottomTab; kind: str
       return (
         <Suspense fallback={TAB_FALLBACK}>
           <ReadinessTab />
+        </Suspense>
+      )
+    case "compliance":
+      return (
+        <Suspense fallback={TAB_FALLBACK}>
+          <ComplianceTab />
         </Suspense>
       )
     case "environments":

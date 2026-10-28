@@ -8,6 +8,7 @@ import { Button } from "@/components/ui/button"
 import { Empty, EmptyContent, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from "@/components/ui/empty"
 import { Spinner } from "@/components/ui/spinner"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
+import { useShownVersion } from "@/features/panels/lib/use-shown-version"
 import { api } from "@/lib/api/client"
 import type { EnvironmentSource, EnvironmentsView } from "@/lib/api/types"
 import { useWorkflowStore } from "@/state/workflow-store"
@@ -31,7 +32,8 @@ type Pane = "compare" | "edit" | "variables"
  */
 export function KubeEnvironmentsTab() {
   const workflowId = useWorkflowStore((s) => s.workflow!.id)
-  const updatedAt = useWorkflowStore((s) => s.workflow!.updatedAt)
+  // Frozen while the tab is hidden: saves made meanwhile don't re-read the environments until it is shown.
+  const updatedAt = useShownVersion("environments")
   const view = useQuery({
     queryKey: ["environments", workflowId, updatedAt],
     queryFn: () => api.listEnvironments(workflowId),

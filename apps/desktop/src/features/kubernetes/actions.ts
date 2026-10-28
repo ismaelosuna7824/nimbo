@@ -153,12 +153,11 @@ export async function restartWorkload(node: KubeNode) {
   }
 }
 
-/** Saves canvas positions. */
+/** Saves canvas positions (a layout-only save: views that don't depend on positions don't refetch). */
 export async function savePositions(positions: Map<string, Position>) {
-  const wf = current()
-  if (!wf || positions.size === 0) return
+  if (positions.size === 0) return
   try {
-    useWorkflowStore.getState().setWorkflow(await api.kubernetesLayout(wf.id, Object.fromEntries(positions)))
+    await useWorkflowStore.getState().saveLayout((wf) => api.kubernetesLayout(wf.id, Object.fromEntries(positions)))
   } catch (err) {
     toast.error("Couldn't save the layout", { description: errorMessage(err) })
   }

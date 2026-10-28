@@ -256,15 +256,17 @@ export function FileTree({
 
   // Scroll to the active file once when it changes (its row may only appear after its folders open), never because
   // the user opened or closed some other folder: that changes the row count but must keep the scroll where it is.
+  // A hidden tree (the dock starts collapsed in Guided) can't scroll: it waits until it is laid out.
   const revealed = useRef<string | null>(null)
+  const laidOut = (virtualizer.scrollRect?.height ?? 0) > 0
   useEffect(() => {
-    if (!activePath || revealed.current === activePath) return
+    if (!activePath || !laidOut || revealed.current === activePath) return
     const i = rows.findIndex((r) => r.type === "file" && r.path === activePath)
     if (i < 0) return
     revealed.current = activePath
     virtualizer.scrollToIndex(i, { align: "auto" })
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activePath, rows.length])
+  }, [activePath, rows.length, laidOut])
 
   const toggle = (dir: string, open: boolean) => {
     if (!q) setOverrides((o) => ({ ...o, [dir]: open }))

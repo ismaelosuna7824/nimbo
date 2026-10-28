@@ -1,11 +1,11 @@
-import { useEffect } from "react"
+import { lazy, Suspense, useEffect, useRef, useState } from "react"
 import { usePanelRef } from "react-resizable-panels"
 import { ResizableHandle, ResizablePanel, ResizablePanelGroup } from "@/components/ui/resizable"
 import { Sidebar, SidebarContent, SidebarHeader, SidebarInset, SidebarProvider } from "@/components/ui/sidebar"
 import { BottomPanel } from "@/features/panels"
 import { CanvasArea } from "@/features/architecture/canvas-area"
 import { Inspector } from "@/features/inspector/inspector"
-import { ReachabilityDialog } from "@/features/network/reachability-dialog"
+import { useReachability } from "@/features/network/store"
 import { Palette } from "@/features/palette/palette"
 import { TopBar } from "@/features/toolbar/top-bar"
 import { useUiStore } from "@/features/toolbar/ui-store"
@@ -14,19 +14,31 @@ import { useWorkflowStore } from "@/state/workflow-store"
 
 /** Height of BottomPanel's tab strip; the panel collapses to it instead of disappearing. */
 const BOTTOM_COLLAPSED = "36px"
+const BOTTOM_OPEN = "34%"
 
 export function EditorShell() {
-  const bottomOpen = useWorkflowStore((s) => s.bottomOpen)
+  // Read, not subscribed: toggling the dock resizes the panel imperatively below, and a subscription here would
+  // re-render the whole editor (canvas, inspector, palette, every tab) on each toggle.
+  const [bottomOpenAtMount] = useState(() => useWorkflowStore.getState().bottomOpen)
   const setBottomOpen = useWorkflowStore((s) => s.setBottomOpen)
   const inspectorOpen = useUiStore((s) => s.inspectorOpen)
   const bottomRef = usePanelRef()
+  // Size to reopen at. expand() would restore the most recent size, which a panel that started collapsed (Guided)
+  // doesn't have: it would open at its minimum.
+  const bottomSize = useRef(BOTTOM_OPEN)
 
   useEffect(() => {
-    const panel = bottomRef.current
-    if (!panel) return
-    if (bottomOpen && panel.isCollapsed()) panel.expand()
-    if (!bottomOpen && !panel.isCollapsed()) panel.collapse()
-  }, [bottomOpen, bottomRef])
+    const follow = (open: boolean) => {
+      const panel = bottomRef.current
+      if (!panel) return
+      if (open && panel.isCollapsed()) panel.resize(bottomSize.current)
+      if (!open && !panel.isCollapsed()) panel.collapse()
+    }
+    follow(useWorkflowStore.getState().bottomOpen)
+    return useWorkflowStore.subscribe((s, prev) => {
+      if (s.bottomOpen !== prev.bottomOpen) follow(s.bottomOpen)
+    })
+  }, [bottomRef])
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -41,7 +53,7 @@ export function EditorShell() {
   }, [])
 
   return (
-    <SidebarProvider className="h-svh min-h-0 overflow-hidden" style={{ "--sidebar-width": "19rem" } as React.CSSProperties}>
+    <SidebarProvider className="h-full min-h-0 overflow-hidden" style={{ "--sidebar-width": "19rem" } as React.CSSProperties}>
       <Sidebar>
         <SidebarHeader>
           <WorkflowSwitcher />
@@ -65,9 +77,10 @@ export function EditorShell() {
                 collapsible
                 collapsedSize={BOTTOM_COLLAPSED}
                 minSize="160px"
-                defaultSize={bottomOpen ? "34%" : BOTTOM_COLLAPSED}
-                onResize={() => {
+                defaultSize={bottomOpenAtMount ? BOTTOM_OPEN : BOTTOM_COLLAPSED}
+                onResize={(size) => {
                   const collapsed = bottomRef.current?.isCollapsed() ?? false
+                  if (!collapsed) bottomSize.current = `${size.asPercentage}%`
                   if (collapsed === useWorkflowStore.getState().bottomOpen) setBottomOpen(!collapsed)
                 }}
               >
@@ -87,7 +100,24 @@ export function EditorShell() {
           )}
         </ResizablePanelGroup>
       </SidebarInset>
-      <ReachabilityDialog />
+      <Reachability />
     </SidebarProvider>
+  )
+}
+
+// The reachability check loads the first time it opens.
+const ReachabilityDialog = lazy(() =>
+  import("@/features/network/reachability-dialog").then((m) => ({ default: m.ReachabilityDialog })),
+)
+
+function Reachability() {
+  // Every open bumps seq, so it is 0 only until the first one.
+  const opened = useReachability((s) => s.seq > 0)
+  return (
+    opened && (
+      <Suspense fallback={null}>
+        <ReachabilityDialog />
+      </Suspense>
+    )
   )
 }

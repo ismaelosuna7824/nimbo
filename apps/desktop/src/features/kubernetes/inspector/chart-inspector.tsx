@@ -5,7 +5,7 @@ import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible"
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip"
-import { Section } from "@/features/docker/inspector/fields"
+import { InspectorBody, InspectorSection } from "@/features/inspector/inspector-section"
 import { DiagnosticRow } from "@/features/panels/components/diagnostic-row"
 import { revealFiles } from "@/features/panels/terraform/reveal-files"
 import type { KubeGraph } from "@/lib/api/types"
@@ -28,20 +28,20 @@ export function ChartInspector({ graph, chartId }: { graph: KubeGraph; chartId: 
   return (
     <div className="flex h-full flex-col" data-testid="k8s-chart-inspector" data-chart={chart.group.chart}>
       <Header chart={chart} />
-      <div className="flex min-h-0 flex-1 flex-col gap-5 overflow-y-auto p-4">
+      <InspectorBody>
         <p className="rounded-md bg-muted px-3 py-2 text-xs text-muted-foreground">
           A third-party chart vendored in {chart.group.sourcePath}. Its {chart.members.length} objects are grouped on the canvas;
           configure them through its values. Pick an object below to see it on the canvas.
         </p>
         {chart.live && (
-          <Section title="Live" icon={<RadioIcon className="size-3.5 text-sky-500" />}>
+          <InspectorSection id="k8s:live" title="Live" icon={<RadioIcon className="size-3.5 text-sky-500" />}>
             <p className="text-xs" data-testid="k8s-chart-live">
               {chart.live.ready}/{chart.live.total} workloads ready
               {chart.live.problems > 0 ? ` · ${chart.live.problems} failing` : ""}
             </p>
-          </Section>
+          </InspectorSection>
         )}
-        <Section title="Values" icon={<FileSlidersIcon className="size-3.5" />}>
+        <InspectorSection id="k8s:values" title="Values" icon={<FileSlidersIcon className="size-3.5" />}>
           <ul className="flex flex-col gap-1">
             {(chart.group.valuesFiles ?? []).map((f) => (
               <li key={f}>
@@ -54,8 +54,8 @@ export function ChartInspector({ graph, chartId }: { graph: KubeGraph; chartId: 
           <p className="text-[11px] text-muted-foreground">
             The chart's options go under <code className="font-mono">{chart.group.chart}:</code> in these files.
           </p>
-        </Section>
-        <Section title={`Objects (${chart.members.length})`} icon={<LayersIcon className="size-3.5" />}>
+        </InspectorSection>
+        <InspectorSection id="k8s:objects" title={`Objects (${chart.members.length})`} navLabel="Objects" icon={<LayersIcon className="size-3.5" />}>
           <p className="text-[11px] text-muted-foreground">{kindsText(chart.kinds)}</p>
           <ul className="flex flex-col gap-0.5" data-testid="k8s-chart-objects">
             {chart.kinds.map((k) => (
@@ -88,17 +88,17 @@ export function ChartInspector({ graph, chartId }: { graph: KubeGraph; chartId: 
               </li>
             ))}
           </ul>
-        </Section>
+        </InspectorSection>
         {diagnostics.length > 0 && (
-          <Section title={`Problems (${diagnostics.length})`} icon={<TriangleAlertIcon className="size-3.5 text-amber-500" />}>
+          <InspectorSection id="k8s:problems" title={`Problems (${diagnostics.length})`} navLabel="Problems" icon={<TriangleAlertIcon className="size-3.5 text-amber-500" />}>
             <div className="-mx-3 flex flex-col rounded-lg border">
               {diagnostics.map((d, i) => (
                 <DiagnosticRow key={i} diagnostic={d} nodeLabel={names.get(d.nodeId!)} onSelect={() => useWorkflowStore.getState().select(d.nodeId!)} />
               ))}
             </div>
-          </Section>
+          </InspectorSection>
         )}
-      </div>
+      </InspectorBody>
     </div>
   )
 }

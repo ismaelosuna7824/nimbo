@@ -1,6 +1,8 @@
 import { create } from "zustand"
+import { loadKindCode } from "@/features/workspaces/code"
 import { api, subscribeEvents } from "@/lib/api/client"
 import { queryClient } from "@/lib/query-client"
+import { jsonEqual } from "@/lib/json-equal"
 import type {
   ComposeBuild,
   ComposeStats,
@@ -18,7 +20,17 @@ import type {
   WorkflowSummary,
 } from "@/lib/api/types"
 
-export type BottomTab = "terraform" | "variables" | "environments" | "deploy" | "endpoints" | "loadtest" | "problems" | "readiness" | "challenge"
+export type BottomTab =
+  | "terraform"
+  | "variables"
+  | "environments"
+  | "deploy"
+  | "endpoints"
+  | "loadtest"
+  | "problems"
+  | "readiness"
+  | "compliance"
+  | "challenge"
 export type AppDialog = "import" | "export" | "new-workflow" | null
 export type UserMode = "guided" | "pro"
 
@@ -31,6 +43,12 @@ function reportSession(openWorkflowId: string | null) {
 
 interface WorkflowStoreState {
   workflow: Workflow | null
+  /**
+   * The open workflow's content version: its updatedAt, except that saves which only moved cards (drags, tidy, the
+   * automatic layout of a template's first open) keep the previous one. Server views key their queries on it rather
+   * than on updatedAt: none of them depends on positions, so moving cards doesn't refetch them.
+   */
+  version: string
   /** True while local edits are waiting to be persisted. */
   dirty: boolean
   saving: boolean
@@ -71,10 +89,16 @@ interface WorkflowStoreState {
   /** Replace the workflow with a server response (no save scheduled). */
   setWorkflow: (wf: Workflow) => void
   /**
+   * Saves moved cards with `save` (a layout request whose response is the workflow) and applies the response like
+   * setWorkflow, keeping the content version. Rejects when the request fails.
+   */
+  saveLayout: (save: (wf: Workflow) => Promise<Workflow>) => Promise<void>
+  /**
    * Apply a local edit and schedule a debounced PUT. `mutate` must not modify
    * its argument: return a new workflow that shares every unchanged part.
+   * `layout`: the edit only moves cards (it keeps the content version once saved).
    */
-  update: (mutate: (current: Workflow) => Workflow) => void
+  update: (mutate: (current: Workflow) => Workflow, opts?: { layout?: boolean }) => void
   flush: () => Promise<void>
 
   select: (nodeId: string | null) => void
@@ -94,6 +118,30 @@ let saveTimer: number | undefined
 let unsubscribe: (() => void) | undefined
 /** Bumped by every open()/close(); an open() that is no longer the latest drops its result. */
 let openSeq = 0
+/** The edits waiting for the debounced PUT include more than moved cards. */
+let pendingContent = false
+/** updatedAt of every save of the open workflow that only moved cards: a copy carrying one keeps the content version. */
+let layoutStamps = new Set<string>()
+/** Layout saves in flight, and the updatedAt of every copy that arrived meanwhile (their echo, or someone else's edit). */
+let layoutSaving = 0
+let heldStamps = new Set<string>()
+
+/** Content version of `wf` arriving while the version is `current` (see WorkflowStoreState.version). */
+function versionOf(wf: Workflow, current: string): string {
+  if (layoutStamps.has(wf.updatedAt)) return current
+  // Maybe the echo of the layout save in flight: decided when its response tells its updatedAt.
+  if (layoutSaving > 0) {
+    heldStamps.add(wf.updatedAt)
+    return current
+  }
+  return wf.updatedAt
+}
+
+function resetVersions() {
+  pendingContent = false
+  layoutStamps = new Set()
+  heldStamps = new Set()
+}
 
 /** Streamed log lines waiting to be appended in one store update (bursts of output arrive line by line). */
 let pendingLogs: Record<string, LogLine[]> = {}
@@ -131,17 +179,22 @@ function resetPendingLogs() {
   pendingLogs = {}
 }
 
+const initialMode: UserMode = (localStorage.getItem("nimbo.mode") as UserMode | null) ?? "guided"
+
 export const useWorkflowStore = create<WorkflowStoreState>((set, get) => ({
   workflow: null,
+  version: "",
   dirty: false,
   saving: false,
   saveError: null,
   selectedNodeId: null,
   bottomTab: "terraform",
-  bottomOpen: true,
+  // Guided starts with the canvas alone: the panel shows just its tab strip (a click or ⌘J away) instead of a third
+  // of the screen of read-only code. Pro keeps it open.
+  bottomOpen: initialMode === "pro",
   readinessEnvironment: null,
   dialog: null,
-  mode: (localStorage.getItem("nimbo.mode") as UserMode | null) ?? "guided",
+  mode: initialMode,
   sandbox: null,
   compose: null,
   composeStats: null,
@@ -160,11 +213,16 @@ export const useWorkflowStore = create<WorkflowStoreState>((set, get) => ({
     const seq = ++openSeq
     await get().flush()
     const wf = await api.getWorkflow(id)
+    // Its kind's editor code before the workflow shows: the editor mounts it without a loading flash. A failed load
+    // doesn't block opening; the editor's own lazy boundaries retry it.
+    await loadKindCode(wf.kind).catch(() => undefined)
     if (seq !== openSeq) return
     unsubscribe?.()
     resetPendingLogs()
+    resetVersions()
     set({
       workflow: wf,
+      version: wf.updatedAt,
       dirty: false,
       saveError: null,
       selectedNodeId: null,
@@ -191,8 +249,10 @@ export const useWorkflowStore = create<WorkflowStoreState>((set, get) => ({
     unsubscribe?.()
     unsubscribe = undefined
     resetPendingLogs()
+    resetVersions()
     set({
       workflow: null,
+      version: "",
       selectedNodeId: null,
       sandbox: null,
       compose: null,
@@ -210,12 +270,34 @@ export const useWorkflowStore = create<WorkflowStoreState>((set, get) => ({
   },
 
   setWorkflow(wf) {
-    set({ workflow: shareWorkflow(get().workflow, wf), dirty: false })
+    set({ workflow: shareWorkflow(get().workflow, wf), dirty: false, version: versionOf(wf, get().version) })
   },
 
-  update(mutate) {
+  async saveLayout(save) {
     const wf = get().workflow
     if (!wf) return
+    layoutSaving++
+    let saved: Workflow | undefined
+    try {
+      saved = await save(wf)
+    } finally {
+      layoutSaving--
+      const current = get().workflow
+      if (saved && current?.id === saved.id) {
+        layoutStamps.add(saved.updatedAt)
+        heldStamps.delete(saved.updatedAt)
+        // Any other copy that arrived meanwhile was someone else's edit: the content may have changed.
+        const version = heldStamps.size > 0 ? saved.updatedAt : get().version
+        set({ workflow: shareWorkflow(current, saved), dirty: false, version })
+      } else if (current && heldStamps.size > 0) set({ version: current.updatedAt })
+      heldStamps.clear()
+    }
+  },
+
+  update(mutate, opts) {
+    const wf = get().workflow
+    if (!wf) return
+    if (!opts?.layout) pendingContent = true
     set({ workflow: mutate(wf), dirty: true })
     clearTimeout(saveTimer)
     saveTimer = window.setTimeout(() => void get().flush(), SAVE_DEBOUNCE_MS)
@@ -225,15 +307,20 @@ export const useWorkflowStore = create<WorkflowStoreState>((set, get) => ({
     clearTimeout(saveTimer)
     const { workflow, dirty } = get()
     if (!workflow || !dirty) return
+    const layoutOnly = !pendingContent
+    pendingContent = false
     set({ saving: true, dirty: false })
     try {
       const saved = await api.saveWorkflow(workflow)
+      if (layoutOnly) layoutStamps.add(saved.updatedAt)
+      const version = versionOf(saved, get().version)
       // Keep edits made while the request was in flight.
       const current = get().workflow!
       const shared = shareWorkflow(current, saved)
-      if (!get().dirty) set({ workflow: shared })
+      if (!get().dirty) set({ workflow: shared, version })
       else
         set({
+          version,
           workflow: {
             ...current,
             edges: shared.edges,
@@ -246,6 +333,7 @@ export const useWorkflowStore = create<WorkflowStoreState>((set, get) => ({
         })
       set({ saveError: null })
     } catch (err) {
+      pendingContent ||= !layoutOnly
       set({ saveError: err instanceof Error ? err.message : String(err), dirty: true })
     } finally {
       set({ saving: false })
@@ -259,10 +347,11 @@ export const useWorkflowStore = create<WorkflowStoreState>((set, get) => ({
   openDialog: (d) => set({ dialog: d }),
   setMode(m) {
     localStorage.setItem("nimbo.mode", m)
-    set({ mode: m })
+    // Switching to Pro (editable code, every attribute) brings the dock up; switching to Guided leaves it as it is.
+    set(m === "pro" ? { mode: m, bottomOpen: true } : { mode: m })
   },
   applyDefaultMode(m) {
-    if (!localStorage.getItem("nimbo.mode")) set({ mode: m })
+    if (!localStorage.getItem("nimbo.mode")) set(m === "pro" ? { mode: m, bottomOpen: true } : { mode: m })
   },
 
   async refreshRuntime() {
@@ -334,7 +423,7 @@ function applyEvent(
         break
       }
       // Ignore echoes of our own saves while local edits are pending.
-      if (!s.dirty && !s.saving) set({ workflow: shareWorkflow(s.workflow, e.data) })
+      if (!s.dirty && !s.saving) set({ workflow: shareWorkflow(s.workflow, e.data), version: versionOf(e.data, s.version) })
       break
     case "workflow.deleted":
       s.close()
@@ -443,24 +532,6 @@ function mergeBuilds(prev: ComposeBuild[], next: ComposeBuild[]): ComposeBuild[]
   const byRun = new Map(prev.map((b) => [b.runId, b]))
   for (const b of next) byRun.set(b.runId, b)
   return [...byRun.values()].sort((a, b) => Date.parse(b.at) - Date.parse(a.at)).slice(0, MAX_BUILDS)
-}
-
-/** Structural equality of JSON values (what the API sends). */
-function jsonEqual(a: unknown, b: unknown): boolean {
-  if (a === b) return true
-  if (typeof a !== "object" || typeof b !== "object" || a === null || b === null) return false
-  if (Array.isArray(a)) {
-    if (!Array.isArray(b) || a.length !== b.length) return false
-    for (let i = 0; i < a.length; i++) if (!jsonEqual(a[i], b[i])) return false
-    return true
-  }
-  if (Array.isArray(b)) return false
-  const ak = Object.keys(a)
-  if (ak.length !== Object.keys(b).length) return false
-  for (const k of ak) {
-    if (!Object.hasOwn(b, k) || !jsonEqual((a as Record<string, unknown>)[k], (b as Record<string, unknown>)[k])) return false
-  }
-  return true
 }
 
 /** `next` with every item equal to the one with the same id in `prev` replaced by the `prev` object. */

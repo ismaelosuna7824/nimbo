@@ -17,3 +17,12 @@ export function CloudBadge({ cloud, className }: { cloud: Cloud; className?: str
     </span>
   )
 }
+
+/**
+ * The clouds a workflow is "about", for its badges: the ones its resources use. A provider declared but used by
+ * nothing doesn't count (it shows as unused under Providers instead). A workflow with no resources yet falls back to
+ * the clouds it was set up for, so a blank AWS workflow still says AWS.
+ */
+export function displayClouds(w: { clouds: Cloud[]; usedClouds?: Cloud[] | null }): Cloud[] {
+  return w.usedClouds?.length ? w.usedClouds : (w.clouds ?? [])
+}

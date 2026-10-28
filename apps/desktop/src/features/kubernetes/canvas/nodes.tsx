@@ -2,13 +2,16 @@ import { BaseEdge, EdgeLabelRenderer, getBezierPath, getSmoothStepPath, Handle, 
 import { ChevronsDownUpIcon, ChevronsUpDownIcon, LockIcon, PlugIcon, TriangleAlertIcon } from "lucide-react"
 import { memo } from "react"
 import { useArcade } from "@/components/arcade/arcade-store"
+import { CARD_SELECTED, CARD_SUBTITLE, CARD_SURFACE, CARD_TITLE, edgeStyle, FRAME_SELECTED, HANDLE, ICON_TILE, StatusDot } from "@/components/canvas-card"
+import { sameCardProps } from "@/components/flow-items"
 import { K8sIcon } from "@/components/k8s-icons/k8s-icon"
 import { techIconFor } from "@/components/tech-icons"
 import { TechIcon } from "@/components/tech-icons/tech-icon"
 import { Button } from "@/components/ui/button"
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip"
-import { Badges, chip, handleClass, STATE_COLOR } from "@/features/docker/canvas/nodes"
+import { Badges, chip, STATE_TONE } from "@/features/docker/canvas/nodes"
 import { ServiceCardUsage } from "@/features/docker/perf/components"
+import { EdgeFlow, NodeLiveBadges } from "@/features/live/live-chips"
 import { openEndpoints } from "@/features/panels/endpoints/use-endpoints"
 import { revealFiles } from "@/features/panels/terraform/reveal-files"
 import type { KubeNode } from "@/lib/api/types"
@@ -95,7 +98,7 @@ function EndpointButton({ endpoint }: { endpoint: string }) {
         <button
           type="button"
           aria-label="Use it: URLs, snippets and Try it"
-          className="nodrag ml-auto inline-flex size-5 shrink-0 items-center justify-center rounded-md bg-primary/10 text-primary hover:bg-primary/20"
+          className="nodrag ml-auto inline-flex size-5 shrink-0 items-center justify-center rounded-md bg-primary/10 text-primary transition-colors hover:bg-primary/20"
           onClick={(e) => {
             e.stopPropagation()
             openEndpoints(endpoint)
@@ -110,7 +113,7 @@ function EndpointButton({ endpoint }: { endpoint: string }) {
   )
 }
 
-export const WorkloadNode = memo(function WorkloadNode({ data, selected }: NodeProps<KubeFlowNode>) {
+export const WorkloadNode = memo(function WorkloadNode({ id, data, selected }: NodeProps<KubeFlowNode>) {
   const node = data.node!
   const containers = node.workload?.containers ?? []
   const state = data.status?.state ?? "absent"
@@ -124,40 +127,30 @@ export const WorkloadNode = memo(function WorkloadNode({ data, selected }: NodeP
       data-kind={node.kind}
       data-name={node.name}
       data-state={state}
-      className={cn(
-        "group/node relative flex h-full w-full flex-col gap-1.5 rounded-xl border bg-card px-3 py-2.5 text-card-foreground shadow-sm",
-        selected && "ring-2 ring-primary ring-offset-2 ring-offset-background",
-      )}
+      className={cn("group/node relative flex h-full w-full flex-col gap-1.5 px-3 pt-2.5 pb-2", CARD_SURFACE, selected && CARD_SELECTED)}
     >
-      <span className="absolute inset-y-2 left-0 w-1 rounded-r" style={{ background: STATE_COLOR[state] ?? STATE_COLOR.absent }} />
-      <Handle type="target" position={Position.Left} className={handleClass} />
+      <NodeLiveBadges id={id} />
+      <Handle type="target" position={Position.Left} className={HANDLE} />
       <div className="flex min-w-0 items-center gap-2.5">
-        <span className="flex size-8 shrink-0 items-center justify-center rounded-lg border bg-background">
+        <span className={cn(ICON_TILE, "bg-blue-500/8 ring-1 ring-blue-500/15 ring-inset")}>
           <K8sIcon icon={node.kind} size={22} />
         </span>
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-1.5">
-            <span className="truncate text-sm leading-tight font-medium">{node.name}</span>
+            <span className={CARD_TITLE}>{node.name}</span>
             <span className="shrink-0 text-[10px] text-muted-foreground">{node.kind}</span>
           </div>
-          <div className="flex min-w-0 items-center gap-1">
+          <div className="mt-0.5 flex min-w-0 items-center gap-1">
             {containers.slice(0, 4).map((c) => (
               <TechIcon key={c.name} icon={techIconFor({ image: c.image, stack: node.stack })} size={12} title={`${c.name}: ${c.image}`} />
             ))}
-            <span className="truncate font-mono text-[11px] text-muted-foreground" title={containers.map((c) => c.image).join(", ")}>
+            <span className={CARD_SUBTITLE} title={containers.map((c) => c.image).join(", ")}>
               {image || "no containers"}
               {containers.length > 1 ? ` +${containers.length - 1}` : ""}
             </span>
           </div>
         </div>
-        {data.status?.rollout && state !== "running" && (
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <span className={cn("size-2 shrink-0 rounded-full", state === "starting" && "animate-pulse")} style={{ background: STATE_COLOR[state] }} />
-            </TooltipTrigger>
-            <TooltipContent>{data.status.rollout}</TooltipContent>
-          </Tooltip>
-        )}
+        {state !== "absent" && <StatusDot tone={STATE_TONE[state] ?? "off"} label={data.status?.rollout || state} className="self-start pt-1" />}
       </div>
       {pods.length > 0 && (
         <div className="flex min-w-0 items-center gap-1" data-slot="pods">
@@ -191,12 +184,12 @@ export const WorkloadNode = memo(function WorkloadNode({ data, selected }: NodeP
         <SourceChips node={node} />
         <Badges errors={data.errors} warnings={data.warnings} />
       </div>
-      <Handle type="source" position={Position.Right} className={handleClass} />
+      <Handle type="source" position={Position.Right} className={HANDLE} />
     </div>
   )
-})
+}, sameCardProps)
 
-export const SmallNode = memo(function SmallNode({ data, selected }: NodeProps<KubeFlowNode>) {
+export const SmallNode = memo(function SmallNode({ id, data, selected }: NodeProps<KubeFlowNode>) {
   const node = data.node!
   return (
     <div
@@ -205,16 +198,19 @@ export const SmallNode = memo(function SmallNode({ data, selected }: NodeProps<K
       data-name={node.name}
       data-unmatched={data.unmatched || undefined}
       className={cn(
-        "relative flex h-full w-full items-center gap-2 rounded-lg border bg-card px-2.5 text-card-foreground shadow-xs",
+        "relative flex h-full w-full items-center gap-2 px-2.5",
+        CARD_SURFACE,
+        "rounded-lg shadow-xs",
         data.unmatched && "border-amber-500/70 bg-amber-500/5",
-        selected && "ring-2 ring-primary ring-offset-2 ring-offset-background",
+        selected && CARD_SELECTED,
       )}
     >
-      <Handle type="target" position={Position.Left} className={handleClass} />
+      <NodeLiveBadges id={id} />
+      <Handle type="target" position={Position.Left} className={HANDLE} />
       <K8sIcon icon={node.kind} size={20} />
       <div className="min-w-0 flex-1">
         <div className="flex items-center gap-1">
-          <span className="truncate text-xs font-medium">{node.name}</span>
+          <span className="truncate text-xs font-semibold">{node.name}</span>
           {data.unmatched && (
             <Tooltip>
               <TooltipTrigger asChild>
@@ -231,10 +227,10 @@ export const SmallNode = memo(function SmallNode({ data, selected }: NodeProps<K
       <SourceChips node={node} />
       <Badges errors={data.errors} warnings={data.warnings} />
       {data.endpoint && <EndpointButton endpoint={data.endpoint} />}
-      <Handle type="source" position={Position.Right} className={handleClass} />
+      <Handle type="source" position={Position.Right} className={HANDLE} />
     </div>
   )
-})
+}, sameCardProps)
 
 /** "12/14 ready" and failing workloads of a deployed chart. */
 function ChartLiveChips({ chart }: { chart: ChartSummary }) {
@@ -266,7 +262,7 @@ function ChartToggle({ chart }: { chart: ChartSummary }) {
       variant="outline"
       size="xs"
       data-testid="k8s-chart-toggle"
-      className="nodrag ml-auto shrink-0 bg-background/80"
+      className="nodrag ml-auto shrink-0 bg-card/80"
       onClick={(e) => {
         e.stopPropagation()
         if (chart.expanded) collapseChart(id)
@@ -293,27 +289,27 @@ export const ChartNode = memo(function ChartNode({ data, selected }: NodeProps<K
       data-state={state}
       data-expanded="false"
       className={cn(
-        "relative flex h-full w-full flex-col gap-1.5 rounded-xl border bg-card px-3 py-2.5 text-card-foreground",
+        "relative flex h-full w-full flex-col gap-1.5 rounded-xl border bg-card px-3 pt-2.5 pb-2 text-card-foreground transition-[box-shadow,border-color] duration-150",
         // Stacked sheets: a group of objects.
         "shadow-[4px_4px_0_-1px_var(--color-card),4px_4px_0_0_var(--color-border),8px_8px_0_-1px_var(--color-card),8px_8px_0_0_var(--color-border)]",
-        selected && "ring-2 ring-primary ring-offset-2 ring-offset-background",
+        selected && "border-primary/70 ring-4 ring-primary/15",
       )}
     >
-      <span className="absolute inset-y-2 left-0 w-1 rounded-r" style={{ background: STATE_COLOR[state] ?? STATE_COLOR.absent }} />
-      <Handle type="target" position={Position.Left} className={handleClass} />
+      <Handle type="target" position={Position.Left} className={HANDLE} />
       <div className="flex min-w-0 items-center gap-2.5">
-        <span className="flex size-8 shrink-0 items-center justify-center rounded-lg border bg-background">
+        <span className={cn(ICON_TILE, "bg-violet-500/8 ring-1 ring-violet-500/15 ring-inset")}>
           <TechIcon icon={icon} size={20} />
         </span>
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-1.5">
-            <span className="truncate text-sm leading-tight font-medium">{g.chart}</span>
+            <span className={CARD_TITLE}>{g.chart}</span>
             {g.version && <span className="shrink-0 font-mono text-[10px] text-muted-foreground">{g.version}</span>}
           </div>
-          <div className="truncate font-mono text-[11px] text-muted-foreground">
+          <div className={cn(CARD_SUBTITLE, "mt-0.5")}>
             release {g.release} · ns {g.namespace}
           </div>
         </div>
+        {state !== "absent" && <StatusDot tone={STATE_TONE[state] ?? "off"} label={state} className="self-start pt-1" />}
       </div>
       <div className="truncate text-[11px] text-muted-foreground" data-slot="chart-kinds" title={kindsText(chart.kinds)}>
         {kindsText(chart.kinds, 3)}
@@ -327,10 +323,10 @@ export const ChartNode = memo(function ChartNode({ data, selected }: NodeProps<K
         <Badges errors={data.errors} warnings={data.warnings} />
         <ChartToggle chart={chart} />
       </div>
-      <Handle type="source" position={Position.Right} className={handleClass} />
+      <Handle type="source" position={Position.Right} className={HANDLE} />
     </div>
   )
-})
+}, sameCardProps)
 
 /** The frame of an expanded chart's objects. */
 function ChartFrame({ data, selected }: { data: KubeNodeData; selected: boolean }) {
@@ -343,16 +339,16 @@ function ChartFrame({ data, selected }: { data: KubeNodeData; selected: boolean 
       data-chart={g.chart}
       data-expanded="true"
       className={cn(
-        "relative h-full w-full rounded-2xl border-2 border-dashed border-violet-500/40 bg-violet-500/[0.04]",
-        selected && "ring-2 ring-primary ring-offset-2 ring-offset-background",
+        "relative h-full w-full rounded-2xl border-2 border-dashed border-violet-500/35 bg-violet-500/[0.035]",
+        selected && FRAME_SELECTED,
       )}
     >
-      <Handle type="target" position={Position.Left} className={handleClass} style={{ top: FRAME_HEADER / 2 }} />
+      <Handle type="target" position={Position.Left} className={HANDLE} style={{ top: FRAME_HEADER / 2 }} />
       <div className="flex min-w-0 items-center gap-2 px-3" style={{ height: FRAME_HEADER }}>
-        <span className="flex size-6 shrink-0 items-center justify-center rounded-md bg-background/80">
+        <span className="flex size-6 shrink-0 items-center justify-center rounded-md bg-card/80 ring-1 ring-border ring-inset">
           <TechIcon icon={icon} size={16} />
         </span>
-        <span className="truncate text-sm font-medium">{g.chart}</span>
+        <span className="truncate text-[13px] font-semibold">{g.chart}</span>
         {g.version && <span className="shrink-0 font-mono text-[11px] text-muted-foreground">{g.version}</span>}
         <span className="truncate text-[11px] text-muted-foreground">
           release {g.release} · ns {g.namespace} · {chart.members.length} objects
@@ -361,7 +357,7 @@ function ChartFrame({ data, selected }: { data: KubeNodeData; selected: boolean 
         <Badges errors={data.errors} warnings={data.warnings} />
         <ChartToggle chart={chart} />
       </div>
-      <Handle type="source" position={Position.Right} className={handleClass} style={{ top: FRAME_HEADER / 2 }} />
+      <Handle type="source" position={Position.Right} className={HANDLE} style={{ top: FRAME_HEADER / 2 }} />
     </div>
   )
 }
@@ -377,25 +373,25 @@ export const FrameNode = memo(function FrameNode({ data, selected }: NodeProps<K
       data-kind="Namespace"
       data-name={name}
       className={cn(
-        "relative h-full w-full rounded-2xl border-2 border-dashed border-blue-500/35 bg-blue-500/[0.04]",
-        !node && "border-muted-foreground/25 bg-muted/20",
-        selected && "ring-2 ring-primary ring-offset-2 ring-offset-background",
+        "relative h-full w-full rounded-2xl border-2 border-dashed border-blue-500/30 bg-blue-500/[0.035]",
+        !node && "border-muted-foreground/20 bg-muted/15",
+        selected && FRAME_SELECTED,
       )}
     >
-      <Handle type="target" position={Position.Left} className={handleClass} style={{ top: FRAME_HEADER / 2 }} />
+      <Handle type="target" position={Position.Left} className={HANDLE} style={{ top: FRAME_HEADER / 2 }} />
       <div className="flex items-center gap-2 px-3" style={{ height: empty ? "100%" : FRAME_HEADER }}>
-        <span className="flex size-6 items-center justify-center rounded-md bg-background/80">
+        <span className="flex size-6 items-center justify-center rounded-md bg-card/80 ring-1 ring-border ring-inset">
           <K8sIcon icon="Namespace" size={16} />
         </span>
-        <span className="truncate text-sm font-medium">{name}</span>
+        <span className="truncate text-[13px] font-semibold">{name}</span>
         <span className="truncate text-[11px] text-muted-foreground">{node ? "namespace" : "namespace (implicit)"}</span>
         {node && <SourceChips node={node} />}
         <Badges errors={data.errors} warnings={data.warnings} />
       </div>
-      <Handle type="source" position={Position.Right} className={handleClass} style={{ top: FRAME_HEADER / 2 }} />
+      <Handle type="source" position={Position.Right} className={HANDLE} style={{ top: FRAME_HEADER / 2 }} />
     </div>
   )
-})
+}, sameCardProps)
 
 const EDGE_DASH: Partial<Record<KubeCanvasEdge["kind"], string>> = {
   inferred: "6 5",
@@ -426,18 +422,9 @@ export const KubeEdge = memo(function KubeEdge({ id, sourceX, sourceY, targetX, 
         id={id}
         path={path}
         markerEnd={markerEnd}
-        style={{
-          strokeWidth: emphasis ? 2.25 : 1.5,
-          strokeDasharray: data ? EDGE_DASH[data.kind] : undefined,
-          stroke: emphasis ? "var(--color-primary)" : "var(--color-muted-foreground)",
-          opacity: emphasis ? 1 : 0.7,
-        }}
+        style={edgeStyle(emphasis, data ? EDGE_DASH[data.kind] : undefined, 0.55)}
       />
-      {data?.live && (
-        <circle r={3} className="fill-emerald-500">
-          <animateMotion dur="1.8s" repeatCount="indefinite" path={path} />
-        </circle>
-      )}
+      <EdgeFlow id={id} path={path} labelX={labelX} labelY={labelY} running={!!data?.live} />
       {text && (
         <EdgeLabelRenderer>
           <div

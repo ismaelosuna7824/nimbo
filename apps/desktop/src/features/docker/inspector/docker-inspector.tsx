@@ -1,4 +1,4 @@
-import { Code2Icon, ExternalLinkIcon, MousePointerClickIcon, Trash2Icon } from "lucide-react"
+import { Code2Icon, ExternalLinkIcon, FlameIcon, MousePointerClickIcon, RadioIcon, Trash2Icon } from "lucide-react"
 import { techIconFor } from "@/components/tech-icons"
 import { TechIcon } from "@/components/tech-icons/tech-icon"
 import { openExternal } from "@/components/open-external"
@@ -7,6 +7,8 @@ import { Button } from "@/components/ui/button"
 import { Checkbox } from "@/components/ui/checkbox"
 import { Empty, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from "@/components/ui/empty"
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip"
+import { InspectorBody, InspectorSection } from "@/features/inspector/inspector-section"
+import { openFailureTest } from "@/features/live/live-store"
 import { DiagnosticRow } from "@/features/panels/components/diagnostic-row"
 import { revealFiles } from "@/features/panels/terraform/reveal-files"
 import { api } from "@/lib/api/client"
@@ -17,7 +19,7 @@ import { toast } from "sonner"
 import { errorMessage } from "@/components/errors"
 import { deleteComposeNode } from "../actions"
 import { stateText } from "../canvas/nodes"
-import { CommitInput, Field, Section } from "./fields"
+import { CommitInput, Field } from "./fields"
 import { ServiceForm } from "./service-form"
 import { StageBaseField } from "./stage-base-field"
 
@@ -38,7 +40,7 @@ function NodeInspector({ node }: { node: ComposeNode }) {
   return (
     <div className="flex h-full flex-col" data-testid="docker-inspector">
       <Header node={node} status={status} />
-      <div className="flex min-h-0 flex-1 flex-col gap-5 overflow-y-auto p-4">
+      <InspectorBody>
         {diagnostics.length > 0 && (
           <div className="-mx-3 flex flex-col rounded-lg border">
             {diagnostics.map((d, i) => (
@@ -51,7 +53,7 @@ function NodeInspector({ node }: { node: ComposeNode }) {
         {node.kind === "network" && <NetworkForm node={node} />}
         {node.kind === "volume" && <VolumeForm node={node} />}
         {(node.kind === "secret" || node.kind === "config" || node.kind === "external" || node.kind === "build-stage") && <ReadOnlyFacts node={node} />}
-      </div>
+      </InspectorBody>
     </div>
   )
 }
@@ -93,6 +95,16 @@ function Header({ node, status }: { node: ComposeNode; status?: ComposeServiceSt
             </TooltipContent>
           </Tooltip>
         )}
+        {node.kind === "service" && (
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button variant="ghost" size="icon-sm" aria-label="Test a failure…" data-testid="docker-inspector-failure" onClick={() => openFailureTest(node.id)}>
+                <FlameIcon />
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent>Test a failure: break it under load and watch the impact</TooltipContent>
+          </Tooltip>
+        )}
         {deletable && (
           <Tooltip>
             <TooltipTrigger asChild>
@@ -111,7 +123,7 @@ function Header({ node, status }: { node: ComposeNode; status?: ComposeServiceSt
 /** Containers of a running service: state, health, restarts and the URLs of published ports. */
 function Runtime({ status }: { status: ComposeServiceStatus }) {
   return (
-    <Section title="Running">
+    <InspectorSection id="docker:running" title="Running" icon={<RadioIcon className="size-3.5 text-sky-600 dark:text-sky-400" />}>
       <ul className="flex flex-col gap-1.5">
         {status.containers.map((c) => (
           <li key={c.id} className="flex flex-col gap-1 rounded-md border px-2 py-1.5 text-xs">
@@ -136,7 +148,7 @@ function Runtime({ status }: { status: ComposeServiceStatus }) {
           </li>
         ))}
       </ul>
-    </Section>
+    </InspectorSection>
   )
 }
 
@@ -161,7 +173,7 @@ function NetworkForm({ node }: { node: ComposeNode }) {
     void run(() => api.patchNetwork(id, node.name, body), `Couldn't update ${node.name}`)
   return (
     <>
-      <Section title="Network">
+      <InspectorSection id="docker:network" title="Network">
         <Field label="Name" htmlFor="net-name" hint="Renaming updates every service attached to it.">
           <CommitInput id="net-name" className="font-mono" value={node.name} validate={(v) => (NAME_RE.test(v) ? undefined : "Letters, digits, “_”, “.” or “-”")} onCommit={(name) => patch({ name })} />
         </Field>
@@ -176,10 +188,10 @@ function NetworkForm({ node }: { node: ComposeNode }) {
           <Checkbox checked={!!node.external} onCheckedChange={(c) => patch({ external: c === true })} />
           External: created outside this project
         </label>
-      </Section>
-      <Section title="Services on it">
+      </InspectorSection>
+      <InspectorSection id="docker:network-members" title="Services on it">
         {members.length ? <p className="font-mono text-xs">{members.join(", ")}</p> : <p className="text-[11px] text-muted-foreground">None yet: drag a service into it, or connect a service to it.</p>}
-      </Section>
+      </InspectorSection>
     </>
   )
 }
@@ -190,7 +202,7 @@ function VolumeForm({ node }: { node: ComposeNode }) {
   const patch = (body: { name?: string; driver?: string; external?: boolean }) => void run(() => api.patchVolume(id, node.name, body), `Couldn't update ${node.name}`)
   return (
     <>
-      <Section title="Volume">
+      <InspectorSection id="docker:volume" title="Volume">
         <Field label="Name" htmlFor="vol-name" hint="Renaming updates the services that mount it.">
           <CommitInput id="vol-name" className="font-mono" value={node.name} validate={(v) => (NAME_RE.test(v) ? undefined : "Letters, digits, “_”, “.” or “-”")} onCommit={(name) => patch({ name })} />
         </Field>
@@ -201,10 +213,10 @@ function VolumeForm({ node }: { node: ComposeNode }) {
           <Checkbox checked={!!node.external} onCheckedChange={(c) => patch({ external: c === true })} />
           External: created outside this project
         </label>
-      </Section>
-      <Section title="Mounted by">
+      </InspectorSection>
+      <InspectorSection id="docker:volume-users" title="Mounted by">
         {users.length ? <p className="font-mono text-xs">{users.join(", ")}</p> : <p className="text-[11px] text-muted-foreground">Nobody yet: connect a service to it to mount it.</p>}
-      </Section>
+      </InspectorSection>
     </>
   )
 }
@@ -227,7 +239,7 @@ function ReadOnlyFacts({ node }: { node: ComposeNode }) {
           ["Used by", usersOf(node.id).join(", ") || undefined],
         ]
   return (
-    <Section title="Details">
+    <InspectorSection id="docker:details" title="Details">
       {node.kind === "build-stage" && node.stage && !node.stage.fromStage && <StageBaseField nodeId={node.id} from={node.stage.from} />}
       <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 text-xs">
         {facts
@@ -240,7 +252,7 @@ function ReadOnlyFacts({ node }: { node: ComposeNode }) {
           ))}
       </dl>
       <p className="text-[11px] text-muted-foreground">Edit it in the Code tab.</p>
-    </Section>
+    </InspectorSection>
   )
 }
 

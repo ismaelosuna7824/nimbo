@@ -1,13 +1,12 @@
 import { useEffect, useState } from "react"
 import { useMutation, useQueryClient } from "@tanstack/react-query"
-import { ArrowLeft, Plus, ShieldAlert, Zap } from "lucide-react"
+import { Plus, ShieldAlert, Zap } from "lucide-react"
 import { toast } from "sonner"
 import { Button } from "@/components/ui/button"
 import { Skeleton } from "@/components/ui/skeleton"
 import { Spinner } from "@/components/ui/spinner"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { errorMessage } from "@/components/errors"
-import { ThemeToggle } from "@/components/theme-toggle"
 import { api } from "@/lib/api/client"
 import type { Connection } from "@/lib/api/types"
 import { cn } from "@/lib/utils"
@@ -29,7 +28,6 @@ export function ConnectionsView() {
   const closeView = useConnectionsStore((s) => s.closeView)
   const selectedId = useConnectionsStore((s) => s.selectedId)
   const select = useConnectionsStore((s) => s.select)
-  const workflowName = useWorkflowStore((s) => s.workflow?.name)
   const connections = useConnections()
 
   // Live load-test events of connection-owned runs (no workflow filter) and list refreshes.
@@ -49,22 +47,16 @@ export function ConnectionsView() {
 
   return (
     <div className="fixed inset-0 z-40 flex flex-col bg-background">
-      <header className="flex h-12 shrink-0 items-center gap-2 border-b px-3">
-        <Button size="sm" variant="ghost" onClick={closeView}>
-          <ArrowLeft /> {workflowName ? `Back to ${workflowName}` : "Home"}
-        </Button>
-        <div className="ml-1 flex min-w-0 items-baseline gap-2">
+      <header className="flex h-12 shrink-0 items-center gap-2 border-b px-4">
+        <div className="flex min-w-0 items-baseline gap-2">
           <h1 className="font-heading text-sm font-semibold">Connections</h1>
           <p className="hidden truncate text-xs text-muted-foreground md:block">
             Services already deployed elsewhere that you can load-test. Saved on this machine; secrets never leave it.
           </p>
         </div>
-        <div className="ml-auto flex items-center gap-2">
-          <Button size="sm" onClick={() => select("new")}>
-            <Plus /> New connection
-          </Button>
-          <ThemeToggle />
-        </div>
+        <Button size="sm" className="ml-auto" onClick={() => select("new")}>
+          <Plus /> New connection
+        </Button>
       </header>
       <div className="grid min-h-0 flex-1 grid-cols-[17rem_minmax(0,1fr)]">
         <nav className="flex min-h-0 flex-col gap-1 overflow-y-auto border-r p-2" aria-label="Saved connections">

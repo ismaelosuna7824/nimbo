@@ -1,6 +1,6 @@
 import { useQuery } from "@tanstack/react-query"
 import { useState } from "react"
-import { ActivityIcon, BoxIcon, HardDriveIcon, LinkIcon, NetworkIcon, PlugIcon, RotateCwIcon, ScrollTextIcon, TagIcon, VariableIcon } from "lucide-react"
+import { ActivityIcon, BoxIcon, CpuIcon, HardDriveIcon, LinkIcon, NetworkIcon, PlugIcon, ScrollTextIcon, SlidersHorizontalIcon, TagIcon, VariableIcon } from "lucide-react"
 import { Checkbox } from "@/components/ui/checkbox"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Switch } from "@/components/ui/switch"
@@ -18,9 +18,10 @@ import type {
 } from "@/lib/api/types"
 import { useWorkflowStore } from "@/state/workflow-store"
 import { patchService } from "../actions"
-import { loadDockerImages } from "../intel"
+import { loadDockerImages } from "../intel/images"
 import { overridden } from "../environments/model"
-import { CommitInput, Field, ListEditor, SecretInput, Section } from "./fields"
+import { InspectorSection, InspectorSubsection } from "@/features/inspector/inspector-section"
+import { CommitInput, Field, ListEditor, SecretInput } from "./fields"
 import { HardeningSection } from "./hardening-section"
 import { StageBaseField } from "./stage-base-field"
 import { OverrideMark, useActiveComposeEnvironment } from "./override-mark"
@@ -59,7 +60,11 @@ const CONDITIONS: { value: DependsOnCondition; label: string }[] = [
 
 const NONE = "__none__"
 
-/** Every section of a service: source, ports, environment, volumes, dependencies, health, restart, resources, networks. */
+/**
+ * A service's fields, grouped into collapsible sections (open/closed remembered per section type): Image & build,
+ * Ports & networking, Environment, Volumes & storage, Health & restart, Resources & limits, Security and a collapsed
+ * Advanced (logging, labels) for what most services never touch.
+ */
 export function ServiceForm({ node }: { node: ComposeNode }) {
   const svc = node.service!
   const graph = useWorkflowStore((s) => s.workflow!.compose?.graph)
@@ -79,7 +84,7 @@ export function ServiceForm({ node }: { node: ComposeNode }) {
   const mark = (...attrs: string[]) => <OverrideMark facts={svc} attrs={attrs} onReset={(resetOverrides) => void patchService(node.name, { resetOverrides })} />
 
   return (
-    <div className="flex flex-col gap-5">
+    <>
       {env && (
         <div className="flex flex-col gap-1.5 rounded-md bg-muted/60 px-2 py-1.5 text-[11px] text-muted-foreground" data-testid="docker-env-edit-hint">
           <p>
@@ -109,7 +114,7 @@ export function ServiceForm({ node }: { node: ComposeNode }) {
           )}
         </div>
       )}
-      <Section title="Container" icon={<BoxIcon className="size-3.5" />}>
+      <InspectorSection id="docker:image" title="Image & build" icon={<BoxIcon className="size-3.5" />}>
         <Field label="Service name" htmlFor="svc-name" hint="Other services reach it by this name on shared networks.">
           <CommitInput
             id="svc-name"
@@ -166,35 +171,55 @@ export function ServiceForm({ node }: { node: ComposeNode }) {
             <CommitInput id="svc-command" className="font-mono" value={svc.command ?? ""} placeholder="from the image" onCommit={(command) => patch({ command: command || null })} />
           </Field>
         )}
-      </Section>
+      </InspectorSection>
 
-      <Section title="Ports" icon={<PlugIcon className="size-3.5" />} action={mark("ports")}>
-        <ListEditor<ComposePortMapping>
-          items={svc.ports}
-          empty="Not published: only other services on its networks can reach it."
-          addLabel="Publish a port"
-          blank={() => ({ container: String(svc.expose[0] ?? "80"), host: "" })}
-          onChange={(ports) => patch({ ports: ports.map(({ published: _, ...p }) => ({ ...p, host: p.host || undefined })) })}
-          render={(p, update) => (
-            <>
-              <CommitInput aria-label="Host port" className="font-mono" placeholder="host (auto)" value={p.host ?? ""} validate={(v) => (v === "" || PORT_RE.test(v) ? undefined : "A port or range")} onCommit={(host) => update({ ...p, host })} />
-              <span className="mt-1.5 text-xs text-muted-foreground">→</span>
-              <CommitInput aria-label="Container port" className="font-mono" placeholder="container" value={p.container} validate={(v) => (PORT_RE.test(v) ? undefined : "A port or range")} onCommit={(container) => update({ ...p, container })} />
-              <Select value={p.protocol ?? "tcp"} onValueChange={(protocol) => update({ ...p, protocol: protocol === "tcp" ? undefined : protocol })}>
-                <SelectTrigger size="sm" className="h-8 w-20 text-xs" aria-label="Protocol">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="tcp">tcp</SelectItem>
-                  <SelectItem value="udp">udp</SelectItem>
-                </SelectContent>
-              </Select>
-            </>
+      <InspectorSection id="docker:ports" title="Ports & networking" icon={<PlugIcon className="size-3.5" />}>
+        <InspectorSubsection title="Ports" action={mark("ports")}>
+          <ListEditor<ComposePortMapping>
+            items={svc.ports}
+            empty="Not published: only other services on its networks can reach it."
+            addLabel="Publish a port"
+            blank={() => ({ container: String(svc.expose[0] ?? "80"), host: "" })}
+            onChange={(ports) => patch({ ports: ports.map(({ published: _, ...p }) => ({ ...p, host: p.host || undefined })) })}
+            render={(p, update) => (
+              <>
+                <CommitInput aria-label="Host port" className="font-mono" placeholder="host (auto)" value={p.host ?? ""} validate={(v) => (v === "" || PORT_RE.test(v) ? undefined : "A port or range")} onCommit={(host) => update({ ...p, host })} />
+                <span className="mt-1.5 text-xs text-muted-foreground">→</span>
+                <CommitInput aria-label="Container port" className="font-mono" placeholder="container" value={p.container} validate={(v) => (PORT_RE.test(v) ? undefined : "A port or range")} onCommit={(container) => update({ ...p, container })} />
+                <Select value={p.protocol ?? "tcp"} onValueChange={(protocol) => update({ ...p, protocol: protocol === "tcp" ? undefined : protocol })}>
+                  <SelectTrigger size="sm" className="h-8 w-20 text-xs" aria-label="Protocol">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="tcp">tcp</SelectItem>
+                    <SelectItem value="udp">udp</SelectItem>
+                  </SelectContent>
+                </Select>
+              </>
+            )}
+          />
+        </InspectorSubsection>
+        <InspectorSubsection title="Networks" icon={<NetworkIcon className="size-3.5" />} action={mark("networks")}>
+          {networks.length === 0 ? (
+            <p className="text-[11px] text-muted-foreground">On the project's default network with every other service. Add a network from the palette to separate them.</p>
+          ) : (
+            <div className="flex flex-col gap-1.5">
+              {networks.map((n) => {
+                const on = svc.networks.includes(n)
+                return (
+                  <label key={n} className="flex items-center gap-2 text-xs">
+                    <Checkbox checked={on} onCheckedChange={(c) => patch({ networks: c === true ? [...svc.networks, n] : svc.networks.filter((x) => x !== n) })} />
+                    <span className="font-mono">{n}</span>
+                  </label>
+                )
+              })}
+              {svc.networks.length === 0 && <p className="text-[11px] text-muted-foreground">None checked: the project's default network.</p>}
+            </div>
           )}
-        />
-      </Section>
+        </InspectorSubsection>
+      </InspectorSection>
 
-      <Section title="Environment" icon={<VariableIcon className="size-3.5" />} action={mark("environment")}>
+      <InspectorSection id="docker:environment" title="Environment" icon={<VariableIcon className="size-3.5" />} action={mark("environment")}>
         <ListEditor<ComposeEnvVar>
           items={svc.environment.filter((e) => !e.fromFile)}
           empty="No variables."
@@ -225,9 +250,9 @@ export function ServiceForm({ node }: { node: ComposeNode }) {
           }}
         />
         {svc.envFiles && svc.envFiles.length > 0 && <p className="text-[11px] text-muted-foreground">Also from {svc.envFiles.join(", ")} (edit in the Code tab).</p>}
-      </Section>
+      </InspectorSection>
 
-      <Section title="Volumes" icon={<HardDriveIcon className="size-3.5" />} action={mark("volumes")}>
+      <InspectorSection id="docker:volumes" title="Volumes & storage" icon={<HardDriveIcon className="size-3.5" />} action={mark("volumes")}>
         <ListEditor<ComposeMount>
           items={svc.volumes}
           empty="Nothing mounted: data is lost when the container is recreated."
@@ -262,69 +287,71 @@ export function ServiceForm({ node }: { node: ComposeNode }) {
             <option key={v} value={v} />
           ))}
         </datalist>
-      </Section>
+      </InspectorSection>
 
-      <Section title="Depends on" icon={<LinkIcon className="size-3.5" />} action={mark("depends_on")}>
-        <ListEditor<ComposeDependency>
-          items={svc.dependsOn}
-          empty="Starts without waiting for other services."
-          addLabel="Add dependency"
-          blank={() => ({ service: services.find((s) => !svc.dependsOn.some((d) => d.service === s)) ?? "", condition: "service_started" })}
-          complete={(d) => d.service !== ""}
-          onChange={(deps) => patch({ dependsOn: deps.filter((d) => d.service).map((d) => ({ service: d.service, condition: d.condition })) })}
-          render={(d, update) => (
-            <>
-              <Select value={d.service || NONE} onValueChange={(service) => update({ ...d, service: service === NONE ? "" : service })}>
-                <SelectTrigger size="sm" className="h-8 min-w-0 flex-1 text-xs" aria-label="Service">
-                  <SelectValue placeholder="service" />
-                </SelectTrigger>
-                <SelectContent>
-                  {services.length === 0 && <SelectItem value={NONE} disabled>No other services</SelectItem>}
-                  {services.map((s) => (
-                    <SelectItem key={s} value={s}>
-                      {s}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-              <Select value={d.condition ?? "service_started"} onValueChange={(condition) => update({ ...d, condition })}>
-                <SelectTrigger size="sm" className="h-8 w-32 text-xs" aria-label="Wait until">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  {CONDITIONS.map((c) => (
-                    <SelectItem key={c.value} value={c.value}>
-                      until {c.label}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </>
-          )}
-        />
-      </Section>
+      {/* Startup order lives with health: "until healthy" dependencies wait on the health check below. */}
+      <InspectorSection id="docker:health" title="Health & restart" icon={<ActivityIcon className="size-3.5" />}>
+        <InspectorSubsection title="Health check" action={mark("healthcheck")}>
+          <HealthcheckFields hc={svc.healthcheck} fromDockerfile={svc.healthcheckFrom === "dockerfile"} onChange={(healthcheck) => patch({ healthcheck })} />
+        </InspectorSubsection>
+        <Field label="Restart" badge={mark("restart")}>
+          <Select value={svc.restart ?? NONE} onValueChange={(v) => patch({ restart: v === NONE ? null : v })}>
+            <SelectTrigger size="sm" className="h-8 w-full text-xs" aria-label="Restart policy">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value={NONE}>Default (never)</SelectItem>
+              {RESTART.map((r) => (
+                <SelectItem key={r.value} value={r.value}>
+                  {r.label}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </Field>
+        <InspectorSubsection title="Depends on" icon={<LinkIcon className="size-3.5" />} action={mark("depends_on")}>
+          <ListEditor<ComposeDependency>
+            items={svc.dependsOn}
+            empty="Starts without waiting for other services."
+            addLabel="Add dependency"
+            blank={() => ({ service: services.find((s) => !svc.dependsOn.some((d) => d.service === s)) ?? "", condition: "service_started" })}
+            complete={(d) => d.service !== ""}
+            onChange={(deps) => patch({ dependsOn: deps.filter((d) => d.service).map((d) => ({ service: d.service, condition: d.condition })) })}
+            render={(d, update) => (
+              <>
+                <Select value={d.service || NONE} onValueChange={(service) => update({ ...d, service: service === NONE ? "" : service })}>
+                  <SelectTrigger size="sm" className="h-8 min-w-0 flex-1 text-xs" aria-label="Service">
+                    <SelectValue placeholder="service" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {services.length === 0 && <SelectItem value={NONE} disabled>No other services</SelectItem>}
+                    {services.map((s) => (
+                      <SelectItem key={s} value={s}>
+                        {s}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+                <Select value={d.condition ?? "service_started"} onValueChange={(condition) => update({ ...d, condition })}>
+                  <SelectTrigger size="sm" className="h-8 w-32 text-xs" aria-label="Wait until">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {CONDITIONS.map((c) => (
+                      <SelectItem key={c.value} value={c.value}>
+                        until {c.label}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </>
+            )}
+          />
+        </InspectorSubsection>
+      </InspectorSection>
 
-      <Section title="Health check" icon={<ActivityIcon className="size-3.5" />} action={mark("healthcheck")}>
-        <HealthcheckFields hc={svc.healthcheck} fromDockerfile={svc.healthcheckFrom === "dockerfile"} onChange={(healthcheck) => patch({ healthcheck })} />
-      </Section>
-
-      <Section title="Restart & resources" icon={<RotateCwIcon className="size-3.5" />}>
+      <InspectorSection id="docker:resources" title="Resources & limits" icon={<CpuIcon className="size-3.5" />}>
         <div className="grid grid-cols-2 gap-2">
-          <Field label="Restart" badge={mark("restart")}>
-            <Select value={svc.restart ?? NONE} onValueChange={(v) => patch({ restart: v === NONE ? null : v })}>
-              <SelectTrigger size="sm" className="h-8 w-full text-xs" aria-label="Restart policy">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value={NONE}>Default (never)</SelectItem>
-                {RESTART.map((r) => (
-                  <SelectItem key={r.value} value={r.value}>
-                    {r.label}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          </Field>
           <Field label="Replicas" htmlFor="svc-replicas" badge={mark("deploy.replicas")}>
             <CommitInput
               id="svc-replicas"
@@ -353,55 +380,38 @@ export function ServiceForm({ node }: { node: ComposeNode }) {
             />
           </Field>
         </div>
-      </Section>
-
-      <Section title="Logging" icon={<ScrollTextIcon className="size-3.5" />} action={mark("logging")}>
-        <LoggingFields logging={svc.logging} onChange={(change) => patch(loggingPatch(svc.logging, change))} />
-      </Section>
-
-      <Section title="Labels" icon={<TagIcon className="size-3.5" />} action={mark("labels")}>
-        <ListEditor<LabelRow>
-          items={Object.entries(svc.labels ?? {}).map(([key, value]) => ({ key, value }))}
-          empty="No labels."
-          addLabel="Add label"
-          blank={() => ({ key: "", value: "" })}
-          complete={(l) => l.key !== ""}
-          onChange={(rows) => patch(labelsPatch(rows))}
-          render={(l, update) => (
-            <>
-              <CommitInput aria-label="Label" width="basis-44" className="font-mono" placeholder="com.example.team" value={l.key} validate={(v) => (/\s/.test(v) ? "No spaces" : undefined)} onCommit={(key) => update({ ...l, key })} />
-              <CommitInput aria-label={`Value of ${l.key}`} className="font-mono" placeholder="value" value={l.value} onCommit={(value) => update({ ...l, value })} />
-            </>
-          )}
-        />
-        {svc.labels?.["prometheus.io/scrape"] !== "true" && (
-          <button type="button" className="self-start text-xs text-primary underline-offset-2 hover:underline" onClick={() => patch({ labels: scrapeLabels(svc) })} data-testid="svc-scrape-labels">
-            Label for Prometheus scraping (/metrics on port {scrapeLabels(svc)["prometheus.io/port"]})
-          </button>
-        )}
-      </Section>
+      </InspectorSection>
 
       <HardeningSection node={node} isSecretKey={(key) => SECRET_KEY.test(key)} mark={mark} scoped={scoped} />
 
-      <Section title="Networks" icon={<NetworkIcon className="size-3.5" />} action={mark("networks")}>
-        {networks.length === 0 ? (
-          <p className="text-[11px] text-muted-foreground">On the project's default network with every other service. Add a network from the palette to separate them.</p>
-        ) : (
-          <div className="flex flex-col gap-1.5">
-            {networks.map((n) => {
-              const on = svc.networks.includes(n)
-              return (
-                <label key={n} className="flex items-center gap-2 text-xs">
-                  <Checkbox checked={on} onCheckedChange={(c) => patch({ networks: c === true ? [...svc.networks, n] : svc.networks.filter((x) => x !== n) })} />
-                  <span className="font-mono">{n}</span>
-                </label>
-              )
-            })}
-            {svc.networks.length === 0 && <p className="text-[11px] text-muted-foreground">None checked: the project's default network.</p>}
-          </div>
-        )}
-      </Section>
-    </div>
+      <InspectorSection id="docker:advanced" title="Advanced" icon={<SlidersHorizontalIcon className="size-3.5" />} defaultOpen={false}>
+        <InspectorSubsection title="Logging" icon={<ScrollTextIcon className="size-3.5" />} action={mark("logging")}>
+          <LoggingFields logging={svc.logging} onChange={(change) => patch(loggingPatch(svc.logging, change))} />
+        </InspectorSubsection>
+
+        <InspectorSubsection title="Labels" icon={<TagIcon className="size-3.5" />} action={mark("labels")}>
+          <ListEditor<LabelRow>
+            items={Object.entries(svc.labels ?? {}).map(([key, value]) => ({ key, value }))}
+            empty="No labels."
+            addLabel="Add label"
+            blank={() => ({ key: "", value: "" })}
+            complete={(l) => l.key !== ""}
+            onChange={(rows) => patch(labelsPatch(rows))}
+            render={(l, update) => (
+              <>
+                <CommitInput aria-label="Label" width="basis-44" className="font-mono" placeholder="com.example.team" value={l.key} validate={(v) => (/\s/.test(v) ? "No spaces" : undefined)} onCommit={(key) => update({ ...l, key })} />
+                <CommitInput aria-label={`Value of ${l.key}`} className="font-mono" placeholder="value" value={l.value} onCommit={(value) => update({ ...l, value })} />
+              </>
+            )}
+          />
+          {svc.labels?.["prometheus.io/scrape"] !== "true" && (
+            <button type="button" className="self-start text-xs text-primary underline-offset-2 hover:underline" onClick={() => patch({ labels: scrapeLabels(svc) })} data-testid="svc-scrape-labels">
+              Label for Prometheus scraping (/metrics on port {scrapeLabels(svc)["prometheus.io/port"]})
+            </button>
+          )}
+        </InspectorSubsection>
+      </InspectorSection>
+    </>
   )
 }
 

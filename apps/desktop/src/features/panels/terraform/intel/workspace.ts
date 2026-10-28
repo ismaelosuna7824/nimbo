@@ -21,8 +21,8 @@ export interface IntelOptions {
 const EMPTY: CodeWorkspace = { files: {}, modules: [] }
 
 function version(workflowId: string): string {
-  const wf = useWorkflowStore.getState().workflow
-  return wf?.id === workflowId ? wf.updatedAt : ""
+  const s = useWorkflowStore.getState()
+  return s.workflow?.id === workflowId ? s.version : ""
 }
 
 const workspaceKey = (workflowId: string) => ["code-workspace", workflowId, version(workflowId)]

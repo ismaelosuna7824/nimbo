@@ -1,5 +1,5 @@
 import type { ReactNode } from "react"
-import { Plus, Trash2 } from "lucide-react"
+import { Plus, Trash2, X } from "lucide-react"
 import { toast } from "sonner"
 import { Button } from "@/components/ui/button"
 import { Switch } from "@/components/ui/switch"
@@ -152,7 +152,8 @@ export function VariablesEditor() {
                         title="Remove default (make required)"
                         onClick={() => edit((d) => setAttr(d.variables[i].body, "default", undefined))}
                       >
-                        <Trash2 />
+                        {/* Clears a value, deletes nothing: a trash can here read like the row's own delete. */}
+                        <X />
                       </Button>
                     </div>
                   )}

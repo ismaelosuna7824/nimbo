@@ -2,6 +2,7 @@ import { useQuery } from "@tanstack/react-query"
 import { ChevronRightIcon, SearchIcon, XIcon } from "lucide-react"
 import { memo, useMemo, useState } from "react"
 import { ThemedIcon } from "@/components/arcade/themed-icon"
+import { CategoryIcon } from "@/components/category-icon"
 import { K8sIcon } from "@/components/k8s-icons/k8s-icon"
 import { TechIcon } from "@/components/tech-icons/tech-icon"
 import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from "@/components/ui/accordion"
@@ -130,6 +131,7 @@ export function KubernetesPalette() {
                     <AccordionItem key={c} value={c} className="border-none">
                       <AccordionTrigger className="px-1 py-1.5 text-sm hover:no-underline">
                         <span className="flex items-center gap-2">
+                          <CategoryIcon category={c} />
                           {CATEGORY_LABEL[c as DockerImageCategory] ?? c}
                           <span className="text-xs text-muted-foreground">{groups.images.get(c)!.length}</span>
                         </span>

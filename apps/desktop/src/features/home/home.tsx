@@ -9,19 +9,15 @@ import {
   PaletteIcon,
   PencilIcon,
   PlusIcon,
-  SearchIcon,
   Trash2Icon,
   UploadIcon,
 } from "lucide-react"
 import { useRef, useState } from "react"
-import { AppLogo } from "@/components/app-logo"
-import { CloudBadge } from "@/components/cloud"
+import { CloudBadge, displayClouds } from "@/components/cloud"
 import { contentCount, DockerBadge } from "@/features/docker/badge"
 import { KubernetesBadge } from "@/features/kubernetes/badge"
-import { ThemeToggle } from "@/components/theme-toggle"
 import { type IconTarget, WorkflowIconDialog } from "@/components/workflow-icon/icon-picker"
 import { WorkflowIconTile } from "@/components/workflow-icon/workflow-icon-tile"
-import { SettingsButton } from "@/features/settings/settings-button"
 import { Button } from "@/components/ui/button"
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible"
 import {
@@ -33,15 +29,13 @@ import {
 } from "@/components/ui/dropdown-menu"
 import { Empty, EmptyContent, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from "@/components/ui/empty"
 import { Input } from "@/components/ui/input"
-import { Kbd } from "@/components/ui/kbd"
 import { Skeleton } from "@/components/ui/skeleton"
-import { api } from "@/lib/api/client"
 import type { WorkflowSummary } from "@/lib/api/types"
+import { cn } from "@/lib/utils"
 import { useWorkflowStore } from "@/state/workflow-store"
-import { MOD_KEY, openWorkflow } from "../toolbar/actions"
+import { openWorkflow } from "../toolbar/actions"
 import { DeleteWorkflowDialog } from "../toolbar/delete-workflow-dialog"
-import { useUiStore } from "../toolbar/ui-store"
-import { archiveWorkflow, duplicateWorkflow, renameWorkflow, restoreWorkflow } from "../toolbar/workflow-actions"
+import { archiveWorkflow, duplicateWorkflow, renameWorkflow, restoreWorkflow, workflowListQuery } from "../toolbar/workflow-actions"
 import { ConnectionsSection } from "../connections/home-section"
 import { LearnSection } from "../learn/home-section"
 import { HealthBanner } from "./health-banner"
@@ -64,44 +58,34 @@ function timeAgo(iso: string) {
 
 export function Home() {
   const openDialog = useWorkflowStore((s) => s.openDialog)
-  const setCommandOpen = useUiStore((s) => s.setCommandOpen)
-  const workflows = useQuery({ queryKey: ["workflows"], queryFn: api.listWorkflows, retry: false })
+  const workflows = useQuery({ ...workflowListQuery, retry: false })
   const [deleting, setDeleting] = useState<WorkflowSummary | null>(null)
   const [iconFor, setIconFor] = useState<IconTarget | null>(null)
   const active = (workflows.data ?? []).filter((w) => !w.archived)
   const archived = (workflows.data ?? []).filter((w) => w.archived)
 
   return (
-    <div className="h-svh overflow-y-auto">
+    <main className="h-full overflow-y-auto">
       <div className="mx-auto flex max-w-5xl flex-col gap-8 px-8 py-10">
-        <header className="flex items-center gap-3">
-          <AppLogo className="size-10" />
-          <div>
+        {/* Search, theme and Settings live in the navigation rail: the header keeps the page's title and its actions. */}
+        <header className="flex flex-wrap items-center gap-x-4 gap-y-3">
+          <div className="min-w-0">
             <h1 className="font-heading text-xl font-semibold">Nimbo</h1>
             <p className="text-sm text-muted-foreground">Design, deploy and load-test cloud infrastructure on your laptop.</p>
           </div>
           <div className="ml-auto flex items-center gap-2">
-            <Button variant="ghost" size="sm" className="text-muted-foreground" onClick={() => setCommandOpen(true)}>
-              <SearchIcon />
-              <Kbd>{MOD_KEY} K</Kbd>
+            <Button variant="outline" onClick={() => openDialog("import")}>
+              <UploadIcon />
+              Import project
             </Button>
-            <ThemeToggle />
-            <SettingsButton />
+            <Button onClick={() => openDialog("new-workflow")}>
+              <PlusIcon />
+              New workflow
+            </Button>
           </div>
         </header>
 
         <HealthBanner />
-
-        <div className="flex flex-wrap gap-3">
-          <Button size="lg" onClick={() => openDialog("new-workflow")}>
-            <PlusIcon />
-            New workflow
-          </Button>
-          <Button size="lg" variant="outline" onClick={() => openDialog("import")}>
-            <UploadIcon />
-            Import project
-          </Button>
-        </div>
 
         <section className="flex flex-col gap-3">
           <h2 className="text-sm font-medium text-muted-foreground">Recent workflows</h2>
@@ -146,7 +130,7 @@ export function Home() {
       </div>
       <DeleteWorkflowDialog workflow={deleting} onClose={() => setDeleting(null)} />
       <WorkflowIconDialog workflow={iconFor} onClose={() => setIconFor(null)} />
-    </div>
+    </main>
   )
 }
 
@@ -167,9 +151,16 @@ function WorkflowCard({
     const next = value.trim()
     if (!cancelled.current && next && next !== w.name) void renameWorkflow(w.id, next)
   }
+  // Home can show over the open workflow (rail): mark which card it is, picking it goes straight back.
+  const open = useWorkflowStore((s) => s.workflow?.id === w.id)
 
   return (
-    <div className="group relative flex min-h-32 flex-col rounded-xl border bg-card transition-colors hover:border-primary/40">
+    <div
+      className={cn(
+        "group relative flex min-h-32 flex-col rounded-xl border bg-card transition-colors hover:border-primary/40",
+        open && "border-primary/50",
+      )}
+    >
       {draft !== null ? (
         <div className="flex flex-1 flex-col gap-1.5 p-4">
           <Input
@@ -196,6 +187,7 @@ function WorkflowCard({
           <span className="flex items-center gap-2.5 pr-8">
             <WorkflowIconTile icon={w.icon} size={32} />
             <span className="min-w-0 font-medium">{w.name}</span>
+            {open && <span className="shrink-0 rounded-full bg-primary/10 px-2 py-0.5 text-[11px] font-medium text-primary">Open</span>}
           </span>
           {w.description && <span className="line-clamp-2 text-xs text-muted-foreground">{w.description}</span>}
           <span className="mt-auto flex flex-wrap items-center gap-1.5 pt-2">
@@ -204,7 +196,7 @@ function WorkflowCard({
             ) : w.kind === "kubernetes" ? (
               <KubernetesBadge />
             ) : (
-              w.clouds.map((c) => <CloudBadge key={c} cloud={c} />)
+              displayClouds(w).map((c) => <CloudBadge key={c} cloud={c} />)
             )}
             <span className="text-xs text-muted-foreground">
               {contentCount(w)} · {timeAgo(w.updatedAt)}

@@ -87,9 +87,13 @@ export const useConnectionsStore = create<ConnectionsState>((set, get) => ({
   setDraft: (id, draft) => set({ drafts: { ...get().drafts, [id]: draft } }),
 }))
 
-/** The saved connections (secrets masked), shared by home, the Connections view and load-test pickers. */
+/**
+ * The saved connections (secrets masked), shared by home, the Connections view and load-test pickers. A recent answer
+ * is reused when another of them mounts (opening a workflow mounts the pickers right after home fetched the list):
+ * saving or deleting one refreshes it, and so do `connections.updated` events.
+ */
 export function useConnections() {
-  return useQuery({ queryKey: ["connections"], queryFn: api.listConnections, retry: false })
+  return useQuery({ queryKey: ["connections"], queryFn: api.listConnections, retry: false, staleTime: 30_000 })
 }
 
 /**

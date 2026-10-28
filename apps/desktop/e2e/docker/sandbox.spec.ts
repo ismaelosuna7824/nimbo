@@ -69,7 +69,9 @@ test("deploys to the sandbox, tries the API, load-tests it and cleans up", async
   await expect(load.getByText("Passed", { exact: true })).toBeVisible()
 
   // Destroy what was deployed.
-  await page.getByRole("button", { name: "Destroy everything in the sandbox" }).click()
+  // Destroy sits in the Deploy menu, apart from Deploy itself.
+  await page.getByRole("button", { name: "More deploy actions" }).click()
+  await page.getByRole("menuitem", { name: /^Destroy everything in the sandbox/ }).click()
   const confirm = page.getByRole("alertdialog", { name: `Destroy everything in “${NAME}”?` })
   await confirm.getByRole("button", { name: "Destroy" }).click()
   await app.bottomTab("Endpoints").click()

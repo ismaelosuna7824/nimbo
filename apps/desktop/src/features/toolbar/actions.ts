@@ -3,6 +3,7 @@ import { errorMessage } from "@/components/errors"
 import { ApiError, api } from "@/lib/api/client"
 import type { ComposeRunAction, ComposeRunRequest, KubeRunRequest, RunAction } from "@/lib/api/types"
 import { useWorkflowStore } from "@/state/workflow-store"
+import { useUiStore } from "./ui-store"
 
 const RUN_LABEL: Record<RunAction, string> = {
   validate: "Validation",
@@ -146,6 +147,8 @@ export function useRunBusy() {
 export async function openWorkflow(id: string) {
   try {
     await useWorkflowStore.getState().open(id)
+    // Picking a workflow on Home shown over the open one (even that same one) goes back to the editor.
+    useUiStore.getState().setHomeOpen(false)
   } catch (err) {
     toast.error("Couldn't open the workflow", { description: errorMessage(err) })
   }

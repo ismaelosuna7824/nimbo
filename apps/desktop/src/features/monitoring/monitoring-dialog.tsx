@@ -45,8 +45,9 @@ function MonitoringBody({ workflow, onDone }: { workflow: Workflow; onDone: () =
   const kube = workflow.kind === "kubernetes"
   const added = hasMonitoring(workflow)
   const busy = useRunBusy()
+  const version = useWorkflowStore((s) => s.version)
   const preview = useQuery({
-    queryKey: ["monitoring", workflow.id, workflow.updatedAt],
+    queryKey: ["monitoring", workflow.id, version],
     queryFn: () => api.monitoring(workflow.id),
     retry: false,
   })

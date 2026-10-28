@@ -6,7 +6,8 @@ import { Input } from "@/components/ui/input"
 import { Progress } from "@/components/ui/progress"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Switch } from "@/components/ui/switch"
-import { CommitInput, Section } from "@/features/docker/inspector/fields"
+import { CommitInput } from "@/features/docker/inspector/fields"
+import { InspectorSubsection } from "@/features/inspector/inspector-section"
 import type { KubeNode } from "@/lib/api/types"
 import { patchObject } from "../actions"
 import { KField, KubeFieldsContext } from "./kube-fields"
@@ -33,7 +34,7 @@ const apply = (node: KubeNode, p: ObjectPatch | undefined) => {
   if (p) void patchObject(node, p.set, p.unset?.length ? p.unset : undefined)
 }
 
-/** Deployment rollout: RollingUpdate (with its limits) or Recreate. */
+/** Deployment rollout: RollingUpdate (with its limits) or Recreate. A part of the workload's "Scaling & rollout". */
 export function RolloutSection({ node }: { node: KubeNode }) {
   const { fields } = useContext(KubeFieldsContext)!
   const s = strategyOf(fields)
@@ -53,7 +54,7 @@ export function RolloutSection({ node }: { node: KubeNode }) {
     </KField>
   )
   return (
-    <Section title="Rollout" icon={<RefreshCwIcon className="size-3.5" />}>
+    <InspectorSubsection title="Rollout" icon={<RefreshCwIcon className="size-3.5" />}>
       <KField path="spec.strategy.type" label="Strategy" display={s.type}>
         <Select value={s.type} onValueChange={(type) => write({ ...s, type: type as Strategy["type"] })}>
           <SelectTrigger size="sm" className="h-8 w-full text-xs" aria-label="Rollout strategy" data-testid="k8s-rollout-strategy">
@@ -76,7 +77,7 @@ export function RolloutSection({ node }: { node: KubeNode }) {
       ) : (
         <p className="text-[11px] text-muted-foreground">Every rollout stops all pods before starting new ones: only needed for a volume one pod at a time can use.</p>
       )}
-    </Section>
+    </InspectorSubsection>
   )
 }
 
@@ -109,7 +110,7 @@ export function SpreadField({ node }: { node: KubeNode }) {
 /**
  * Least privilege for the pods: non-root user and RuntimeDefault seccomp (pod), then per container no privileged mode,
  * no privilege escalation, a read-only root filesystem and no Linux capabilities (the Pod Security "restricted"
- * profile; findings k8s_run_as_root, k8s_privileged, k8s_hardening).
+ * profile; findings k8s_run_as_root, k8s_privileged, k8s_hardening). A part of the workload's "Security".
  */
 export function HardeningSection({ node }: { node: KubeNode }) {
   const { fields } = useContext(KubeFieldsContext)!
@@ -124,15 +125,17 @@ export function HardeningSection({ node }: { node: KubeNode }) {
   const editable = (path: string) => fieldAccess(fields, path, node)
   if (all.length === 0) return null
   return (
-    <section className="flex flex-col gap-2.5" data-testid="k8s-hardening">
-      <div className="flex items-center gap-2">
-        <ShieldCheckIcon className="size-3.5 text-emerald-600 dark:text-emerald-400" />
-        <h3 className="text-xs font-semibold">Hardening</h3>
-        <div className="h-px flex-1 bg-border" />
+    <InspectorSubsection
+      title="Hardening"
+      icon={<ShieldCheckIcon className="size-3.5 text-emerald-600 dark:text-emerald-400" />}
+      className="gap-2.5"
+      data-testid="k8s-hardening"
+      action={
         <Badge variant={passed === all.length ? "secondary" : "outline"} data-testid="k8s-hardening-score">
           {passed}/{all.length}
         </Badge>
-      </div>
+      }
+    >
       <div className="flex items-center gap-2">
         <Progress value={(passed / all.length) * 100} className="h-1.5 flex-1" aria-label="Hardening score" />
         <span className="text-[11px] text-muted-foreground">{passed === all.length ? "Restricted: every protection is on." : `${all.length - passed} protection${all.length - passed === 1 ? "" : "s"} off`}</span>
@@ -175,7 +178,7 @@ export function HardeningSection({ node }: { node: KubeNode }) {
             ))}
         </div>
       ))}
-    </section>
+    </InspectorSubsection>
   )
 }
 

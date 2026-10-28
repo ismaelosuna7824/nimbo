@@ -41,6 +41,8 @@
     --color-card: var(--card);
     --color-foreground: var(--foreground);
     --color-background: var(--background);
+    --color-canvas: var(--canvas);
+    --color-rail: var(--rail);
     --radius-sm: calc(var(--radius) * 0.6);
     --radius-md: calc(var(--radius) * 0.8);
     --radius-lg: var(--radius);
@@ -48,76 +50,111 @@
     --radius-2xl: calc(var(--radius) * 1.8);
     --radius-3xl: calc(var(--radius) * 2.2);
     --radius-4xl: calc(var(--radius) * 2.6);
+    /* Elevation: every shadow utility draws one of the three levels below (theme-aware). */
+    --shadow-2xs: var(--elevation-1);
+    --shadow-xs: var(--elevation-1);
+    --shadow-sm: var(--elevation-1);
+    --shadow: var(--elevation-1);
+    --shadow-md: var(--elevation-2);
+    --shadow-lg: var(--elevation-3);
+    --shadow-xl: var(--elevation-3);
+    --shadow-2xl: var(--elevation-3);
+    /* The soft accent glow under a selected canvas card (with its ring). */
+    --shadow-glow: 0 8px 24px -8px color-mix(in oklab, var(--primary) 55%, transparent);
 }
 
+/*
+ * Visual system ("Pulido"). Neutrals carry a faint violet-blue tint (hue 280, chroma ≤ 0.015).
+ * Surfaces, lowest to highest: rail < canvas < background (pages, panels) ≈ sidebar < card < popover.
+ * Shadows come in three levels (--elevation-1..3): resting controls, cards, floating layers.
+ */
 :root {
-    --background: oklch(1 0 0);
-    --foreground: oklch(0.145 0 0);
+    /* macOS desktop app: height of the custom title bar; --app-top is how far full-window layers (the setup wizard)
+       start from the top, so the traffic lights and the drag area stay visible over them. */
+    --titlebar-h: 38px;
+    --app-top: 0px;
+    --background: oklch(0.992 0.002 280);
+    --foreground: oklch(0.17 0.012 280);
+    --canvas: oklch(0.972 0.004 280);
+    --rail: oklch(0.955 0.006 280);
     --card: oklch(1 0 0);
-    --card-foreground: oklch(0.145 0 0);
+    --card-foreground: oklch(0.17 0.012 280);
     --popover: oklch(1 0 0);
-    --popover-foreground: oklch(0.145 0 0);
+    --popover-foreground: oklch(0.17 0.012 280);
     /* Brand accent: Nimbo violet (matches the app icon). */
     --primary: oklch(0.541 0.247 293.009);
     --primary-foreground: oklch(0.985 0 0);
-    --secondary: oklch(0.97 0 0);
-    --secondary-foreground: oklch(0.205 0 0);
-    --muted: oklch(0.97 0 0);
-    --muted-foreground: oklch(0.556 0 0);
-    --accent: oklch(0.97 0 0);
-    --accent-foreground: oklch(0.205 0 0);
+    --secondary: oklch(0.958 0.006 280);
+    --secondary-foreground: oklch(0.22 0.012 280);
+    --muted: oklch(0.958 0.006 280);
+    --muted-foreground: oklch(0.5 0.016 280);
+    --accent: oklch(0.952 0.008 280);
+    --accent-foreground: oklch(0.22 0.012 280);
     --destructive: oklch(0.577 0.245 27.325);
-    --border: oklch(0.922 0 0);
-    --input: oklch(0.922 0 0);
+    --border: oklch(0.915 0.006 280);
+    --input: oklch(0.88 0.008 280);
     --ring: oklch(0.606 0.25 292.717);
-    --chart-1: oklch(0.87 0 0);
-    --chart-2: oklch(0.556 0 0);
-    --chart-3: oklch(0.439 0 0);
-    --chart-4: oklch(0.371 0 0);
-    --chart-5: oklch(0.269 0 0);
-    --radius: 0.625rem;
-    --sidebar: oklch(0.985 0 0);
-    --sidebar-foreground: oklch(0.145 0 0);
+    --chart-1: oklch(0.87 0.004 280);
+    --chart-2: oklch(0.556 0.01 280);
+    --chart-3: oklch(0.439 0.01 280);
+    --chart-4: oklch(0.371 0.01 280);
+    --chart-5: oklch(0.269 0.01 280);
+    --radius: 0.75rem;
+    --sidebar: oklch(0.982 0.003 280);
+    --sidebar-foreground: oklch(0.17 0.012 280);
     --sidebar-primary: oklch(0.541 0.247 293.009);
     --sidebar-primary-foreground: oklch(0.985 0 0);
-    --sidebar-accent: oklch(0.97 0 0);
-    --sidebar-accent-foreground: oklch(0.205 0 0);
-    --sidebar-border: oklch(0.922 0 0);
+    --sidebar-accent: oklch(0.945 0.009 280);
+    --sidebar-accent-foreground: oklch(0.22 0.012 280);
+    --sidebar-border: oklch(0.915 0.006 280);
     --sidebar-ring: oklch(0.606 0.25 292.717);
+    --elevation-1: 0 1px 2px oklch(0.25 0.03 280 / 0.06), 0 0 0 0.5px oklch(0.25 0.03 280 / 0.02);
+    --elevation-2: 0 1px 2px oklch(0.25 0.03 280 / 0.06), 0 4px 12px -4px oklch(0.25 0.03 280 / 0.1);
+    --elevation-3: 0 2px 4px oklch(0.25 0.03 280 / 0.06), 0 12px 32px -8px oklch(0.25 0.03 280 / 0.18);
+}
+
+:root[data-titlebar] {
+    --app-top: var(--titlebar-h);
 }
 
 .dark {
-    --background: oklch(0.145 0 0);
-    --foreground: oklch(0.985 0 0);
-    --card: oklch(0.205 0 0);
-    --card-foreground: oklch(0.985 0 0);
-    --popover: oklch(0.205 0 0);
-    --popover-foreground: oklch(0.985 0 0);
+    --background: oklch(0.18 0.009 280);
+    --foreground: oklch(0.97 0.003 280);
+    --canvas: oklch(0.158 0.008 280);
+    --rail: oklch(0.145 0.008 280);
+    --card: oklch(0.215 0.01 280);
+    --card-foreground: oklch(0.97 0.003 280);
+    --popover: oklch(0.228 0.011 280);
+    --popover-foreground: oklch(0.97 0.003 280);
     --primary: oklch(0.606 0.25 292.717);
     --primary-foreground: oklch(0.985 0 0);
-    --secondary: oklch(0.269 0 0);
-    --secondary-foreground: oklch(0.985 0 0);
-    --muted: oklch(0.269 0 0);
-    --muted-foreground: oklch(0.708 0 0);
-    --accent: oklch(0.269 0 0);
-    --accent-foreground: oklch(0.985 0 0);
+    --secondary: oklch(0.26 0.012 280);
+    --secondary-foreground: oklch(0.97 0.003 280);
+    --muted: oklch(0.26 0.012 280);
+    --muted-foreground: oklch(0.72 0.014 280);
+    --accent: oklch(0.265 0.013 280);
+    --accent-foreground: oklch(0.97 0.003 280);
     --destructive: oklch(0.704 0.191 22.216);
-    --border: oklch(1 0 0 / 10%);
-    --input: oklch(1 0 0 / 15%);
+    --border: oklch(1 0 0 / 8%);
+    --input: oklch(1 0 0 / 14%);
     --ring: oklch(0.702 0.183 293.541);
-    --chart-1: oklch(0.87 0 0);
-    --chart-2: oklch(0.556 0 0);
-    --chart-3: oklch(0.439 0 0);
-    --chart-4: oklch(0.371 0 0);
-    --chart-5: oklch(0.269 0 0);
-    --sidebar: oklch(0.205 0 0);
-    --sidebar-foreground: oklch(0.985 0 0);
+    --chart-1: oklch(0.87 0.004 280);
+    --chart-2: oklch(0.556 0.01 280);
+    --chart-3: oklch(0.439 0.01 280);
+    --chart-4: oklch(0.371 0.01 280);
+    --chart-5: oklch(0.269 0.01 280);
+    --sidebar: oklch(0.18 0.009 280);
+    --sidebar-foreground: oklch(0.97 0.003 280);
     --sidebar-primary: oklch(0.606 0.25 292.717);
     --sidebar-primary-foreground: oklch(0.985 0 0);
-    --sidebar-accent: oklch(0.269 0 0);
-    --sidebar-accent-foreground: oklch(0.985 0 0);
-    --sidebar-border: oklch(1 0 0 / 10%);
+    --sidebar-accent: oklch(0.25 0.012 280);
+    --sidebar-accent-foreground: oklch(0.97 0.003 280);
+    --sidebar-border: oklch(1 0 0 / 8%);
     --sidebar-ring: oklch(0.702 0.183 293.541);
+    /* Dark elevation: a 1px top highlight plus a soft drop (light shadows vanish on dark surfaces). */
+    --elevation-1: inset 0 1px 0 oklch(1 0 0 / 0.04), 0 1px 2px oklch(0 0 0 / 0.3);
+    --elevation-2: inset 0 1px 0 oklch(1 0 0 / 0.05), 0 1px 2px oklch(0 0 0 / 0.35), 0 6px 16px -6px oklch(0 0 0 / 0.45);
+    --elevation-3: inset 0 1px 0 oklch(1 0 0 / 0.06), 0 2px 4px oklch(0 0 0 / 0.35), 0 16px 40px -8px oklch(0 0 0 / 0.6);
 }
 
 @layer base {
@@ -131,30 +168,86 @@
     @apply font-sans;
     }
 }
+
+/* Motion stays subtle; with reduced motion, state changes are instant. */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  ::before,
+  ::after {
+    transition-duration: 0s !important;
+  }
+}
+
 /* React Flow follows the shadcn palette in both themes. */
 .react-flow {
-  --xy-background-color: var(--background);
-  --xy-background-pattern-dots-color: color-mix(in oklab, var(--muted-foreground) 35%, transparent);
+  --xy-background-color: var(--canvas);
+  --xy-background-pattern-dots-color: color-mix(in oklab, var(--muted-foreground) 24%, transparent);
   --xy-node-background-color: transparent;
   --xy-node-border: none;
   --xy-node-boxshadow-selected: none;
   --xy-node-boxshadow-hover: none;
   --xy-connectionline-stroke: var(--primary);
   --xy-connectionline-stroke-width: 2;
-  --xy-controls-button-background-color: var(--card);
+  --xy-controls-button-background-color: transparent;
   --xy-controls-button-background-color-hover: var(--accent);
-  --xy-controls-button-color: var(--foreground);
+  --xy-controls-button-color: var(--muted-foreground);
   --xy-controls-button-color-hover: var(--foreground);
   --xy-controls-button-border-color: var(--border);
-  --xy-controls-box-shadow: none;
-  --xy-minimap-background-color: var(--card);
-  --xy-minimap-mask-background-color: color-mix(in oklab, var(--background) 70%, transparent);
+  --xy-controls-box-shadow: var(--elevation-2);
+  --xy-minimap-background-color: color-mix(in oklab, var(--card) 80%, transparent);
+  --xy-minimap-mask-background-color: color-mix(in oklab, var(--canvas) 72%, transparent);
+  --xy-minimap-mask-stroke-color: color-mix(in oklab, var(--primary) 45%, transparent);
+  --xy-minimap-mask-stroke-width: 1;
+  --xy-minimap-node-background-color: color-mix(in oklab, var(--muted-foreground) 35%, transparent);
   --xy-selection-background-color: color-mix(in oklab, var(--primary) 8%, transparent);
   --xy-selection-border: 1px dashed var(--primary);
+  --xy-edge-label-background-color: var(--card);
+  --xy-edge-label-color: var(--muted-foreground);
 }
 
-.react-flow__controls {
+/* Floating chrome over the canvas: frosted glass (the view switch and Tidy up use bg-card/80 backdrop-blur-md shadow-md). */
+.react-flow__controls,
+.react-flow__minimap {
   overflow: hidden;
   border: 1px solid var(--border);
   border-radius: var(--radius-lg);
+  background-color: color-mix(in oklab, var(--card) 80%, transparent);
+  backdrop-filter: blur(12px) saturate(1.4);
+  box-shadow: var(--elevation-2);
+}
+
+.react-flow__minimap-node.selected {
+  fill: var(--primary) !important;
+}
+
+/* Arrowheads follow the muted edge stroke (React Flow paints them a fixed gray). */
+.react-flow__arrowhead polyline {
+  fill: color-mix(in oklab, var(--muted-foreground) 70%, transparent) !important;
+  stroke: color-mix(in oklab, var(--muted-foreground) 70%, transparent) !important;
+}
+
+.react-flow__controls-button {
+  transition: background-color 150ms, color 150ms;
+}
+
+.react-flow__controls-button:last-child {
+  border-bottom: none;
+}
+
+/* Edges that carry live traffic or connect running services: a slow dash drifting toward the target. */
+.edge-flow {
+  stroke-dasharray: 6 6;
+  animation: edge-flow 1.2s linear infinite;
+}
+
+@keyframes edge-flow {
+  to {
+    stroke-dashoffset: -12;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .edge-flow {
+    animation: none;
+  }
 }

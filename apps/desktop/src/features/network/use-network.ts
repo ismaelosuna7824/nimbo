@@ -27,15 +27,16 @@ export function hasNetworkResources(nodes: WorkflowNode[] | undefined): boolean 
 const REFETCH_DEBOUNCE_MS = 600
 
 /**
- * Network model of the open workflow. Refetched (debounced) when the workflow
- * is saved or changed elsewhere (workflow.updated) and when the deployed state
- * changes (state.updated); every caller shares one query.
+ * Network model of the open workflow. Refetched (debounced) when the workflow's
+ * content is saved or changed elsewhere (workflow.updated; moved cards don't
+ * count) and when the deployed state changes (state.updated); every caller
+ * shares one query.
  */
 export function useNetwork() {
   const workflowId = useWorkflowStore((s) => s.workflow?.id)
-  const updatedAt = useWorkflowStore((s) => s.workflow?.updatedAt)
+  const contentVersion = useWorkflowStore((s) => s.version)
   const deployedAt = useWorkflowStore((s) => s.deployed?.updatedAt)
-  const version = `${updatedAt ?? ""}|${deployedAt ?? ""}`
+  const version = `${contentVersion}|${deployedAt ?? ""}`
   const [settled, setSettled] = useState(version)
   useEffect(() => {
     const t = window.setTimeout(() => setSettled(version), REFETCH_DEBOUNCE_MS)
@@ -45,6 +46,9 @@ export function useNetwork() {
     queryKey: ["network", workflowId, settled],
     queryFn: () => api.network(workflowId!),
     enabled: !!workflowId,
+    // The key changes with everything the model depends on: a new reader (the inspector section of each selected
+    // node) reuses the answer instead of fetching it again.
+    staleTime: Infinity,
     placeholderData: (prev, prevQuery) => (prevQuery?.queryKey[1] === workflowId ? prev : undefined),
   })
 }

@@ -2,6 +2,7 @@ import { useQuery } from "@tanstack/react-query"
 import { HammerIcon, SearchIcon, XIcon } from "lucide-react"
 import { memo, useMemo, useState } from "react"
 import { ThemedIcon } from "@/components/arcade/themed-icon"
+import { CategoryIcon } from "@/components/category-icon"
 import { techIcon } from "@/components/tech-icons"
 import { TechIcon } from "@/components/tech-icons/tech-icon"
 import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from "@/components/ui/accordion"
@@ -11,7 +12,7 @@ import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip"
 import type { DockerImage, DockerImageCategory, DockerStarter } from "@/lib/api/types"
 import { addFromPalette, DOCKER_DRAG_TYPE, type DockerPaletteItem } from "./actions"
-import { loadDockerImages } from "./intel"
+import { loadDockerImages } from "./intel/images"
 
 export const CATEGORY_LABEL: Record<DockerImageCategory, string> = {
   web: "Web servers & proxies",
@@ -147,6 +148,7 @@ export function DockerPalette() {
                     <AccordionItem key={c} value={c} className="border-none">
                       <AccordionTrigger className="px-1 py-1.5 text-sm hover:no-underline">
                         <span className="flex items-center gap-2">
+                          <CategoryIcon category={c} />
                           {CATEGORY_LABEL[c]}
                           <span className="text-xs text-muted-foreground">{byCategory.get(c)!.length}</span>
                         </span>

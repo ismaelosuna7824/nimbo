@@ -1,4 +1,5 @@
 import { ArrowRightIcon, SparklesIcon } from "lucide-react"
+import { memo } from "react"
 import { ResourceIcon } from "@/components/resource-icon"
 import { Badge } from "@/components/ui/badge"
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog"
@@ -12,7 +13,8 @@ export interface PendingConnection {
   recipes: ConnectionRecipe[]
 }
 
-export function ConnectDialog({
+/** Memoized: the canvas re-renders on every edit, the closed dialog doesn't (pass stable callbacks). */
+export const ConnectDialog = memo(function ConnectDialog({
   pending,
   onPick,
   onClose,
@@ -60,7 +62,7 @@ export function ConnectDialog({
       </DialogContent>
     </Dialog>
   )
-}
+})
 
 function RecipeGroup({
   title,

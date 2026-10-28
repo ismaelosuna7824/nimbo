@@ -11,6 +11,8 @@ function useHealth() {
     queryKey: ["health"],
     queryFn: api.health,
     retry: false,
+    // Like the other health readers: coming back home reuses a recent answer (a failed one is always checked again).
+    staleTime: 30_000,
     refetchInterval: (q) => (q.state.status === "error" ? 5000 : 60_000),
   })
 }

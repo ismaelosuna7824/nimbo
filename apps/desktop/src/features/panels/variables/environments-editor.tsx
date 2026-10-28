@@ -353,8 +353,8 @@ function EnvironmentDetail({ env, onRenamed }: { env: Environment; onRenamed: (n
 
 function SectionTitle({ title, hint, action }: { title: string; hint?: ReactNode; action?: ReactNode }) {
   return (
-    <div className="flex h-8 items-center gap-2 border-y bg-muted/30 px-2.5 text-[11px] first:border-t-0">
-      <span className="shrink-0 font-semibold whitespace-nowrap">{title}</span>
+    <div className="flex h-9 items-center gap-2 border-y bg-muted/30 px-3 text-xs first:border-t-0">
+      <span className="shrink-0 text-[13px] font-semibold whitespace-nowrap">{title}</span>
       {hint && <span className="min-w-0 truncate text-muted-foreground">{hint}</span>}
       <div className="ml-auto shrink-0">{action}</div>
     </div>

@@ -5,11 +5,15 @@ import { Spinner } from "@/components/ui/spinner"
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip"
 import { isNetworkFinding, type NetRule, type NetworkSummary, type WorkflowNode } from "@/lib/api/types"
 import { useWorkflowStore } from "@/state/workflow-store"
+import { InspectorSection } from "../inspector/inspector-section"
 import { DiagnosticRow } from "../panels/components/diagnostic-row"
 import { BasisBadge, SubnetBadge, Term } from "./glossary"
 import type { NetTerm } from "./terms"
 import { INTERNET, openReachability, type ReachabilityPreset } from "./store"
 import { addTestInstance, useNetwork } from "./use-network"
+
+// Constant: section headings are memoized on their props.
+const ICON = <RouteIcon className="size-3.5 text-teal-500" />
 
 /** Gateway / route target kinds with a beginner explanation. */
 const TERM_OF_KIND: Record<string, NetTerm> = {
@@ -54,13 +58,7 @@ function entriesOf(summary: NetworkSummary, nodeId: string) {
  * workload sits, this node's network findings and shortcuts to the reachability check.
  * Renders nothing for nodes the network model doesn't know.
  */
-export function NetworkSection({
-  node,
-  section: Section,
-}: {
-  node: WorkflowNode
-  section: React.ComponentType<{ title: string; icon?: React.ReactNode; children: React.ReactNode }>
-}) {
+export function NetworkSection({ node }: { node: WorkflowNode }) {
   const network = useNetwork()
   const summary = network.data
   const allDiagnostics = useWorkflowStore((s) => s.workflow?.diagnostics)
@@ -93,7 +91,7 @@ export function NetworkSection({
       : {}
 
   return (
-    <Section title="Network" icon={<RouteIcon className="size-3.5 text-teal-500" />}>
+    <InspectorSection id="network" title="Network" icon={ICON}>
       <div className="flex flex-col gap-3 text-xs" data-testid="network-section">
         <div>
           <BasisBadge basis={summary.basis} reason={summary.basisReason} />
@@ -276,7 +274,7 @@ export function NetworkSection({
           )}
         </div>
       </div>
-    </Section>
+    </InspectorSection>
   )
 }
 

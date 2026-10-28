@@ -29,10 +29,14 @@ describe("readiness status", () => {
   test("scores without evidence read as a dash", () => {
     expect(scoreLabel(null)).toBe("—")
     expect(scoreLabel(0)).toBe("0")
-    expect(scoreTone(null)).toBe("text-muted-foreground")
-    expect(scoreTone(90)).toContain("emerald")
-    expect(scoreTone(89)).toContain("amber")
-    expect(scoreTone(69)).toBe("text-destructive")
+    expect(scoreTone(null, ["fail"])).toBe("text-muted-foreground")
+  })
+
+  test("a score is red only when a check failed, whatever the number", () => {
+    // One warning in a two-check category scores 50: it needs work, it is not broken.
+    expect(scoreTone(50, ["pass", "warn"])).toContain("amber")
+    expect(scoreTone(95, ["pass", "fail"])).toBe("text-destructive")
+    expect(scoreTone(100, ["pass", "info", "todo", "skip"])).toContain("emerald")
   })
 
   test("component columns follow the daemon's cell order", () => {

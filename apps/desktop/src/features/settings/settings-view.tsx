@@ -1,5 +1,4 @@
 import { lazy, Suspense, useEffect } from "react"
-import { useConnectionsStore } from "@/features/connections/store"
 import { useWorkflowStore } from "@/state/workflow-store"
 import { useSettings, useSettingsView } from "./store"
 
@@ -30,18 +29,6 @@ export function SettingsHost() {
     window.addEventListener("keydown", onKey)
     return () => window.removeEventListener("keydown", onKey)
   }, [])
-
-  // Settings and Connections are both full pages: opening one closes the other.
-  useEffect(() => {
-    if (open) useConnectionsStore.getState().closeView()
-  }, [open])
-  useEffect(
-    () =>
-      useConnectionsStore.subscribe((s, prev) => {
-        if (s.viewOpen && !prev.viewOpen) useSettingsView.getState().closeView()
-      }),
-    [],
-  )
 
   return open ? (
     <Suspense fallback={<div className="fixed inset-0 z-40 bg-background" />}>

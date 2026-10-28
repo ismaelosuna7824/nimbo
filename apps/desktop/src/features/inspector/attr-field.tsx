@@ -1,5 +1,5 @@
 import { BracesIcon, LockIcon, Undo2Icon, XIcon } from "lucide-react"
-import { useState } from "react"
+import { memo, useState } from "react"
 import { ResourceIcon } from "@/components/resource-icon"
 import { Input } from "@/components/ui/input"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
@@ -18,6 +18,8 @@ import {
   mapEntries,
   referencedNodes,
   removeListItem,
+  isJsonAttr,
+  jsonFieldValue,
   resolveReference,
   stringLiteral,
 } from "./body"
@@ -37,7 +39,8 @@ function shortHelp(description?: string) {
   return cut > 0 && cut < 220 ? clean.slice(0, cut + 1) : clean
 }
 
-export function AttrField({
+/** Memoized: typing in one field of a form leaves the others' props alone (useBlockEditors hands out stable setters). */
+export const AttrField = memo(function AttrField({
   attr,
   value,
   onChange,
@@ -64,6 +67,7 @@ export function AttrField({
   const items = kind === "string-list" && !constant && !forceExpr && !rawRef ? listItems(value) : null
   // Maps edit entry by entry; values holding expressions are kept as they are.
   const entries = kind === "string-map" && !forceExpr && !rawRef && !ref ? mapEntries(value) : null
+  const json = kind === "string" && isJsonAttr(attr.name, attr.description)
   const pro = mode === "pro"
   const help = shortHelp(attr.description)
   const invalid = problems.some((p) => p.severity === "error")
@@ -175,11 +179,33 @@ export function AttrField({
           onAdd={(text) => onChange(listValue([...items, JSON.stringify(text)]))}
           onEdit={pro ? () => setRawRef(true) : undefined}
         />
+      ) : json ? (
+        // A JSON document always gets a multi-line editor, set or not, in Guided too: clearing it must not leave a
+        // one-line text box that can't take the document back (pasted JSON becomes jsonencode(…)).
+        <>
+          <ExpressionInput
+            value={value?.expr ?? (typeof value?.literal === "string" ? value.literal : "")}
+            onCommit={(text) => onChange(jsonFieldValue(text))}
+            invalid={invalid}
+            rows={6}
+            placeholder={'Paste a JSON document, e.g. { "Version": "2012-10-17", "Statement": [ … ] }, or Link to… a policy document'}
+          />
+          <ReferencedChips expr={value?.expr} />
+        </>
       ) : entries ? (
         <MapField entries={entries} onChange={onChange} />
       ) : exprMode ? (
         <>
-          <ExpressionInput value={exprOf(value)} onCommit={setExpr} invalid={invalid} rows={kind === "complex" ? 3 : 1} />
+          <ExpressionInput
+            value={exprOf(value)}
+            onCommit={(expr) => {
+              // Emptied: stay an expression editor, so the user can write the next one instead of a plain text.
+              if (!expr.trim()) setForceExpr(true)
+              setExpr(expr)
+            }}
+            invalid={invalid}
+            rows={kind === "complex" ? 3 : 1}
+          />
           <ReferencedChips expr={value?.expr} />
         </>
       ) : (
@@ -194,7 +220,7 @@ export function AttrField({
       ))}
     </div>
   )
-}
+})
 
 function ReferencedChips({ expr }: { expr?: string }) {
   const { nodes, schemas, select } = useInspector()

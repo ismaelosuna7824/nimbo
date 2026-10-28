@@ -1,5 +1,5 @@
 import { ArrowRightIcon, HardDriveIcon, LinkIcon, NetworkIcon, VariableIcon } from "lucide-react"
-import { useState } from "react"
+import { memo, useState } from "react"
 import type { TechIconInfo } from "@/components/tech-icons"
 import { TechIcon } from "@/components/tech-icons/tech-icon"
 import { Button } from "@/components/ui/button"
@@ -24,8 +24,11 @@ const KIND: Record<ComposeConnectKind, { title: string; icon: typeof LinkIcon }>
 
 const ORDER: ComposeConnectKind[] = ["depends_on", "env", "network", "volume"]
 
-/** Ways to connect two compose nodes; a volume mount asks for its path in the container. */
-export function ComposeConnectDialog({
+/**
+ * Ways to connect two compose nodes; a volume mount asks for its path in the container. Memoized: the canvas
+ * re-renders on every edit, the closed dialog doesn't (pass stable callbacks).
+ */
+export const ComposeConnectDialog = memo(function ComposeConnectDialog({
   pending,
   onPick,
   onClose,
@@ -125,4 +128,4 @@ export function ComposeConnectDialog({
       </DialogContent>
     </Dialog>
   )
-}
+})

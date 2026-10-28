@@ -11,13 +11,14 @@ import { Spinner } from "@/components/ui/spinner"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip"
 import { DiagnosticRow } from "@/features/panels/components/diagnostic-row"
+import { useShownVersion } from "@/features/panels/lib/use-shown-version"
 import { api } from "@/lib/api/client"
 import type { EnvironmentReadiness, ReadinessGroup, ReadinessItem } from "@/lib/api/types"
 import { cn } from "@/lib/utils"
 import { useWorkflowStore } from "@/state/workflow-store"
 import { openFinding, runReadinessAction } from "./actions"
 import { ComponentsTable } from "./components-table"
-import { defaultEnvironment, ENV_STATUS, envLabel, ITEM_STATUS, scoreLabel, scoreTone, untestedSummary } from "./status"
+import { defaultEnvironment, ENV_STATUS, ENV_VERDICT, envLabel, ITEM_STATUS, scoreLabel, scoreTone, untestedSummary } from "./status"
 
 /**
  * Production readiness of a docker or Kubernetes workflow: every environment opened on its own and scored from its
@@ -26,7 +27,8 @@ import { defaultEnvironment, ENV_STATUS, envLabel, ITEM_STATUS, scoreLabel, scor
  */
 export function ReadinessTab() {
   const workflowId = useWorkflowStore((s) => s.workflow!.id)
-  const updatedAt = useWorkflowStore((s) => s.workflow!.updatedAt)
+  // Frozen while the tab is hidden: saves made meanwhile don't re-check readiness until it is shown.
+  const updatedAt = useShownVersion("readiness")
   const active = useWorkflowStore((s) => s.workflow!.activeEnvironment ?? "")
   // Finished runs change the load and resilience evidence; running ones don't count yet.
   const finishedRuns = useWorkflowStore((s) => s.loadTests.filter((r) => r.status !== "running").map((r) => r.id).join(","))
@@ -135,7 +137,7 @@ function EnvironmentView({ env }: { env: EnvironmentReadiness }) {
     <div className="flex min-w-0 flex-1 flex-col @3xl:min-h-0" data-testid="readiness-environment">
       <header className="flex flex-wrap items-center gap-x-4 gap-y-1 border-b px-3 py-1.5">
         <div className="flex items-baseline gap-1" data-testid="readiness-score">
-          <span className={cn("text-2xl leading-none font-semibold tabular-nums", scoreTone(env.score))}>{env.score}</span>
+          <span className={cn("text-2xl leading-none font-semibold tabular-nums", scoreTone(env.score, [ENV_VERDICT[env.status]]))}>{env.score}</span>
           <span className="text-[11px] text-muted-foreground">/100</span>
         </div>
         <div className="flex min-w-0 flex-1 flex-col gap-0.5">
@@ -202,7 +204,9 @@ function CategoryButton({ group, onSelect }: { group: ReadinessGroup; onSelect: 
     >
       <span className="truncate text-[11px] text-muted-foreground">{group.title}</span>
       <span className="flex items-baseline gap-1">
-        <span className={cn("text-sm font-semibold tabular-nums", scoreTone(group.score))}>{scoreLabel(group.score)}</span>
+        <span className={cn("text-sm font-semibold tabular-nums", scoreTone(group.score, group.items.map((i) => i.status)))}>
+          {scoreLabel(group.score)}
+        </span>
         <span className="text-[10px] text-muted-foreground tabular-nums">{group.weight}%</span>
         {group.untested > 0 && (
           <span className="ml-auto flex items-center gap-0.5 text-[10px] whitespace-nowrap text-violet-600 tabular-nums dark:text-violet-400">

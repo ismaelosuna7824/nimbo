@@ -24,6 +24,9 @@ export function useEndpoints() {
     queryKey: ["endpoints", workflowId, deployedAt, sandboxKey, containersKey, clusterKey],
     queryFn: () => api.endpoints(workflowId!),
     enabled: !!workflowId,
+    // The key changes with everything the answer depends on: a new reader (the inspector of each selected node)
+    // reuses it instead of fetching it again.
+    staleTime: Infinity,
     // Keep showing the previous answer while refetching, but never another workflow's.
     placeholderData: (prev, prevQuery) => (prevQuery?.queryKey[1] === workflowId ? prev : undefined),
   })

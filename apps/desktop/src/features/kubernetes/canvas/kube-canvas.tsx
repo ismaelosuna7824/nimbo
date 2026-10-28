@@ -1,23 +1,24 @@
 import {
-  applyNodeChanges,
   Background,
   BackgroundVariant,
   Controls,
   MarkerType,
   MiniMap,
   Panel,
-  ReactFlow,
   ReactFlowProvider,
   useReactFlow,
   type Connection,
-  type NodeChange,
 } from "@xyflow/react"
-import { ChevronsDownUpIcon, ChevronsUpDownIcon, Code2Icon, ExpandIcon, FileSlidersIcon, GlobeIcon, LayoutTemplateIcon, MousePointerClickIcon, RotateCwIcon, ShieldPlusIcon, SplitIcon, Trash2Icon, WandSparklesIcon } from "lucide-react"
+import "@xyflow/react/dist/style.css"
+import { ChevronsDownUpIcon, ChevronsUpDownIcon, Code2Icon, ExpandIcon, FileSlidersIcon, FlameIcon, GlobeIcon, LayoutTemplateIcon, MousePointerClickIcon, RotateCwIcon, ShieldPlusIcon, SplitIcon, Trash2Icon, WandSparklesIcon } from "lucide-react"
 import { useTheme } from "next-themes"
-import { useCallback, useEffect, useMemo, useRef, useState } from "react"
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { toast } from "sonner"
+import { MINIMAP_CARD, MINIMAP_FRAME, minimapTint } from "@/components/canvas-card"
+import { CanvasContextMenu, CanvasFlow } from "@/components/canvas-flow"
 import { errorMessage } from "@/components/errors"
-import { useSyncedState } from "@/components/use-synced-state"
+import { sameFlowEdge, sameFlowNode, useStableItems } from "@/components/flow-items"
+import { useComplianceMarked } from "@/features/compliance/highlight"
 import {
   AlertDialog,
   AlertDialogAction,
@@ -29,13 +30,13 @@ import {
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog"
 import { Button } from "@/components/ui/button"
-import { ContextMenu, ContextMenuContent, ContextMenuItem, ContextMenuSeparator, ContextMenuTrigger } from "@/components/ui/context-menu"
+import { ContextMenuContent, ContextMenuItem, ContextMenuSeparator } from "@/components/ui/context-menu"
 import { Empty, EmptyContent, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from "@/components/ui/empty"
 import { looseItems, placeNew, relativePosition } from "@/features/docker/canvas/model"
 import { useEndpoints } from "@/features/panels/endpoints/use-endpoints"
 import { revealFiles } from "@/features/panels/terraform/reveal-files"
 import { api } from "@/lib/api/client"
-import type { KubeGraph, KubeNode, Position } from "@/lib/api/types"
+import type { KubeConnectRecipe, KubeGraph, KubeNode, Position } from "@/lib/api/types"
 import { useWorkflowStore } from "@/state/workflow-store"
 import {
   addFromPalette,
@@ -48,8 +49,12 @@ import {
   restartWorkload,
   savePositions,
   type KubePaletteDrag,
+  type KubeRecipeInputs,
 } from "../actions"
 import { EnvironmentSwitch } from "@/features/environments/environment-switch"
+import { FailureTestDialog } from "@/features/live/failure-dialog"
+import { openFailureTest } from "@/features/live/live-store"
+import { LiveTrafficOverlay } from "@/features/live/live-overlay"
 import { expandedCharts, setChartExpanded, useExpandedCharts } from "./charts"
 import { KubeConnectDialog, type PendingKubeConnection, type PendingKubeEnd } from "./connect-dialog"
 import { buildKubeCanvas, layoutChart, layoutKubeCanvas, withChartSpots, WORKLOAD_H, WORKLOAD_W, type ChartSummary, type KubeCanvasItem } from "./model"
@@ -57,6 +62,8 @@ import { ChartNode, FrameNode, KubeEdge, SmallNode, WorkloadNode, type KubeFlowE
 
 const nodeTypes = { workload: WorkloadNode, small: SmallNode, frame: FrameNode, chart: ChartNode }
 const edgeTypes = { kube: KubeEdge }
+/** Frames that are only layout (implicit namespaces, expanded charts); a Namespace object's frame can be marked. */
+const isFrame = (n: KubeFlowNode) => n.type === "frame" && !n.data.node
 const EMPTY_GRAPH: KubeGraph = { nodes: [], edges: [] }
 const EDGE_MARKER = { type: MarkerType.ArrowClosed, width: 16, height: 16 }
 const FIT_VIEW_OPTIONS = { padding: 0.2, maxZoom: 1.1 }
@@ -70,17 +77,15 @@ function isEditableTarget(el: Element | null) {
 }
 
 function minimapColor(n: KubeFlowNode) {
-  if (n.type === "frame") return n.data.chart ? "rgba(139,92,246,0.15)" : "rgba(59,130,246,0.15)"
-  if (n.type === "chart") return "#8b5cf6"
-  if (n.data.status?.state === "running") return "#10b981"
-  return n.type === "workload" ? "#64748b" : "#94a3b8"
+  if (n.type === "frame") return MINIMAP_FRAME
+  if (n.type === "chart") return minimapTint("var(--color-violet-500)")
+  return n.data.status?.state === "running" ? minimapTint("var(--color-emerald-500)") : MINIMAP_CARD
 }
 
-/** Rebuilt nodes keep React Flow's DOM measurement, so cards don't blink while it measures them again. */
-function keepMeasured(next: KubeFlowNode[], current: KubeFlowNode[]): KubeFlowNode[] {
-  const measured = new Map(current.map((n) => [n.id, n.measured]))
-  return next.map((n) => (n.measured || !measured.get(n.id) ? n : { ...n, measured: measured.get(n.id) }))
-}
+const MINIMAP_STYLE = { width: 168, height: 112 }
+const ENV_PANEL_STYLE = { marginLeft: 232 }
+
+const openInCode = (n: KubeNode) => n.file && revealFiles("", n.file, n.line)
 
 const isWorkload = (n: KubeNode) => n.category === "workload"
 
@@ -121,9 +126,16 @@ function CanvasInner() {
     .filter((i) => !i.placed)
     .map((i) => i.id)
     .join(",")
+  // The ids being placed, so a re-render while the save is in flight doesn't place them twice. Cleared once nothing
+  // is unplaced (or the save failed): the same ids can come back later (an object deleted and re-added, a chart
+  // collapsed and expanded again) and must be placed again, not skipped as "already done".
   const placing = useRef("")
   useEffect(() => {
-    if (!unplacedKey || placing.current === unplacedKey) return
+    if (!unplacedKey) {
+      placing.current = ""
+      return
+    }
+    if (placing.current === unplacedKey) return
     placing.current = unplacedKey
     const all = looseItems(canvas.items).every((i) => !i.placed)
     const fresh = canvas.items.find((f) => f.chart?.expanded && f.kind === "frame" && canvas.items.every((i) => i.parent !== f.id || !i.placed))
@@ -135,17 +147,22 @@ function CanvasInner() {
     void run
       .then((positions) => savePositions(positions))
       .then(() => all && window.requestAnimationFrame(() => void flow.fitView({ padding: 0.15, duration: 300 })))
-      .catch((err) => toast.error("Automatic layout failed", { description: errorMessage(err) }))
+      .catch((err) => {
+        placing.current = ""
+        toast.error("Automatic layout failed", { description: errorMessage(err) })
+      })
   }, [unplacedKey, canvas, flow, graph, status, expanded])
 
+  // Lays out the workflow as it is when asked (read then, so the callback stays the same across edits).
   const tidy = useCallback(async () => {
+    const s = useWorkflowStore.getState()
     try {
-      await savePositions(await layoutKubeCanvas(graph, status, expanded))
+      await savePositions(await layoutKubeCanvas(s.workflow?.kubernetes?.graph ?? EMPTY_GRAPH, s.kube, expandedCharts(workflowId)))
       window.requestAnimationFrame(() => void flow.fitView({ padding: 0.15, duration: 400 }))
     } catch (err) {
       toast.error("Tidy up failed", { description: errorMessage(err) })
     }
-  }, [graph, status, expanded, flow])
+  }, [workflowId, flow])
 
   // Focus after an expansion: the chart's frame, or the object asked for once its card is drawn.
   const focusing = useRef<string | null>(null)
@@ -249,6 +266,10 @@ function CanvasInner() {
       }),
     )
   }, [canvas, byId, selectedNodeId, endpoints, diagnostics, graph])
+  // The Compliance tab's "Show on canvas" rings the objects of a control (a collapsed chart's card stands for its
+  // objects) and dims the rest.
+  const chartOf = useMemo(() => new Map(graph.nodes.flatMap((n) => (n.chart ? [[n.id, n.chart] as const] : []))), [graph])
+  const nodes = useComplianceMarked(useStableItems(derivedNodes, sameFlowNode), isFrame, chartOf)
 
   const derivedEdges = useMemo(
     () =>
@@ -264,12 +285,7 @@ function CanvasInner() {
       ),
     [canvas, hovered],
   )
-
-  const [nodes, setNodes] = useSyncedState(derivedNodes, keepMeasured)
-  const onNodesChange = useCallback(
-    (changes: NodeChange<KubeFlowNode>[]) => setNodes((ns) => applyNodeChanges(changes.filter((c) => c.type !== "remove"), ns)),
-    [setNodes],
-  )
+  const edges = useStableItems(derivedEdges, sameFlowEdge)
   useEffect(() => {
     const id = focusing.current
     if (!id || !nodes.some((n) => n.id === id)) return
@@ -277,6 +293,7 @@ function CanvasInner() {
     focus(id)
   }, [nodes, focus])
 
+  const nameOf = useCallback((id: string) => byId.get(id)?.node?.name ?? id, [byId])
   const describe = useCallback(
     (id: string): PendingKubeEnd => {
       const n = byId.get(id)?.node
@@ -332,11 +349,11 @@ function CanvasInner() {
           await savePositions(withChartSpots(canvas, positions))
           return
         }
-        setNodes((ns) => ns.map((n) => (n.id === from ? (derivedNodes.find((d) => d.id === from) ?? n) : n)))
+        flow.setNodes((ns) => ns.map((n) => (n.id === from ? (nodes.find((d) => d.id === from) ?? n) : n)))
         setPending({ from: describe(from), to: describe(target), recipes: grants })
       })()
     },
-    [byId, canvas, flow, grantTarget, describe, derivedNodes, setNodes],
+    [byId, canvas, flow, grantTarget, describe, nodes],
   )
 
   /** Asks the daemon how `from` can refer to `to` ("" = a new object) and applies or offers the recipes. */
@@ -419,140 +436,187 @@ function CanvasInner() {
     [flow],
   )
 
-  const openInCode = (n: KubeNode) => n.file && revealFiles("", n.file, n.line)
+  const onNodeClick = useCallback((_: unknown, n: KubeFlowNode) => select(n.data.node || n.data.chart ? n.id : null), [select])
+  const onNodeDoubleClick = useCallback(
+    (_: unknown, n: KubeFlowNode) => {
+      if (n.data.node) openInCode(n.data.node)
+      else if (n.type === "chart") void expand(n.id)
+    },
+    [expand],
+  )
+  const onNodeContextMenu = useCallback((_: unknown, n: KubeFlowNode) => {
+    setMenu(n.data.node ?? null)
+    setChartMenu(n.data.chart ?? null)
+  }, [])
+  const onPaneContextMenu = useCallback(() => {
+    setMenu(null)
+    setChartMenu(null)
+  }, [])
+  const onPaneClick = useCallback(() => select(null), [select])
+  // A chart's card or frame stands for many objects: connect its objects instead.
+  const isValidConnection = useCallback(
+    (c: { source: string; target: string }) => c.source !== c.target && !byId.get(c.source)?.chart && !byId.get(c.target)?.chart,
+    [byId],
+  )
+  const onEdgeMouseEnter = useCallback((_: unknown, e: KubeFlowEdge) => setHovered(e.id), [])
+  const onEdgeMouseLeave = useCallback(() => setHovered(null), [])
+  const closeConnect = useCallback(() => setPending(null), [])
+  const pickRecipe = useCallback(
+    (recipe: KubeConnectRecipe, inputs: KubeRecipeInputs) => {
+      const p = pending!
+      setPending(null)
+      void applyRecipe(p.from.id, p.to?.id ?? "", recipe, inputs)
+    },
+    [pending],
+  )
+  const cancelDelete = useCallback(() => setPendingDelete(null), [])
+  const confirmDelete = useCallback(() => {
+    const n = pendingDelete!.node
+    setPendingDelete(null)
+    void deleteObject(n)
+  }, [pendingDelete])
+
   const objectCount = graph.nodes.filter((n) => n.kind !== "Namespace").length
+  // Memoized parts of the canvas: it re-renders on every edit (the cards' data), these only when what they show does.
+  const hasItems = canvas.items.length > 0
+  const clusterRunning = status?.cluster.state === "running"
+  const overlays = useMemo(
+    () => (
+      <>
+        <Background variant={BackgroundVariant.Dots} gap={16} size={1.2} />
+        <Controls showInteractive={false} position="bottom-left" />
+        <MiniMap pannable zoomable nodeColor={minimapColor} nodeStrokeWidth={0} position="bottom-right" style={MINIMAP_STYLE} />
+        {/* Right of the Build/Architecture switch the canvas area draws at the top left. */}
+        <Panel position="top-left" style={ENV_PANEL_STYLE}>
+          <EnvironmentSwitch className="bg-card/80 shadow-md backdrop-blur-md dark:bg-card/80" />
+        </Panel>
+        {hasItems && (
+          <Panel position="top-right">
+            <Button variant="outline" size="sm" className="bg-card/80 shadow-md backdrop-blur-md dark:bg-card/80" onClick={() => void tidy()}>
+              <WandSparklesIcon />
+              Tidy up
+            </Button>
+          </Panel>
+        )}
+        <LiveTrafficOverlay kind="kubernetes" edges={canvas.edges} />
+      </>
+    ),
+    [hasItems, tidy, canvas.edges],
+  )
+  const menuContent = useMemo(
+    () => (
+      <ContextMenuContent className="min-w-52" data-testid="k8s-node-menu">
+        {chartMenu ? (
+          <>
+            {chartMenu.expanded ? (
+              <ContextMenuItem onSelect={() => collapseChart(chartMenu.group.id)}>
+                <ChevronsDownUpIcon />
+                Collapse chart
+              </ContextMenuItem>
+            ) : (
+              <ContextMenuItem onSelect={() => void expand(chartMenu.group.id)}>
+                <ChevronsUpDownIcon />
+                Expand {chartMenu.members.length} objects
+              </ContextMenuItem>
+            )}
+            {chartMenu.group.valuesFiles?.[0] && (
+              <ContextMenuItem onSelect={() => revealFiles("", chartMenu.group.valuesFiles![0])}>
+                <FileSlidersIcon />
+                Open values
+              </ContextMenuItem>
+            )}
+          </>
+        ) : menu ? (
+          <>
+            {menu.file && (
+              <ContextMenuItem onSelect={() => openInCode(menu)}>
+                <Code2Icon />
+                Open in code
+              </ContextMenuItem>
+            )}
+            {isWorkload(menu) && (
+              <>
+                <ContextMenuItem onSelect={() => void connect(menu.id, "", "expose")}>
+                  <SplitIcon />
+                  Expose via Service
+                </ContextMenuItem>
+                <ContextMenuItem onSelect={() => void connect(menu.id, "", "scale")}>
+                  <ExpandIcon />
+                  Add HPA
+                </ContextMenuItem>
+                <ContextMenuItem data-testid="k8s-menu-allow-all" onSelect={() => void connect(menu.id, "", "allowAll")}>
+                  <GlobeIcon />
+                  Accept traffic from anywhere
+                </ContextMenuItem>
+                {menu.kind !== "Job" && menu.kind !== "CronJob" && menu.kind !== "Pod" && (
+                  <ContextMenuItem disabled={!clusterRunning} onSelect={() => void restartWorkload(menu)}>
+                    <RotateCwIcon />
+                    Restart
+                  </ContextMenuItem>
+                )}
+              </>
+            )}
+            {(menu.kind === "Deployment" || menu.kind === "StatefulSet") && (
+              <ContextMenuItem data-testid="k8s-menu-failure" onSelect={() => openFailureTest(menu.id)}>
+                <FlameIcon />
+                Test a failure…
+              </ContextMenuItem>
+            )}
+            {(isWorkload(menu) || (menu.kind === "ServiceAccount" && menu.apiVersion === "v1")) && (
+              <ContextMenuItem data-testid="k8s-menu-own-role" onSelect={() => void giveOwnRole(menu)}>
+                <ShieldPlusIcon />
+                Give it its own Role
+              </ContextMenuItem>
+            )}
+            <ContextMenuSeparator />
+            <ContextMenuItem variant="destructive" onSelect={() => requestDelete(menu.id)}>
+              <Trash2Icon />
+              Delete
+            </ContextMenuItem>
+          </>
+        ) : (
+          <ContextMenuItem disabled={!hasItems} onSelect={() => void tidy()}>
+            <WandSparklesIcon />
+            Tidy up
+          </ContextMenuItem>
+        )}
+      </ContextMenuContent>
+    ),
+    [chartMenu, menu, hasItems, clusterRunning, expand, connect, requestDelete, tidy],
+  )
 
   return (
     <div className="relative h-full w-full" data-testid="k8s-canvas" onDragOver={onDragOver} onDrop={onDrop}>
-      <ContextMenu>
-        <ContextMenuTrigger asChild>
-          <div className="h-full w-full">
-            <ReactFlow<KubeFlowNode, KubeFlowEdge>
-              nodes={nodes}
-              edges={derivedEdges}
-              nodeTypes={nodeTypes}
-              edgeTypes={edgeTypes}
-              onNodesChange={onNodesChange}
-              onNodeClick={(_, n) => select(n.data.node || n.data.chart ? n.id : null)}
-              onNodeDoubleClick={(_, n) => {
-                if (n.data.node) openInCode(n.data.node)
-                else if (n.type === "chart") void expand(n.id)
-              }}
-              onNodeContextMenu={(_, n) => {
-                setMenu(n.data.node ?? null)
-                setChartMenu(n.data.chart ?? null)
-              }}
-              onPaneContextMenu={() => {
-                setMenu(null)
-                setChartMenu(null)
-              }}
-              onPaneClick={() => select(null)}
-              onNodeDragStop={onNodeDragStop}
-              onConnect={onConnect}
-              // A chart's card or frame stands for many objects: connect its objects instead.
-              isValidConnection={(c) => c.source !== c.target && !byId.get(c.source)?.chart && !byId.get(c.target)?.chart}
-              onEdgeMouseEnter={(_, e) => setHovered(e.id)}
-              onEdgeMouseLeave={() => setHovered(null)}
-              deleteKeyCode={null}
-              colorMode={resolvedTheme === "light" ? "light" : "dark"}
-              snapToGrid
-              snapGrid={SNAP_GRID}
-              fitView
-              fitViewOptions={FIT_VIEW_OPTIONS}
-              minZoom={0.15}
-              maxZoom={2}
-              proOptions={PRO_OPTIONS}
-              className="bg-background"
-            >
-              <Background variant={BackgroundVariant.Dots} gap={16} size={1.2} />
-              <Controls showInteractive={false} position="bottom-left" />
-              <MiniMap pannable zoomable nodeColor={minimapColor} nodeStrokeWidth={0} position="bottom-right" style={{ width: 168, height: 112 }} className="!rounded-lg !border" />
-              {/* Right of the Build/Architecture switch the canvas area draws at the top left. */}
-              <Panel position="top-left" style={{ marginLeft: 232 }}>
-                <EnvironmentSwitch className="bg-background/80 backdrop-blur" />
-              </Panel>
-              {canvas.items.length > 0 && (
-                <Panel position="top-right">
-                  <Button variant="outline" size="sm" className="bg-background/80 backdrop-blur" onClick={() => void tidy()}>
-                    <WandSparklesIcon />
-                    Tidy up
-                  </Button>
-                </Panel>
-              )}
-            </ReactFlow>
-          </div>
-        </ContextMenuTrigger>
-        <ContextMenuContent className="min-w-52" data-testid="k8s-node-menu">
-          {chartMenu ? (
-            <>
-              {chartMenu.expanded ? (
-                <ContextMenuItem onSelect={() => collapseChart(chartMenu.group.id)}>
-                  <ChevronsDownUpIcon />
-                  Collapse chart
-                </ContextMenuItem>
-              ) : (
-                <ContextMenuItem onSelect={() => void expand(chartMenu.group.id)}>
-                  <ChevronsUpDownIcon />
-                  Expand {chartMenu.members.length} objects
-                </ContextMenuItem>
-              )}
-              {chartMenu.group.valuesFiles?.[0] && (
-                <ContextMenuItem onSelect={() => revealFiles("", chartMenu.group.valuesFiles![0])}>
-                  <FileSlidersIcon />
-                  Open values
-                </ContextMenuItem>
-              )}
-            </>
-          ) : menu ? (
-            <>
-              {menu.file && (
-                <ContextMenuItem onSelect={() => openInCode(menu)}>
-                  <Code2Icon />
-                  Open in code
-                </ContextMenuItem>
-              )}
-              {isWorkload(menu) && (
-                <>
-                  <ContextMenuItem onSelect={() => void connect(menu.id, "", "expose")}>
-                    <SplitIcon />
-                    Expose via Service
-                  </ContextMenuItem>
-                  <ContextMenuItem onSelect={() => void connect(menu.id, "", "scale")}>
-                    <ExpandIcon />
-                    Add HPA
-                  </ContextMenuItem>
-                  <ContextMenuItem data-testid="k8s-menu-allow-all" onSelect={() => void connect(menu.id, "", "allowAll")}>
-                    <GlobeIcon />
-                    Accept traffic from anywhere
-                  </ContextMenuItem>
-                  {menu.kind !== "Job" && menu.kind !== "CronJob" && menu.kind !== "Pod" && (
-                    <ContextMenuItem disabled={status?.cluster.state !== "running"} onSelect={() => void restartWorkload(menu)}>
-                      <RotateCwIcon />
-                      Restart
-                    </ContextMenuItem>
-                  )}
-                </>
-              )}
-              {(isWorkload(menu) || (menu.kind === "ServiceAccount" && menu.apiVersion === "v1")) && (
-                <ContextMenuItem data-testid="k8s-menu-own-role" onSelect={() => void giveOwnRole(menu)}>
-                  <ShieldPlusIcon />
-                  Give it its own Role
-                </ContextMenuItem>
-              )}
-              <ContextMenuSeparator />
-              <ContextMenuItem variant="destructive" onSelect={() => requestDelete(menu.id)}>
-                <Trash2Icon />
-                Delete
-              </ContextMenuItem>
-            </>
-          ) : (
-            <ContextMenuItem disabled={canvas.items.length === 0} onSelect={() => void tidy()}>
-              <WandSparklesIcon />
-              Tidy up
-            </ContextMenuItem>
-          )}
-        </ContextMenuContent>
-      </ContextMenu>
+      <CanvasContextMenu menu={menuContent}>
+        <CanvasFlow<KubeFlowNode, KubeFlowEdge>
+          nodes={nodes}
+          edges={edges}
+          nodeTypes={nodeTypes}
+          edgeTypes={edgeTypes}
+          onNodeClick={onNodeClick}
+          onNodeDoubleClick={onNodeDoubleClick}
+          onNodeContextMenu={onNodeContextMenu}
+          onPaneContextMenu={onPaneContextMenu}
+          onPaneClick={onPaneClick}
+          onNodeDragStop={onNodeDragStop}
+          onConnect={onConnect}
+          isValidConnection={isValidConnection}
+          onEdgeMouseEnter={onEdgeMouseEnter}
+          onEdgeMouseLeave={onEdgeMouseLeave}
+          deleteKeyCode={null}
+          colorMode={resolvedTheme === "light" ? "light" : "dark"}
+          snapToGrid
+          snapGrid={SNAP_GRID}
+          fitView
+          fitViewOptions={FIT_VIEW_OPTIONS}
+          minZoom={0.15}
+          maxZoom={2}
+          proOptions={PRO_OPTIONS}
+          className="bg-background"
+        >
+          {overlays}
+        </CanvasFlow>
+      </CanvasContextMenu>
       {objectCount === 0 && (
         <div className="pointer-events-none absolute inset-0 flex items-center justify-center">
           <Empty className="pointer-events-auto max-w-md border bg-background/90 backdrop-blur">
@@ -575,42 +639,42 @@ function CanvasInner() {
           </Empty>
         </div>
       )}
-      <KubeConnectDialog
-        pending={pending}
-        onClose={() => setPending(null)}
-        onPick={(recipe, inputs) => {
-          const p = pending!
-          setPending(null)
-          void applyRecipe(p.from.id, p.to?.id ?? "", recipe, inputs)
-        }}
-      />
-      <AlertDialog open={!!pendingDelete} onOpenChange={(o) => !o && setPendingDelete(null)}>
-        <AlertDialogContent data-testid="k8s-delete-dialog">
-          <AlertDialogHeader>
-            <AlertDialogTitle>
-              Delete {pendingDelete?.node.kind} {pendingDelete?.node.name}?
-            </AlertDialogTitle>
-            <AlertDialogDescription>
-              Its YAML document is removed from {pendingDelete?.node.file ?? "its file"}.
-              {pendingDelete && pendingDelete.users > 0 && ` ${pendingDelete.users === 1 ? "1 other object refers" : `${pendingDelete.users} other objects refer`} to it; they keep their references.`}
-            </AlertDialogDescription>
-          </AlertDialogHeader>
-          <AlertDialogFooter>
-            <AlertDialogCancel>Cancel</AlertDialogCancel>
-            <AlertDialogAction
-              variant="destructive"
-              data-testid="k8s-delete-confirm"
-              onClick={() => {
-                const n = pendingDelete!.node
-                setPendingDelete(null)
-                void deleteObject(n)
-              }}
-            >
-              Delete
-            </AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
+      <KubeConnectDialog pending={pending} onClose={closeConnect} onPick={pickRecipe} />
+      <DeleteDialog pending={pendingDelete} onCancel={cancelDelete} onConfirm={confirmDelete} />
+      <FailureTestDialog kind="kubernetes" edges={canvas.edges} nameOf={nameOf} />
     </div>
   )
 }
+
+/** Asks before deleting an object. Memoized: the canvas re-renders on every edit, the closed dialog doesn't. */
+const DeleteDialog = memo(function DeleteDialog({
+  pending,
+  onCancel,
+  onConfirm,
+}: {
+  pending: { node: KubeNode; users: number } | null
+  onCancel: () => void
+  onConfirm: () => void
+}) {
+  return (
+    <AlertDialog open={!!pending} onOpenChange={(o) => !o && onCancel()}>
+      <AlertDialogContent data-testid="k8s-delete-dialog">
+        <AlertDialogHeader>
+          <AlertDialogTitle>
+            Delete {pending?.node.kind} {pending?.node.name}?
+          </AlertDialogTitle>
+          <AlertDialogDescription>
+            Its YAML document is removed from {pending?.node.file ?? "its file"}.
+            {pending && pending.users > 0 && ` ${pending.users === 1 ? "1 other object refers" : `${pending.users} other objects refer`} to it; they keep their references.`}
+          </AlertDialogDescription>
+        </AlertDialogHeader>
+        <AlertDialogFooter>
+          <AlertDialogCancel>Cancel</AlertDialogCancel>
+          <AlertDialogAction variant="destructive" data-testid="k8s-delete-confirm" onClick={onConfirm}>
+            Delete
+          </AlertDialogAction>
+        </AlertDialogFooter>
+      </AlertDialogContent>
+    </AlertDialog>
+  )
+})

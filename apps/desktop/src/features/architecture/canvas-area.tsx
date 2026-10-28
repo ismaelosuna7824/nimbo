@@ -1,17 +1,20 @@
 import { lazy, Suspense, useEffect } from "react"
+import { lazyComponent } from "@/components/lazy-module"
 import { Kbd, KbdGroup } from "@/components/ui/kbd"
 import { Spinner } from "@/components/ui/spinner"
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group"
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip"
-import { Canvas } from "@/features/canvas/canvas"
-import { DockerCanvas } from "@/features/docker/canvas/docker-canvas"
-import { KubeCanvas } from "@/features/kubernetes/canvas/kube-canvas"
+import { dockerCode, kubernetesCode, terraformCode } from "@/features/workspaces/code"
 import { useWorkflowStore } from "@/state/workflow-store"
 import { ExportImageDialog } from "./export-dialog"
 import { switchView, useCanvasView, VIEW_SHORTCUT, type CanvasView } from "./store"
 
 // The diagram view (and its icon set) loads the first time someone opens it.
 const ArchitectureView = lazy(() => import("./view").then((m) => ({ default: m.ArchitectureView })))
+// Each kind's canvas comes with its workspace code, loaded when the workflow opens (see workspaces/code).
+const Canvas = lazyComponent(terraformCode, (m) => m.Canvas)
+const DockerCanvas = lazyComponent(dockerCode, (m) => m.DockerCanvas)
+const KubeCanvas = lazyComponent(kubernetesCode, (m) => m.KubeCanvas)
 
 /** The editor's canvas area: the Build canvas or the Architecture diagram, with the switch between them. */
 export function CanvasArea() {
@@ -32,7 +35,15 @@ export function CanvasArea() {
   return (
     <div className="relative h-full w-full" data-canvas-view={view}>
       {view === "build" ? (
-        kind === "docker" ? <DockerCanvas /> : kind === "kubernetes" ? <KubeCanvas /> : <Canvas />
+        <Suspense
+          fallback={
+            <div className="flex h-full items-center justify-center bg-canvas text-muted-foreground">
+              <Spinner />
+            </div>
+          }
+        >
+          {kind === "docker" ? <DockerCanvas /> : kind === "kubernetes" ? <KubeCanvas /> : <Canvas />}
+        </Suspense>
       ) : (
         <Suspense
           fallback={
@@ -63,7 +74,7 @@ function ViewSwitch({ view }: { view: CanvasView }) {
             value={view}
             onValueChange={(v) => v && switchView(v as CanvasView)}
             aria-label="Canvas view"
-            className="bg-background shadow-xs"
+            className="border bg-card/80 shadow-md backdrop-blur-md data-[variant=outline]:bg-card/80"
           >
             <ToggleGroupItem value="build">Build</ToggleGroupItem>
             <ToggleGroupItem value="architecture">Architecture</ToggleGroupItem>

@@ -55,12 +55,19 @@ export function defaultEnvironment(envs: EnvironmentReadiness[], picked: string 
   return (envs.find((e) => e.productionLike) ?? envs.find((e) => e.name === active) ?? envs[0])?.name ?? null
 }
 
-/** Text color of a 0-100 score (null: nothing verified yet). */
-export function scoreTone(score: number | null): string {
+/** The item status an environment verdict reads as, for coloring its score like its badge. */
+export const ENV_VERDICT: Record<ReadinessStatus, ReadinessItemStatus> = { ready: "pass", needs_work: "warn", blocked: "fail" }
+
+/**
+ * Text color of a 0-100 score (null: nothing verified yet), from the verdicts behind it rather than the number: red
+ * only when a check failed, amber when one needs work. The number alone overstates it (one warning in a two-check
+ * category is 50), and red on something that is not broken reads as an alarm.
+ */
+export function scoreTone(score: number | null, statuses: readonly ReadinessItemStatus[]): string {
   if (score === null) return "text-muted-foreground"
-  if (score >= 90) return "text-emerald-700 dark:text-emerald-400"
-  if (score >= 70) return "text-amber-700 dark:text-amber-400"
-  return "text-destructive"
+  if (statuses.includes("fail")) return "text-destructive"
+  if (statuses.includes("warn")) return "text-amber-700 dark:text-amber-400"
+  return "text-emerald-700 dark:text-emerald-400"
 }
 
 /** "83", or an em dash when nothing was verified yet. */

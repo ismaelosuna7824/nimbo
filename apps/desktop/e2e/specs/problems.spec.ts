@@ -29,7 +29,7 @@ test("groups best-practice findings in Problems and turns a rule off in Settings
   await expect(page.getByRole("heading", { name: "Best-practice checks", level: 2 })).toBeVisible()
   await page.getByRole("switch", { name: "Names use local.name_prefix" }).click()
   await expect.poll(async () => (await api.settings()).bestPractices.disabledRules).toEqual(["bp_name_prefix"])
-  await page.getByRole("button", { name: "Back to Practices" }).click()
+  await app.rail("Practices").click()
   await expect(panel.getByText("No problems")).toBeVisible()
 })
 
@@ -57,6 +57,6 @@ test("lists Docker best practices with file:line and docs, and toggles a docker 
   await expect(page.getByRole("switch", { name: "Hardened containers" })).not.toBeChecked()
   await page.getByRole("switch", { name: "Exec-form CMD and ENTRYPOINT" }).click()
   await expect.poll(async () => (await api.settings()).bestPractices.disabledRules).toEqual(["dk_shell_form"])
-  await page.getByRole("button", { name: "Back to Docker practices" }).click()
+  await app.rail("Docker practices").click()
   await expect(panel.getByText("No problems")).toBeVisible()
 })

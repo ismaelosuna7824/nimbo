@@ -11,7 +11,6 @@
 import { autocompletion, type CompletionContext, type CompletionResult } from "@codemirror/autocomplete"
 import type { Extension } from "@codemirror/state"
 import { hoverTooltip } from "@codemirror/view"
-import { api } from "@/lib/api/client"
 import type { ComposeEnvironment, ComposeGraph, DockerImage } from "@/lib/api/types"
 import { envFileComposeFiles, envFileOfCompose } from "@/features/docker/environments/model"
 import { definitionExtension } from "@/features/code-intel/definition"
@@ -20,21 +19,11 @@ import { dirName } from "@/features/panels/terraform/file-model"
 import { composeCompletions, composeHover, type ComposeEnv, type NameSection } from "./compose-completion"
 import { composeDefinitionAt } from "./compose-definition"
 import { loadComposeSchema } from "./compose-schema"
+import { loadDockerImages } from "./images"
 import { DOCKERIGNORE_NAME, dockerignoreCompletions, stacksIn } from "./dockerignore"
 import { dockerfileCompletions, dockerfileDefinitionAt, dockerfileHover } from "./dockerfile"
 import { ENV_FILE_NAME, envFileCompletions, envFileHover, type EnvFileEnv } from "./env-file"
 import { dockerQuickFixes } from "./quick-fixes"
-
-let imagesPromise: Promise<DockerImage[]> | undefined
-
-/** The image catalog, fetched once per session. */
-export function loadDockerImages(): Promise<DockerImage[]> {
-  imagesPromise ??= api.dockerImages().catch((err: unknown) => {
-    imagesPromise = undefined
-    throw err
-  })
-  return imagesPromise
-}
 
 export interface DockerIntelOptions {
   workflowId: string

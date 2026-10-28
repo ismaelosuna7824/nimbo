@@ -243,6 +243,8 @@ export interface Diagnostic {
   docs?: string
   nodeId?: string
   attribute?: string
+  /** Rule-specific sub-kind, e.g. the ports a bp_open_ingress finding is about ("22,3389" or "all"); used by compliance grading. */
+  facet?: string
   /** Code diagnostics (Terraform syntax errors): the file and 1-based line they point at. */
   file?: string
   line?: number
@@ -317,13 +319,25 @@ export interface Workflow {
   kubernetes?: KubernetesModel
   // derived, read-only
   edges: WorkflowEdge[]
+  /** Every cloud the workflow configures: its resources' clouds plus declared providers (the sandbox starts them all). */
   clouds: Cloud[]
+  /** Clouds the resources and data sources on the canvas actually use (no providers declared but used by nothing). */
+  usedClouds?: Cloud[] | null
   diagnostics: Diagnostic[]
   /** Node ID -> root .tf file the export writes it to (its `file`, or the recommended layout). */
   nodeFiles?: Record<string, string>
 }
 
 export type WorkflowLayout = "single" | "environments"
+
+/** CI/CD pipeline an export can include (`.github/workflows/<name>.yml` or `.gitlab-ci.yml`). */
+export type CIProvider = "none" | "github" | "gitlab"
+
+export interface ExportPipeline {
+  ci: CIProvider
+  /** An HTTP check of each environment's SMOKE_URL after every deploy. */
+  smoke: boolean
+}
 
 export interface WorkflowSummary {
   id: string
@@ -334,6 +348,8 @@ export interface WorkflowSummary {
   nodeCount: number
   kind?: WorkflowKind
   clouds: Cloud[]
+  /** See Workflow.usedClouds. */
+  usedClouds?: Cloud[] | null
   archived?: boolean
   icon?: WorkflowIcon
 }
@@ -726,6 +742,41 @@ export interface PlanSummary {
   destroy: number
 }
 
+/** What a plan does to one resource instance; replace = destroy and create. */
+export type PlanAction = "create" | "update" | "replace" | "delete" | "read" | "no-op"
+
+/** Stands for the parts of a planned value known only after apply. */
+export const UNKNOWN_VALUE = "(known after apply)"
+
+/** One top-level attribute a planned change sets. */
+export interface AttributeChange {
+  name: string
+  before?: unknown
+  after?: unknown
+  /** Terraform marks the value sensitive: before/after are withheld. */
+  sensitive?: boolean
+  /** The whole new value is known only after apply (partly unknown values carry UNKNOWN_VALUE inside). */
+  unknown?: boolean
+  /** Changing this attribute is why the resource is replaced. */
+  forcesReplacement?: boolean
+}
+
+/** One resource instance of a saved plan. */
+export interface PlannedChange {
+  address: string
+  /** The node declaring it (module resources: the module node); absent when no node does anymore. */
+  nodeId?: string
+  mode: "managed" | "data"
+  type: string
+  name: string
+  index?: unknown
+  action: PlanAction
+  /** Terraform's action_reason, e.g. "replace_because_cannot_update". */
+  reason?: string
+  /** Empty for delete, read and no-op. */
+  attributes?: AttributeChange[]
+}
+
 export interface Run {
   id: string
   workflowId: string
@@ -737,6 +788,10 @@ export interface Run {
   endedAt?: string
   exitCode: number
   plan?: PlanSummary
+  /** Plan runs: the resource instances of the saved plan (only from api.run, not in lists or events). */
+  changes?: PlannedChange[]
+  /** The workflow's updatedAt the run was started from: a plan describes that version only. */
+  workflowVersion?: string
   error?: string
   log?: LogLine[]
   /** Kubernetes restart: the workload node id. */
@@ -1181,7 +1236,8 @@ export interface LoadTestSpec {
 }
 
 export type ScenarioId = "kill_replica" | "dependency_down" | "dependency_latency" | "cache_flush" | "traffic_spike"
-export type ScenarioVerdict = "survived" | "degraded" | "failed"
+/** "inconclusive": the target was already failing before the fault, so nothing was measured (neither passed nor failed). */
+export type ScenarioVerdict = "survived" | "degraded" | "failed" | "inconclusive"
 
 /** target: graph node id ("service:db", "Deployment/ns/web"); unused by traffic_spike. atSec: seconds after load starts. */
 export interface ScenarioSpec {
@@ -1199,7 +1255,7 @@ export interface ScenarioCheck {
   detail: string
 }
 
-/** Times share LoadSample.t's axis. verdict is "" while the run is in progress. */
+/** Times share LoadSample.t's axis. verdict is "" while the run is in progress, and after a run the user stopped (no verdict). */
 export interface ScenarioResult {
   id: ScenarioId
   target: string
@@ -1244,6 +1300,30 @@ export interface ScenarioCatalog {
   environment?: string
   scenarios: ScenarioOption[]
   unavailable: { id: ScenarioId; title: string; reason: string }[]
+}
+
+/**
+ * GET /workflows/{id}/traffic: requests each service (docker) or workload (Kubernetes) receives now, measured by the
+ * workflow's own Prometheus (Add monitoring). Only measured nodes are listed.
+ */
+export interface LiveTraffic {
+  status: "ok" | "no_monitoring" | "not_running" | "unreachable"
+  message?: string
+  /** How the rates are computed ("between its last two scrapes, 15 s apart"). */
+  window: string
+  nodes: NodeTraffic[]
+}
+
+export interface NodeTraffic {
+  /** Canvas node: "service:api", "Deployment/default/web". */
+  nodeId: string
+  /** "otel": the app's own HTTP metrics; "traefik" / "ingress-nginx": the ingress controller's. */
+  source: MonitoringHTTPSource
+  rps: number
+  /** Share of requests answered 5xx (0–1). */
+  errorRate: number
+  /** Absent while no request completed. */
+  p95Ms?: number
 }
 
 export interface LatencyStats {
@@ -3639,4 +3719,74 @@ export interface ChallengeFilter {
   level?: LearnLevel
   tag?: string
   q?: string
+}
+
+// ---------------------------------------------------------------------------
+// Compliance (GET /workflows/{id}/compliance): a pre-audit of the design against security benchmarks
+
+/** Grade of one control. Manual controls can't be seen in a design: only the user attests them. */
+export type ComplianceStatus = "met" | "violated" | "not_applicable" | "not_evaluated" | "manual" | "attested"
+
+export interface ComplianceFramework {
+  id: string // "cis-aws-7.0"
+  name: string
+  version: string
+  /** "aws" | "azurerm" | "google" | "oci" (Terraform clouds), "docker", "kubernetes". */
+  platform: string
+  source: string
+}
+
+export interface ComplianceResource {
+  nodeId: string
+  /** "aws_s3_bucket.logs", a compose service name, "Deployment/shop/api". */
+  address: string
+  type: string
+  failing?: boolean
+}
+
+export interface ComplianceFinding {
+  nodeId?: string
+  address?: string
+  code: string
+  severity: Severity
+  message: string
+  fix?: string
+}
+
+export interface ComplianceAttestation {
+  note: string
+  by?: string
+  at: string
+}
+
+export interface ComplianceControl {
+  id: string
+  title: string
+  section: string
+  rules?: string[]
+  appliesTo?: string[]
+  manual?: boolean
+  guidance: string
+  status: ComplianceStatus
+  /** Why a control has no verdict (not applicable, not evaluated) or how many resources fail ("1 of 3 resources have findings."). */
+  reason?: string
+  resources: ComplianceResource[]
+  findings: ComplianceFinding[]
+  attestation?: ComplianceAttestation
+}
+
+export interface ComplianceResult {
+  framework: ComplianceFramework
+  controls: ComplianceControl[]
+  counts: Record<ComplianceStatus, number>
+  /** Automatic controls with a verdict (met, violated) and those met. */
+  graded: number
+  met: number
+}
+
+export interface WorkflowCompliance {
+  /** Frameworks for the workflow's platforms. */
+  frameworks: ComplianceFramework[]
+  results: ComplianceResult[]
+  disclaimer: string
 }

@@ -77,7 +77,7 @@ export function Wizard() {
     <DialogPrimitive.Root open onOpenChange={(o) => !o && close()}>
       <DialogPrimitive.Portal>
         <DialogPrimitive.Content
-          className="fixed inset-0 z-50 grid grid-cols-[17rem_minmax(0,1fr)] bg-background text-foreground outline-none motion-safe:animate-in motion-safe:fade-in-0"
+          className="fixed inset-x-0 top-(--app-top) bottom-0 z-50 grid grid-cols-[17rem_minmax(0,1fr)] bg-background text-foreground outline-none motion-safe:animate-in motion-safe:fade-in-0"
           // Full-screen setup: Escape shouldn't drop the user out of it by accident.
           onEscapeKeyDown={(e) => e.preventDefault()}
           onOpenAutoFocus={(e) => {
@@ -107,8 +107,11 @@ export function Wizard() {
                         aria-current={active ? "step" : undefined}
                         onClick={() => setStep(s.id)}
                         className={cn(
-                          "flex w-full items-center gap-3 rounded-lg px-2.5 py-2 text-left text-sm text-muted-foreground transition-colors outline-none hover:bg-muted hover:text-foreground focus-visible:ring-3 focus-visible:ring-ring/50 disabled:pointer-events-none disabled:opacity-50",
-                          active && "bg-background font-medium text-foreground shadow-xs ring-1 ring-border",
+                          "flex w-full items-center gap-3 rounded-lg px-2.5 py-2 text-left text-sm text-muted-foreground transition-colors outline-none focus-visible:ring-3 focus-visible:ring-ring/50 focus-visible:ring-inset disabled:pointer-events-none disabled:opacity-50",
+                          // The current step is tinted with the accent (like its badge); hovering another only lifts it
+                          // a little, so the hovered row never looks more selected than the current one. The ring is
+                          // inset: the steps list scrolls, and an outer ring is clipped at its edges.
+                          active ? "bg-primary/10 font-medium text-foreground ring-1 ring-primary/30 ring-inset" : "hover:bg-muted/60 hover:text-foreground",
                         )}
                       >
                         <span

@@ -1,4 +1,4 @@
-import { CircleCheck, CircleX, Flame, Info, TriangleAlert } from "lucide-react"
+import { CircleCheck, CircleMinus, CircleX, Flame, Info, TriangleAlert } from "lucide-react"
 import { Badge } from "@/components/ui/badge"
 import { Spinner } from "@/components/ui/spinner"
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip"
@@ -26,17 +26,19 @@ export const INJECT_MARK: Record<ScenarioId, string> = {
 /** Kill and flush act once: the window after them is only observed. */
 export const instantScenario = (id: ScenarioId) => id === "kill_replica" || id === "cache_flush"
 
-const VERDICT_LABEL: Record<ScenarioVerdict, string> = { survived: "Survived", degraded: "Degraded", failed: "Failed" }
+export const VERDICT_LABEL: Record<ScenarioVerdict, string> = { survived: "Survived", degraded: "Degraded", failed: "Failed", inconclusive: "Not assessed" }
 const VERDICT_BADGE: Record<ScenarioVerdict, string> = {
   survived: "border-emerald-500/30 text-emerald-700 dark:text-emerald-400",
   degraded: "border-amber-500/40 text-amber-700 dark:text-amber-400",
   failed: "border-destructive/40 text-destructive",
+  inconclusive: "text-muted-foreground",
 }
-const VERDICT_ICON = { survived: CircleCheck, degraded: TriangleAlert, failed: CircleX }
+const VERDICT_ICON = { survived: CircleCheck, degraded: TriangleAlert, failed: CircleX, inconclusive: CircleMinus }
 const VERDICT_TEXT = {
   survived: "text-emerald-600 dark:text-emerald-400",
   degraded: "text-amber-600 dark:text-amber-400",
   failed: "text-destructive",
+  inconclusive: "text-muted-foreground",
 }
 
 /** The verdict as a small badge (results header, history rows). */

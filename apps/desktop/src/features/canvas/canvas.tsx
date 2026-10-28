@@ -1,18 +1,13 @@
 import {
-  applyEdgeChanges,
-  applyNodeChanges,
   Background,
   BackgroundVariant,
   Controls,
   MarkerType,
   MiniMap,
   Panel,
-  ReactFlow,
   ReactFlowProvider,
   useReactFlow,
   type Connection,
-  type EdgeChange,
-  type NodeChange,
   type OnSelectionChangeParams,
 } from "@xyflow/react"
 import "@xyflow/react/dist/style.css"
@@ -26,11 +21,13 @@ import {
   WandSparklesIcon,
 } from "lucide-react"
 import { useTheme } from "next-themes"
-import { useCallback, useEffect, useMemo, useRef, useState } from "react"
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { toast } from "sonner"
+import { MINIMAP_CARD, MINIMAP_FRAME, minimapTint } from "@/components/canvas-card"
+import { CanvasContextMenu, CanvasFlow } from "@/components/canvas-flow"
 import { CLOUD_META, cloudOfType } from "@/components/cloud-meta"
 import { errorMessage } from "@/components/errors"
-import { useSyncedState } from "@/components/use-synced-state"
+import { sameFlowEdge, sameFlowNode, useStableItems } from "@/components/flow-items"
 import {
   AlertDialog,
   AlertDialogAction,
@@ -42,16 +39,13 @@ import {
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog"
 import { Button } from "@/components/ui/button"
-import {
-  ContextMenu,
-  ContextMenuContent,
-  ContextMenuItem,
-  ContextMenuSeparator,
-  ContextMenuTrigger,
-} from "@/components/ui/context-menu"
+import { ContextMenuContent, ContextMenuItem, ContextMenuSeparator } from "@/components/ui/context-menu"
 import { Empty, EmptyContent, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from "@/components/ui/empty"
 import { api } from "@/lib/api/client"
 import type { ConnectionRecipe, HopVerdict, NodeKind, Position, Workflow, WorkflowNode } from "@/lib/api/types"
+import { LiveTrafficOverlay } from "@/features/live/live-overlay"
+import type { FlowEdge } from "@/features/live/traffic"
+import { useComplianceMarked } from "@/features/compliance/highlight"
 import { useReachability } from "@/features/network/store"
 import { useWorkflowStore } from "@/state/workflow-store"
 import { addResource, registerCanvas, RESOURCE_DRAG_TYPE } from "./actions"
@@ -59,6 +53,7 @@ import { nodeLabel, schemaKey, useNodeSchemas } from "./catalog"
 import { ConnectDialog, type PendingConnection } from "./connect-dialog"
 import { computeLayout, GROUP_HEADER, GROUP_PAD, layoutUnpositioned, NODE_HEIGHT, NODE_WIDTH, parentMap } from "./layout"
 import { isUsable, useEndpoints } from "../panels/endpoints/use-endpoints"
+import { PlanChip } from "../plan/plan-chip"
 import { ModuleOverlay } from "./module-view"
 import { openModuleView } from "./module-view-store"
 import { ModuleRefactorDialogs } from "./module-refactor"
@@ -127,80 +122,12 @@ export function Canvas() {
   )
 }
 
-/** Shallow equality of two plain objects (React Flow node/edge data). */
-function sameFields(a: Record<string, unknown> | undefined, b: Record<string, unknown> | undefined) {
-  if (a === b) return true
-  if (!a || !b) return false
-  const keys = Object.keys(a)
-  return keys.length === Object.keys(b).length && keys.every((k) => Object.is(a[k], b[k]))
-}
-
-function sameFlowNode(a: ResourceFlowNode, b: ResourceFlowNode) {
-  return (
-    a.type === b.type &&
-    a.parentId === b.parentId &&
-    a.width === b.width &&
-    a.height === b.height &&
-    a.zIndex === b.zIndex &&
-    a.selected === b.selected &&
-    a.className === b.className &&
-    a.position.x === b.position.x &&
-    a.position.y === b.position.y &&
-    sameFields(a.data, b.data)
-  )
-}
-
-function sameFlowEdge(a: RefFlowEdge, b: RefFlowEdge) {
-  return a.source === b.source && a.target === b.target && sameFields(a.data, b.data)
-}
-
-/**
- * Rebuilt nodes keep React Flow's DOM measurement (`measured`) from the local copy. A node object without it makes
- * React Flow drop that node's handle bounds and re-measure; when that reset lands in the same commit as the previous
- * re-measure, React Flow never observes the node again and its handles stay dead (drags from or onto them do nothing).
- * Unchanged nodes keep their measured local object, so their cards don't re-render either.
- */
-function keepMeasured(next: ResourceFlowNode[], current: ResourceFlowNode[]): ResourceFlowNode[] {
-  const byId = new Map(current.map((n) => [n.id, n]))
-  return next.map((n) => {
-    const local = byId.get(n.id)
-    if (!local?.measured || n.measured) return n
-    return sameFlowNode(local, n) ? local : { ...n, measured: local.measured }
-  })
-}
-
-/**
- * Returns `items` with every item that `same` finds unchanged (by id) replaced
- * by the object from the previous call (or the previous array itself when
- * nothing changed), so React Flow only re-renders the cards and edges whose
- * content changed.
- */
-function useStableItems<T extends { id: string }>(items: T[], same: (a: T, b: T) => boolean): T[] {
-  // Holder kept across renders; only read and written while memoizing the next list.
-  const [cache] = useState(() => ({ byId: new Map<string, T>(), list: [] as T[] }))
-  return useMemo(() => {
-    const byId = new Map<string, T>()
-    let unchanged = items.length === cache.list.length
-    const list = items.map((item, i) => {
-      const old = cache.byId.get(item.id)
-      const kept = old && same(old, item) ? old : item
-      if (kept !== cache.list[i]) unchanged = false
-      byId.set(item.id, kept)
-      return kept
-    })
-    if (!unchanged) {
-      cache.byId = byId
-      cache.list = list
-    }
-    return cache.list
-  }, [items, same, cache])
-}
-
 const EDGE_MARKER = { type: MarkerType.ArrowClosed, width: 16, height: 16 }
 const SNAP_GRID: [number, number] = [16, 16]
 const FIT_VIEW_OPTIONS = { padding: 0.2, maxZoom: 1.1 }
 const PRO_OPTIONS = { hideAttribution: true }
 const MINIMAP_STYLE = { width: 168, height: 112 }
+const NO_FLOW_EDGES: FlowEdge[] = []
 
 /** Canvas ring of a node on a checked reachability path, by hop verdict. */
 const HOP_RING: Record<HopVerdict, string> = {
@@ -209,9 +136,13 @@ const HOP_RING: Record<HopVerdict, string> = {
   unknown: "rounded-xl ring-2 ring-amber-500 ring-offset-2 ring-offset-background",
 }
 
+/** Terraform groups (a VPC around its subnets) are resources too: the compliance highlight marks or dims them all. */
+const noFrames = () => false
+
 function minimapColor(n: ResourceFlowNode) {
+  if (n.type === "container") return MINIMAP_FRAME
   const cloud = n.data.schema?.cloud ?? cloudOfType(n.data.node.type)
-  return cloud ? CLOUD_META[cloud].accent : "#a855f7"
+  return cloud ? minimapTint(CLOUD_META[cloud].accent) : MINIMAP_CARD
 }
 
 function isValidConnection(c: Connection | RefFlowEdge) {
@@ -294,18 +225,19 @@ function CanvasInner() {
     () => (selectedNodeId && !selection.includes(selectedNodeId) ? [selectedNodeId] : selection),
     [selection, selectedNodeId],
   )
-  // While the reachability dialog shows an answer: ring the nodes on the path by verdict, dim the rest.
+  // While the reachability dialog shows an answer: ring the nodes on the path by verdict, dim the rest. Otherwise the
+  // Compliance tab's "Show on canvas" does the same for the resources of a control.
   const reachHighlight = useReachability((s) => s.highlight)
+  const complianceNodes = useComplianceMarked(stableNodes, noFrames)
   const derivedNodes = useMemo(() => {
-    const selectedNodes = selectedIds.length
-      ? stableNodes.map((n) => (selectedIds.includes(n.id) ? { ...n, selected: true } : n))
-      : stableNodes
+    const base = reachHighlight ? stableNodes : complianceNodes
+    const selectedNodes = selectedIds.length ? base.map((n) => (selectedIds.includes(n.id) ? { ...n, selected: true } : n)) : base
     if (!reachHighlight) return selectedNodes
     return selectedNodes.map((n) => {
       const verdict = reachHighlight[n.id]
       return { ...n, className: verdict ? HOP_RING[verdict] : "opacity-35" }
     })
-  }, [stableNodes, selectedIds, reachHighlight])
+  }, [stableNodes, complianceNodes, selectedIds, reachHighlight])
   const onSelectionChange = useCallback(
     ({ nodes: picked }: OnSelectionChangeParams) => {
       const ids = picked.map((n) => n.id)
@@ -347,31 +279,22 @@ function CanvasInner() {
     [stableEdges, hoveredEdge],
   )
 
-  const [nodes, setNodes] = useSyncedState(derivedNodes, keepMeasured)
-  const [edges, setEdges] = useSyncedState(derivedEdges)
   /** What the context menu acts on: the right-clicked node (or the selection containing it); null = the pane. */
   const [menu, setMenu] = useState<{ ids: string[]; node?: WorkflowNode } | null>(null)
-  const onNodesChange = useCallback(
-    (changes: NodeChange<ResourceFlowNode>[]) =>
-      setNodes((ns) => applyNodeChanges(changes.filter((c) => c.type !== "remove"), ns)),
-    [setNodes],
-  )
-  const onEdgesChange = useCallback(
-    (changes: EdgeChange<RefFlowEdge>[]) =>
-      setEdges((es) => applyEdgeChanges(changes.filter((c) => c.type === "select"), es)),
-    [setEdges],
-  )
 
   const savePositions = useCallback(
     (positions: Map<string, Position>) => {
       if (positions.size === 0) return
-      update((draft) => ({
-        ...draft,
-        nodes: draft.nodes.map((n) => {
-          const p = positions.get(n.id)
-          return p ? { ...n, position: p, positioned: true } : n
+      update(
+        (draft) => ({
+          ...draft,
+          nodes: draft.nodes.map((n) => {
+            const p = positions.get(n.id)
+            return p ? { ...n, position: p, positioned: true } : n
+          }),
         }),
-      }))
+        { layout: true },
+      )
     },
     [update],
   )
@@ -385,9 +308,15 @@ function CanvasInner() {
         .join(","),
     [wfNodes],
   )
+  // Cleared once everything is placed (or the layout failed): the same ids can come back unplaced later (a node
+  // deleted and restored, code that re-adds it) and must be laid out again, not skipped as "already done".
   const layoutRunning = useRef("")
   useEffect(() => {
-    if (!layoutKey || layoutRunning.current === layoutKey) return
+    if (!layoutKey) {
+      layoutRunning.current = ""
+      return
+    }
+    if (layoutRunning.current === layoutKey) return
     layoutRunning.current = layoutKey
     const { nodes: current, edges: currentEdges } = useWorkflowStore.getState().workflow!
     const allUnplaced = current.every((n) => !n.positioned)
@@ -396,7 +325,10 @@ function CanvasInner() {
         savePositions(positions)
         if (allUnplaced) window.requestAnimationFrame(() => void flow.fitView({ padding: 0.15, duration: 300 }))
       })
-      .catch((err) => toast.error("Automatic layout failed", { description: errorMessage(err) }))
+      .catch((err) => {
+        layoutRunning.current = ""
+        toast.error("Automatic layout failed", { description: errorMessage(err) })
+      })
   }, [layoutKey, savePositions, flow])
 
   const tidy = useCallback(async () => {
@@ -454,10 +386,10 @@ function CanvasInner() {
         return
       }
       const original = builtNodes.find((n) => n.id === source)?.position
-      if (original) setNodes((ns) => ns.map((n) => (n.id === source ? { ...n, position: original } : n)))
+      if (original) flow.setNodes((ns) => ns.map((n) => (n.id === source ? { ...n, position: original } : n)))
       setPending({ source: describeNode(source), target: describeNode(target), recipes })
     },
-    [savePositions, builtNodes, setNodes, describeNode],
+    [savePositions, builtNodes, flow, describeNode],
   )
 
   const onNodeDragStop = useCallback(
@@ -659,122 +591,145 @@ function CanvasInner() {
   )
   const onPaneContextMenu = useCallback(() => setMenu(null), [])
   const menuNode = menu?.ids.length === 1 ? menu.node : undefined
+  const closeConnect = useCallback(() => setPending(null), [])
+  const pickRecipe = useCallback(
+    (recipe: ConnectionRecipe) => {
+      const p = pending!
+      setPending(null)
+      void applyRecipe(p.source.id, p.target.id, recipe)
+    },
+    [pending, applyRecipe],
+  )
+  const cancelDelete = useCallback(() => setPendingDelete(null), [])
+  const confirmDelete = useCallback(() => {
+    const n = pendingDelete!.node
+    setPendingDelete(null)
+    void deleteNode(n)
+  }, [pendingDelete, deleteNode])
+  const deleteLabel = pendingDelete ? nodeLabel(pendingDelete.node, schemas.get(schemaKey(pendingDelete.node.kind, pendingDelete.node.type))) : undefined
+
+  // Memoized parts of the canvas: it re-renders on every edit (the cards' data), these only when what they show does.
+  const empty = wfNodes.length === 0
+  const multi = selectedIds.length > 1 ? selectedIds : null
+  const overlays = useMemo(
+    () => (
+      <>
+        <Background variant={BackgroundVariant.Dots} gap={16} size={1.2} />
+        <Controls showInteractive={false} position="bottom-left" />
+        <MiniMap pannable zoomable nodeColor={minimapColor} nodeStrokeWidth={0} position="bottom-right" style={MINIMAP_STYLE} />
+        <Panel position="top-right" className="flex items-center gap-2">
+          <PlanChip />
+          {!empty && (
+            <Button variant="outline" size="sm" className="bg-card/80 shadow-md backdrop-blur-md dark:bg-card/80" onClick={() => void tidy()}>
+              <WandSparklesIcon />
+              Tidy up
+            </Button>
+          )}
+        </Panel>
+        {multi && (
+          <Panel position="top-center">
+            <Button
+              variant="outline"
+              size="sm"
+              className="bg-card/80 shadow-md backdrop-blur-md dark:bg-card/80"
+              onClick={() => void openExtractModule(multi)}
+            >
+              <PackageIcon className="text-violet-500" />
+              Extract {multi.length} to module…
+            </Button>
+          </Panel>
+        )}
+        {/* Terraform: the load test's target only (nothing measures requests between cloud resources). */}
+        <LiveTrafficOverlay kind="" edges={NO_FLOW_EDGES} />
+      </>
+    ),
+    [empty, multi, tidy],
+  )
+  const menuContent = useMemo(
+    () => (
+      <ContextMenuContent className="min-w-52">
+        {menu ? (
+          <>
+            {menuNode?.kind === "module" && (
+              <>
+                <ContextMenuItem onSelect={() => void openModuleView(menuNode.id)}>
+                  <PackageSearchIcon />
+                  Open module
+                </ContextMenuItem>
+                <ContextMenuItem onSelect={() => void openInlineModule(menuNode.id)}>
+                  <PackageOpenIcon />
+                  Inline module…
+                </ContextMenuItem>
+              </>
+            )}
+            <ContextMenuItem onSelect={() => void openExtractModule(menu.ids)}>
+              <PackageIcon />
+              {menu.ids.length > 1 ? `Extract ${menu.ids.length} to module…` : "Extract to module…"}
+            </ContextMenuItem>
+            {menuNode && (
+              <>
+                <ContextMenuSeparator />
+                <ContextMenuItem variant="destructive" onSelect={() => requestDelete(menuNode.id)}>
+                  <Trash2Icon />
+                  Delete
+                </ContextMenuItem>
+              </>
+            )}
+          </>
+        ) : (
+          <>
+            <ContextMenuItem disabled={empty} onSelect={() => void tidy()}>
+              <WandSparklesIcon />
+              Tidy up
+            </ContextMenuItem>
+            {multi && (
+              <ContextMenuItem onSelect={() => void openExtractModule(multi)}>
+                <PackageIcon />
+                Extract {multi.length} selected to module…
+              </ContextMenuItem>
+            )}
+          </>
+        )}
+      </ContextMenuContent>
+    ),
+    [menu, menuNode, empty, multi, tidy, requestDelete],
+  )
   return (
     <div ref={wrapper} className="relative h-full w-full" onDragOver={onDragOver} onDrop={onDrop}>
-      <ContextMenu>
-        <ContextMenuTrigger asChild>
-          <div className="h-full w-full">
-            <ReactFlow<ResourceFlowNode, RefFlowEdge>
-              nodes={nodes}
-              edges={edges}
-              nodeTypes={nodeTypes}
-              edgeTypes={edgeTypes}
-              onNodesChange={onNodesChange}
-              onEdgesChange={onEdgesChange}
-              onNodeClick={onNodeClick}
-              onNodeDoubleClick={onNodeDoubleClick}
-              onNodeContextMenu={onNodeContextMenu}
-              onSelectionChange={onSelectionChange}
-              onSelectionContextMenu={onSelectionContextMenu}
-              onPaneContextMenu={onPaneContextMenu}
-              onPaneClick={onPaneClick}
-              onNodeDragStop={onNodeDragStop}
-              onConnect={onConnectEdge}
-              isValidConnection={isValidConnection}
-              onEdgeMouseEnter={onEdgeMouseEnter}
-              onEdgeMouseLeave={onEdgeMouseLeave}
-              deleteKeyCode={null}
-              colorMode={resolvedTheme === "light" ? "light" : "dark"}
-              snapToGrid
-              snapGrid={SNAP_GRID}
-              fitView
-              fitViewOptions={FIT_VIEW_OPTIONS}
-              minZoom={0.15}
-              maxZoom={2}
-              proOptions={PRO_OPTIONS}
-              className="bg-background"
-            >
-              <Background variant={BackgroundVariant.Dots} gap={16} size={1.2} />
-              <Controls showInteractive={false} position="bottom-left" />
-              <MiniMap
-                pannable
-                zoomable
-                nodeColor={minimapColor}
-                nodeStrokeWidth={0}
-                position="bottom-right"
-                style={MINIMAP_STYLE}
-                className="!rounded-lg !border"
-              />
-              {wfNodes.length > 0 && (
-                <Panel position="top-right">
-                  <Button variant="outline" size="sm" className="bg-background/80 backdrop-blur" onClick={() => void tidy()}>
-                    <WandSparklesIcon />
-                    Tidy up
-                  </Button>
-                </Panel>
-              )}
-              {selectedIds.length > 1 && (
-                <Panel position="top-center">
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    className="bg-background/80 backdrop-blur"
-                    onClick={() => void openExtractModule(selectedIds)}
-                  >
-                    <PackageIcon className="text-violet-500" />
-                    Extract {selectedIds.length} to module…
-                  </Button>
-                </Panel>
-              )}
-            </ReactFlow>
-          </div>
-        </ContextMenuTrigger>
-        <ContextMenuContent className="min-w-52">
-          {menu ? (
-            <>
-              {menuNode?.kind === "module" && (
-                <>
-                  <ContextMenuItem onSelect={() => void openModuleView(menuNode.id)}>
-                    <PackageSearchIcon />
-                    Open module
-                  </ContextMenuItem>
-                  <ContextMenuItem onSelect={() => void openInlineModule(menuNode.id)}>
-                    <PackageOpenIcon />
-                    Inline module…
-                  </ContextMenuItem>
-                </>
-              )}
-              <ContextMenuItem onSelect={() => void openExtractModule(menu.ids)}>
-                <PackageIcon />
-                {menu.ids.length > 1 ? `Extract ${menu.ids.length} to module…` : "Extract to module…"}
-              </ContextMenuItem>
-              {menuNode && (
-                <>
-                  <ContextMenuSeparator />
-                  <ContextMenuItem variant="destructive" onSelect={() => requestDelete(menuNode.id)}>
-                    <Trash2Icon />
-                    Delete
-                  </ContextMenuItem>
-                </>
-              )}
-            </>
-          ) : (
-            <>
-              <ContextMenuItem disabled={wfNodes.length === 0} onSelect={() => void tidy()}>
-                <WandSparklesIcon />
-                Tidy up
-              </ContextMenuItem>
-              {selectedIds.length > 1 && (
-                <ContextMenuItem onSelect={() => void openExtractModule(selectedIds)}>
-                  <PackageIcon />
-                  Extract {selectedIds.length} selected to module…
-                </ContextMenuItem>
-              )}
-            </>
-          )}
-        </ContextMenuContent>
-      </ContextMenu>
-      {wfNodes.length === 0 && (
+      <CanvasContextMenu menu={menuContent}>
+        <CanvasFlow<ResourceFlowNode, RefFlowEdge>
+          nodes={derivedNodes}
+          edges={derivedEdges}
+          selectableEdges
+          nodeTypes={nodeTypes}
+          edgeTypes={edgeTypes}
+          onNodeClick={onNodeClick}
+          onNodeDoubleClick={onNodeDoubleClick}
+          onNodeContextMenu={onNodeContextMenu}
+          onSelectionChange={onSelectionChange}
+          onSelectionContextMenu={onSelectionContextMenu}
+          onPaneContextMenu={onPaneContextMenu}
+          onPaneClick={onPaneClick}
+          onNodeDragStop={onNodeDragStop}
+          onConnect={onConnectEdge}
+          isValidConnection={isValidConnection}
+          onEdgeMouseEnter={onEdgeMouseEnter}
+          onEdgeMouseLeave={onEdgeMouseLeave}
+          deleteKeyCode={null}
+          colorMode={resolvedTheme === "light" ? "light" : "dark"}
+          snapToGrid
+          snapGrid={SNAP_GRID}
+          fitView
+          fitViewOptions={FIT_VIEW_OPTIONS}
+          minZoom={0.15}
+          maxZoom={2}
+          proOptions={PRO_OPTIONS}
+          className="bg-background"
+        >
+          {overlays}
+        </CanvasFlow>
+      </CanvasContextMenu>
+      {empty && (
         <div className="pointer-events-none absolute inset-0 flex items-center justify-center">
           <Empty className="pointer-events-auto max-w-md border bg-background/90 backdrop-blur">
             <EmptyHeader>
@@ -798,41 +753,41 @@ function CanvasInner() {
       )}
       <ModuleOverlay />
       <ModuleRefactorDialogs />
-      <ConnectDialog
-        pending={pending}
-        onClose={() => setPending(null)}
-        onPick={(recipe) => {
-          const p = pending!
-          setPending(null)
-          void applyRecipe(p.source.id, p.target.id, recipe)
-        }}
-      />
-      <AlertDialog open={!!pendingDelete} onOpenChange={(o) => !o && setPendingDelete(null)}>
-        <AlertDialogContent>
-          <AlertDialogHeader>
-            <AlertDialogTitle>
-              Delete {pendingDelete && nodeLabel(pendingDelete.node, schemas.get(schemaKey(pendingDelete.node.kind, pendingDelete.node.type)))}?
-            </AlertDialogTitle>
-            <AlertDialogDescription>
-              {pendingDelete?.users === 1 ? "1 other resource uses" : `${pendingDelete?.users} other resources use`} it.
-              Those links will break and show up under Problems until you fix them.
-            </AlertDialogDescription>
-          </AlertDialogHeader>
-          <AlertDialogFooter>
-            <AlertDialogCancel>Cancel</AlertDialogCancel>
-            <AlertDialogAction
-              variant="destructive"
-              onClick={() => {
-                const n = pendingDelete!.node
-                setPendingDelete(null)
-                void deleteNode(n)
-              }}
-            >
-              Delete
-            </AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
+      <ConnectDialog pending={pending} onClose={closeConnect} onPick={pickRecipe} />
+      <DeleteDialog pending={pendingDelete} label={deleteLabel} onCancel={cancelDelete} onConfirm={confirmDelete} />
     </div>
   )
 }
+
+/** Asks before deleting a node other resources use. Memoized: the canvas re-renders on every edit, the closed dialog doesn't. */
+const DeleteDialog = memo(function DeleteDialog({
+  pending,
+  label,
+  onCancel,
+  onConfirm,
+}: {
+  pending: { node: WorkflowNode; users: number } | null
+  label: string | undefined
+  onCancel: () => void
+  onConfirm: () => void
+}) {
+  return (
+    <AlertDialog open={!!pending} onOpenChange={(o) => !o && onCancel()}>
+      <AlertDialogContent>
+        <AlertDialogHeader>
+          <AlertDialogTitle>Delete {label}?</AlertDialogTitle>
+          <AlertDialogDescription>
+            {pending?.users === 1 ? "1 other resource uses" : `${pending?.users} other resources use`} it.
+            Those links will break and show up under Problems until you fix them.
+          </AlertDialogDescription>
+        </AlertDialogHeader>
+        <AlertDialogFooter>
+          <AlertDialogCancel>Cancel</AlertDialogCancel>
+          <AlertDialogAction variant="destructive" onClick={onConfirm}>
+            Delete
+          </AlertDialogAction>
+        </AlertDialogFooter>
+      </AlertDialogContent>
+    </AlertDialog>
+  )
+})

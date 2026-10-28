@@ -16,7 +16,8 @@ import { Skeleton } from "@/components/ui/skeleton"
 import { Switch } from "@/components/ui/switch"
 import { Toggle } from "@/components/ui/toggle"
 import { AccessWarnings, LeastPrivilegeOk, ReadOnlySource } from "@/features/access/parts"
-import { CommitInput, Field, ListEditor, Section } from "@/features/docker/inspector/fields"
+import { CommitInput, Field, ListEditor } from "@/features/docker/inspector/fields"
+import { InspectorSection, InspectorSubsection } from "@/features/inspector/inspector-section"
 import { api } from "@/lib/api/client"
 import type { AccessRelated, KubeAccessEdit, KubeAccessView, KubeGraph, KubeNode, KubeRule, KubeSubject } from "@/lib/api/types"
 import { cn } from "@/lib/utils"
@@ -46,10 +47,10 @@ type Save = (edit: Omit<KubeAccessEdit, "nodeId">) => Promise<boolean>
 /** The RBAC view of an object (refreshed by every saved edit) and how to save an edit of it. */
 function useKubeAccess(node: KubeNode) {
   const workflowId = useWorkflowStore((s) => s.workflow!.id)
-  const updatedAt = useWorkflowStore((s) => s.workflow!.updatedAt)
+  const version = useWorkflowStore((s) => s.version)
   const setWorkflow = useWorkflowStore((s) => s.setWorkflow)
   const query = useQuery({
-    queryKey: ["kubernetes-access", workflowId, node.id, updatedAt],
+    queryKey: ["kubernetes-access", workflowId, node.id, version],
     queryFn: () => api.kubernetesAccess(workflowId, node.id),
     placeholderData: (prev, prevQuery) => (prevQuery?.queryKey[2] === node.id ? prev : undefined),
     retry: false,
@@ -79,7 +80,7 @@ export function KubeAccessPanel({ node }: { node: KubeNode }) {
   const { query, save } = useKubeAccess(node)
   const view = query.data
   return (
-    <Section title="Access" icon={<KeyRoundIcon className="size-3.5 text-amber-500" />}>
+    <InspectorSection id="k8s:access" title="Access" icon={<KeyRoundIcon className="size-3.5 text-amber-500" />}>
       <div className="flex flex-col gap-3" data-testid="k8s-rbac-panel" data-kind={node.kind}>
         {query.isPending && !view ? (
           <Loading />
@@ -100,7 +101,7 @@ export function KubeAccessPanel({ node }: { node: KubeNode }) {
           </>
         ) : null}
       </div>
-    </Section>
+    </InspectorSection>
   )
 }
 
@@ -547,7 +548,7 @@ function OwnRoleButton({ node }: { node: KubeNode }) {
 
 const NEW_SA = "__new__"
 
-/** A workload's "Identity": the ServiceAccount its pods run as, its API token and what it can do. */
+/** A workload's "Identity" (inside its "Security"): the ServiceAccount its pods run as, its API token and what it can do. */
 export function WorkloadIdentity({ node }: { node: KubeNode }) {
   const { query, save } = useKubeAccess(node)
   const graph = useWorkflowStore((s) => s.workflow!.kubernetes?.graph)
@@ -555,7 +556,7 @@ export function WorkloadIdentity({ node }: { node: KubeNode }) {
   const view = query.data
   const accounts = serviceAccountsIn(graph, node.namespace)
   return (
-    <Section title="Identity" icon={<ShieldIcon className="size-3.5 text-amber-500" />}>
+    <InspectorSubsection title="Identity" icon={<ShieldIcon className="size-3.5 text-amber-500" />}>
       <div className="flex flex-col gap-3" data-testid="k8s-identity">
         {query.isPending && !view ? (
           <Loading />
@@ -608,7 +609,7 @@ export function WorkloadIdentity({ node }: { node: KubeNode }) {
           </>
         ) : null}
       </div>
-    </Section>
+    </InspectorSubsection>
   )
 }
 

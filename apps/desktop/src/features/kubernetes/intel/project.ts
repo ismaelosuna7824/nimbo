@@ -10,8 +10,8 @@ import { queryClient } from "@/lib/query-client"
 import { useWorkflowStore } from "@/state/workflow-store"
 
 function version(workflowId: string): string {
-  const wf = useWorkflowStore.getState().workflow
-  return wf?.id === workflowId ? wf.updatedAt : ""
+  const s = useWorkflowStore.getState()
+  return s.workflow?.id === workflowId ? s.version : ""
 }
 
 // Same keys as the Code tab's listing and file queries: one fetch serves both.

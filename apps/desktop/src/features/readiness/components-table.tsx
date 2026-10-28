@@ -58,7 +58,9 @@ function ComponentRow({ component, env }: { component: ReadinessComponent; env: 
           </span>
         </button>
       </TableCell>
-      <TableCell className={cn("px-2 py-1 text-right font-mono tabular-nums", scoreTone(component.score))}>{scoreLabel(component.score)}</TableCell>
+      <TableCell className={cn("px-2 py-1 text-right font-mono tabular-nums", scoreTone(component.score, [component.status]))}>
+        {scoreLabel(component.score)}
+      </TableCell>
       {CELL_COLUMNS.map((col) => {
         const cell = component.cells.find((x) => x.id === col.id)
         return (

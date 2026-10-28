@@ -1,5 +1,6 @@
 import { useMemo } from "react"
 import { ChevronRight, CircleAlert, CircleCheck, Route, Settings2, ShieldCheck, TriangleAlert } from "lucide-react"
+import { useShallow } from "zustand/react/shallow"
 import { Button } from "@/components/ui/button"
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible"
 import { Empty, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from "@/components/ui/empty"
@@ -31,22 +32,22 @@ interface Group {
 const RANK = { error: 0, warning: 1, info: 2 } as const
 
 export function ProblemsTab() {
-  const nodes = useWorkflowStore((s) => s.workflow?.nodes)
   const diagnostics = useWorkflowStore((s) => s.workflow?.diagnostics)
   const docker = useWorkflowStore((s) => s.workflow?.kind === "docker")
-  const kubeGraph = useWorkflowStore((s) => (s.workflow?.kind === "kubernetes" ? s.workflow.kubernetes?.graph : undefined))
   const kubernetes = useWorkflowStore((s) => s.workflow?.kind === "kubernetes")
   const select = useWorkflowStore((s) => s.select)
   const openSettings = useSettingsView((s) => s.openView)
+  // Labels and the network flag, not the nodes: this tab stays mounted, and every inspector keystroke replaces them.
   // Kubernetes objects read "Deployment shop/web" (node ids are "Deployment/shop/web").
-  const labels = useMemo(
-    () =>
-      kubeGraph
+  const labels = useWorkflowStore(
+    useShallow((s): Record<string, string> => {
+      const kubeGraph = s.workflow?.kind === "kubernetes" ? s.workflow.kubernetes?.graph : undefined
+      return kubeGraph
         ? Object.fromEntries(kubeGraph.nodes.map((n) => [n.id, `${n.kind} ${n.namespace ? `${n.namespace}/` : ""}${n.name}`]))
-        : nodeLabelById(nodes),
-    [nodes, kubeGraph],
+        : nodeLabelById(s.workflow?.nodes)
+    }),
   )
-  const withNetwork = useMemo(() => hasNetworkResources(nodes), [nodes])
+  const withNetwork = useWorkflowStore((s) => hasNetworkResources(s.workflow?.nodes))
 
   const groups = useMemo<Group[]>(() => {
     const all = diagnostics ?? []

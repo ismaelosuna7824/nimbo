@@ -1,14 +1,16 @@
 import { useQueries, useQuery, type UseQueryResult } from "@tanstack/react-query"
 import { useCallback, useMemo } from "react"
-import { api } from "@/lib/api/client"
 import type { NodeKind, ResourceSchema, WorkflowNode } from "@/lib/api/types"
+import { loadSchema } from "../panels/terraform/intel/catalog"
 
 export const schemaKey = (kind: NodeKind, type: string) => `${kind}:${type}`
 
 function schemaQuery(kind: NodeKind, type: string) {
   return {
     queryKey: ["schema", kind, type],
-    queryFn: () => api.schema(kind, type),
+    // Batched with every schema asked for in the same tick (a workflow's node types at once, the code editor's) and
+    // shared with code intelligence: one request instead of one per type. Null: a type the catalog doesn't have.
+    queryFn: () => loadSchema(kind === "data" ? "data" : "resource", type),
     staleTime: Infinity,
     retry: false,
     enabled: kind !== "module",
@@ -34,7 +36,7 @@ export function useNodeSchemas(nodes: WorkflowNode[] | undefined): Map<string, R
     [signature],
   )
   const combine = useCallback(
-    (results: UseQueryResult<ResourceSchema>[]) => {
+    (results: UseQueryResult<ResourceSchema | null>[]) => {
       const m = new Map<string, ResourceSchema>()
       types.forEach((t, i) => {
         const d = results[i]?.data
@@ -54,6 +56,6 @@ export function nodeAddress(n: Pick<WorkflowNode, "kind" | "type" | "name">) {
   return `${n.type}.${n.name}`
 }
 
-export function nodeLabel(n: WorkflowNode, schema?: ResourceSchema) {
+export function nodeLabel(n: Pick<WorkflowNode, "label" | "type">, schema?: ResourceSchema) {
   return n.label || schema?.label || n.type
 }

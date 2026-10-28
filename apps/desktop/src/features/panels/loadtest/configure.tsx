@@ -19,7 +19,8 @@ import type { ExternalTarget } from "@/features/connections/safety"
 import { formatDuration } from "../lib/format"
 import type { LoadDraft } from "./draft"
 import { DEFAULT_THRESHOLDS, METRIC_META, modeUnit, stagePoints, totalDuration } from "./metrics"
-import { scenarioProblem, ScenarioStep } from "./scenario-step"
+import { ScenarioStep } from "./scenario-step"
+import { scenarioProblem } from "./scenario-timing"
 
 export function Sparkline({ profile, className }: { profile: LoadProfile; className?: string }) {
   const pts = stagePoints(profile.stages)

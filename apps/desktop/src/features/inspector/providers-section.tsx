@@ -5,6 +5,7 @@ import { Input } from "@/components/ui/input"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip"
 import type { Value } from "@/lib/api/types"
+import { cn } from "@/lib/utils"
 import { useWorkflowStore } from "@/state/workflow-store"
 import { exprOf, getAttr } from "./body"
 import { addProblem, addProvider, PROVIDER_REGION, providerNames, providerRef, providerUsers, regionVariables } from "./providers"
@@ -61,11 +62,31 @@ export function ProvidersSection() {
         const users = providerUsers(wf.nodes, p)
         const regionAttr = PROVIDER_REGION[p.name]
         const region = regionAttr ? getAttr(p.body, regionAttr) : undefined
+        // A provider block nothing uses: quiet row, but say what it still costs (its emulator starts with the sandbox).
+        const unused = users.length === 0
         return (
-          <div key={`${providerRef(p)}-${i}`} className="flex items-center gap-2 rounded-md border px-2 py-1.5 text-xs">
+          <div
+            key={`${providerRef(p)}-${i}`}
+            className={cn(
+              "flex items-center gap-2 rounded-md border px-2 py-1.5 text-xs",
+              unused && "border-dashed text-muted-foreground",
+            )}
+          >
             <span className="font-mono font-medium">{providerRef(p)}</span>
             {region && <span className="truncate font-mono text-muted-foreground">{exprOf(region)}</span>}
-            <span className="ml-auto text-[10px] text-muted-foreground">{users.length} using</span>
+            {unused ? (
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <span className="ml-auto text-[10px]">Not used</span>
+                </TooltipTrigger>
+                <TooltipContent className="max-w-64">
+                  No resource uses this provider. It is still configured, so the sandbox starts its local emulator and
+                  the export keeps it: remove it if you don&apos;t need it.
+                </TooltipContent>
+              </Tooltip>
+            ) : (
+              <span className="ml-auto text-[10px] text-muted-foreground">{users.length} using</span>
+            )}
             <Tooltip>
               <TooltipTrigger asChild>
                 <span>

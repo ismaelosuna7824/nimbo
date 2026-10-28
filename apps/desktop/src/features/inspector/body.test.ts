@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import { appendToList, base64Of, listItems, listValue, mapEntries, mapValue, removeListItem, splitTopLevel, stringLiteral } from "./body"
+import { appendToList, base64Of, isJsonAttr, jsonFieldValue, listItems, listValue, mapEntries, mapValue, removeListItem, splitTopLevel, stringLiteral } from "./body"
 
 describe("list values", () => {
   test("listItems reads literals and list constructors", () => {
@@ -74,5 +74,25 @@ describe("map values", () => {
       { name: "LoadBalancer", value: { expr: "aws_lb.app.arn_suffix" } },
     ])
     expect(base64Of("local.user_data")).toBe("base64encode(local.user_data)")
+  })
+})
+
+describe("JSON document fields", () => {
+  test("policy-like string attributes are JSON documents", () => {
+    for (const name of ["assume_role_policy", "policy", "redrive_policy", "definition", "container_definitions", "event_pattern", "policy_json"])
+      expect(isJsonAttr(name)).toBe(true)
+    for (const name of ["name", "policy_arn", "policy_arns", "description"]) expect(isJsonAttr(name)).toBe(false)
+    expect(isJsonAttr("settings", "A JSON object of settings.")).toBe(true)
+  })
+
+  test("pasted JSON becomes jsonencode, expressions stay, text is a string, empty unsets", () => {
+    const doc = '{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Action":"sts:AssumeRole"}]}'
+    expect(jsonFieldValue(doc)).toEqual({ expr: `jsonencode(${JSON.stringify(JSON.parse(doc), null, 2)})` })
+    expect(jsonFieldValue("jsonencode({ Version = \"2012-10-17\" })")).toEqual({ expr: 'jsonencode({ Version = "2012-10-17" })' })
+    expect(jsonFieldValue("data.aws_iam_policy_document.assume.json")).toEqual({ expr: "data.aws_iam_policy_document.assume.json" })
+    // Half-typed JSON is kept as typed (an expression), so nothing is lost and Problems shows the mistake.
+    expect(jsonFieldValue('{"Version": ')).toEqual({ expr: '{"Version":' })
+    expect(jsonFieldValue("  ")).toBeUndefined()
+    expect(jsonFieldValue("not json")).toEqual({ literal: "not json" })
   })
 })

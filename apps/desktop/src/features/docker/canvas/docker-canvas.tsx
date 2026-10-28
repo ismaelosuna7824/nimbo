@@ -1,24 +1,25 @@
 import {
-  applyNodeChanges,
   Background,
   BackgroundVariant,
   Controls,
   MarkerType,
   MiniMap,
   Panel,
-  ReactFlow,
   ReactFlowProvider,
   useReactFlow,
   type Connection,
-  type NodeChange,
 } from "@xyflow/react"
-import { Code2Icon, LayoutTemplateIcon, MousePointerClickIcon, Trash2Icon, WandSparklesIcon } from "lucide-react"
-import { useCallback, useEffect, useMemo, useRef, useState } from "react"
+import "@xyflow/react/dist/style.css"
+import { Code2Icon, FlameIcon, LayoutTemplateIcon, MousePointerClickIcon, Trash2Icon, WandSparklesIcon } from "lucide-react"
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { toast } from "sonner"
+import { MINIMAP_CARD, MINIMAP_FRAME, minimapTint } from "@/components/canvas-card"
+import { CanvasContextMenu, CanvasFlow } from "@/components/canvas-flow"
 import { errorMessage } from "@/components/errors"
+import { sameFlowEdge, sameFlowNode, useStableItems } from "@/components/flow-items"
+import { useComplianceMarked } from "@/features/compliance/highlight"
 import { techIconFor } from "@/components/tech-icons"
 import { useTheme } from "next-themes"
-import { useSyncedState } from "@/components/use-synced-state"
 import {
   AlertDialog,
   AlertDialogAction,
@@ -30,13 +31,16 @@ import {
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog"
 import { Button } from "@/components/ui/button"
-import { ContextMenu, ContextMenuContent, ContextMenuItem, ContextMenuSeparator, ContextMenuTrigger } from "@/components/ui/context-menu"
+import { ContextMenuContent, ContextMenuItem, ContextMenuSeparator } from "@/components/ui/context-menu"
 import { Empty, EmptyContent, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from "@/components/ui/empty"
 import { EnvironmentSwitch } from "@/features/environments/environment-switch"
+import { FailureTestDialog } from "@/features/live/failure-dialog"
+import { openFailureTest } from "@/features/live/live-store"
+import { LiveTrafficOverlay } from "@/features/live/live-overlay"
 import { useEndpoints } from "@/features/panels/endpoints/use-endpoints"
 import { revealFiles } from "@/features/panels/terraform/reveal-files"
 import { api } from "@/lib/api/client"
-import type { ComposeGraph, ComposeNode, Position } from "@/lib/api/types"
+import type { ComposeConnectRecipe, ComposeGraph, ComposeNode, Position } from "@/lib/api/types"
 import { useWorkflowStore } from "@/state/workflow-store"
 import {
   addFromPalette,
@@ -53,28 +57,31 @@ import { buildCanvas, looseItems, placeNew, relativePosition, SERVICE_H, SERVICE
 import { DockerEdge, FrameNode, ServiceNode, SmallNode, type DockerFlowEdge, type DockerFlowNode } from "./nodes"
 
 const nodeTypes = { service: ServiceNode, small: SmallNode, frame: FrameNode }
+/** Frames that are only layout; a frame drawn for a compose object (a network) can be marked. */
+const isFrame = (n: DockerFlowNode) => n.type === "frame" && !n.data.node
 const edgeTypes = { docker: DockerEdge }
 const EMPTY_GRAPH: ComposeGraph = { nodes: [], edges: [] }
 const EDGE_MARKER = { type: MarkerType.ArrowClosed, width: 16, height: 16 }
 const FIT_VIEW_OPTIONS = { padding: 0.2, maxZoom: 1.1 }
 const PRO_OPTIONS = { hideAttribution: true }
 const SNAP_GRID: [number, number] = [16, 16]
+const MINIMAP_STYLE = { width: 168, height: 112 }
+const ENV_PANEL_STYLE = { marginLeft: 232 }
 
 function isEditableTarget(el: Element | null) {
   return !!el && (el instanceof HTMLInputElement || el instanceof HTMLTextAreaElement || (el as HTMLElement).isContentEditable)
 }
 
 function minimapColor(n: DockerFlowNode) {
-  if (n.type === "frame") return "rgba(14,165,233,0.15)"
-  if (n.data.status?.state === "running") return "#10b981"
-  return n.type === "service" ? "#64748b" : "#94a3b8"
+  if (n.type === "frame") return MINIMAP_FRAME
+  return n.data.status?.state === "running" ? minimapTint("var(--color-emerald-500)") : MINIMAP_CARD
 }
 
-/** Rebuilt nodes keep React Flow's DOM measurement, so cards don't blink while it measures them again. */
-function keepMeasured(next: DockerFlowNode[], current: DockerFlowNode[]): DockerFlowNode[] {
-  const measured = new Map(current.map((n) => [n.id, n.measured]))
-  return next.map((n) => (n.measured || !measured.get(n.id) ? n : { ...n, measured: measured.get(n.id) }))
+function isValidConnection(c: { source: string; target: string }) {
+  return c.source !== c.target
 }
+
+const openInCode = (n: ComposeNode) => n.file && revealFiles("", n.file, n.line)
 
 /** The Build canvas of a Docker workspace: services in their network frames, volumes, secrets, edges. */
 export function DockerCanvas() {
@@ -110,26 +117,38 @@ function CanvasInner() {
     .filter((i) => !i.placed)
     .map((i) => i.id)
     .join(",")
+  // The ids being placed, so a re-render while the save is in flight doesn't place them twice. Cleared once nothing
+  // is unplaced (or the save failed): the same ids can come back later (monitoring removed and added again, a service
+  // deleted and re-added) and must be placed again, not skipped as "already done".
   const placing = useRef("")
   useEffect(() => {
-    if (!unplacedKey || placing.current === unplacedKey) return
+    if (!unplacedKey) {
+      placing.current = ""
+      return
+    }
+    if (placing.current === unplacedKey) return
     placing.current = unplacedKey
     const all = looseItems(canvas.items).every((i) => !i.placed)
     const run = all ? layoutCanvas(canvas) : Promise.resolve(placeNew(canvas.items.map((i) => ({ ...i })), canvas.edges))
     void run
       .then((positions) => savePositions(positions))
       .then(() => all && window.requestAnimationFrame(() => void flow.fitView({ padding: 0.15, duration: 300 })))
-      .catch((err) => toast.error("Automatic layout failed", { description: errorMessage(err) }))
+      .catch((err) => {
+        placing.current = ""
+        toast.error("Automatic layout failed", { description: errorMessage(err) })
+      })
   }, [unplacedKey, canvas, flow])
 
+  // Lays out the workflow as it is when asked (read then, so the callback stays the same across edits).
   const tidy = useCallback(async () => {
+    const s = useWorkflowStore.getState()
     try {
-      await savePositions(await layoutCanvas(canvas))
+      await savePositions(await layoutCanvas(buildCanvas(s.workflow?.compose?.graph ?? EMPTY_GRAPH, s.compose)))
       window.requestAnimationFrame(() => void flow.fitView({ padding: 0.15, duration: 400 }))
     } catch (err) {
       toast.error("Tidy up failed", { description: errorMessage(err) })
     }
-  }, [canvas, flow])
+  }, [flow])
 
   const derivedNodes = useMemo(() => {
     const endpointOf = new Map<string, string>()
@@ -171,6 +190,8 @@ function CanvasInner() {
       }
     })
   }, [canvas, byId, selectedNodeId, endpoints, diagnostics])
+  // The Compliance tab's "Show on canvas" rings the services of a control and dims the rest.
+  const nodes = useComplianceMarked(useStableItems(derivedNodes, sameFlowNode), isFrame)
 
   const derivedEdges = useMemo(
     () =>
@@ -191,12 +212,7 @@ function CanvasInner() {
       }),
     [canvas, byId, hovered],
   )
-
-  const [nodes, setNodes] = useSyncedState(derivedNodes, keepMeasured)
-  const onNodesChange = useCallback(
-    (changes: NodeChange<DockerFlowNode>[]) => setNodes((ns) => applyNodeChanges(changes.filter((c) => c.type !== "remove"), ns)),
-    [setNodes],
-  )
+  const edges = useStableItems(derivedEdges, sameFlowEdge)
 
   const onNodeDragStop = useCallback(
     (_: unknown, __: DockerFlowNode, dragged: DockerFlowNode[]) => {
@@ -233,6 +249,8 @@ function CanvasInner() {
     },
     [byId],
   )
+
+  const nameOf = useCallback((id: string) => byId.get(id)?.node?.name ?? id, [byId])
 
   // Dragging from A's right handle to B: A uses B (api → db).
   const onConnect = useCallback(
@@ -306,86 +324,126 @@ function CanvasInner() {
     [flow],
   )
 
-  const openInCode = (n: ComposeNode) => n.file && revealFiles("", n.file, n.line)
+  const onNodeClick = useCallback((_: unknown, n: DockerFlowNode) => select(n.data.node ? n.id : null), [select])
+  const onNodeDoubleClick = useCallback((_: unknown, n: DockerFlowNode) => n.data.node && openInCode(n.data.node), [])
+  const onNodeContextMenu = useCallback((_: unknown, n: DockerFlowNode) => setMenu(n.data.node ?? null), [])
+  const onPaneContextMenu = useCallback(() => setMenu(null), [])
+  const onPaneClick = useCallback(() => select(null), [select])
+  const onConnectEdge = useCallback((c: Connection) => void onConnect(c), [onConnect])
+  const onEdgeMouseEnter = useCallback((_: unknown, e: DockerFlowEdge) => setHovered(e.id), [])
+  const onEdgeMouseLeave = useCallback(() => setHovered(null), [])
+  const closeConnect = useCallback(() => setPending(null), [])
+  const pickRecipe = useCallback(
+    (recipe: ComposeConnectRecipe, target?: string) => {
+      const p = pending!
+      setPending(null)
+      void applyRecipe(p.from.id, p.to.id, recipe, target)
+    },
+    [pending],
+  )
+  const cancelDelete = useCallback(() => setPendingDelete(null), [])
+  const confirmDelete = useCallback(() => {
+    const n = pendingDelete!.node
+    setPendingDelete(null)
+    void deleteComposeNode(n)
+  }, [pendingDelete])
+
   const serviceCount = graph.nodes.filter((n) => n.kind === "service").length
+  // Memoized parts of the canvas: it re-renders on every edit (the cards' data), these only when what they show does.
+  const hasItems = canvas.items.length > 0
+  const overlays = useMemo(
+    () => (
+      <>
+        <Background variant={BackgroundVariant.Dots} gap={16} size={1.2} />
+        <Controls showInteractive={false} position="bottom-left" />
+        <MiniMap pannable zoomable nodeColor={minimapColor} nodeStrokeWidth={0} position="bottom-right" style={MINIMAP_STYLE} />
+        {/* Right of the Build/Architecture switch the canvas area draws at the top left. */}
+        <Panel position="top-left" style={ENV_PANEL_STYLE}>
+          <EnvironmentSwitch className="bg-card/80 shadow-md backdrop-blur-md dark:bg-card/80" />
+        </Panel>
+        {hasItems && (
+          <Panel position="top-right">
+            <Button variant="outline" size="sm" className="bg-card/80 shadow-md backdrop-blur-md dark:bg-card/80" onClick={() => void tidy()}>
+              <WandSparklesIcon />
+              Tidy up
+            </Button>
+          </Panel>
+        )}
+        <LiveTrafficOverlay kind="docker" edges={canvas.edges} />
+      </>
+    ),
+    [hasItems, tidy, canvas.edges],
+  )
+  const menuContent = useMemo(
+    () => (
+      <ContextMenuContent className="min-w-52">
+        {menu ? (
+          <>
+            {menu.file && (
+              <ContextMenuItem onSelect={() => openInCode(menu)}>
+                <Code2Icon />
+                Open in code
+              </ContextMenuItem>
+            )}
+            {menu.kind === "service" && (
+              <ContextMenuItem data-testid="docker-menu-failure" onSelect={() => openFailureTest(menu.id)}>
+                <FlameIcon />
+                Test a failure…
+              </ContextMenuItem>
+            )}
+            {(menu.kind === "service" || menu.kind === "network" || menu.kind === "volume") && (
+              <>
+                <ContextMenuSeparator />
+                <ContextMenuItem variant="destructive" onSelect={() => requestDelete(menu.id)}>
+                  <Trash2Icon />
+                  Delete
+                </ContextMenuItem>
+              </>
+            )}
+          </>
+        ) : (
+          <ContextMenuItem disabled={!hasItems} onSelect={() => void tidy()}>
+            <WandSparklesIcon />
+            Tidy up
+          </ContextMenuItem>
+        )}
+      </ContextMenuContent>
+    ),
+    [menu, hasItems, tidy, requestDelete],
+  )
 
   return (
     <div ref={wrapper} className="relative h-full w-full" data-testid="docker-canvas" onDragOver={onDragOver} onDrop={onDrop}>
-      <ContextMenu>
-        <ContextMenuTrigger asChild>
-          <div className="h-full w-full">
-            <ReactFlow<DockerFlowNode, DockerFlowEdge>
-              nodes={nodes}
-              edges={derivedEdges}
-              nodeTypes={nodeTypes}
-              edgeTypes={edgeTypes}
-              onNodesChange={onNodesChange}
-              onNodeClick={(_, n) => select(n.data.node ? n.id : null)}
-              onNodeDoubleClick={(_, n) => n.data.node && openInCode(n.data.node)}
-              onNodeContextMenu={(_, n) => setMenu(n.data.node ?? null)}
-              onPaneContextMenu={() => setMenu(null)}
-              onPaneClick={() => select(null)}
-              onNodeDragStop={onNodeDragStop}
-              onConnect={(c) => void onConnect(c)}
-              isValidConnection={(c) => c.source !== c.target}
-              onEdgeMouseEnter={(_, e) => setHovered(e.id)}
-              onEdgeMouseLeave={() => setHovered(null)}
-              deleteKeyCode={null}
-              colorMode={resolvedTheme === "light" ? "light" : "dark"}
-              snapToGrid
-              snapGrid={SNAP_GRID}
-              fitView
-              fitViewOptions={FIT_VIEW_OPTIONS}
-              minZoom={0.15}
-              maxZoom={2}
-              proOptions={PRO_OPTIONS}
-              className="bg-background"
-            >
-              <Background variant={BackgroundVariant.Dots} gap={16} size={1.2} />
-              <Controls showInteractive={false} position="bottom-left" />
-              <MiniMap pannable zoomable nodeColor={minimapColor} nodeStrokeWidth={0} position="bottom-right" style={{ width: 168, height: 112 }} className="!rounded-lg !border" />
-              {/* Right of the Build/Architecture switch the canvas area draws at the top left. */}
-              <Panel position="top-left" style={{ marginLeft: 232 }}>
-                <EnvironmentSwitch className="bg-background/80 backdrop-blur" />
-              </Panel>
-              {canvas.items.length > 0 && (
-                <Panel position="top-right">
-                  <Button variant="outline" size="sm" className="bg-background/80 backdrop-blur" onClick={() => void tidy()}>
-                    <WandSparklesIcon />
-                    Tidy up
-                  </Button>
-                </Panel>
-              )}
-            </ReactFlow>
-          </div>
-        </ContextMenuTrigger>
-        <ContextMenuContent className="min-w-52">
-          {menu ? (
-            <>
-              {menu.file && (
-                <ContextMenuItem onSelect={() => openInCode(menu)}>
-                  <Code2Icon />
-                  Open in code
-                </ContextMenuItem>
-              )}
-              {(menu.kind === "service" || menu.kind === "network" || menu.kind === "volume") && (
-                <>
-                  <ContextMenuSeparator />
-                  <ContextMenuItem variant="destructive" onSelect={() => requestDelete(menu.id)}>
-                    <Trash2Icon />
-                    Delete
-                  </ContextMenuItem>
-                </>
-              )}
-            </>
-          ) : (
-            <ContextMenuItem disabled={canvas.items.length === 0} onSelect={() => void tidy()}>
-              <WandSparklesIcon />
-              Tidy up
-            </ContextMenuItem>
-          )}
-        </ContextMenuContent>
-      </ContextMenu>
+      <CanvasContextMenu menu={menuContent}>
+        <CanvasFlow<DockerFlowNode, DockerFlowEdge>
+          nodes={nodes}
+          edges={edges}
+          nodeTypes={nodeTypes}
+          edgeTypes={edgeTypes}
+          onNodeClick={onNodeClick}
+          onNodeDoubleClick={onNodeDoubleClick}
+          onNodeContextMenu={onNodeContextMenu}
+          onPaneContextMenu={onPaneContextMenu}
+          onPaneClick={onPaneClick}
+          onNodeDragStop={onNodeDragStop}
+          onConnect={onConnectEdge}
+          isValidConnection={isValidConnection}
+          onEdgeMouseEnter={onEdgeMouseEnter}
+          onEdgeMouseLeave={onEdgeMouseLeave}
+          deleteKeyCode={null}
+          colorMode={resolvedTheme === "light" ? "light" : "dark"}
+          snapToGrid
+          snapGrid={SNAP_GRID}
+          fitView
+          fitViewOptions={FIT_VIEW_OPTIONS}
+          minZoom={0.15}
+          maxZoom={2}
+          proOptions={PRO_OPTIONS}
+          className="bg-background"
+        >
+          {overlays}
+        </CanvasFlow>
+      </CanvasContextMenu>
       {serviceCount === 0 && (
         <div className="pointer-events-none absolute inset-0 flex items-center justify-center">
           <Empty className="pointer-events-auto max-w-md border bg-background/90 backdrop-blur">
@@ -408,39 +466,40 @@ function CanvasInner() {
           </Empty>
         </div>
       )}
-      <ComposeConnectDialog
-        pending={pending}
-        onClose={() => setPending(null)}
-        onPick={(recipe, target) => {
-          const p = pending!
-          setPending(null)
-          void applyRecipe(p.from.id, p.to.id, recipe, target)
-        }}
-      />
-      <AlertDialog open={!!pendingDelete} onOpenChange={(o) => !o && setPendingDelete(null)}>
-        <AlertDialogContent>
-          <AlertDialogHeader>
-            <AlertDialogTitle>Delete {pendingDelete?.node.name}?</AlertDialogTitle>
-            <AlertDialogDescription>
-              {pendingDelete?.users === 1 ? "1 other item uses" : `${pendingDelete?.users} other items use`} it. Their
-              references are removed from the compose file too.
-            </AlertDialogDescription>
-          </AlertDialogHeader>
-          <AlertDialogFooter>
-            <AlertDialogCancel>Cancel</AlertDialogCancel>
-            <AlertDialogAction
-              variant="destructive"
-              onClick={() => {
-                const n = pendingDelete!.node
-                setPendingDelete(null)
-                void deleteComposeNode(n)
-              }}
-            >
-              Delete
-            </AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
+      <ComposeConnectDialog pending={pending} onClose={closeConnect} onPick={pickRecipe} />
+      <DeleteDialog pending={pendingDelete} onCancel={cancelDelete} onConfirm={confirmDelete} />
+      <FailureTestDialog kind="docker" edges={canvas.edges} nameOf={nameOf} />
     </div>
   )
 }
+
+/** Asks before deleting what other items use. Memoized: the canvas re-renders on every edit, the closed dialog doesn't. */
+const DeleteDialog = memo(function DeleteDialog({
+  pending,
+  onCancel,
+  onConfirm,
+}: {
+  pending: { node: ComposeNode; users: number } | null
+  onCancel: () => void
+  onConfirm: () => void
+}) {
+  return (
+    <AlertDialog open={!!pending} onOpenChange={(o) => !o && onCancel()}>
+      <AlertDialogContent>
+        <AlertDialogHeader>
+          <AlertDialogTitle>Delete {pending?.node.name}?</AlertDialogTitle>
+          <AlertDialogDescription>
+            {pending?.users === 1 ? "1 other item uses" : `${pending?.users} other items use`} it. Their
+            references are removed from the compose file too.
+          </AlertDialogDescription>
+        </AlertDialogHeader>
+        <AlertDialogFooter>
+          <AlertDialogCancel>Cancel</AlertDialogCancel>
+          <AlertDialogAction variant="destructive" onClick={onConfirm}>
+            Delete
+          </AlertDialogAction>
+        </AlertDialogFooter>
+      </AlertDialogContent>
+    </AlertDialog>
+  )
+})

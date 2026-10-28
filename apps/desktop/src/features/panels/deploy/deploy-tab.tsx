@@ -1,6 +1,6 @@
 import { useState } from "react"
 import { useQuery } from "@tanstack/react-query"
-import { CircleCheck, Eye, FileSearch, Rocket, ShieldCheck, Square, Trash2, TriangleAlert } from "lucide-react"
+import { CircleCheck, Eye, FileDiff, FileSearch, Rocket, ShieldCheck, Square, Trash2, TriangleAlert } from "lucide-react"
 import { useShallow } from "zustand/react/shallow"
 import { toast } from "sonner"
 import { PixelProgress } from "@/components/arcade/pixel-progress"
@@ -25,6 +25,8 @@ import { api } from "@/lib/api/client"
 import type { PlanSummary, Run, RunAction } from "@/lib/api/types"
 import { cn } from "@/lib/utils"
 import { useWorkflowStore } from "@/state/workflow-store"
+import { latestPlan } from "@/features/plan/plan"
+import { showPlanOnCanvas } from "@/features/plan/plan-store"
 import { StatusBadge } from "../components/status-badge"
 import { editWorkflow } from "../lib/edit"
 import { durationBetween, formatDuration, formatRelative } from "../lib/format"
@@ -82,6 +84,8 @@ export function DeployTab() {
   const missing = missingRequired(workflow, workflow.activeEnvironment)
   const errors = workflow.diagnostics.filter((d) => d.severity === "error").length
   const dockerDown = health.data && !health.data.docker
+  // Only the newest plan of the active environment can be shown on the canvas (see features/plan).
+  const canvasPlan = latestPlan(runs, workflow.activeEnvironment)
 
   const start = async (action: RunAction) => {
     setStarting(action)
@@ -212,18 +216,25 @@ export function DeployTab() {
       </div>
 
       <Tabs value={view} onValueChange={setView} className="@container flex min-h-0 min-w-0 flex-col gap-0">
-        <TabsList variant="line" className="h-8 w-full shrink-0 justify-start overflow-x-auto overflow-y-hidden rounded-none border-b px-2 [scrollbar-width:none]">
-          <TabsTrigger value="logs" className="flex-none text-xs">
-            Logs
-          </TabsTrigger>
-          <TabsTrigger value="resources" className="flex-none text-xs">
-            Resources <span className="text-muted-foreground tabular-nums">{deployed?.resources.length ?? 0}</span>
-          </TabsTrigger>
-          <TabsTrigger value="outputs" className="flex-none text-xs">
-            Outputs{" "}
-            <span className="text-muted-foreground tabular-nums">{Object.keys(deployed?.outputs ?? {}).length}</span>
-          </TabsTrigger>
-        </TabsList>
+        <div className="flex h-8 shrink-0 items-center border-b">
+          <TabsList variant="line" className="h-8 min-w-0 flex-1 justify-start overflow-x-auto overflow-y-hidden rounded-none px-2 [scrollbar-width:none]">
+            <TabsTrigger value="logs" className="flex-none text-xs">
+              Logs
+            </TabsTrigger>
+            <TabsTrigger value="resources" className="flex-none text-xs">
+              Resources <span className="text-muted-foreground tabular-nums">{deployed?.resources.length ?? 0}</span>
+            </TabsTrigger>
+            <TabsTrigger value="outputs" className="flex-none text-xs">
+              Outputs{" "}
+              <span className="text-muted-foreground tabular-nums">{Object.keys(deployed?.outputs ?? {}).length}</span>
+            </TabsTrigger>
+          </TabsList>
+          {selectedRun && selectedRun.id === canvasPlan?.id && view === "logs" && (
+            <Button size="xs" variant="ghost" className="mr-2" onClick={showPlanOnCanvas}>
+              <FileDiff /> Show on canvas
+            </Button>
+          )}
+        </div>
         <TabsContent value="logs" className="min-h-0">
           {selectedRun ? (
             <RunLog key={selectedRun.id} run={selectedRun} />

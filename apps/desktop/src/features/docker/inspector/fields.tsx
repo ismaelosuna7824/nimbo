@@ -7,22 +7,7 @@ import { useState } from "react"
 import { useSyncedState } from "@/components/use-synced-state"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
-import { Separator } from "@/components/ui/separator"
 import { cn } from "@/lib/utils"
-
-export function Section({ title, icon, action, children }: { title: string; icon?: React.ReactNode; action?: React.ReactNode; children: React.ReactNode }) {
-  return (
-    <section className="flex flex-col gap-2.5">
-      <div className="flex items-center gap-2">
-        {icon}
-        <h3 className="text-xs font-semibold">{title}</h3>
-        <Separator className="flex-1" />
-        {action}
-      </div>
-      {children}
-    </section>
-  )
-}
 
 /** A text field committed on blur/Enter when it changed; Escape restores it. */
 export function CommitInput({

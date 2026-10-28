@@ -209,6 +209,40 @@ export function mapValue(entries: Attr[]): Value | undefined {
 /** Link to… with "Base64-encode" (user data). */
 export const base64Of = (expr: string) => `base64encode(${expr})`
 
+/**
+ * String attributes that hold a JSON document: IAM and resource policies, Step Functions definitions, ECS container
+ * definitions, EventBridge patterns… The provider schema types them as plain strings; the name (or the description)
+ * is what tells them apart.
+ */
+export function isJsonAttr(name: string, description?: string): boolean {
+  return (
+    /(^|_)policy$|_policy_|(^|_)policy_document$|_json$|^json_|(^|_)definition$|^container_definitions$|^event_pattern$|^template_body$/.test(name) ||
+    /\bJSON\b/.test(description ?? "")
+  )
+}
+
+/** Expressions a JSON field keeps as they are (functions, references, heredocs), rather than as a text. */
+const JSON_FIELD_EXPR = /^(jsonencode|file|templatefile|data\.|local\.|var\.|module\.|[a-z0-9]+_[a-z0-9_]+\.[\w-]+|<<)/
+
+/**
+ * The value of a JSON field from what was typed or pasted: a JSON document becomes `jsonencode(…)` (JSON is valid
+ * HCL object syntax, so the document stays readable and Terraform checks it); `jsonencode(…)`, `file(…)`, data
+ * sources and other expressions stay expressions; anything else is a plain string. Empty unsets it.
+ */
+export function jsonFieldValue(text: string): Value | undefined {
+  const src = text.trim()
+  if (!src) return undefined
+  try {
+    const doc: unknown = JSON.parse(src)
+    if (doc !== null && typeof doc === "object") return { expr: `jsonencode(${JSON.stringify(doc, null, 2)})` }
+  } catch {
+    // Not JSON: an expression or a plain string.
+  }
+  // Half-typed JSON stays an expression, so the text is kept and Problems points at the mistake.
+  if (JSON_FIELD_EXPR.test(src) || src.startsWith("{") || src.startsWith("[")) return { expr: src }
+  return { literal: src }
+}
+
 export type CtyKind = "string" | "number" | "bool" | "string-list" | "string-map" | "complex"
 
 export function ctyKind(t: CtyType): CtyKind {

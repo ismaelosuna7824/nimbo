@@ -3,7 +3,9 @@ import { keepPreviousData, useQueries, useQuery } from "@tanstack/react-query"
 import { useDefaultLayout } from "react-resizable-panels"
 import { Check, FileArchive, Files, GitCompare, RotateCcw, TriangleAlert, X } from "lucide-react"
 import { toast } from "sonner"
+import { useShallow } from "zustand/react/shallow"
 import { errorMessage } from "@/components/errors"
+import { lazyModule, useLazyModule } from "@/components/lazy-module"
 import {
   AlertDialog,
   AlertDialogAction,
@@ -30,6 +32,7 @@ import { useUiStore } from "@/features/toolbar/ui-store"
 import { setLeaveGuard, useWorkflowStore } from "@/state/workflow-store"
 import { DiagnosticRow } from "../components/diagnostic-row"
 import { copyText, formatBytes } from "../lib/format"
+import { useShownVersion } from "../lib/use-shown-version"
 import { ChangesDialog, type PendingChange } from "./changes-dialog"
 import { registerCloseFileTab } from "./close-file-tab"
 import type { CodeEditorHandle, EditorDiagnostic } from "./code-editor"
@@ -37,11 +40,8 @@ import { downloadWorkflowFile } from "./download-file"
 import { EditorTabs, PathBar } from "./editor-chrome"
 import { ancestors, baseName, dirName, isFormattable, isYaml } from "./file-model"
 import { FileTree, type EntryKind, type FileTreeHandle, type OpenOptions } from "./file-tree"
-import { dockerIntel } from "@/features/docker/intel"
-import { kubernetesIntel } from "@/features/kubernetes/intel"
 import { formatYaml, YamlFormatError } from "@/features/code-intel/yaml/format"
 import { insertService } from "@/features/docker/compose-snippet"
-import { terraformIntel } from "./intel"
 import { NewFromTemplateDialog } from "./new-from-template-dialog"
 import { NewModuleDialog } from "./new-module-dialog"
 import {
@@ -62,6 +62,10 @@ import { useFilesRequestFor } from "./reveal-files"
 
 // CodeMirror loads with the first file shown, not with the app.
 const CodeEditor = lazy(() => import("./code-editor").then((m) => ({ default: m.CodeEditor })))
+// Each kind's language intelligence (schemas, completion, checks) loads with the first file shown in its workspace.
+const terraformIntelCode = lazyModule(() => import("./intel"))
+const dockerIntelCode = lazyModule(() => import("@/features/docker/intel"))
+const kubernetesIntelCode = lazyModule(() => import("@/features/kubernetes/intel"))
 
 /** Largest file the daemon serves as text. */
 const MAX_TEXT_BYTES = 2 << 20
@@ -125,10 +129,12 @@ function copyName(path: string, free: (path: string) => boolean): string {
 export function FilesTab() {
   const workflowId = useWorkflowStore((s) => s.workflow!.id)
   const workflowName = useWorkflowStore((s) => s.workflow!.name)
-  const updatedAt = useWorkflowStore((s) => s.workflow!.updatedAt)
+  // The workflow version the files are read at: frozen while the tab is hidden, so saves don't refetch them meanwhile.
+  const updatedAt = useShownVersion("terraform")
   const docker = useWorkflowStore((s) => s.workflow!.kind === "docker")
   const kubernetes = useWorkflowStore((s) => s.workflow!.kind === "kubernetes")
-  const composeFiles = useWorkflowStore((s) => s.workflow!.compose?.files)
+  // Compared item by item: a save replaces the compose object (e.g. a moved card) with the same file list.
+  const composeFiles = useWorkflowStore(useShallow((s) => s.workflow!.compose?.files))
   const mode = useWorkflowStore((s) => s.mode)
   const visible = useWorkflowStore((s) => s.bottomOpen && s.bottomTab === "terraform")
   const pro = mode === "pro"
@@ -247,6 +253,9 @@ export function FilesTab() {
         preferred && byPath.has(preferred)
           ? preferred
           : (files.find((f) => f.generated && f.kind === "terraform" && /^modules\/[^/]+\/main\.tf$/.test(f.path)) ??
+              // Split layouts (api.tf, compute.tf, …) have no main.tf: their first Terraform file, never scaffold
+              // like .gitignore that sorts first.
+              files.find((f) => f.kind === "terraform") ??
               files.find((f) => f.kind === "compose") ??
               files.find((f) => !f.binary))?.path
       if (first) {
@@ -416,7 +425,10 @@ export function FilesTab() {
 
   // Completion, hover, go to definition, checks and quick fixes as you type: Terraform for .tf files; compose files,
   // Dockerfiles, .env and .dockerignore in a Docker workspace; manifests, Kustomize and Helm files in a Kubernetes
-  // one. References reach unapplied files too.
+  // one. References reach unapplied files too. The editor gets them once their code has loaded.
+  const dockerLang = useLazyModule(active && docker ? dockerIntelCode : undefined)
+  const kubernetesLang = useLazyModule(active && kubernetes ? kubernetesIntelCode : undefined)
+  const terraformLang = useLazyModule(active && !docker && !kubernetes ? terraformIntelCode : undefined)
   const intel = useMemo(() => {
     if (!active) return undefined
     const buffers = () => {
@@ -428,7 +440,7 @@ export function FilesTab() {
     const open = (path: string, opts: { line?: number }) => openFile(path, { line: opts.line })
     if (docker) {
       return (
-        dockerIntel({
+        dockerLang?.dockerIntel({
           workflowId,
           path: active,
           buffers,
@@ -442,7 +454,7 @@ export function FilesTab() {
     }
     if (kubernetes) {
       return (
-        kubernetesIntel({
+        kubernetesLang?.kubernetesIntel({
           workflowId,
           path: active,
           buffers,
@@ -451,8 +463,8 @@ export function FilesTab() {
         }) ?? undefined
       )
     }
-    return active.endsWith(".tf") ? terraformIntel({ workflowId, path: active, openFile: open, buffers }) : undefined
-  }, [workflowId, active, openFile, docker, kubernetes, textOf, writeFiles])
+    return active.endsWith(".tf") ? terraformLang?.terraformIntel({ workflowId, path: active, openFile: open, buffers }) : undefined
+  }, [workflowId, active, openFile, docker, kubernetes, textOf, writeFiles, dockerLang, kubernetesLang, terraformLang])
 
   /** "New from template…" with a snippet: the service goes at the end of the compose file's services. */
   const insertSnippet = useCallback(

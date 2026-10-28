@@ -1,9 +1,8 @@
 import { useEffect, useMemo, useState } from "react"
 import { useQuery } from "@tanstack/react-query"
-import { ArrowLeftIcon, ClockIcon, GraduationCapIcon, MapIcon, SearchIcon, SwordsIcon, TriangleAlertIcon } from "lucide-react"
+import { ClockIcon, GraduationCapIcon, MapIcon, SearchIcon, SwordsIcon, TriangleAlertIcon } from "lucide-react"
 import { errorMessage } from "@/components/errors"
 import { inline, Markdown } from "@/components/markdown"
-import { ThemeToggle } from "@/components/theme-toggle"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import { Button } from "@/components/ui/button"
 import { Empty, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from "@/components/ui/empty"
@@ -29,7 +28,6 @@ export function LearnView() {
   const provider = useLearnStore((s) => s.provider)
   const setProvider = useLearnStore((s) => s.setProvider)
   const challengeId = useLearnStore((s) => s.challengeId)
-  const workflowName = useWorkflowStore((s) => s.workflow?.name)
   const overview = useQuery({ queryKey: learnKeys.overview, queryFn: api.learnOverview })
 
   // Opening or closing a workflow (Start challenge, the palette) navigates away from this page.
@@ -55,18 +53,12 @@ export function LearnView() {
 
   return (
     <div className="fixed inset-0 z-40 flex flex-col bg-background">
-      <header className="flex h-12 shrink-0 items-center gap-2 border-b px-3">
-        <Button size="sm" variant="ghost" onClick={closeView}>
-          <ArrowLeftIcon /> {workflowName ? `Back to ${workflowName}` : "Home"}
-        </Button>
-        <div className="ml-1 flex min-w-0 items-baseline gap-2">
+      <header className="flex h-12 shrink-0 items-center gap-2 border-b px-4">
+        <div className="flex min-w-0 items-baseline gap-2">
           <h1 className="font-heading text-sm font-semibold">Learn</h1>
           <p className="hidden truncate text-xs text-muted-foreground md:block">
             Roadmaps and hands-on challenges for every provider, from official documentation — graded for real by Nimbo.
           </p>
-        </div>
-        <div className="ml-auto flex items-center gap-2">
-          <ThemeToggle />
         </div>
       </header>
       <nav className="flex shrink-0 gap-1 overflow-x-auto border-b px-3 py-2" aria-label="Providers">
@@ -207,6 +199,9 @@ function RoadmapView({ provider }: { provider: LearnProviderId }) {
   const roadmap = useQuery({
     queryKey: learnKeys.roadmap(provider),
     queryFn: () => api.learnRoadmap(provider),
+    // Learning content, migrated in when the engine starts: it doesn't change while the app runs (progress lives in
+    // the challenges).
+    staleTime: Infinity,
     retry: (n, e) => !(e instanceof ApiError && e.status === 404) && n < 2,
   })
   const challenges = useAllChallenges()

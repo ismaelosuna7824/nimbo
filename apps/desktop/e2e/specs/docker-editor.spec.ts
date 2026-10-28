@@ -112,6 +112,8 @@ test("opening and closing folders keeps the file tree's scroll position", async 
   await api.request("PUT", `/workflows/${wf.id}/terraform`, { changes })
   await app.gotoHome()
   await app.openWorkflow("Tree scroll")
+  // Guided opens with the dock collapsed: open the Code tab first.
+  await app.bottomTab("Code").click()
   const panel = app.bottomPanel("Code")
   const tree = panel.getByRole("tree", { name: "Files" })
   await expect(panel.getByRole("tab", { name: "compose.yaml" })).toBeVisible()
