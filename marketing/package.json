@@ -10,7 +10,8 @@
     "dev": "bunx --bun astro dev",
     "build": "bunx --bun astro build",
     "check": "bunx --bun astro check",
-    "render": "bun run build && bun scripts/render.ts"
+    "render": "bun run build && bun scripts/render.ts",
+    "render:before-after": "bun run build && bun scripts/render-before-after.ts"
   },
   "dependencies": {
     "@fontsource-variable/geist": "^5.3.0",

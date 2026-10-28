@@ -1,0 +1,216 @@
+---
+/**
+ * Before → after LinkedIn carousel: ten 1080×1350 slides stacked, one per printed page.
+ * /before-after/en/ and /before-after/es/; scripts/render-before-after.ts captures each
+ * .cs-slide to PNG and prints the page to PDF. Screenshots come from /shots/ (served by
+ * the render script from out/before-after/screens).
+ */
+import "../../render/carousel.css";
+import Icon from "../../../../apps/landing/src/components/Icon.astro";
+import Mascot from "../../../../apps/landing/src/components/demos/Mascot.astro";
+import { COPY, LANGS, type Lang } from "../../render/carousel";
+
+export function getStaticPaths() {
+  return LANGS.map((lang) => ({ params: { lang } }));
+}
+
+const lang = Astro.params.lang as Lang;
+const t = COPY[lang];
+const TOTAL = 10;
+const shot = (name: string) => `/shots/${name}.png`;
+/** Crop of a screenshot in its own pixels (2× CSS px of the app): top right bottom left. */
+const crop = (inset: string) => `object-view-box: inset(${inset})`;
+---
+
+<!doctype html>
+<html lang={lang}>
+  <head>
+    <meta charset="utf-8" />
+    <title>Nimbo: before → after ({lang})</title>
+  </head>
+  <body>
+    <main class="cs-deck">
+      {/* 1 · Cover */}
+      <section class="cs-slide cs-center" data-slide="01-cover">
+        <div class="cs-brand"><Mascot size={104} tile /></div>
+        <p class="cs-wordmark">{t.cover.kicker}</p>
+        <h1 class="cs-hero">Nimbo: {t.before.toLowerCase()} <span class="cs-arrow">→</span> <span class="cs-accent">{t.after.toLowerCase()}</span></h1>
+        <p class="cs-sub" style="max-width: 860px; font-size: 28px" set:html={t.cover.sub} />
+        <figure class="cs-shot cs-after cs-cover-shot">
+          <img src={shot("mac-titlebar-full")} alt="" />
+        </figure>
+      </section>
+
+      {/* 2 · Terraform editor */}
+      <section class="cs-slide" data-slide="02-editor">
+        <p class="cs-kicker">{t.editor.kicker}</p>
+        <h2 class="cs-title" set:html={t.editor.title} />
+        <div class="cs-body">
+          <div class="cs-stack">
+            <figure class="cs-shot cs-window"><span class="cs-tag">{t.before}</span><img src={shot("before-editor")} alt="" /></figure>
+            <figure class="cs-shot cs-window cs-after"><span class="cs-tag">{t.after}</span><img src={shot("after-editor")} alt="" /></figure>
+          </div>
+          <p class="cs-note" set:html={t.editor.note} />
+        </div>
+        <footer class="cs-foot"><span class="cs-foot-brand"><Mascot size={30} tile />Nimbo</span><span>2 / {TOTAL}</span></footer>
+      </section>
+
+      {/* 3 · Toolbar and Docker canvas */}
+      <section class="cs-slide" data-slide="03-toolbar-docker">
+        <p class="cs-kicker">{t.toolbar.kicker}</p>
+        <h2 class="cs-title" set:html={t.toolbar.title} />
+        <div class="cs-body" style="gap: 18px">
+          <div class="cs-strip">
+            <span class="cs-tag cs-tag-out">{t.before}</span>
+            <figure class="cs-shot cs-natural"><img src={shot("before-toolbar")} style={crop("0 0 0 690px")} alt="" /></figure>
+          </div>
+          <div class="cs-strip">
+            <span class="cs-tag cs-tag-out cs-tag-after">{t.after}</span>
+            <figure class="cs-shot cs-after cs-natural" style="width: 713px"><img src={shot("after-toolbar")} style={crop("0 0 0 990px")} alt="" /></figure>
+          </div>
+          <div style="display: grid; grid-template-columns: 1fr 400px; gap: 30px; align-items: center">
+            <p class="cs-note" set:html={t.toolbar.toolbarNote} />
+            <figure class="cs-shot cs-after cs-natural"><img src={shot("after-deploy-menu")} style={crop("0 240px 10px 100px")} alt="" /></figure>
+          </div>
+          <div class="cs-cols" style="align-items: start; margin-top: 18px">
+            <div class="cs-strip">
+              <span class="cs-tag cs-tag-out">{t.before}</span>
+              <figure class="cs-shot cs-natural"><img src={shot("before-docker-canvas")} alt="" /></figure>
+            </div>
+            <div class="cs-strip">
+              <span class="cs-tag cs-tag-out cs-tag-after">{t.after}</span>
+              <figure class="cs-shot cs-after cs-natural"><img src={shot("after-docker-canvas")} alt="" /></figure>
+            </div>
+          </div>
+          <p class="cs-note" set:html={t.toolbar.dockerNote} />
+        </div>
+        <footer class="cs-foot"><span class="cs-foot-brand"><Mascot size={30} tile />Nimbo</span><span>3 / {TOTAL}</span></footer>
+      </section>
+
+      {/* 4 · Inspector */}
+      <section class="cs-slide" data-slide="04-inspector">
+        <p class="cs-kicker">{t.inspector.kicker}</p>
+        <h2 class="cs-title" set:html={t.inspector.title} />
+        <p class="cs-sub" set:html={t.inspector.sub} />
+        <div class="cs-body" style="margin-top: 28px">
+          <div class="cs-cols" style="flex: 1; padding: 0 40px">
+            <div class="cs-strip">
+              <span class="cs-tag cs-tag-out">{t.before}</span>
+              <figure class="cs-shot" style="flex: 1"><img src={shot("before-inspector")} alt="" /></figure>
+            </div>
+            <div class="cs-strip">
+              <span class="cs-tag cs-tag-out cs-tag-after">{t.after}</span>
+              <figure class="cs-shot cs-after" style="flex: 1"><img src={shot("after-inspector")} alt="" /></figure>
+            </div>
+          </div>
+        </div>
+        <footer class="cs-foot"><span class="cs-foot-brand"><Mascot size={30} tile />Nimbo</span><span>4 / {TOTAL}</span></footer>
+      </section>
+
+      {/* 5 · Plan on the canvas */}
+      <section class="cs-slide" data-slide="05-plan">
+        <p class="cs-kicker"><span class="cs-new">{t.newTag}</span>{t.plan.kicker}</p>
+        <h2 class="cs-title" set:html={t.plan.title} />
+        <p class="cs-sub" set:html={t.plan.sub} />
+        <div class="cs-body">
+          <figure class="cs-shot cs-after" style="flex: 1"><img src={shot("after-plan-crop")} alt="" /></figure>
+        </div>
+        <footer class="cs-foot"><span class="cs-foot-brand"><Mascot size={30} tile />Nimbo</span><span>5 / {TOTAL}</span></footer>
+      </section>
+
+      {/* 6 · Live traffic and failure tests */}
+      <section class="cs-slide" data-slide="06-live-failure">
+        <p class="cs-kicker"><span class="cs-new">{t.newTag}</span>{t.live.kicker}</p>
+        <h2 class="cs-title" set:html={t.live.title} />
+        <div class="cs-body" style="margin-top: 30px">
+          <ul class="cs-list">{t.live.items.map((i) => <li set:html={i} />)}</ul>
+          <figure class="cs-shot cs-after cs-natural" style="margin-top: 8px"><img src={shot("after-live")} style={crop("940px 960px 470px 960px")} alt="" /></figure>
+          <div class="cs-cols" style="grid-template-columns: 420px 1fr; align-items: start">
+            <figure class="cs-shot cs-after cs-natural"><img src={shot("after-failure-dialog")} style={crop("0 0 560px 0")} alt="" /></figure>
+            <div class="cs-strip" style="gap: 22px">
+              <figure class="cs-shot cs-after cs-natural"><img src={shot("after-live-verdict")} style={crop("1500px 910px 90px 862px")} alt="" /></figure>
+              <figure class="cs-shot cs-after cs-natural"><img src={shot("after-live-verdict")} style={crop("930px 860px 650px 1500px")} alt="" /></figure>
+            </div>
+          </div>
+        </div>
+        <footer class="cs-foot"><span class="cs-foot-brand"><Mascot size={30} tile />Nimbo</span><span>6 / {TOTAL}</span></footer>
+      </section>
+
+      {/* 7 · Compliance */}
+      <section class="cs-slide" data-slide="07-compliance">
+        <p class="cs-kicker"><span class="cs-new">{t.newTag}</span>{t.compliance.kicker}</p>
+        <h2 class="cs-title" set:html={t.compliance.title} />
+        <p class="cs-sub" set:html={t.compliance.sub} />
+        <div class="cs-body">
+          <figure class="cs-shot cs-after" style="flex: 1"><img src={shot("after-compliance")} style={crop("80px 0 0 76px")} alt="" /></figure>
+        </div>
+        <footer class="cs-foot"><span class="cs-foot-brand"><Mascot size={30} tile />Nimbo</span><span>7 / {TOTAL}</span></footer>
+      </section>
+
+      {/* 8 · CI/CD export */}
+      <section class="cs-slide" data-slide="08-cicd">
+        <p class="cs-kicker"><span class="cs-new">{t.newTag}</span>{t.cicd.kicker}</p>
+        <h2 class="cs-title" set:html={t.cicd.title} />
+        <div class="cs-body" style="flex-direction: row; gap: 40px; align-items: center">
+          <figure class="cs-shot cs-after" style="width: 520px; flex: none"><img src={shot("after-cicd")} style="height: auto" alt="" /></figure>
+          <ul class="cs-list" style="gap: 26px; font-size: 26px">{t.cicd.items.map((i) => <li set:html={i} />)}</ul>
+        </div>
+        <footer class="cs-foot"><span class="cs-foot-brand"><Mascot size={30} tile />Nimbo</span><span>8 / {TOTAL}</span></footer>
+      </section>
+
+      {/* 9 · Navigation, redesign, performance */}
+      <section class="cs-slide" data-slide="09-navigation-performance">
+        <p class="cs-kicker"><span class="cs-new">{t.newTag}</span>{t.nav.kicker}</p>
+        <h2 class="cs-title" set:html={t.nav.title} />
+        <p class="cs-sub" set:html={t.nav.sub} />
+        <div class="cs-body">
+          <div class="cs-cols" style="align-items: start">
+            <div class="cs-strip">
+              <span class="cs-tag cs-tag-out">{t.before} · Home</span>
+              <figure class="cs-shot cs-natural"><img src={shot("before-home")} alt="" /></figure>
+            </div>
+            <div class="cs-strip">
+              <span class="cs-tag cs-tag-out cs-tag-after">{t.after} · Home</span>
+              <figure class="cs-shot cs-after cs-natural"><img src={shot("after-home")} alt="" /></figure>
+            </div>
+          </div>
+          <div class="cs-strip">
+            <span class="cs-tag cs-tag-out cs-tag-after">{t.after} · macOS</span>
+            <figure class="cs-shot cs-after cs-natural"><img src={shot("mac-titlebar-full")} style={crop("0 0 1440px 0")} alt="" /></figure>
+          </div>
+          <div class="cs-stats">
+            {
+              t.nav.stats.map((s) => (
+                <div class="cs-stat">
+                  <p class="cs-stat-value" set:html={s.value} />
+                  <p class="cs-stat-label">{s.label}</p>
+                </div>
+              ))
+            }
+          </div>
+          <p class="cs-note" set:html={t.nav.note} />
+        </div>
+        <footer class="cs-foot"><span class="cs-foot-brand"><Mascot size={30} tile />Nimbo</span><span>9 / {TOTAL}</span></footer>
+      </section>
+
+      {/* 10 · Closing */}
+      <section class="cs-slide cs-center" data-slide="10-closing" style="justify-content: center; padding-bottom: 64px">
+        <div class="cs-brand"><Mascot size={150} tile /></div>
+        <p class="cs-hero" style="margin-top: 34px; font-size: 80px" set:html={t.closing.title} />
+        <p class="cs-badges">{t.closing.badges}</p>
+        <ul class="cs-links">
+          <li><Icon name="github" size={28} /><span>github.com/ismaelosuna7824/nimbo</span></li>
+          <li>
+            <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <circle cx="12" cy="12" r="10"></circle>
+              <path d="M2 12h20"></path>
+              <path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"></path>
+            </svg>
+            <span>nimbo-hc.web.app</span>
+          </li>
+        </ul>
+        <p class="cs-note" style="margin-top: 30px; font-size: 22px">{t.closing.foot}</p>
+      </section>
+    </main>
+  </body>
+</html>
