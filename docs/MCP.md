@@ -464,7 +464,16 @@ checks; opt-in rules are off until turned on there.
   (`dk_db_published`), no `docker.sock` mounts (`dk_docker_sock`), no
   `privileged`/`network_mode: host`/`pid: host` (`dk_privileged`),
   `read_only` + `cap_drop: [ALL]` + `no-new-privileges` (`dk_hardening`,
-  opt-in).
+  opt-in). CIS Docker rules: no dangerous `cap_add` (`dk_cap_add`), security
+  profiles left on (`dk_apparmor_unconfined`, `dk_selinux_disabled`,
+  `dk_seccomp_unconfined`), no sensitive host directories (`dk_host_dirs`),
+  no `ipc`/`uts`/`userns_mode: host` (`dk_host_ipc`, `dk_host_uts`,
+  `dk_host_userns`), no host devices (`dk_devices`, info), no shared mount
+  propagation (`dk_mount_propagation`), no `network_mode: bridge`
+  (`dk_default_bridge`, info), updates with their install
+  (`dk_update_alone`, info); opt-in: `dk_net_raw`, `dk_read_only`,
+  `dk_no_new_privileges`, `dk_pids_limit`, `dk_port_interface`,
+  `dk_privileged_port`, `dk_add_any`.
 
 Shared settings stay short with an extension field merged into every
 service, as the templates do:
@@ -559,8 +568,15 @@ must allow one eviction; one budget per pod), `k8s_hpa_no_requests`
 `k8s_unknown_ref` (warnings), `k8s_namespace_missing` (info),
 `k8s_default_namespace`, `k8s_network_policy` (opt-in); security —
 `k8s_secret_env`, `k8s_secret_in_configmap`, `k8s_privileged`,
-`k8s_host_namespaces`, `k8s_host_path` (warnings; info for DaemonSets),
-`k8s_run_as_root` (info), `k8s_hardening` (opt-in); hygiene —
+`k8s_host_namespaces`, `k8s_host_path`, `k8s_host_port` (warnings; info for
+DaemonSets), `k8s_windows_host_process`, `k8s_rbac_cluster_admin`,
+`k8s_rbac_system_masters`, `k8s_rbac_default_sa` (warnings),
+`k8s_run_as_root`, `k8s_rbac_wildcard` (info), `k8s_hardening`,
+`k8s_net_raw`, `k8s_capabilities`, `k8s_seccomp`, `k8s_secret_env_ref`,
+`k8s_automount_token`, `k8s_rbac_secrets`, `k8s_rbac_create_pods`,
+`k8s_rbac_escalate`, `k8s_rbac_create_pv`, `k8s_rbac_node_proxy`,
+`k8s_rbac_csr_approval`, `k8s_rbac_webhook_config`, `k8s_rbac_sa_token`
+(opt-in; the CIS Kubernetes rules); hygiene —
 `k8s_recommended_labels` (info: app.kubernetes.io/name and instance),
 `k8s_resource_quota`, `k8s_image_digest` (opt-in, production-like
 environments). `production_readiness` evaluates the opt-in rules too.
@@ -657,6 +673,31 @@ Example: "Is the docker stack ready for production?" → `production_readiness`
 `run_load_test {scenario: {id: kill_replica, target: service:api, atSec: 15}}`,
 `plan_capacity {target_rps: 300}` → `production_readiness` again.
 
+## Compliance (pre-audit of the design)
+
+`compliance_report` grades a workflow's **design** against the security
+benchmarks of its platforms: CIS AWS, Azure, Google Cloud and OCI
+Foundations for the clouds a Terraform workflow uses, CIS Docker for docker
+workflows, CIS Kubernetes for Kubernetes ones. It is a pre-audit, never a
+certification. Automatic controls are decided by the best-practice rules
+(opt-in ones included) on the resources each control is about:
+
+| Status | Meaning |
+|---|---|
+| `met` | No findings of its rules |
+| `violated` | A finding on any resource it applies to (reason: "N of M resources have findings"; each finding with address, message, fix) |
+| `not_applicable` | Nothing in the design is what it is about |
+| `not_evaluated` | One of its rules is turned off in Settings |
+| `manual` / `attested` | A design can't show it (account settings, MFA, processes); only the user marks it done, with a note, in the app's Compliance tab |
+
+| Tool | Inputs | What it does |
+|---|---|---|
+| `compliance_report` | `workflow`, `framework?`, `markdown?` | Read-only. Per framework: "N / M automatic controls met", counts per status, open controls (violated, manual not attested, not evaluated) with rules, findings, reason and guidance; met, attested and not applicable ids. `markdown: true` returns the exportable report of one framework (header, disclaimer, summary, a table per section, attestations) |
+
+Example: "Does this design meet CIS AWS?" → `compliance_report` → fix the
+violated controls' findings with the edit tools → `compliance_report` again;
+tell the user which manual controls they need to check and attest.
+
 ## Access (permissions)
 
 Read and edit permissions structurally instead of writing policy JSON, role
@@ -751,7 +792,7 @@ Conventions).
 | `apply_terraform_code` | `workflow`, `files` | Edit by code (merged over current files; `""` deletes a file, and its blocks are gone unless the same call writes them to another file). Every block stays in the file it is written in; applying the same files again changes nothing |
 | `scan_terraform_folder` | `dir` | Terraform projects in a folder/repo (counts, providers, clouds, tfvars, backend, layout, environments, diagnostics) without importing; an `environments/<env>/` + `modules/<service>` tree is one project |
 | `import_terraform` | `dir?` \| `files?`, `projects?`, `name?` | Import Terraform as new workflows (default: the root only; `projects` from the scan, `"."` = root); an environments tree becomes one workflow with its environments |
-| `export_terraform` | `workflow`, `dir`, `environments?` | Write Terraform + assets to a directory in the workflow's layout (single root, or `modules/<service>` + `environments/<env>/` roots; see Structure); `environments` adds each environment's values and `.env.example` |
+| `export_terraform` | `workflow`, `dir`, `environments?`, `ci?`, `smoke?` | Write Terraform + assets to a directory in the workflow's layout (single root, or `modules/<service>` + `environments/<env>/` roots; see Structure); `environments` adds each environment's values and `.env.example`. Docker and Kubernetes workflows write their files as they are. `ci`: `none` (default), `github` (`.github/workflows/<name>.yml`) or `gitlab` (`.gitlab-ci.yml`), a ready-to-use pipeline (checks, a plan/render per environment on pull requests, gated per-environment deploys from the default branch) whose header and a README section list the secrets and variables to set; `smoke` adds an HTTP check of each environment's `SMOKE_URL` after every deploy (see ARCHITECTURE.md, "CI/CD pipeline export") |
 | `sandbox_status` / `sandbox_start` / `sandbox_stop` / `sandbox_reset` | `workflow` | Manage the local Floci sandbox |
 | `validate` / `plan` / `deploy` / `destroy` | `workflow`, `environment?`, `wait_seconds?` | Terraform runs in the sandbox; status, plan summary, last 60 log lines, deployed resources after `deploy` |
 | `get_run` | `run` | Status and log tail of a run |
@@ -771,6 +812,7 @@ Conventions).
 | `get_challenge` | `id`, `include_solution?` | One challenge: problem, requirements, hints, checks, starter, adaptations, sources, prerequisites, progress (solution only on request) |
 | `start_challenge` | `challenge`, `name?` | New workflow from a challenge's starter, linked to it |
 | `check_challenge` | `workflow`, `wait?` | Grade a challenge workflow for real (static checks, deploy, http, load, scenarios, readiness); per-check measurements, passed, score |
+| `compliance_report` | `workflow`, `framework?`, `markdown?` | Read-only pre-audit of the design against its platforms' CIS benchmarks: summary, counts, open controls with findings and guidance; `markdown` returns the exportable report |
 | `get_access` | `workflow`, `node` | Structured permissions of a node (AWS policy statements, Azure role assignment, GCP IAM member/binding, OCI policy statements, Kubernetes RBAC) with least-privilege warnings |
 | `set_access` | `workflow`, `node`, provider structure | Write a node's permissions back from that structure; read-only parts are kept verbatim |
 | `grant_access` | `workflow`, `identity`, `resource`, `level?` | Give an identity Read/Write/Manage on a resource in the provider's model (lists the options without `level`) |

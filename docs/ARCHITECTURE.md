@@ -23,8 +23,10 @@ flowchart LR
 | `backend/cmd/nimbo` | main | `nimbo serve` (HTTP daemon), `nimbo mcp` (MCP stdio server), `nimbo doctor [--json]` (setup checks; exit 1 when not ready) |
 | `backend/internal/model` | model | Shared domain types = wire contract |
 | `backend/internal/hclcodec` | hclcodec | Workflow ⇄ HCL, value normalization, edge derivation |
+| `backend/internal/cicd` | cicd | CI/CD pipeline an export can include (GitHub Actions / GitLab CI) for Terraform, Docker and Kubernetes workflows; see "CI/CD pipeline export" below |
 | `backend/internal/catalog` | catalog | Embedded provider schemas, curated metadata, Floci support map, connection recipes, templates, schema validation |
 | `backend/internal/lint` | lint | Best-practice checks (`bp_*` info/warning diagnostics with why + fix), run on every save after schema validation; see "Best-practice checks" below |
+| `backend/internal/compliance` | compliance | Security benchmarks (CIS Foundations per cloud, CIS Docker, CIS Kubernetes) mapped onto the best-practice rules, grading of a design, attestations of manual controls, Markdown report; see "Compliance" below |
 | `backend/internal/netcheck` | netcheck | Network model of a workflow (deployed state or statically evaluated design), `net_*` configuration checks, reachability analyzer and live probes; see "netcheck" below |
 | `backend/internal/sandbox` | sandbox | Per-workflow Docker sandbox, Terraform runs in containers, deployed state |
 | `backend/internal/loadtest` | loadtest | Load engine, presets, target suggestions, results persistence |
@@ -198,6 +200,8 @@ func CheckEnvironmentsLayout(wf *model.Workflow) error
 func ServiceName(wf *model.Workflow) string // wf.Service, else snake_case(wf.Name)
 func EnvironmentNames(wf *model.Workflow) []string
 func AssetPlacement(wf *model.Workflow) func(rel string) []string
+func RequiredVersion(wf *model.Workflow) string // the Terraform constraint the export needs: the roots' required_version raised to what the backend (or backend.tf.example) needs
+func HasBackend(wf *model.Workflow) bool         // a backend or cloud block
 
 // ImportEnvironments parses an environments-layout tree (slash paths:
 // modules/<svc>/*.tf, environments|envs/<env>/{*.tf, terraform.tfvars,
@@ -335,6 +339,94 @@ func ValidModuleName(name string) error                 // snake_case
 func LocalModuleDir(n *model.Node) (string, bool)       // "modules/x" for a constant local source inside the workflow
 func TypeConstraint(raw json.RawMessage) string         // provider schema cty type JSON -> "list(string)"
 ```
+
+### cicd (CI/CD pipeline export)
+
+```go
+func ParseProvider(s string) (string, error) // "" / "none" -> "", "github", "gitlab"; else an error (API: 400)
+// Files renders the pipeline of wf for an export: generated are the files
+// the export generates (a README.md there gets the section appended), own
+// the workflow's files exported as they are. The result replaces files
+// with the same path.
+func Files(wf *model.Workflow, generated map[string][]byte, own map[string]bool, opts Options) (map[string][]byte, error)
+type Options struct{ Provider string; Smoke bool }
+```
+
+`api.exportPipeline` calls it after `exportFiles` for the folder export, the
+zip and MCP `export_terraform` (`ci`, `smoke`). Output: the pipeline
+(`.github/workflows/<workflow name slug>.yml` or `.gitlab-ci.yml`) and its
+documentation: a "GitHub Actions pipeline" / "GitLab CI pipeline" section
+appended to the generated README.md, a new README.md when the export has
+none, or `CI.md` when the workflow has its own README. Jobs are described
+once (provider-neutral `job`: stage, trigger, tools, settings, steps) and
+rendered as yaml node trees per provider, so names and scripts cannot break
+the document. The file's header comment and the README table list every
+secret/variable the jobs read (required or optional).
+
+- **Triggers.** Checks run on every push and pull/merge request; plans and
+  renders on pull/merge requests; deploys on pushes to the default branch
+  (GitHub also `workflow_dispatch`). GitLab runs merge request pipelines for
+  merge requests and branch pipelines otherwise, never both.
+- **Environments.** One plan/deploy job per environment (Terraform
+  `EnvironmentNames` in the environments layout, the workflow's
+  environments otherwise; docker: compose environments; Kubernetes:
+  overlay/values environments; `default` without any). Deploys chain:
+  others first, then staging-like (staging, stage, stg, uat, preprod), then
+  production (`model.ProdLike`). GitHub deploy jobs run in a GitHub
+  `environment:` of that name (protection rules, environment-scoped
+  settings); pull request jobs read repository-level values. GitLab deploy
+  jobs use `environment:` (plans `action: prepare`, smoke `action: verify`,
+  for scoped variables), production-like ones are `when: manual` with
+  `allow_failure: false`. Deploys are serialized per environment (GitHub
+  `concurrency`, GitLab `resource_group`).
+- **Terraform.** `terraform fmt -check -recursive` + validate of every root
+  (`make validate ENV=<env>`; single layout: `init -backend=false`). The
+  environments layout runs `make init|plan|apply ENV=<env>`; the single
+  layout plain `terraform init/plan/apply` with a workspace per environment
+  when it has two or more (`terraform workspace select -or-create`) and
+  `-var-file=<env file>` when committed. `TF_BACKEND_CONFIG` (backend.hcl
+  contents) is written to `backend.hcl`; the single layout copies
+  `backend.tf.example` to `backend.tf` when none is committed. Without it a
+  partial backend fails init with what to set, and a single-layout apply
+  fails instead of applying into a throwaway local state. The plan text is
+  an artifact (GitHub: also the run summary; GitLab: `expose_as` on the
+  merge request). Terraform is pinned from `hclcodec.RequiredVersion`
+  (raised to what the state backend needs): an exact pin, the newest patch
+  of a minor (`~> 1.9.0`, `< 1.10`), else latest (setup-terraform version /
+  `hashicorp/terraform:<tag>`). Credentials only for `wf.Clouds`: AWS role
+  through OIDC (`aws-actions/configure-aws-credentials`; GitLab `id_tokens`
+  + `AWS_WEB_IDENTITY_TOKEN_FILE`), Azure OIDC (`azure/login`,
+  `ARM_USE_OIDC`; GitLab `ARM_OIDC_TOKEN`), Google workload identity
+  federation (`google-github-actions/auth`; GitLab an `external_account`
+  credentials file), OCI API key variables. Sensitive variables come from
+  `TF_VAR_<name>` secrets.
+- **Docker Compose.** `docker compose config --quiet` per environment (base
+  files + override, `.env` then the environment's env file when present).
+  Services with `build:` declared in the base files are built with
+  `docker compose build` through `.ci-images.compose.yaml` (written by the
+  job: `image: ${IMAGE_PREFIX}/<service>:${IMAGE_TAG}`) and pushed to GHCR /
+  the GitLab registry from the default branch. Deploy over SSH
+  (`DEPLOY_HOST`, `DEPLOY_SSH_KEY`, optional `DEPLOY_KNOWN_HOSTS`,
+  `DEPLOY_PATH`; skipped with a warning while unset): `git archive HEAD` to
+  the host, then `docker compose -f … -f compose.<env>.yaml pull` and
+  `up -d --no-build` there (`up -d --build` when nothing builds).
+- **Kubernetes.** Render every source per environment (`kubectl kustomize
+  <overlay>`, `helm template` with the values files, manifests as they
+  are) and check them with `kubeconform -ignore-missing-schemas`; deploy
+  with `kubectl apply -k`, `helm upgrade --install --create-namespace
+  --wait` and `kubectl apply -f` in source order, using the environment's
+  `KUBECONFIG` (GitHub: secret contents; GitLab: File variable). Images
+  Nimbo builds for its local cluster (`Builds`) are listed in the header:
+  they must be pushed to a registry first.
+- **Smoke check** (`smoke`): after each deploy, `curl --retry` every URL of
+  the environment's `SMOKE_URL` (skipped with a warning while unset; on
+  GitHub the deploy job passes its environment's value as a job output so
+  the check needs no second approval). Load tests need the daemon, so they
+  stay in the app.
+
+Tests parse every generated file, run `actionlint` (with shellcheck when
+installed) on the GitHub workflows and skip that with a log line when it is
+missing.
 
 ### catalog
 
@@ -499,13 +591,20 @@ calls, nested calls included, read from its files by `LocalModules` (each
 directory parsed and normalized once; only when the workflow calls a local
 module; registry/remote module code is never read). Findings carry `detail` (why) and `fix`, never
 severity `error`, so plan/apply are never refused for them. Settings:
-`bestPractices: {disabled, disabledRules}` (codes `bp_[a-z0-9_]+`, sorted,
-deduplicated). The desktop Problems tab groups Errors / Warnings / Best
+`bestPractices: {disabled, disabledRules, enabledRules}` (codes `bp_[a-z0-9_]+`, sorted,
+deduplicated). Opt-in rules (`DefaultOff`) run only when listed in
+`enabledRules`, so Problems stays quiet on designs that don't follow
+benchmark-only practices; compliance grading runs them anyway (see
+Compliance).
+The desktop Problems tab groups Errors / Warnings / Best
 practices / Network (`net_*`, see netcheck); node badges and tab counts
 ignore `info`.
 
 Rules (warnings: `bp_sensitive_not_marked`, `bp_provider_version`,
-`bp_open_ingress`, `bp_public_bucket` — public intent = website configuration
+`bp_open_ingress` — SSH, Telnet, RDP, SMB (445) and database ports; findings
+carry `facet` = the exposed ports ("22,3389", or "all"), read by
+`lint.ExposesPort` so compliance controls about one port count only theirs —,
+`bp_public_bucket` — public intent = website configuration
 or a `Public = "true"` tag/label —, `bp_unencrypted_storage` — S3/DynamoDB
 findings are info —, `bp_iam_wildcard`; info: `bp_variable_type`,
 `bp_variable_description`, `bp_output_description`, `bp_required_version`,
@@ -558,6 +657,51 @@ submodule, each wrapping one resource), `bp_sensitive_not_marked` 3 (2),
 (terraform-aws-lambda's complete example calls the module ~15 times: about
 59 instances), every other rule 0. The 22 Terraform templates and a fresh workflow with every popular
 starter of each cloud have 0 findings (`lint` tests).
+
+CIS OCI rules (`lint/rules_cis_oci.go`, backing `compliance/cis_oci.go`, CIS OCI Foundations v3.1.1 `cis-oci-3.1`):
+warnings `bp_oci_ssh_open`, `bp_oci_rdp_open` (security list / NSG ingress from 0.0.0.0/0 or ::/0, protocol all or TCP
+with a range covering 22 / 3389; no tcp_options = every port), `bp_oci_public_bucket` (access_type ObjectRead* unless
+freeform_tags Public = "true"), `bp_oci_policy_manage_all` (policy statement "manage all-resources in tenancy" for
+anyone but Administrators); info `bp_oci_unrestricted_endpoint` (serverless ADB without subnet_id/whitelisted_ips,
+OIC/OAC public without allowlist, or 0.0.0.0/0 allowlisted), `bp_oci_key_rotation` (keys in a VIRTUAL_PRIVATE vault
+without auto-rotation ≤ 365 days; default-vault keys can't auto-rotate and aren't flagged), `bp_oci_policy_admin_group`
+(use/manage users|groups|all-resources in tenancy without `where target.group.name != 'Administrators'`),
+`bp_oci_storage_admin_delete` (group manage on storage resource types without excluding — or granting only — the
+delete permissions; Oracle's CIS script table). Opt-in (DefaultOff: the templates/starters don't follow them; compliance
+grading runs them): `bp_oci_default_security_list`, `bp_oci_legacy_imds`, `bp_oci_secure_boot`,
+`bp_oci_in_transit_encryption`, `bp_oci_flow_logs` (oci_logging_log service flowlogs on the subnet or its VCN),
+`bp_oci_bucket_write_logs` (service objectstorage, category write), `bp_oci_customer_managed_key` (bucket, volume,
+boot volume, image-booted instance source_details, file system without kms_key_id), `bp_oci_bucket_versioning`.
+Policy statements are read from the `statements` list; interpolations are kept as `${…}` so a group named by
+reference still parses.
+
+CIS AWS rules (`lint/rules_cis_aws.go`, mapped by `compliance/cis_aws.go`, framework `cis-aws-7.0` = CIS AWS Foundations v7.0.0). All category `security`, each with `Docs` → the AWS Security Hub control page. Opt-in rules are `DefaultOff` (quiet in Problems; compliance grading runs them).
+
+| Rule | Severity | Default | Trigger |
+|---|---|---|---|
+| `bp_iam_password_length` | info | on | `aws_iam_account_password_policy` with `minimum_password_length` unset or < 14 |
+| `bp_iam_password_reuse` | info | on | `aws_iam_account_password_policy` with `password_reuse_prevention` unset or < 24 |
+| `bp_iam_user_policy` | info | on | `aws_iam_user_policy`, `aws_iam_user_policy_attachment`, `aws_iam_policy_attachment` with users, non-empty `aws_iam_user_policies_exclusive`/`_policy_attachments_exclusive` |
+| `bp_iam_admin_attached` | warning | on | Attachment of the AWS managed `AdministratorAccess` (any partition, also interpolated) via policy attachments, `managed_policy_arns` or `*_policy_attachments_exclusive`; identity policies / role inline policies using an `aws_iam_policy_document` that allows `*` on `*` (`bp_iam_wildcard` reports the data source itself) |
+| `bp_s3_deny_http` | info | opt-in | `aws_s3_bucket` without a bucket policy (`aws_s3_bucket_policy` or inline `policy`) with a Deny on `aws:SecureTransport = false` (JSON, `jsonencode`, `aws_iam_policy_document`); unreadable policies are not flagged |
+| `bp_s3_block_public_access` | info | opt-in | Bucket/account public access block with any of the four flags missing or false, public-intent buckets included (stricter than `bp_public_bucket`) |
+| `bp_rds_public` | warning | on | `aws_db_instance`/`aws_rds_cluster`/`aws_rds_cluster_instance` with `publicly_accessible = true` |
+| `bp_rds_minor_upgrade` | info | on | Same types with `auto_minor_version_upgrade = false` |
+| `bp_rds_multi_az` | info | opt-in | `aws_db_instance` without `multi_az = true` (read replicas and Aurora engines excluded) |
+| `bp_cloudtrail_multi_region` | info | on | Trail not multi-Region, `enable_logging = false`, or selectors that don't record all read+write management events |
+| `bp_cloudtrail_log_validation` | info | on | Trail without `enable_log_file_validation = true` |
+| `bp_cloudtrail_kms` | info | on | Trail without `kms_key_id` |
+| `bp_cloudtrail_bucket_logging` | info | on | Trail whose `s3_bucket_name` references an in-design bucket without `aws_s3_bucket_logging` (or inline `logging`) |
+| `bp_cloudtrail_s3_write_events` / `_read_events` | info | opt-in | No trail in the design records S3 object-level write (read) data events (basic `data_resource` AWS::S3::Object or advanced selector); reported on every trail |
+| `bp_kms_rotation` | info | on | Symmetric encryption `aws_kms_key` (no custom key store) without `enable_key_rotation = true` |
+| `bp_vpc_flow_logs` | info | opt-in | `aws_vpc`/`aws_default_vpc` without an `aws_flow_log` on its `vpc_id` recording REJECT or ALL |
+| `bp_nacl_admin_ports` | info | opt-in | NACL ingress (inline, default NACL, `aws_network_acl_rule`) allowing 0.0.0.0/0 or ::/0, TCP/UDP/all, range including 22 or 3389 |
+| `bp_sg_admin_ipv4` / `bp_sg_admin_ipv6` | warning | opt-in | Security group ingress (inline, default group, rule resources) from 0.0.0.0/0 (::/0), TCP/UDP/all, range including 22 or 3389 — CIS-exact port set; `bp_open_ingress` stays the Problems rule |
+| `bp_sg_open_cifs` | warning | opt-in | Same, port 445 from either open CIDR |
+| `bp_default_sg_closed` | info | opt-in | VPC without an `aws_default_security_group`, a default group with ingress/egress, or a rule resource targeting it (`aws_default_security_group.*` or `<vpc>.default_security_group_id`); reported on the group and its VPC |
+| `bp_imdsv2` | info (warning for explicit `http_tokens = "optional"`) | on | `aws_instance`/`aws_launch_template`/`aws_launch_configuration` not requiring IMDSv2, unless the endpoint is disabled or an `aws_ec2_instance_metadata_defaults` requires tokens |
+
+Framework `cis-aws-7.0`: 70 controls, 26 automatic (rules above plus `bp_iam_wildcard` for 2.14 and `bp_unencrypted_storage` for 3.2.1, 3.3.1, 6.1.1 on their own resource types), 44 manual (Organizations, account contacts, root user, IAM users/credentials, AWS Config, Macie, MFA Delete, web front-end access logs, all 5.x CloudWatch alarms, Security Hub, VPC peering routes, VPC endpoints). cisecurity.org lists v7.1.0 but its recommendation list isn't public; numbering follows v7.0.0 (Tenable v7.0.0 audits, Prowler `cis_7.0_aws`).
 
 ### netcheck (network checks)
 
@@ -789,6 +933,27 @@ Sandbox behavior notes:
 - `State` caches the `terraform show -json` output per workflow, keyed by the
   tfstate's modification time and size, so repeated reads skip the Terraform
   container (node mapping is redone per call).
+- Planned changes: plan runs save the plan to `.nimbo/plan.tfplan` in the
+  workdir (`-out`), read it with `terraform show -json` (same offline show
+  container as `State`) and delete it after the run, since it holds variable
+  values, secrets included. `parsePlan` (`plan.go`) maps `resource_changes`
+  onto nodes with the state's mapping (`nodeIndex`: root resources by
+  mode/type/name, module resources → the root module call's node, every
+  count/for_each instance → its node; none → `nodeId` empty) into
+  `Run.Changes []PlannedChange{address, nodeId, mode, type, name, index,
+  action, reason, attributes}`. `action` folds Terraform's list into
+  create | update | replace (delete+create either order) | delete | read |
+  no-op (`forget` too). `attributes` (create/update/replace only) are the
+  top-level attributes whose value differs or becomes unknown — for a create
+  every attribute with a value (null and empty collections left out, as
+  Terraform's diff does) — with `before`/`after`; values Terraform marks
+  sensitive anywhere in the attribute are withheld (`sensitive: true`), a
+  wholly unknown new value is `unknown: true`, unknown parts of a known one
+  read `"(known after apply)"`, and `forcesReplacement` comes from
+  `replace_paths`. A failed show only logs a warning (the plan still
+  succeeds with its summary). `Run.WorkflowVersion` is the workflow's
+  `updatedAt` the run started from. `Changes` (like `Log`) is only in
+  `GET /runs/{id}` and the persisted run, not in lists or `run.status`.
 - Each emulator gets `<PREFIX>_DOCKER_RESOURCE_NAMESPACE=nimbo-<wf>` so
   sandboxes sharing the Docker daemon never clean up each other's spawned
   containers; spawned volumes are found by the `floci_namespace` label, plus
@@ -905,6 +1070,33 @@ const ComposeLabel = "com.nimbo.workflow"
   300 ms) runs from an up/restart until the project has no containers; a
   status read restarts it when containers exist (e.g. after a daemon restart:
   the project keeps running when the app exits, like Floci sandboxes).
+
+### Plan on the canvas (`apps/desktop/src/features/plan`)
+
+Opt-in overlay of the latest plan on the Terraform Build canvas: the plan
+toast ("Show on canvas", only while the overlay is off) and the Deploy tab's
+"Show on canvas" (for the newest plan of the active environment) turn it on;
+the chip's × turns it off; opening another workflow resets it.
+
+- `latestPlan`: the newest succeeded plan run whose environment is the active
+  one; its `changes` come from `GET /runs/{id}` (react-query, never refetched:
+  run details don't change once ended).
+- Staleness (`planStaleness`), never shown as current: *edited* when the
+  run's `workflowVersion` is older than the store's content `version` (which
+  card moves don't advance, so a plan started after a drag stays current),
+  or missing; *deployed* when an apply or destroy started after the plan.
+  Asset edits that don't save the workflow are not detected.
+- `usePlanOverlay` (mounted by `PlanChip` in the canvas's top-right panel)
+  publishes `{run, stale, byNode, offCanvas, counts}` to `usePlanOverlayStore`;
+  `PlanMarker` (card corner, `useNodePlan(nodeId)`) and the inspector's
+  "Planned changes" section read it. A card with several instances shows the
+  most consequential action (replace > delete > update > create); read and
+  no-op are quiet. Tones: replace/delete destructive (they lose the running
+  object), create primary tint, update neutral, outdated muted and dashed;
+  green is never used (it reads as "passed").
+- The chip's popover: counts per action, the outdated reason with "Plan
+  again", and "Not on the canvas" (changes without a card, e.g. the delete of
+  a removed node).
 
 ### loadtest
 
@@ -1381,7 +1573,12 @@ templates or the 5 build starters (also with the opt-in limits and cache-mount
 rules on; `TestTemplatesAreClean`, `TestStartersFollowThePractices`;
 `NIMBO_AWESOME_COMPOSE=<checkout> go test ./internal/compose -run Awesome -v`
 prints the per-rule counts). Rules that fired on almost every service there
-(`dk_no_limits` 80/81, `dk_cache_mount` 20, `dk_hardening` 81) are opt-in.
+(`dk_no_limits` 80/81, `dk_cache_mount` 20, `dk_hardening` 81, and the CIS
+Docker rules `dk_net_raw`, `dk_read_only`, `dk_no_new_privileges`,
+`dk_pids_limit` 81, `dk_port_interface` 52, `dk_privileged_port` 19) are
+opt-in. The CIS rules (`compose/cis.go`, registered from `init`) cover the
+CIS Docker Benchmark recommendations no other rule decides; the compliance
+view runs them even when they are opt-in.
 
 | Code | Severity | Default | Trigger | awesome-compose |
 |---|---|---|---|---|
@@ -1417,6 +1614,21 @@ prints the per-rule counts). Rules that fired on almost every service there
 | `dk_docker_sock` | warning | on | bind mount of `docker.sock` | 2 |
 | `dk_privileged` | warning | on | `privileged: true`, `network_mode: host`, `pid: host` | 1 |
 | `dk_hardening` | info | **opt-in** | service without `read_only: true`, `cap_drop: [ALL]` or `no-new-privileges` | 81 |
+| `dk_cap_add` | warning | on | `cap_add` of ALL, SYS_ADMIN, NET_ADMIN, SYS_PTRACE or SYS_MODULE (CIS 5.4) | 3 |
+| `dk_net_raw` | info | **opt-in** | service keeping NET_RAW: no `cap_drop` of ALL or NET_RAW, NET_RAW or ALL in `cap_add`, or `privileged` (CIS 5.4) | 81 |
+| `dk_read_only` | info | **opt-in** | service without `read_only: true` (CIS 5.13) | 81 |
+| `dk_no_new_privileges` | info | **opt-in** | no `security_opt` `no-new-privileges` (bare, `:true` or `=true`) (CIS 5.26) | 81 |
+| `dk_apparmor_unconfined`, `dk_selinux_disabled`, `dk_seccomp_unconfined` | warning | on | `security_opt` `apparmor=unconfined`, `label=disable`, `seccomp=unconfined` (`:` or `=`) (CIS 5.2, 5.3, 5.22) | 0 |
+| `dk_host_dirs` | warning (info read-only) | on | bind mount of `/`, `/boot`, `/dev`, `/etc`, `/lib`, `/lib64`, `/proc`, `/sys`, `/usr`, or read-write of anything under them; the workflow's own files skipped (CIS 5.6) | 5 |
+| `dk_host_ipc`, `dk_host_uts`, `dk_host_userns` | warning | on | `ipc: host`, `uts: host`, `userns_mode: host` (CIS 5.17, 5.21, 5.31) | 0 |
+| `dk_devices` | info | on | any `devices:` mapping (CIS 5.18) | 0 |
+| `dk_mount_propagation` | warning | on | bind mount with `shared`/`rshared` propagation (CIS 5.20) | 0 |
+| `dk_pids_limit` | info | **opt-in** | no `pids_limit` or `deploy.resources.limits.pids` (CIS 5.29) | 81 |
+| `dk_default_bridge` | info | on | `network_mode: bridge` (CIS 5.30) | 0 |
+| `dk_port_interface` | info | **opt-in** | published port without a host IP (or 0.0.0.0/::) (CIS 5.14) | 52 |
+| `dk_privileged_port` | info | **opt-in** | published host port below 1024 (CIS 5.8) | 19 |
+| `dk_update_alone` | info | on | RUN updating or upgrading packages (apt-get/apt/apk/yum/dnf/microdnf/zypper) without an install in the same RUN (CIS 4.7) | 0 |
+| `dk_add_any` | info | **opt-in** | any `ADD` in the stages the target builds (CIS 4.9) | 0 |
 
 Replicas with a fixed host port are an error (`dk_port_clash`). New services
 follow the rules: the palette publishes databases/caches/brokers on
@@ -1529,7 +1741,11 @@ plain data, with no React (unit-tested in `model.test.ts`):
   as they were through `PUT /terraform {changes}`.
 - **Inspector** (`../inspector`): a service form (image or build, ports, env
   with masked secrets, volumes, depends_on, healthcheck, restart, replicas,
-  CPU/memory, networks, command). It sends a partial `PATCH
+  CPU/memory, networks, command). Its fields are grouped into the shared
+  collapsible inspector sections (Image & build, Ports & networking,
+  Environment, Volumes & storage, Health & restart, Resources & limits,
+  Security, and a collapsed Advanced for logging and labels), after a Running
+  section while the service runs. It sends a partial `PATCH
   /compose/services/{name}`, so fields that weren't touched keep their source
   text.
 
@@ -1731,7 +1947,12 @@ namespace?, valuesFiles?, environments?}`.
   filesystem, drop ALL), HPA CPU and memory targets, Namespace (Pod Security
   level + labels), PodDisruptionBudget, ConfigMap/Secret keys (Secret values
   write-only under `stringData`), RBAC objects, and a header rename for
-  plain manifests (references are not rewritten).
+  plain manifests (references are not rewritten). A workload's form is
+  grouped into collapsible `InspectorSection`s (Containers, Scaling &
+  rollout, Networking, Config & secrets, Storage, Probes, Security with
+  Hardening and Identity, Scheduling, Advanced collapsed), each holding
+  every container's part as a "Container <name>" subsection when there are
+  several.
 - **Vendored charts** (`KubeGraph.charts`, `KubeNode.chart`). A Helm
   dependency with a remote repository (https, oci, a repo name — not
   `file://` or empty) vendored in the chart's `charts/` is third-party:
@@ -1868,6 +2089,18 @@ is info; limits alone count as requests; LimitRange defaults count.
 | `k8s_rollout_strategy` | warning (error / info) | prod-like: Deployment with 2+ replicas using Recreate without a ReadWriteOnce claim, or `maxUnavailable` (rounded down) ≥ replicas; error in any environment: `maxSurge` and `maxUnavailable` both 0; info: StatefulSet `updateStrategy: OnDelete` in prod |
 | `k8s_recommended_labels` | info | workload metadata without `app.kubernetes.io/name` or `instance` (part-of/version listed in the same finding) |
 | `k8s_resource_quota`, `k8s_image_digest` | info, opt-in | prod-like: namespace with workloads but no ResourceQuota / LimitRange; image not pinned by `@sha256:` digest (locally built images skipped) |
+| `k8s_host_port` | warning (info for DaemonSets) | container `ports[].hostPort` (CIS 5.2.12) |
+| `k8s_windows_host_process` | warning | pod or container `windowsOptions.hostProcess: true` (CIS 5.2.10) |
+| `k8s_net_raw`, `k8s_capabilities`, `k8s_seccomp` | info, opt-in | Linux container keeping NET_RAW (not dropped, added back, or privileged) / not dropping ALL or adding anything but NET_BIND_SERVICE / effective seccompProfile (container, else pod) not RuntimeDefault or Localhost (CIS 5.2.8, 5.2.9, 5.6.2) |
+| `k8s_secret_env_ref`, `k8s_automount_token` | info, opt-in | Secret read through `env.valueFrom.secretKeyRef` or `envFrom.secretRef` / API token mounted in pods whose ServiceAccount no binding of the workflow names (CIS 5.4.1, 5.1.6) |
+| `k8s_rbac_cluster_admin`, `k8s_rbac_system_masters`, `k8s_rbac_default_sa` | warning | binding to the cluster-admin ClusterRole / subject Group system:masters / subject ServiceAccount default (CIS 5.1.1, 5.1.7, 5.1.5) |
+| `k8s_rbac_wildcard` | info | Role/ClusterRole rule with `*` in apiGroups, resources or verbs (CIS 5.1.3) |
+| `k8s_rbac_secrets`, `k8s_rbac_create_pods`, `k8s_rbac_escalate`, `k8s_rbac_create_pv`, `k8s_rbac_node_proxy`, `k8s_rbac_csr_approval`, `k8s_rbac_webhook_config`, `k8s_rbac_sa_token` | info, opt-in | Role/ClusterRole rule granting (RBAC matching, wildcards and `*/sub` included) list/watch on secrets or get without resourceNames / create pods / bind or escalate on roles, impersonate on users, groups or serviceaccounts / create persistentvolumes / nodes/proxy / update certificatesigningrequests/approval / write webhook configurations / create serviceaccounts/token (CIS 5.1.2, 5.1.4, 5.1.8-5.1.13) |
+
+The rules marked CIS (`kuberules/cis.go`, registered from `init`) cover the
+CIS Kubernetes Benchmark policy recommendations no other rule decides; the
+ones that would flag most manifests are opt-in, and the compliance view runs
+them anyway.
 
 Categories: `kubernetes` (errors), `kubernetes-reliability`,
 `kubernetes-security`, `kubernetes-networking`, `kubernetes-hygiene`
@@ -2113,6 +2346,15 @@ times on `LoadSample.t`'s axis, `verdict` empty while running).
   the numbers and the fix (load balancer / readiness, restart policy, more
   replicas, timeouts + circuit breaker, fallback, retries with backoff and
   jitter, cache warming / single-flight, HPA target).
+- **No verdict** (never survived/failed when nothing was measured): a
+  baseline with no successful request or >= 50% errors gives verdict
+  `inconclusive` ("Not assessed: the target was already failing before the
+  fault…", check *Healthy before the fault* failed); a run the user stopped
+  gives verdict `""` once over ("Stopped before the end: no verdict"). Both
+  keep the *Fault reverted* check, are shown neutrally (muted, not green or
+  red) on the canvas, toast and results, and readiness ignores them
+  (`model.ScenarioGraded`): the last graded run counts, else a todo saying
+  why there is no verdict.
 
 Desktop: Load test → New test → *Incident (optional)* under the traffic
 shape (`scenario-step.tsx`: scenario, target, start, duration, params, the
@@ -2123,6 +2365,63 @@ markers (`scenario-result.tsx`, `charts.tsx`); History rows carry a
 scenario badge. `revealScenario(id, target?)` opens New test with a
 scenario preselected (Readiness). MCP: `list_scenarios`, `run_load_test
 scenario`.
+
+Canvas failure tests (`apps/desktop/src/features/live/failure*.ts(x)`):
+*Test a failure…* on a Docker service card or a Kubernetes
+Deployment/StatefulSet card (context menu) and in their inspector header
+opens a guided dialog over the catalog seen from that node
+(`failureChoices`: scenarios targeting it, the traffic spike when a load
+target is on it, every other scenario disabled with the catalog's reason or
+what it acts on). It explains what Nimbo does (per kind) and what to expect,
+picks the traffic with the Load test tab's `useWorkflowTarget` (suggested
+targets ranked by how directly they reach the node, `rankTargets`; the path
+is editable, keeping the target's node), a preset whose length fits the
+default timing (`scenario-timing.ts`, shared with the New test step), and
+starts an ordinary load test with that scenario. Terraform workflows have no
+entry point: the catalog is empty for them (`kind: ""`) because nothing can
+break a Floci/cloud resource reversibly and safely.
+
+### Live traffic on the canvas (`monitoring/live.go`, `api/traffic.go`, `apps/desktop/src/features/live`)
+
+While a load test of the open workflow runs (and for 30 s after, with its
+final numbers; dismissible), every canvas shows what is measured, never
+estimates:
+
+- **Target node**: requests/s, p95 and error share of the last 3 s of the
+  run's `loadtest.sample`s (the summary once it ended). Tone follows the
+  incident verdict's thresholds: quiet up to 1% errors (`ErrorRateOK`),
+  amber above, red from 50% (`ErrorRateFailed`). Terraform shows only this.
+- **Per service (docker/Kubernetes with monitoring)**: `GET
+  /workflows/{id}/traffic` → `model.LiveTraffic{status: ok | no_monitoring |
+  not_running | unreachable, message?, window, nodes[{nodeId, source, rps,
+  errorRate, p95Ms?}]}`. The daemon finds the running Prometheus (docker:
+  the `prometheus` container's published 9090; Kubernetes: the stack's
+  forward), and runs three instant queries built from the HTTP recording
+  rules' own expressions (`workloadExprs` / `otelServiceExprs`) read with
+  `irate(…[1m])` instead of `rate(…[5m])`, one `label_replace(…,
+  "nimbo_node", <node id>)` series per measured node (`LiveSeries`, cached
+  per workflow `updatedAt`). A workload measured by several sources reads its
+  own metrics first. The canvas polls it every 5 s only while the run lasts,
+  the canvas is mounted and the window visible; nodes under 0.5 req/s (health
+  checks) show nothing.
+- **Edges**: while a run is shown, the running-containers dot is replaced by
+  traffic: Kubernetes routing edges from the target while each step has one
+  way on (`entryPath`: Ingress → Service → workload), and traffic edges into
+  a node Prometheus measures, labelled with its req/s only when that edge is
+  its single way in (`measuredEdges`). Without monitoring the legend offers
+  Add monitoring; CPU on cards stays the `compose.stats`/`kube.stats` stream.
+- **Faults**: the incident's node shows its state (`faultLive`: pending with
+  a countdown, active with the revert countdown, reverted, failed to inject,
+  then the verdict) from `loadtest.status` and the run's schedule counted
+  from the traffic start (estimated from sample arrival, earliest kept,
+  `run-clock.ts`), with a Stop button (the engine reverts at once). A run
+  with a scenario ends with a verdict toast linking to its results.
+
+Render cost: `LiveTrafficOverlay` (inside React Flow) writes a small store
+keyed by node/edge id (`live-store.ts`, unchanged entries keep their
+objects); cards and edges subscribe to their own entry, so a sample
+re-renders the target's chip, not the cards (measured: 10 s of samples →
+10 chip renders, 0 `ServiceNode`/`DockerEdge`/`CanvasInner` renders).
 
 ### Production readiness (`internal/readiness`, `internal/kube/kubeready`, `api/readiness.go`)
 
@@ -2198,9 +2497,91 @@ active environment and opens Deploy when a test targets another one.
 Desktop: the **Readiness** bottom tab of docker and Kubernetes workspaces
 (`features/readiness`): environments with score and confidence, a header
 with the category scores, a components table (cell → problem, run,
-scenario or planner) and the checklist; it refetches when the workflow is
-saved or a load test finishes. MCP: `production_readiness {workflow,
-environment?}`.
+scenario or planner) and the checklist; it refetches when a load test
+finishes and when the workflow is saved while the tab is shown (saves made
+while it is hidden are caught up when it is shown again, like the Code and
+Environments tabs: `panels/lib/use-shown-version.ts`). MCP:
+`production_readiness {workflow, environment?}`.
+
+### Compliance (`internal/compliance`, `api/compliance.go`, `apps/desktop/src/features/compliance`)
+
+A **pre-audit of the design**, never a certification: a workflow is graded
+against the security benchmarks of its platforms from the findings of the
+best-practice rules. Controls a design can't show (account MFA, org
+policies, processes) are manual and only the user can attest them.
+
+```go
+func Register(f Framework)                    // provider files call it from init(); IDs unique
+func Frameworks() []Framework                 // by platform, then ID
+func ForWorkflow(wf *model.Workflow) []Framework // Platform ∈ Platforms(wf)
+func Platforms(wf *model.Workflow) []string   // Terraform: wf.Clouds → "aws" | "azurerm" | "google" | "oci"; else "docker" | "kubernetes"
+func GradingSettings(cfg model.BestPracticeSettings, fws ...Framework) model.BestPracticeSettings // cfg + every mapped rule enabled
+func Evaluate(f Framework, wf *model.Workflow, diags []model.Diagnostic, cfg model.BestPracticeSettings, att Attestations) Result
+func Markdown(workflow string, r Result, now time.Time) string
+func LoadAttestations(home, wfID string) (Attestations, error) // <home>/workflows/<id>/compliance.json
+func Attest(home, wfID, key string, a Attestation) error        // key = Key(frameworkID, controlID)
+func Unattest(home, wfID, key string) error
+```
+
+A `Framework{id, name, version, platform, source, controls}` lists
+`Control{id, title, section, rules, appliesTo, appliesToNode, counts, manual, guidance}`
+(`appliesToNode`, Go only: narrows Terraform resources of an `appliesTo` type,
+e.g. SQL Server flag controls to SQL Server instances; `counts`, Go only:
+keeps the findings of a rule that flags several settings to the ones about
+this control's setting, by `Diagnostic.attribute` — `dk_privileged` sets
+`privileged`/`network_mode`/`pid`, Kubernetes findings carry their field
+path — so `network_mode: host` fails CIS Docker 5.10, not 5.5). Frameworks
+live in their own files (`cis_aws.go`, `cis_azure.go`, `cis_gcp.go`,
+`cis_oci.go`, `cis_docker.go`, `cis_kubernetes.go`); a test checks that
+every mapped rule exists in `lint`/`compose`/`kuberules` (or is a `net_*`
+finding) for the framework's platform and that a control is either manual
+or decided by rules.
+
+Grading per control, on `appliesTo` resources: Terraform managed resources
+(`type.name`; data sources and module calls don't count), compose graph
+nodes by kind (`service`, `network`, `volume`, `secret`, `config`; a
+Dockerfile build stage's findings count against its service), rendered
+Kubernetes objects by kind; empty `appliesTo` = every resource. In order:
+
+| Status | When |
+|---|---|
+| `not_applicable` | No resource of an `appliesTo` type (automatic controls: also an empty design); `reason` names the types |
+| `manual` / `attested` | Manual control without / with an attestation (`{note, by?, at}`) |
+| `not_evaluated` | One of its rules is off in Settings (checks disabled, or in `disabledRules`): no findings would prove nothing, so it is never `met` |
+| `violated` | A finding of its rules on any applicable resource (an auditor fails the control when one resource fails it; `reason` says "N of M resources have findings."), or a finding without a node (design-wide) |
+| `met` | No findings |
+
+Only findings on applicable resources count, so one rule can serve controls
+about different types. Opt-in rules (`DefaultOff`) are graded too: the API
+computes the diagnostics under `GradingSettings` (Terraform: `lint.Check` +
+`netcheck.Check`; docker: `compose.Derive`; Kubernetes: `kube.Derive` +
+`kuberules.Check`), never stored, so Problems keeps honouring the defaults.
+`Result.graded`/`met` count automatic controls with a verdict (met,
+violated): the "N / M automatic controls met" summary.
+
+API: `GET /workflows/{id}/compliance[?framework=]`, `PUT|DELETE
+/workflows/{id}/compliance/attestations/{framework}/{control}` (manual
+controls of a framework that applies only; a note is required),
+`GET /workflows/{id}/compliance/report?framework=&format=md` (Markdown:
+header with workflow, framework, version, source and date, the disclaimer,
+the summary, one table per section with status, rules, evidence and
+guidance, then the attestations). MCP: `compliance_report {workflow,
+framework?, markdown?}` (read-only).
+
+Desktop: the **Compliance** bottom tab of every workflow kind
+(`features/compliance`): framework selector (only the frameworks for the
+workflow's platforms; the last choice is remembered in localStorage),
+summary, legend with the count per status (zero counts hidden), a table
+grouped by section with violated controls first (control, resource chips —
+click selects the node, Kubernetes reveals it in a collapsed chart —, rule
+codes, "Mark as done…" with a note dialog for manual controls, the attested
+note with undo), "Export report" (save dialog in the desktop app, a download
+in the browser) and "Show on canvas": `highlight.ts` keeps node id → mark
+in a small store and `useComplianceMarked` rings marked cards (red failing,
+green passing) and dims the rest on the Terraform, docker and Kubernetes
+canvases on top of their stable node objects (same array back when off;
+the reachability highlight wins on the Terraform canvas). It refetches on
+saves while shown (`use-shown-version.ts`) and when Settings change.
 
 ### Kubernetes environments (`internal/kube/environments.go`, `envsettings.go`, `envcompare.go`)
 
@@ -3102,8 +3483,8 @@ Docker; the desktop onboarding wizard (`GET /setup`) and `nimbo doctor`
 | `PUT /workflows/{id}/terraform` | `{files}` or `{changes?, moves?, format?}` → `Workflow`. `files`: the complete code (GET's keys; a file left out is deleted): re-import, keep positions/ids/envs by address; an environments-layout tree is read back with `ImportEnvironments` + `MergeEnvironmentsTree`. `changes: {path: content|null}` / `moves: [{from, to}]` (moves first, in order) edit any files of the Code tab in one request, at their export paths: Terraform code of the layout (root `*.tf` Terraform loads in the single layout; `modules/<service>/*.tf` and `environments/<env>/*.tf` in the environments layout) is re-imported when it changed (a renamed file keeps its nodes; code without blocks is stored as a file, an emptied one dropped); every other path is stored as a workflow asset (`AssetPlacement` inverted: in the environments layout `modules/<service>/x` → asset `x`, `modules/<name>/…` as is, anything else 400); moves go through a staging folder (swaps work), emptied folders are removed. New/moved-to paths: clean relative, no hidden segments or state files (400); clash with a file or folder (409); generated non-code files (scaffold, tfvars, env), environment-root files that are read-only (`readOnlyReason`), creating/moving/deleting under `environments/` and lock-file copies → 409; unknown path → 404. `format: true` formats the HCL written (`hclcodec.Format`, terraform fmt). Syntax errors in any HCL written (module files too) → 400 + diagnostics located at the full path; nothing is written or saved on any error |
 | `GET /workflows/{id}/terraform/workspace` | → `CodeWorkspace{files: {path: content}, modules: DownloadedModule{key, source, version?, files}[]}`: every `.tf` file the Code tab lists (generated and assets such as local modules) and the registry/remote modules `terraform init` downloaded into the sandbox working directory (manifest keys; local ones come from `files`). The editor resolves names, module inputs and outputs from it |
 | `POST /workflows/{id}/terraform/check` | `{path, files: {path: content}}` (the edited file and any other unsaved ones; saved files fill in the rest) → `{problems: CodeProblem{severity, code, message, detail?, line, column, endLine, endColumn}[]}` (`codeintel.Check`: syntax errors, then schema and reference warnings). 400 for paths that are not clean relative `.tf` paths or missing from `files` |
-| `POST /workflows/{id}/export` | `{dir, environments: bool}` → `{dir, files: string[]}` (writes the workflow's layout + assets placed by `AssetPlacement`; 400 when an explicit environments layout is impossible) |
-| `GET /workflows/{id}/export.zip?environments=` | → zip |
+| `POST /workflows/{id}/export` | `{dir, environments: bool, ci?: "none"\|"github"\|"gitlab", smoke?: bool}` → `{dir, files: string[]}` (writes the workflow's layout + assets placed by `AssetPlacement`, plus the CI/CD pipeline and its README section with `ci`, see "CI/CD pipeline export"; 400 when an explicit environments layout is impossible or `ci` is unknown) |
+| `GET /workflows/{id}/export.zip?environments=&ci=&smoke=` | → zip (same files as the folder export) |
 | `GET /workflows/{id}/files` | → `{files: WorkflowFile[]}`: everything an export with environments writes in the workflow's layout, sorted by path. `WorkflowFile{path, size, kind: terraform\|tfvars\|env\|module\|scaffold\|asset, generated, editable, readOnlyReason?, movable, binary, language: hcl\|json\|javascript\|typescript\|python\|go\|yaml\|markdown\|shell\|text}`. Generated `*.tf` are editable through `PUT /terraform` (root files; in the environments layout the service module, every root's `main.tf` and the first root's `providers.tf`/`versions.tf`/`backend.tf` — the rest of a root is read-only, see TERRAFORM_FIDELITY.md); `readOnlyReason` says why a file is not editable; `movable` files can be renamed, moved or deleted (not generated non-code files, environment-root files or lock-file copies); generated tfvars/env files are not (edited in the app). `scaffold` files (`README.md`, `.gitignore`, `terraform.tfvars.example`, `backend.tf.example`, `Makefile`, `backend.hcl.example`, `modules/<service>/README.md`) are generated read-only from the workflow, only where the workflow has no file of that name (e.g. an imported README); a folder import skips generated ones (marker line). Assets (`modules/**`, Lambda sources, templates…) are listed at their export path (environments layout: inside `modules/<service>/`, the lock file in every root) and are editable when they are UTF-8 text ≤ 2 MiB, except `.terraform.lock.hcl`. Symlinks are never listed |
 | `GET /workflows/{id}/files/content?path=` | → `WorkflowFileContent{…WorkflowFile, content}`. Binary → 415 `{error, code: "binary", size, download}`; text > 2 MiB → 413 `{…, code: "too_large"}`; `download` is the raw URL path. `path` must be clean, relative, slash-separated, without `.`/`..` (400); unknown or reached through a symlink → 404 |
 | `PUT /workflows/{id}/files/content?path=` | `{content}` → `{file: WorkflowFile, workflow: Workflow}`: overwrites an existing editable text asset (UTF-8, no NUL, ≤ 2 MiB, else 400/413) and bumps the workflow's `updatedAt`. Generated or read-only files → 409 |
@@ -3113,6 +3494,10 @@ Docker; the desktop onboarding wizard (`GET /setup`) and `nimbo doctor`
 | `GET /workflows/{id}/modules` | → `ModuleTree{calls: {"module.a[.module.b]": ModuleCallSource{source, version?, local, dir?}}, modules: {dir: Workflow}}`: every module call, nested ones included, with the content of local modules (inside the workflow files) and of registry/remote modules found in the sandbox working directory's `.terraform/modules/modules.json`; each directory parsed once. Used by the Architecture view |
 | `GET /workflows/{id}/structure` | → `StructureSummary{layout, layoutSetting, layoutNote?, environments, service?, states, resourcesPerState, rootResources, modules: StructureModule{call, source, version?, kind: local\|registry\|remote, dir?, resources, depth}[], maxNesting, backend?, state}` (`lint.Structure` over the local modules the workflow calls): the layout export writes (`hclcodec.ResolveLayout`; `layoutNote` says why auto fell back to single or why an explicit environments layout can't be exported), the service module name, how many states the export has, managed resource instances per state (root + local modules, constant count/for_each expanded, feature-flagged blocks absent; registry/remote modules listed but not counted), module tree depth, backend type and where state lives. MCP `get_workflow`/`review_terraform` show it |
 | `GET /workflows/{id}/modules/{nodeId}?path=` | → `ModuleView{source, local, dir?, workflow?, message?}`. Local source inside the workflow files → the module parsed as a read-only `Workflow` (nodes unpositioned) and `dir`, its folder relative to the workflow files (`modules/network`; the UI's "Open files" filters the Code tab to it). Registry/remote → `message` ("Registry module terraform-aws-modules/vpc/aws 5.0.0 — contents are downloaded at deploy time"). `path=module.a.module.b` drills into nested calls |
+| `GET /workflows/{id}/compliance[?framework=]` | → `{frameworks: FrameworkInfo[], results: compliance.Result[], disclaimer}`: the frameworks for the workflow's platforms and its grade against each (or one: 404 unknown, 400 another platform's). See "Compliance" |
+| `PUT /workflows/{id}/compliance/attestations/{framework}/{control}` | `{note, by?}` → `Attestation{note, by?, at}`; manual controls only (400 for automatic ones or an empty note, 404 unknown control) |
+| `DELETE /workflows/{id}/compliance/attestations/{framework}/{control}` | → 204 (also when there was none) |
+| `GET /workflows/{id}/compliance/report?framework=&format=md` | → `text/markdown` attachment `<workflow>-<framework>-<date>.md` (framework: default the first that applies; 400 for another format) |
 | `POST /workflows/{id}/modules/extract/preview` | `{nodeIds, name}` → `ModuleExtraction{name, source, inputs: ModuleIO[], outputs: ModuleIO[], moved: {from,to}[], providers, dependsOn, files}`; nothing is saved. 400 with the reason when the selection cannot be extracted, 409 when `modules/<name>` exists |
 | `POST /workflows/{id}/modules/extract` | `{nodeIds, name}` → `Workflow` (`hclcodec.ExtractModule`; the module files are written to the workflow's assets at `modules/<name>/`; same errors as the preview) |
 | `POST /workflows/{id}/modules/{nodeId}/inline` | → `Workflow` (`hclcodec.InlineModule`; then the module's `*.tf` and `README.md` are deleted, other files stay). 400 for non-local modules, count/for_each, clashes, whole-module references; 409 when another local module also calls the directory |
@@ -3133,7 +3518,7 @@ Docker; the desktop onboarding wizard (`GET /setup`) and `nimbo doctor`
 | `POST /workflows/{id}/sandbox/start` / `stop` / `reset` | → `SandboxStatus` |
 | `POST /workflows/{id}/runs` | `{action, environment?}` → `Run` (starts sandbox if needed; environment defaults to the active one, 404 if unknown; plan/apply → 400 + diagnostics while error diagnostics other than `net_*` exist; 409 while another run is active). Docker workflows: `{action: up\|down\|build\|pull\|restart, service?, removeVolumes?, remapPorts?, timeoutSec?}` → 201 `Run` (`service`, `removeVolumes` echoed); up with busy fixed host ports and no `remapPorts` → 409 `{code: "port_conflict", conflicts: PortConflict[]}`; invalid compose files or unknown service → 400; no compose plugin → 503 `compose_missing`; Terraform actions on docker workflows and compose actions on Terraform ones → 400 |
 | `GET /workflows/{id}/runs` | → `Run[]` |
-| `GET /runs/{runId}` | → `Run` (with log) |
+| `GET /runs/{runId}` | → `Run` (with log; plan runs also `changes`, see sandbox "Planned changes") |
 | `POST /runs/{runId}/cancel` | → 204 |
 | `GET /workflows/{id}/state` | → `DeployedState` |
 | `GET /workflows/{id}/compose/status` | docker workflows → `ComposeStatus{workflowId, project, state, services: {name, nodeId, state, health?, image?, containers: {id, name, state, health?, exitCode, restarts, image, imageId, startedAt?, ports: {container, protocol, hostIp, host, url?}[]}[]}[], remaps: PortRemap[], message?, updatedAt}`; the same body arrives as `compose.status` events on changes. 400 for Terraform workflows |
@@ -3151,6 +3536,7 @@ Docker; the desktop onboarding wizard (`GET /setup`) and `nimbo doctor`
 | `GET /loadtests/{runId}` | → `LoadTestRun` |
 | `POST /loadtests/{runId}/stop` | → 204 |
 | `GET /workflows/{id}/scenarios` | → `ScenarioCatalog` (incident scenarios of the active environment; `kind: ""` for Terraform) |
+| `GET /workflows/{id}/traffic` | → `LiveTraffic` (requests per service/workload from the workflow's Prometheus; docker and Kubernetes) |
 | `GET /connections` | → `Connection[]` (masked) |
 | `POST /connections` | `Connection` → 201 `Connection` (masked; 400 on validation errors) |
 | `GET /connections/{id}` | → `Connection` (masked) |

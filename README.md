@@ -16,6 +16,12 @@ account. AI agents can do the same through the built-in MCP server.
 - **Terraform both ways**: export a workflow as idiomatic, `terraform fmt`
   clean files (plus per-environment `.tfvars`); import a Terraform folder and
   get the diagram back, edges derived from references.
+- **CI/CD with the export**: any workflow (Terraform, Docker Compose,
+  Kubernetes) can be exported with a ready-to-use GitHub Actions or GitLab CI
+  pipeline: checks on every push, a plan/render per environment on pull
+  requests, gated deploys from the default branch (OIDC credentials where the
+  cloud supports them) and an optional smoke check; the README lists the
+  secrets to set.
 - **Architecture diagram**: switch the canvas from *Build* to *Architecture*
   (⌘⇧A) for a read-only, shareable cloud diagram: official AWS/Azure/Google
   Cloud/OCI icons, nested cloud → region → VPC → AZ → subnet containers,
@@ -91,7 +97,8 @@ account. AI agents can do the same through the built-in MCP server.
   [docs/MCP.md](docs/MCP.md).
 
 Architecture, contracts and verified Floci facts:
-[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
+[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md). UI rules (what is visible when,
+status colors, destructive actions): [docs/UX_GUIDELINES.md](docs/UX_GUIDELINES.md).
 
 ## Testing networks
 
