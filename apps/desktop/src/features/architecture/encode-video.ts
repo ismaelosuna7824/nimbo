@@ -51,8 +51,13 @@ const RECORDER_TYPES: { mimeType: string; container: VideoContainer }[] = [
 ]
 
 function encoderConfig(codec: string, width: number, height: number, fps: number): VideoEncoderConfig {
-  return { codec, width, height, bitrate: videoBitrate(width, height, fps), framerate: fps, avc: { format: "avc" } }
+  // Realtime: macOS WebKit's H.264 encoder (VideoToolbox) in the default quality mode holds every frame back at
+  // 1080p and never emits nor finishes flush(), so the export hung on frame ~9; realtime emits each frame as encoded.
+  return { codec, width, height, bitrate: videoBitrate(width, height, fps), framerate: fps, latencyMode: "realtime", avc: { format: "avc" } }
 }
+
+/** An encoder that takes no frame for this long is stuck: the export fails instead of hanging. */
+const STALL_MS = 10_000
 
 /** How this browser can encode a `width`×`height` video (even sides), or null when it cannot. */
 export async function videoSupport(width: number, height: number, fps = VIDEO_FPS): Promise<VideoSupport | null> {
@@ -108,13 +113,16 @@ export async function encodeMp4(job: VideoJob, codec: string): Promise<Blob> {
 
   let failure: unknown
   let writing = Promise.resolve()
+  let packets = 0
   const encoder = new VideoEncoder({
     output: (chunk, meta) => {
+      packets++
       const packet = EncodedPacket.fromEncodedChunk(chunk)
       writing = writing.then(() => source.add(packet, meta)).catch((err: unknown) => void (failure ??= err))
     },
     error: (err) => void (failure ??= err),
   })
+  const stalled = () => new Error("The video encoder stopped responding; try GIF, a smaller size or a shorter loop")
   try {
     encoder.configure(encoderConfig(codec, job.width, job.height, job.fps))
     const frameUs = 1e6 / job.fps
@@ -127,12 +135,21 @@ export async function encodeMp4(job: VideoJob, codec: string): Promise<Blob> {
       encoder.encode(frame, { keyFrame: i % (job.fps * 2) === 0 })
       frame.close()
       job.onProgress(i + 1)
-      while (encoder.encodeQueueSize > 4) await new Promise((r) => setTimeout(r, 1))
+      const waitSince = performance.now()
+      while (encoder.encodeQueueSize > 4) {
+        job.signal.throwIfAborted()
+        if (performance.now() - waitSince > STALL_MS) throw stalled()
+        await new Promise((r) => setTimeout(r, 1))
+      }
       await yieldToUi()
     }
-    await encoder.flush()
+    let flushTimer = 0
+    const flushTimeout = new Promise<never>((_, reject) => (flushTimer = window.setTimeout(() => reject(stalled()), STALL_MS)))
+    await Promise.race([encoder.flush(), flushTimeout]).finally(() => clearTimeout(flushTimer))
     await writing
     if (failure) throw failure
+    // Realtime encoders may drop frames under load; a short video would no longer loop seamlessly.
+    if (packets !== job.frames) throw new Error(`The video encoder dropped ${job.frames - packets} of ${job.frames} frames; try again or use GIF`)
     await output.finalize()
   } catch (err) {
     if (output.state !== "finalized" && output.state !== "canceled") await output.cancel()
