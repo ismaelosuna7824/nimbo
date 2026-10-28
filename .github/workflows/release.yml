@@ -171,9 +171,17 @@ jobs:
           APPIMAGE_EXTRACT_AND_RUN: 1
           NO_STRIP: true
         # createUpdaterArtifacts is only on here, so local builds (setup.sh) need no signing key.
-        run: >-
-          bunx tauri build --ci --target ${{ matrix.target }} --bundles ${{ matrix.bundles }}
-          --config '{"bundle":{"createUpdaterArtifacts":true}}'
+        # hdiutil on the hosted macOS runners sometimes fails with "Resource busy" while creating the DMG; a retry
+        # (compilation is cached by then) gets past it. Other failures stop at once.
+        run: |
+          for attempt in 1 2 3; do
+            bunx tauri build --ci --target ${{ matrix.target }} --bundles ${{ matrix.bundles }} \
+              --config '{"bundle":{"createUpdaterArtifacts":true}}' 2>&1 | tee build.log && exit 0
+            grep -q "hdiutil: create failed - Resource busy" build.log || exit 1
+            echo "::warning::hdiutil was busy (attempt $attempt); retrying"
+            sleep 20
+          done
+          exit 1
 
       - name: Smoke test (macOS)
         if: matrix.platform == 'macos'
