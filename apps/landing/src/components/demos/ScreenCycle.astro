@@ -10,7 +10,7 @@ import DemoFrame from "./ui/DemoFrame.astro"
 
 interface Props {
   /** Demo id (data-demo); must be listed in this component's script. */
-  id: "docker" | "kubernetes" | "readiness" | "learn"
+  id: "docker" | "kubernetes" | "readiness" | "learn" | "plan" | "traffic" | "compliance" | "cicd"
   lang: Lang
   /** Accessible description of both captures. */
   label: string
@@ -91,7 +91,11 @@ const aspect = `${shots[0].src.width} / ${shots[0].src.height}`
     :global([data-demo="docker"] .demo-title),
     :global([data-demo="kubernetes"] .demo-title),
     :global([data-demo="readiness"] .demo-title),
-    :global([data-demo="learn"] .demo-title) {
+    :global([data-demo="learn"] .demo-title),
+    :global([data-demo="plan"] .demo-title),
+    :global([data-demo="traffic"] .demo-title),
+    :global([data-demo="compliance"] .demo-title),
+    :global([data-demo="cicd"] .demo-title) {
       display: none;
     }
   }
@@ -100,7 +104,7 @@ const aspect = `${shots[0].src.width} / ${shots[0].src.height}`
 <script>
   import { mountDemo } from "./lib/timeline"
 
-  for (const id of ["docker", "kubernetes", "readiness", "learn"]) {
+  for (const id of ["docker", "kubernetes", "readiness", "learn", "plan", "traffic", "compliance", "cicd"]) {
     mountDemo(id, (tl) => {
       tl.state(3200, ".seg, .shots", "1")
       return { length: 8400 }

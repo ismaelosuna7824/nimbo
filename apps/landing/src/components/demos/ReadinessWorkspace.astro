@@ -1,8 +1,8 @@
 ---
-/** The Readiness tab of a compose project's prod environment, then a load test with an injected incident and its verdict. */
+/** The Readiness tab of a compose project, then the capacity planner sized from its load test. */
 import type { Lang } from "../../i18n"
-import incident from "../../assets/screens/readiness-incident.png"
-import score from "../../assets/screens/readiness-score.png"
+import capacity from "../../assets/screens/readiness-capacity.webp"
+import score from "../../assets/screens/readiness-score.webp"
 import { demoStrings } from "./lib/strings"
 import ScreenCycle from "./ScreenCycle.astro"
 
@@ -23,6 +23,6 @@ const s = demoStrings(lang).readiness
   class={className}
   shots={[
     { src: score, label: s.score },
-    { src: incident, label: s.incident },
+    { src: capacity, label: s.capacity },
   ]}
 />

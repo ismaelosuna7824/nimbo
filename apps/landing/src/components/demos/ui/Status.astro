@@ -1,0 +1,45 @@
+---
+/**
+ * The app's resource status row: a dot + a short muted word, no pill.
+ * Tones: `ready` (Local, hollow green ring) and `ok` (Deployed, filled green
+ * with a soft ring). Extra `data-*` attributes and `class` land on the root
+ * so timelines can toggle it.
+ */
+interface Props {
+  tone: "ready" | "ok";
+  label: string;
+  class?: string;
+  [attr: `data-${string}`]: string | undefined;
+}
+
+const { tone, label, class: className, ...attrs } = Astro.props;
+---
+
+<span class:list={["st", `st-${tone}`, className]} {...attrs}><i class="st-dot"></i>{label}</span>
+
+<style>
+  .st {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    color: var(--color-muted);
+    font-size: 10.5px;
+    font-weight: 500;
+    line-height: 1;
+    white-space: nowrap;
+    transition: opacity 0.35s var(--ease-out-soft);
+  }
+  .st-dot {
+    flex-shrink: 0;
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+  }
+  .st-ready .st-dot {
+    box-shadow: inset 0 0 0 1.5px rgb(16 185 129 / 0.8);
+  }
+  .st-ok .st-dot {
+    background: #10b981;
+    box-shadow: 0 0 0 2.5px rgb(16 185 129 / 0.2);
+  }
+</style>

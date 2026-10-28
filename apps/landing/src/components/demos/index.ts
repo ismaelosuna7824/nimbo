@@ -5,6 +5,7 @@
  */
 import AgentMCP from "./AgentMCP.astro";
 import ArchitectureViews from "./ArchitectureViews.astro";
+import CompliancePreAudit from "./CompliancePreAudit.astro";
 import ConnectRecipe from "./ConnectRecipe.astro";
 import Connections from "./Connections.astro";
 import DockerWorkspace from "./DockerWorkspace.astro";
@@ -14,8 +15,11 @@ import GuidedPro from "./GuidedPro.astro";
 import HeroCanvas from "./HeroCanvas.astro";
 import KubernetesWorkspace from "./KubernetesWorkspace.astro";
 import LearnWorkspace from "./LearnWorkspace.astro";
+import LiveTraffic from "./LiveTraffic.astro";
 import LoadTestLive from "./LoadTestLive.astro";
 import LocalCloud from "./LocalCloud.astro";
+import PipelineExport from "./PipelineExport.astro";
+import PlanCanvas from "./PlanCanvas.astro";
 import ReadinessWorkspace from "./ReadinessWorkspace.astro";
 import TerraformBothWays from "./TerraformBothWays.astro";
 
@@ -32,6 +36,10 @@ export const demos = [
   { id: "sandbox", component: LocalCloud, titleKey: "sandbox" },
   { id: "endpoints", component: EndpointsTry, titleKey: "endpoints" },
   { id: "loadtest", component: LoadTestLive, titleKey: "loadtest" },
+  { id: "plan", component: PlanCanvas, titleKey: "plan" },
+  { id: "traffic", component: LiveTraffic, titleKey: "traffic" },
+  { id: "compliance", component: CompliancePreAudit, titleKey: "compliance" },
+  { id: "cicd", component: PipelineExport, titleKey: "cicd" },
   { id: "mcp", component: AgentMCP, titleKey: "mcp" },
   { id: "connections", component: Connections, titleKey: "connections" },
   { id: "modes", component: GuidedPro, titleKey: "modes" },

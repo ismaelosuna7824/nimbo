@@ -1,0 +1,28 @@
+---
+/** The export dialog adding a CI/CD pipeline: GitHub Actions for Terraform, then GitLab CI for a compose project. */
+import type { Lang } from "../../i18n"
+import gitlab from "../../assets/screens/cicd-docker.webp"
+import github from "../../assets/screens/cicd-terraform.webp"
+import { demoStrings } from "./lib/strings"
+import ScreenCycle from "./ScreenCycle.astro"
+
+interface Props {
+  lang: Lang
+  class?: string
+}
+
+const { lang, class: className } = Astro.props
+const s = demoStrings(lang).cicd
+---
+
+<ScreenCycle
+  id="cicd"
+  lang={lang}
+  label={s.label}
+  title={s.windowTitle}
+  class={className}
+  shots={[
+    { src: github, label: s.github },
+    { src: gitlab, label: s.gitlab },
+  ]}
+/>

@@ -18,12 +18,17 @@ export const demosEs: DemoStrings = {
     kubernetes: "Workspaces de Kubernetes",
     readiness: "Listo para producción",
     learn: "Rutas y retos de Aprende",
+    plan: "El plan de Terraform en el lienzo",
+    traffic: "Tráfico en vivo y pruebas de fallos",
+    compliance: "Preauditoría de cumplimiento CIS",
+    cicd: "Exportar un pipeline de CI/CD",
   },
   common: {
     local: "Local",
     deployed: "Desplegado",
     module: "Módulo",
     deploy: "Desplegar",
+    test: "Probar",
     guided: "Guiado",
     pro: "Pro",
     sandboxOff: "Sandbox apagado",
@@ -39,9 +44,8 @@ export const demosEs: DemoStrings = {
     label:
       "Vista animada de la app Nimbo: un API Gateway, una función Lambda y una tabla DynamoDB se arrastran desde la paleta de recursos al lienzo y se conectan. Se pulsa Desplegar, arranca el sandbox local, cada recurso queda marcado como Desplegado y una notificación muestra la URL local de la API.",
     windowTitle: "Nimbo",
-    workflow: "orders-api",
-    palette: "Recursos",
-    search: "Buscar…",
+    workflow: "Orders API",
+    search: "Buscar en AWS…",
     toastTitle: "Desplegado — tu API está en línea",
     endpoints: "Abrir Endpoints",
     loadTest: "Prueba de carga",
@@ -157,38 +161,66 @@ export const demosEs: DemoStrings = {
   },
   architecture: {
     label:
-      "El mismo pipeline de pedidos en las dos vistas de Nimbo. Build muestra el lienzo editable con los recursos de Terraform; Architecture lo dibuja como un diagrama de arquitectura cloud con iconos oficiales de AWS: los usuarios llegan a un API Gateway y dos funciones Lambda leen y escriben en DynamoDB, S3, SQS y SNS, dentro de AWS Cloud y la región us-east-1, con leyenda.",
-    windowTitle: "Orders pipeline",
+      "El workflow Orders API en las dos vistas de Nimbo. Build muestra el lienzo editable con los recursos de Terraform (una HTTP API con su stage, ruta e integración, una función Lambda, una tabla de DynamoDB, un rol de IAM con sus políticas y un grupo de logs), cada tarjeta con su estado Local. Architecture dibuja el mismo diseño como un diagrama de arquitectura cloud con iconos oficiales de AWS: los usuarios llegan a un API Gateway, que llama a una función Lambda que lee y escribe en una tabla de DynamoDB, con CloudWatch Logs y un rol de IAM, dentro de AWS Cloud y la región us-east-1, con leyenda.",
+    windowTitle: "Orders API",
     build: "Build",
     architecture: "Architecture",
   },
   docker: {
     label:
-      "Una API en Node.js con PostgreSQL y Redis desde un archivo compose, corriendo en Nimbo: tarjetas de servicio con el icono de su tecnología, estado sano, CPU y memoria en vivo, flechas de depends_on y volúmenes. Después su prueba de carga: las peticiones suben a 1,000 por segundo y el veredicto dice que la api llegó al 99% de su límite de 0.25 CPU a 717 peticiones por segundo, limitada por CPU, mientras la base de datos y la caché siguen bajas.",
+      "Una API en Node.js con PostgreSQL y Redis desde un archivo compose, corriendo en Nimbo con monitoreo agregado: tarjetas de servicio con el icono de su tecnología, un punto verde de estado sano, CPU y memoria en vivo, flechas de depends_on y volúmenes, y el inspector de la api agrupado en Running, Image & build, Ports & networking, Environment y Volumes & storage. Después una prueba de carga aprobada a 50 peticiones por segundo: 4,000 peticiones, p95 de 3.4 ms, sin errores, y un veredicto que dice que ningún contenedor fue el cuello de botella: el más ocupado, api, llegó al 11% de su límite de CPU.",
     windowTitle: "Notes API · compose.yaml",
     running: "Corriendo",
     loadTest: "Prueba de carga",
   },
   kubernetes: {
     label:
-      "Una app de Kubernetes corriendo en su clúster k3s local en Nimbo: un Ingress enruta a los Services y Deployments de frontend y backend, escalados por HorizontalPodAutoscalers, con un Deployment de Redis, pods y CPU en vivo. Después el diálogo Convert to Kubernetes que convierte un proyecto compose en un chart de Helm, con el mapeo de cada ajuste de compose a objetos de Kubernetes.",
+      "Una app de Kubernetes corriendo en su clúster k3s local en Nimbo: en el namespace shop, un Ingress enruta a los Services y Deployments de frontend y backend, escalados por HorizontalPodAutoscalers, con un Deployment de Redis, puntos de listo y CPU en vivo. Después el diálogo Convert to Kubernetes que convierte un proyecto compose en un chart de Helm dimensionado con una prueba de carga, con autoescalado en prod y el mapeo de cada ajuste de compose a objetos de Kubernetes.",
     windowTitle: "Shop on Kubernetes",
     cluster: "Clúster local",
     convert: "Compose → K8s",
   },
   readiness: {
     label:
-      "La pestaña Readiness de un workspace de Docker en Nimbo: la puntuación del entorno prod con las de fiabilidad, rendimiento, resiliencia, monitoreo, seguridad e higiene, una fila por servicio con sus revisiones, prueba de carga, incidentes y plan de capacidad, y la lista de pendientes. Después una prueba de carga con un incidente: se mata una réplica de la API a mitad de la prueba y el veredicto dice si el servicio sobrevivió, con la ventana del fallo sombreada en las gráficas.",
-    windowTitle: "Notes API · prod",
+      "La pestaña Readiness de un workspace de Docker en Nimbo: una puntuación de 85 de 100 que necesita trabajo, con las de fiabilidad, rendimiento, resiliencia, monitoreo, seguridad e higiene, una confianza del 78% y una fila por servicio con sus reglas, salud, recursos, monitoreo y carga. La resiliencia está en 0 porque una prueba de fallos falló. Después el planificador de capacidad para 100 peticiones por segundo: réplicas, vCPU y memoria por servicio a partir de lo que midió la prueba de carga, y el cómputo mensual más barato entre las nubes.",
+    windowTitle: "Notes API",
     score: "Readiness",
-    incident: "Incidente",
+    capacity: "Capacidad",
   },
   learn: {
     label:
-      "La página Learn de Nimbo: la ruta de Docker de principiante a experto, con sus pasos, los retos enlazados y la documentación oficial. Después el workflow de un reto tras Check my solution: el problema, los requisitos y los objetivos calificados, aprobados después de que Nimbo desplegara el proyecto, matara una réplica durante una prueba de carga y midiera la tasa de errores.",
+      "La página Learn de Nimbo: la ruta de Docker de principiante a experto, con sus pasos, los retos enlazados y la documentación oficial. Después un reto de Docker, An API and its PostgreSQL database: el problema, los requisitos y los siete objetivos que Nimbo califica, desde un proyecto compose válido hasta un stack que se despliega.",
     windowTitle: "Learn · Docker",
     roadmap: "Ruta",
     challenge: "Reto",
+  },
+  plan: {
+    label:
+      "Un workflow de AWS desplegado después de un plan de Terraform, mostrado en el lienzo: un marcador + en una cola SQS nueva, una tilde en la función Lambda y en una política de IAM que cambian en su lugar, un marcador de reemplazo en la tabla de DynamoDB y una leyenda que dice +1, ~2, ±1, −1. Después el inspector de la tabla con sus cambios planeados: reemplazo, porque hash_key cambia de id a pk, lo que obliga a reemplazarla, seguido de cada atributo que cambia.",
+    windowTitle: "Orders API · dev",
+    canvas: "Lienzo",
+    diff: "Diff",
+  },
+  traffic: {
+    label:
+      "Un workspace de Docker durante una prueba de carga en Nimbo: la tarjeta de la api muestra su tasa y latencia en vivo, 50 peticiones por segundo con p95 de 4.8 ms, mientras un panel abajo sigue la prueba. Después una prueba de fallos que tumbó la caché de Redis durante la prueba: la tarjeta de la caché queda marcada como Failed y la api muestra 40 peticiones por segundo, p95 de 1.77 s y 18.3% de errores, con el veredicto Failed.",
+    windowTitle: "Notes API · prueba de carga",
+    live: "En vivo",
+    failure: "Prueba de fallos",
+  },
+  compliance: {
+    label:
+      "La pestaña Compliance de un workspace de Docker en Nimbo: el CIS Docker Benchmark v1.8.0 revisado sobre el diseño, con 22 de 27 controles automáticos cumplidos, 5 incumplidos y 24 manuales, marcado como preauditoría y no como certificación. Los controles incumplidos (capabilities, sistema de archivos raíz de solo lectura, interfaz del host, no-new-privileges, límite de PIDs) listan los servicios afectados, resaltados en el lienzo. Después el CIS Kubernetes Benchmark v2.0.1 de un workspace de Kubernetes: 12 de 17 controles automáticos cumplidos, con hallazgos de seguridad de pods en los Deployments.",
+    windowTitle: "Compliance · CIS",
+    docker: "Docker",
+    kubernetes: "Kubernetes",
+  },
+  cicd: {
+    label:
+      "El diálogo de exportación de Nimbo con un pipeline de CI/CD. Para un workflow de Terraform con entornos dev y prod: una raíz por entorno y un módulo de servicio, más un workflow de GitHub Actions que revisa cada push, hace el plan de cada entorno en los pull requests y aplica desde la rama principal con producción al final, detrás de revisores obligatorios, y una prueba de humo después de cada despliegue. Después un proyecto de Docker exportado con GitLab CI: imágenes construidas y subidas al registry de GitLab, despliegues por SSH, un entorno tras otro con arranque manual para producción.",
+    windowTitle: "Exportar · pipeline de CI/CD",
+    github: "GitHub Actions",
+    gitlab: "GitLab CI",
   },
   modes: {
     label:

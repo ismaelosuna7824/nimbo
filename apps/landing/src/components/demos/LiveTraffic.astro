@@ -1,0 +1,28 @@
+---
+/** Live load-test traffic on the canvas, then a failure test's impact and verdict. */
+import type { Lang } from "../../i18n"
+import failure from "../../assets/screens/failure-verdict.webp"
+import live from "../../assets/screens/traffic-live.webp"
+import { demoStrings } from "./lib/strings"
+import ScreenCycle from "./ScreenCycle.astro"
+
+interface Props {
+  lang: Lang
+  class?: string
+}
+
+const { lang, class: className } = Astro.props
+const s = demoStrings(lang).traffic
+---
+
+<ScreenCycle
+  id="traffic"
+  lang={lang}
+  label={s.label}
+  title={s.windowTitle}
+  class={className}
+  shots={[
+    { src: live, label: s.live },
+    { src: failure, label: s.failure },
+  ]}
+/>

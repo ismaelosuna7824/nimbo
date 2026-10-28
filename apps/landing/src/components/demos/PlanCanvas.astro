@@ -1,0 +1,28 @@
+---
+/** A Terraform plan shown on the canvas (+ ~ ± − markers), then a replaced resource's attribute diff in the inspector. */
+import type { Lang } from "../../i18n"
+import canvas from "../../assets/screens/plan-canvas.webp"
+import diff from "../../assets/screens/plan-inspector.webp"
+import { demoStrings } from "./lib/strings"
+import ScreenCycle from "./ScreenCycle.astro"
+
+interface Props {
+  lang: Lang
+  class?: string
+}
+
+const { lang, class: className } = Astro.props
+const s = demoStrings(lang).plan
+---
+
+<ScreenCycle
+  id="plan"
+  lang={lang}
+  label={s.label}
+  title={s.windowTitle}
+  class={className}
+  shots={[
+    { src: canvas, label: s.canvas },
+    { src: diff, label: s.diff },
+  ]}
+/>

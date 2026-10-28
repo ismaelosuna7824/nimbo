@@ -4,7 +4,7 @@ export const es: Strings = {
   meta: {
     title: "Nimbo — Diseña, despliega y prueba bajo carga infraestructura cloud en tu laptop",
     description:
-      "Nimbo es una app de escritorio gratuita para diseñar infraestructura cloud conectando nodos, exportar o importar Terraform, desplegar en una nube local privada (AWS, Azure, GCP, OCI), levantar proyectos de Docker Compose y Kubernetes en tu máquina, hacerles pruebas de carga, revisar si están listos para producción y aprender con retos calificados, sin tocar una cuenta real.",
+      "Nimbo es una app de escritorio gratuita para diseñar infraestructura cloud conectando nodos y desplegarla en una nube local privada (AWS, Azure, GCP, OCI), Docker Compose o Kubernetes en tu máquina. Mira el plan de Terraform en el lienzo, haz pruebas de carga con tráfico en vivo y pruebas de fallos, haz una preauditoría con los benchmarks CIS, revisa si está lista para producción, aprende con retos calificados y exporta Terraform con un pipeline de CI/CD, sin tocar una cuenta real.",
     ogImageAlt: "La mascota de Nimbo junto al titular: Diseña, despliega y prueba bajo carga infraestructura cloud en tu laptop.",
   },
   a11y: {
@@ -17,6 +17,7 @@ export const es: Strings = {
     externalNew: "(abre GitHub)",
   },
   nav: {
+    whatsNew: "Novedades",
     features: "Funciones",
     how: "Cómo funciona",
     agents: "Agentes de IA",
@@ -49,6 +50,53 @@ export const es: Strings = {
     title: "De la idea a infraestructura probada en cuatro pasos",
     sub: "Diséñala, ejecútala en local, ponla bajo carga y llévate el Terraform.",
   },
+  whatsNew: {
+    eyebrow: "Novedades",
+    title: "Un Nimbo más tranquilo que hace más",
+    sub: "Un nuevo look y una nueva forma de moverte, más cuatro cosas nuevas que hacer con tu diseño antes de que llegue a producción.",
+    items: [
+      {
+        id: "navigation",
+        title: "Una barra lateral en cada pantalla",
+        body: "Inicio, Aprende y Conexiones se abren sobre el editor y dejan tu workflow donde estaba. Ten varios workflows abiertos, como archivos en un editor.",
+      },
+      {
+        id: "editor",
+        title: "Un editor más limpio",
+        body: "Deploy es un botón dividido con Validate, Plan y sus ejecuciones; Destroy va al final y pide confirmación. Todo lo demás vive en un menú ⋯.",
+      },
+      {
+        id: "redesign",
+        title: "Un look más tranquilo",
+        body: "Tarjetas con un solo punto de estado, flechas animadas al desplegar y un inspector agrupado por Networking, Security, Capacity y más. Rojo solo cuando algo está roto.",
+      },
+      {
+        id: "performance",
+        title: "Mucho más rápido",
+        body: "Cerca de 5× menos JavaScript al arrancar y muchos menos renders y peticiones. Un workflow de 500 nodos carga desde el motor en 19 ms en lugar de 107.",
+      },
+      {
+        id: "plan",
+        title: "El plan en el lienzo",
+        body: "+ ~ ± − en cada tarjeta que cambia un plan de Terraform, con el diff de atributos en el inspector.",
+      },
+      {
+        id: "live-traffic",
+        title: "Tráfico en vivo y pruebas de fallos",
+        body: "Mira cómo fluye una prueba de carga por el lienzo, luego rompe una dependencia a propósito y obtén un veredicto.",
+      },
+      {
+        id: "compliance",
+        title: "Preauditoría CIS",
+        body: "Unos 300 controles CIS para cada nube, Docker y Kubernetes, revisados sobre tu diseño.",
+      },
+      {
+        id: "cicd",
+        title: "Exporta CI/CD",
+        body: "Exporta un pipeline de GitHub Actions o GitLab CI junto con tus archivos de Terraform, Compose o Kubernetes.",
+      },
+    ],
+  },
   features: {
     eyebrow: "Funciones",
     title: "Todo lo que hay entre la pizarra y producción",
@@ -62,6 +110,7 @@ export const es: Strings = {
           "Modo Guiado: primero los campos obligatorios, valores por defecto sensatos y recetas de un clic como “SQS → disparador de Lambda”",
           "Modo Pro: todos los atributos, expresiones HCL, meta-argumentos y paleta de comandos ⌘K",
           "Variables por entorno, con los secretos enmascarados",
+          "Un inspector agrupado por Networking, Security, Capacity, Logging, Backup y Tags, para cada nube, Docker y Kubernetes",
         ],
       },
       terraform: {
@@ -116,6 +165,16 @@ export const es: Strings = {
           "Entornos desde compose.<env>.yaml y .env.<env>, overlays de Kustomize o values de Helm, para comparar y editar",
         ],
       },
+      compliance: {
+        eyebrow: "Preauditoría de cumplimiento",
+        title: "Revisa tu diseño contra los benchmarks CIS.",
+        body: "Nimbo revisa tu diseño contra los benchmarks CIS de AWS, Azure, Google Cloud, OCI, Docker y Kubernetes: unos 300 controles, alrededor de 200 revisados automáticamente. Show on canvas resalta lo que afecta cada hallazgo, puedes dar fe de los controles manuales y el reporte se exporta en Markdown para tus auditores.",
+        bullets: [
+          "Una preauditoría del diseño, no una certificación: encuentra qué corregir antes de la auditoría real",
+          "Cada control automático nombra los recursos o servicios en los que falla",
+          "Da fe de los controles manuales explicando cómo se cumplen; la nota y la fecha van al reporte",
+        ],
+      },
       learn: {
         eyebrow: "Aprende",
         title: "Rutas y retos que Nimbo califica de verdad.",
@@ -136,6 +195,16 @@ export const es: Strings = {
           "Las URLs locales y credenciales de prueba se mantienen entre reinicios",
         ],
       },
+      plan: {
+        eyebrow: "El plan en el lienzo",
+        title: "Mira qué va a cambiar Deploy antes de que lo haga.",
+        body: "Ejecuta un plan de Terraform y Nimbo marca cada tarjeta que toca: + crear, ~ actualizar, ± reemplazar, − borrar. Selecciona una tarjeta y el inspector muestra su diff atributo por atributo, con el motivo cuando hay que reemplazarla.",
+        bullets: [
+          "Una leyenda cuenta cada tipo de cambio, incluidos los recursos cuyas tarjetas quitaste",
+          "El plan se marca como desactualizado si editas el diseño o despliegas después",
+          "Cada entorno tiene su propio plan; el lienzo muestra el del entorno activo",
+        ],
+      },
       endpoints: {
         eyebrow: "Endpoints y Try it",
         title: "Cada API, cola, bucket y tabla, lista para usar.",
@@ -154,6 +223,26 @@ export const es: Strings = {
           "Latencia p50 / p95 / p99, tasa de error y puntaje de estabilidad en vivo",
           "Endpoints HTTP y operaciones de AWS: SQS, S3, DynamoDB, Lambda, SNS, Kinesis, EventBridge, Step Functions",
           "Historial de ejecuciones y comparación lado a lado",
+        ],
+      },
+      traffic: {
+        eyebrow: "Tráfico en vivo y pruebas de fallos",
+        title: "Mira cómo fluye el tráfico. Luego rompe algo a propósito.",
+        body: "Mientras corre una prueba de carga, el lienzo muestra peticiones por segundo, latencia p95 y errores en el objetivo; agrega monitoreo con Prometheus y además verás el tráfico por servicio en flechas animadas. En los workspaces de Docker y Kubernetes, haz clic derecho en una tarjeta y elige Test a failure: detén una dependencia, agrega latencia, mata una réplica o vacía una caché mientras fluye el tráfico.",
+        bullets: [
+          "El impacto en vivo en las tarjetas mientras dura el fallo, y Nimbo siempre deja todo como estaba",
+          "Un veredicto al final: sobrevivió, degradado, falló o sin evaluar",
+          "Cada prueba de fallos cuenta como evidencia para la puntuación de Readiness",
+        ],
+      },
+      cicd: {
+        eyebrow: "Exporta tu pipeline de CI/CD",
+        title: "Entrega el pipeline junto con el código.",
+        body: "Al exportar un workflow, agrega un pipeline de GitHub Actions o GitLab CI: revisiones en cada push, un plan en los pull requests, un entorno tras otro con aprobación antes de producción, imágenes construidas y publicadas, despliegues en Kubernetes y una prueba de humo.",
+        bullets: [
+          "Para proyectos de Terraform, Docker Compose y Kubernetes",
+          "Su encabezado y el README listan cada secreto y variable que debes configurar",
+          "YAML normal en tu repositorio: nada en él necesita a Nimbo para correr",
         ],
       },
       mcp: {
@@ -246,7 +335,12 @@ export const es: Strings = {
       {
         id: "export",
         q: "¿Puedo exportar mi Terraform?",
-        a: "Sí. Cada workflow se exporta como archivos idiomáticos, limpios según terraform fmt, con un .tfvars por entorno. Es Terraform normal que puedes versionar y aplicar donde quieras. También puedes importar una carpeta existente y recuperar el diagrama.",
+        a: "Sí. Cada workflow se exporta como archivos idiomáticos, limpios según terraform fmt, con un .tfvars por entorno. Es Terraform normal que puedes versionar y aplicar donde quieras, y puedes agregar a la exportación un pipeline de GitHub Actions o GitLab CI. También puedes importar una carpeta existente y recuperar el diagrama.",
+      },
+      {
+        id: "compliance",
+        q: "¿La revisión de cumplimiento certifica mi infraestructura?",
+        a: "No. Es una preauditoría de tu diseño contra los benchmarks CIS de AWS, Azure, Google Cloud, OCI, Docker y Kubernetes. Cerca de dos tercios de los controles se revisan automáticamente; del resto, como los ajustes del host o de la cuenta, das fe tú. El reporte en Markdown te ayuda a preparar una auditoría, pero no es una certificación.",
       },
       {
         id: "agents",

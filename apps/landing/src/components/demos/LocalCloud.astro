@@ -4,6 +4,7 @@ import type { Lang } from "../../i18n";
 import { demoStrings } from "./lib/strings";
 import DemoFrame from "./ui/DemoFrame.astro";
 import Icon from "./ui/Icon.astro";
+import Status from "./ui/Status.astro";
 
 interface Props {
   lang: Lang;
@@ -78,10 +79,7 @@ const resources = [
           resources.map((r) => (
             <span class="chip" style={{ "--c": r.color }}>
               <span class="chip-addr">{r.address}</span>
-              <span class="pill" data-anim="pop">
-                <Icon name="circle-check" size={9} strokeWidth={2.5} />
-                {all.common.deployed}
-              </span>
+              <Status tone="ok" label={all.common.deployed} class="dep" data-anim="fade" />
             </span>
           ))
         }
@@ -245,19 +243,6 @@ const resources = [
     white-space: nowrap;
     text-overflow: ellipsis;
   }
-  .pill {
-    display: inline-flex;
-    flex-shrink: 0;
-    align-items: center;
-    gap: 3px;
-    height: 16px;
-    padding: 0 6px;
-    border-radius: 999px;
-    background: rgb(52 211 153 / 0.14);
-    color: var(--color-green);
-    font-size: 9.5px;
-    font-weight: 500;
-  }
 
   .stamp {
     position: absolute;
@@ -347,7 +332,7 @@ const resources = [
   mountDemo("sandbox", (tl) => {
     const emus = tl.els(".emu");
     const lines = tl.els(".tl");
-    const pills = tl.els(".res .pill");
+    const pills = tl.els(".res .dep");
 
     emus.forEach((e, i) => tl.state(300 + i * 160, e, "start"));
     emus.forEach((e, i) => tl.state(1300 + i * 160, e, "run"));

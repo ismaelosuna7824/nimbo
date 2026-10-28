@@ -1,11 +1,16 @@
 ---
-/** Hero: a mini Nimbo window where three resources are dropped, wired and deployed. */
+/**
+ * Hero: a mini Nimbo window (title bar with the command bar, left rail,
+ * editor toolbar, resource palette and canvas) where three resources are
+ * dropped, wired and deployed.
+ */
 import type { Lang } from "../../i18n";
 import { demoStrings } from "./lib/strings";
 import Cursor from "./ui/Cursor.astro";
 import DemoFrame from "./ui/DemoFrame.astro";
 import Edges from "./ui/Edges.astro";
 import Icon from "./ui/Icon.astro";
+import Mascot from "./Mascot.astro";
 import NodeCard from "./ui/NodeCard.astro";
 import PixelTile from "./ui/PixelTile.astro";
 
@@ -31,77 +36,110 @@ const palette = [
 
 <DemoFrame id="hero" lang={lang} label={s.label} chrome={false} class={className}>
   <div class="win">
-    <div class="tb">
+    <div class="title">
       <span class="lights"><i></i><i></i><i></i></span>
-      <span class="wf">
-        <PixelTile glyph="network" color="violet" size={20} />
-        <span class="wf-name">{s.workflow}</span>
-      </span>
-      <span class="tb-mid">
-        <span class="seg"><span class="seg-on">{c.guided}</span><span>{c.pro}</span></span>
-        <span class="chip" data-state="run" data-state0="off">
-          <span class="chip-dot"></span>
-          <span class="l-off">{c.sandboxOff}</span>
-          <span class="l-start">{c.sandboxStarting}</span>
-          <span class="l-run">{c.sandboxRunning}</span>
-        </span>
-      </span>
-      <span class="deploy" data-state="idle" data-state0="idle">
-        <Icon name="cloud-upload" size={13} class="deploy-ic" />
-        <span class="spin"></span>
-        {c.deploy}
+      <span class="cmd">
+        <PixelTile glyph="network" color="violet" size={13} />
+        <span class="cmd-name">{s.workflow}</span>
+        <Icon name="search" size={10} class="cmd-search" />
+        <kbd>⌘K</kbd>
       </span>
     </div>
 
-    <div class="main">
-      <aside class="pal">
-        <span class="pal-title">{s.palette}</span>
-        <span class="pal-search"><Icon name="search" size={11} />{s.search}<kbd>⌘K</kbd></span>
-        <span class="pal-clouds">
-          <span class="on"><i style="background:#f97316"></i>AWS</span>
-          <span><i style="background:#3b82f6"></i>Azure</span>
-          <span><i style="background:#22c55e"></i>GCP</span>
-          <span><i style="background:#ef4444"></i>OCI</span>
+    <div class="body">
+      <nav class="rail" aria-hidden="true">
+        <Mascot size={22} tile class="rail-logo" />
+        <span class="rail-btn"><Icon name="house" size={14} /></span>
+        <span class="rail-btn"><Icon name="graduation-cap" size={14} /></span>
+        <span class="rail-btn"><Icon name="plug" size={14} /></span>
+        <span class="rail-sep"></span>
+        <span class="rail-wf"><PixelTile glyph="network" color="violet" size={22} /></span>
+        <span class="rail-end">
+          <span class="rail-btn"><Icon name="sun" size={14} /></span>
+          <span class="rail-btn"><Icon name="settings" size={14} /></span>
         </span>
-        <ul>
-          {
-            palette.map((p) => (
-              <li data-pal={p.id}>
-                <span class="pal-ic">
-                  <Icon name={p.icon} size={11} />
-                </span>
-                {p.label}
-              </li>
-            ))
-          }
-        </ul>
-      </aside>
+      </nav>
 
-      <div class="cv" data-fade>
-        <Edges
-          edges={[
-            { from: "api", to: "fn", live: true },
-            { from: "fn", to: "db", live: true },
-          ]}
-        />
-        <NodeCard id="api" lang={lang} label="API Gateway" address="aws_apigatewayv2_api.http" icon="waypoints" deployed />
-        <NodeCard id="fn" lang={lang} label="Lambda" address="aws_lambda_function.api" icon="zap" deployed />
-        <NodeCard id="db" lang={lang} label="DynamoDB" address="aws_dynamodb_table.items" icon="table" deployed />
-
-        <div class="toast" data-anim="up">
-          <span class="toast-title"><Icon name="circle-check" size={13} class="toast-ok" />{s.toastTitle}</span>
-          <span class="toast-url">
-            <span class="method">GET</span>
-            <span class="url">http://127.0.0.1:45123/…/items</span>
-            <span class="copy" data-state="idle" data-state0="idle">
-              <Icon name="copy" size={11} class="i-copy" />
-              <Icon name="check" size={11} class="i-done" />
+      <div class="panel">
+        <div class="tb">
+          <Icon name="panel-left" size={13} class="tb-ic tb-toggle" />
+          <span class="wf-name">{s.workflow}</span>
+          <span class="tb-right">
+            <span class="seg"><span class="seg-on">{c.guided}</span><span>{c.pro}</span></span>
+            <span class="chip" data-state="run" data-state0="off">
+              <span class="chip-dot"></span>
+              <span class="l-off">{c.sandboxOff}</span>
+              <span class="l-start">{c.sandboxStarting}</span>
+              <span class="l-run">{c.sandboxRunning}</span>
+            </span>
+            <span class="tb-div"></span>
+            <span class="test"><Icon name="gauge" size={12} />{c.test}</span>
+            <span class="split">
+              <span class="deploy" data-state="idle" data-state0="idle">
+                <Icon name="cloud-upload" size={12} class="deploy-ic" />
+                <span class="spin"></span>
+                {c.deploy}
+              </span>
+              <span class="deploy-more"><Icon name="chevron-down" size={11} /></span>
+            </span>
+            <span class="tb-icons">
+              <Icon name="list-checks" size={13} class="tb-ic" />
+              <Icon name="ellipsis" size={13} class="tb-ic" />
+              <Icon name="panel-right" size={13} class="tb-ic" />
             </span>
           </span>
-          <span class="toast-actions">
-            <span class="btn-xs btn-pri"><Icon name="plug" size={10} />{s.endpoints}</span>
-            <span class="btn-xs"><Icon name="gauge" size={10} />{s.loadTest}</span>
-          </span>
+        </div>
+
+        <div class="main">
+          <aside class="pal">
+            <span class="pal-clouds">
+              <span class="on"><i style="background:#f97316"></i>AWS</span>
+              <span><i style="background:#3b82f6"></i>Azure</span>
+              <span><i style="background:#22c55e"></i>GCP</span>
+              <span><i style="background:#ef4444"></i>OCI</span>
+            </span>
+            <span class="pal-search"><Icon name="search" size={11} />{s.search}</span>
+            <ul>
+              {
+                palette.map((p) => (
+                  <li data-pal={p.id}>
+                    <span class="pal-ic">
+                      <Icon name={p.icon} size={11} />
+                    </span>
+                    {p.label}
+                  </li>
+                ))
+              }
+            </ul>
+          </aside>
+
+          <div class="cv" data-fade>
+            <Edges
+              edges={[
+                { from: "api", to: "fn", live: true },
+                { from: "fn", to: "db", live: true },
+              ]}
+            />
+            <NodeCard id="api" lang={lang} label="API Gateway" address="aws_apigatewayv2_api.http" icon="waypoints" deployed />
+            <NodeCard id="fn" lang={lang} label="Lambda" address="aws_lambda_function.api" icon="zap" deployed />
+            <NodeCard id="db" lang={lang} label="DynamoDB" address="aws_dynamodb_table.items" icon="table" deployed />
+
+            <div class="toast" data-anim="up">
+              <span class="toast-title"><Icon name="circle-check" size={13} class="toast-ok" />{s.toastTitle}</span>
+              <span class="toast-url">
+                <span class="method">GET</span>
+                <span class="url">http://127.0.0.1:45123/…/items</span>
+                <span class="copy" data-state="idle" data-state0="idle">
+                  <Icon name="copy" size={11} class="i-copy" />
+                  <Icon name="check" size={11} class="i-done" />
+                </span>
+              </span>
+              <span class="toast-actions">
+                <span class="btn-xs btn-pri"><Icon name="plug" size={10} />{s.endpoints}</span>
+                <span class="btn-xs"><Icon name="gauge" size={10} />{s.loadTest}</span>
+              </span>
+            </div>
+          </div>
         </div>
       </div>
     </div>
@@ -111,49 +149,166 @@ const palette = [
 </DemoFrame>
 
 <style>
+  /* App theme (dark): slightly purple-tinted neutrals. */
   .win {
+    --app-chrome: oklch(0.155 0.008 280);
+    --app-bg: oklch(0.18 0.009 280);
+    --app-canvas: oklch(0.158 0.008 280);
+    --app-muted: oklch(0.26 0.012 280);
+    --app-primary: oklch(0.606 0.25 292.717);
     position: relative;
     display: flex;
     flex-direction: column;
-    background: var(--color-bg);
+    background: var(--app-chrome);
   }
 
-  /* Top bar */
+  /* macOS title bar with the command bar */
+  .title {
+    position: relative;
+    display: flex;
+    align-items: center;
+    height: 30px;
+    padding: 0 10px;
+  }
+  .lights {
+    display: flex;
+    gap: 6px;
+  }
+  .lights i {
+    width: 9px;
+    height: 9px;
+    border-radius: 50%;
+    background: rgb(255 255 255 / 0.13);
+  }
+  .cmd {
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    width: min(240px, 46%);
+    height: 20px;
+    padding: 0 3px 0 4px;
+    border: 1px solid rgb(255 255 255 / 0.08);
+    border-radius: 7px;
+    background: rgb(255 255 255 / 0.03);
+    translate: -50% -50%;
+  }
+  .cmd-name {
+    flex: 1;
+    overflow: hidden;
+    font-size: 10.5px;
+    font-weight: 500;
+    white-space: nowrap;
+    text-overflow: ellipsis;
+  }
+  .cmd :global(.cmd-search) {
+    flex-shrink: 0;
+    color: var(--color-muted);
+  }
+  .cmd kbd {
+    flex-shrink: 0;
+    padding: 0 4px;
+    border-radius: 4px;
+    background: var(--app-muted);
+    color: var(--color-muted);
+    font-family: var(--font-sans);
+    font-size: 9px;
+    line-height: 14px;
+  }
+
+  .body {
+    display: grid;
+    grid-template-columns: 40px 1fr;
+  }
+
+  /* Left rail */
+  .rail {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 6px;
+    padding: 2px 0 8px;
+    color: var(--color-muted);
+  }
+  .rail :global(.rail-logo) {
+    margin-bottom: 4px;
+    border-radius: 6px;
+  }
+  .rail-btn {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 26px;
+    height: 26px;
+    border-radius: 7px;
+  }
+  .rail-sep {
+    width: 100%;
+    height: 1px;
+    margin: 2px 0;
+    background: rgb(255 255 255 / 0.08);
+  }
+  .rail-wf {
+    position: relative;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 30px;
+    height: 30px;
+    border-radius: 9px;
+    background: rgb(139 92 246 / 0.16);
+    box-shadow: 0 0 12px -2px rgb(139 92 246 / 0.35);
+  }
+  .rail-wf::before {
+    position: absolute;
+    top: 7px;
+    bottom: 7px;
+    left: -5px;
+    width: 2px;
+    border-radius: 0 2px 2px 0;
+    background: var(--app-primary);
+    content: "";
+  }
+  .rail-end {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    margin-top: auto;
+  }
+
+  /* Editor panel (inset, rounded top-left like the app) */
+  .panel {
+    min-width: 0;
+    overflow: hidden;
+    border-top: 1px solid rgb(255 255 255 / 0.08);
+    border-left: 1px solid rgb(255 255 255 / 0.08);
+    border-top-left-radius: 10px;
+    background: var(--app-bg);
+  }
   .tb {
     display: flex;
     align-items: center;
     gap: 8px;
-    height: 40px;
-    padding: 0 10px;
-    border-bottom: 1px solid var(--color-border);
-    background: var(--color-surface);
+    height: 38px;
+    padding: 0 8px 0 10px;
+    border-bottom: 1px solid rgb(255 255 255 / 0.08);
   }
-  .lights {
-    display: flex;
-    gap: 5px;
-    margin-right: 4px;
-  }
-  .lights i {
-    width: 8px;
-    height: 8px;
-    border-radius: 50%;
-    background: rgb(255 255 255 / 0.13);
-  }
-  .wf {
-    display: flex;
-    flex: 1;
-    align-items: center;
-    gap: 7px;
-    min-width: 0;
+  .tb :global(.tb-ic) {
+    flex-shrink: 0;
+    color: var(--color-muted);
   }
   .wf-name {
+    flex: 1;
     overflow: hidden;
+    min-width: 0;
     font-size: 12px;
     font-weight: 600;
     white-space: nowrap;
     text-overflow: ellipsis;
   }
-  .tb-mid {
+  .tb-right {
     display: flex;
     align-items: center;
     gap: 6px;
@@ -161,33 +316,40 @@ const palette = [
   .seg {
     display: flex;
     padding: 2px;
-    border: 1px solid var(--color-border-strong);
     border-radius: 7px;
-    font-size: 10.5px;
+    background: rgb(255 255 255 / 0.05);
     color: var(--color-muted);
+    font-size: 10.5px;
+    font-weight: 500;
   }
   .seg span {
     padding: 2px 7px;
     border-radius: 5px;
   }
   .seg .seg-on {
-    background: var(--color-surface-3);
+    background: rgb(255 255 255 / 0.1);
     color: var(--color-fg);
   }
-  .chip {
+  .chip,
+  .test {
     display: inline-flex;
     align-items: center;
     gap: 6px;
     height: 24px;
     padding: 0 8px;
-    border: 1px solid var(--color-border-strong);
+    border: 1px solid rgb(255 255 255 / 0.1);
     border-radius: 7px;
+    background: rgb(255 255 255 / 0.02);
     font-size: 10.5px;
+    font-weight: 500;
     white-space: nowrap;
   }
+  .test {
+    gap: 4px;
+  }
   .chip-dot {
-    width: 7px;
-    height: 7px;
+    width: 6px;
+    height: 6px;
     border-radius: 50%;
     background: var(--color-subtle);
     transition: background 0.3s;
@@ -201,28 +363,46 @@ const palette = [
     display: inline;
   }
   .chip[data-state="start"] .chip-dot {
-    background: var(--color-amber);
+    background: #f59e0b;
     animation: hero-pulse 0.8s ease-in-out infinite;
   }
   .chip[data-state="run"] .chip-dot {
-    background: var(--color-green);
-    box-shadow: 0 0 6px var(--color-green);
+    background: #10b981;
+    box-shadow: 0 0 0 2.5px rgb(16 185 129 / 0.2);
+  }
+  .tb-div {
+    width: 1px;
+    height: 16px;
+    background: rgb(255 255 255 / 0.1);
+  }
+
+  /* Deploy split button */
+  .split {
+    display: inline-flex;
+    flex-shrink: 0;
+    height: 24px;
+    border-radius: 7px;
+    background: var(--app-primary);
+    color: #fff;
+    box-shadow: 0 0 0 1px rgb(255 255 255 / 0.12) inset;
+    transition:
+      scale 0.15s,
+      filter 0.15s;
   }
   .deploy {
     display: inline-flex;
     align-items: center;
     gap: 5px;
-    height: 26px;
-    padding: 0 10px;
-    border-radius: 7px;
-    background: var(--color-primary-strong);
-    color: #fff;
-    font-size: 11px;
-    font-weight: 500;
-    box-shadow: 0 0 0 1px rgb(167 139 250 / 0.35) inset;
-    transition:
-      scale 0.15s,
-      filter 0.15s;
+    padding: 0 9px;
+    font-size: 10.5px;
+    font-weight: 600;
+  }
+  .deploy-more {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 20px;
+    border-left: 1px solid rgb(0 0 0 / 0.28);
   }
   .spin {
     display: none;
@@ -239,55 +419,35 @@ const palette = [
   .deploy[data-state="busy"] :global(.deploy-ic) {
     display: none;
   }
+  .tb-icons {
+    display: flex;
+    gap: 9px;
+    margin-left: 4px;
+  }
 
-  /* Palette */
+  /* Resource palette (left panel) */
   .main {
     display: grid;
-    grid-template-columns: 128px 1fr;
+    grid-template-columns: 124px 1fr;
   }
   .pal {
     display: flex;
     flex-direction: column;
     gap: 8px;
-    padding: 10px 8px;
-    border-right: 1px solid var(--color-border);
-    background: var(--color-surface);
+    padding: 9px 8px;
+    border-right: 1px solid rgb(255 255 255 / 0.08);
     font-size: 11px;
-  }
-  .pal-title {
-    color: var(--color-muted);
-    font-size: 10px;
-    font-weight: 600;
-    letter-spacing: 0.06em;
-    text-transform: uppercase;
-  }
-  .pal-search {
-    display: flex;
-    align-items: center;
-    gap: 5px;
-    overflow: hidden;
-    height: 24px;
-    padding: 0 6px;
-    border: 1px solid var(--color-border-strong);
-    border-radius: 6px;
-    color: var(--color-subtle);
-    font-size: 10px;
-    white-space: nowrap;
-  }
-  .pal-search kbd {
-    margin-left: auto;
-    padding: 0 3px;
-    border: 1px solid var(--color-border-strong);
-    border-radius: 4px;
-    font-family: var(--font-sans);
-    font-size: 9px;
   }
   .pal-clouds {
     display: grid;
     grid-template-columns: repeat(2, 1fr);
-    gap: 3px;
-    font-size: 9.5px;
+    gap: 2px;
+    padding: 2px;
+    border-radius: 7px;
+    background: rgb(255 255 255 / 0.04);
     color: var(--color-muted);
+    font-size: 9.5px;
+    font-weight: 500;
   }
   .pal-clouds span {
     display: flex;
@@ -297,13 +457,26 @@ const palette = [
     border-radius: 5px;
   }
   .pal-clouds .on {
-    background: var(--color-surface-3);
+    background: rgb(255 255 255 / 0.1);
     color: var(--color-fg);
   }
   .pal-clouds i {
     width: 5px;
     height: 5px;
     border-radius: 50%;
+  }
+  .pal-search {
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    overflow: hidden;
+    height: 24px;
+    padding: 0 6px;
+    border: 1px solid rgb(255 255 255 / 0.1);
+    border-radius: 7px;
+    color: var(--color-subtle);
+    font-size: 10px;
+    white-space: nowrap;
   }
   .pal ul {
     display: flex;
@@ -318,7 +491,8 @@ const palette = [
     align-items: center;
     gap: 7px;
     padding: 4px 5px;
-    border-radius: 6px;
+    border-radius: 7px;
+    font-weight: 500;
     transition: background 0.2s;
   }
   .pal li:global(.is-hover) {
@@ -329,34 +503,34 @@ const palette = [
     display: flex;
     align-items: center;
     justify-content: center;
-    width: 18px;
-    height: 18px;
-    border-radius: 5px;
-    background: rgb(249 115 22 / 0.13);
+    width: 20px;
+    height: 20px;
+    border-radius: 6px;
+    background: rgb(249 115 22 / 0.15);
     color: var(--color-aws);
   }
 
   /* Canvas */
   .cv {
     position: relative;
-    height: 350px;
+    height: 340px;
     overflow: hidden;
-    background-color: var(--color-bg);
-    background-image: radial-gradient(circle, rgb(255 255 255 / 0.11) 1.1px, transparent 1.3px);
+    background-color: var(--app-canvas);
+    background-image: radial-gradient(circle, rgb(255 255 255 / 0.09) 1px, transparent 1.2px);
     background-size: 16px 16px;
     background-position: 8px 8px;
-    --nw: clamp(128px, 38cqw, 166px);
+    --nw: clamp(128px, 36cqw, 166px);
   }
   .cv :global([data-node="api"]) {
-    top: 18px;
+    top: 44px;
     left: 4%;
   }
   .cv :global([data-node="fn"]) {
-    top: 82px;
+    top: 18px;
     right: 4%;
   }
   .cv :global([data-node="db"]) {
-    top: 180px;
+    top: 116px;
     right: 4%;
   }
 
@@ -369,11 +543,11 @@ const palette = [
     display: flex;
     flex-direction: column;
     gap: 7px;
-    width: min(226px, 52%);
+    width: min(240px, 60%);
     padding: 9px 10px;
-    border: 1px solid var(--color-border-strong);
-    border-radius: 10px;
-    background: var(--color-surface-2);
+    border: 1px solid rgb(255 255 255 / 0.1);
+    border-radius: 12px;
+    background: oklch(0.215 0.01 280);
     box-shadow: 0 16px 40px -12px rgb(0 0 0 / 0.9);
   }
   .toast-title {
@@ -445,14 +619,14 @@ const palette = [
     gap: 4px;
     height: 20px;
     padding: 0 7px;
-    border: 1px solid var(--color-border-strong);
-    border-radius: 5px;
+    border: 1px solid rgb(255 255 255 / 0.1);
+    border-radius: 6px;
     font-size: 10px;
     white-space: nowrap;
   }
   .btn-pri {
     border-color: transparent;
-    background: var(--color-primary-strong);
+    background: var(--app-primary);
     color: #fff;
   }
 
@@ -464,18 +638,17 @@ const palette = [
     width: 64px;
     height: 24px;
     border: 1px dashed var(--color-primary-soft);
-    border-radius: 7px;
+    border-radius: 8px;
     background: rgb(139 92 246 / 0.18);
     opacity: 0;
     transition: opacity 0.2s;
   }
   .ghost i {
     position: absolute;
-    top: 5px;
-    bottom: 5px;
-    left: 0;
-    width: 3px;
-    border-radius: 0 3px 3px 0;
+    top: -1px;
+    right: 12px;
+    left: 12px;
+    height: 1px;
     background: var(--color-aws);
   }
   :global(.is-drag) > .ghost {
@@ -493,9 +666,28 @@ const palette = [
     }
   }
 
-  @container (max-width: 520px) {
-    .seg {
+  /* Narrower windows drop chrome the way the app collapses it. */
+  @container (max-width: 700px) {
+    .tb-icons {
       display: none;
+    }
+  }
+  @container (max-width: 560px) {
+    .seg,
+    .tb :global(.tb-toggle) {
+      display: none;
+    }
+  }
+  @container (max-width: 540px) {
+    .body {
+      grid-template-columns: 1fr;
+    }
+    .rail {
+      display: none;
+    }
+    .panel {
+      border-left: 0;
+      border-top-left-radius: 0;
     }
   }
   @container (max-width: 460px) {
@@ -506,7 +698,7 @@ const palette = [
       display: none;
     }
     .cv {
-      height: 368px;
+      height: 380px;
       --nw: 46cqw;
     }
     .cv :global([data-node="api"]) {
@@ -514,11 +706,11 @@ const palette = [
       left: 3%;
     }
     .cv :global([data-node="fn"]) {
-      top: 92px;
+      top: 96px;
       right: 3%;
     }
     .cv :global([data-node="db"]) {
-      top: 172px;
+      top: 184px;
       right: 3%;
     }
     .toast {
@@ -526,11 +718,18 @@ const palette = [
       right: 3%;
       width: auto;
     }
-    .lights {
+  }
+  @container (max-width: 400px) {
+    .test,
+    .tb-div {
       display: none;
     }
+    .lights i {
+      width: 7px;
+      height: 7px;
+    }
   }
-  @container (max-width: 360px) {
+  @container (max-width: 340px) {
     .chip {
       padding: 0 6px;
     }
@@ -562,7 +761,7 @@ const palette = [
     const deploy = tl.$(".deploy");
     tl.cursor(t, cur, deploy);
     tl.click(t + 750, cur);
-    tl.pulse(t + 750, deploy, "is-pressed", 180);
+    tl.pulse(t + 750, ".split", "is-pressed", 180);
     tl.state(t + 800, deploy, "busy");
     tl.state(t + 800, ".chip", "start");
     tl.state(t + 1800, ".chip", "run");

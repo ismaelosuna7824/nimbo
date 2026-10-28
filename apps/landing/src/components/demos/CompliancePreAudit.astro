@@ -1,0 +1,28 @@
+---
+/** CIS benchmarks checked against the design: Docker with violations shown on the canvas, then Kubernetes. */
+import type { Lang } from "../../i18n"
+import docker from "../../assets/screens/compliance-docker.webp"
+import kubernetes from "../../assets/screens/compliance-k8s.webp"
+import { demoStrings } from "./lib/strings"
+import ScreenCycle from "./ScreenCycle.astro"
+
+interface Props {
+  lang: Lang
+  class?: string
+}
+
+const { lang, class: className } = Astro.props
+const s = demoStrings(lang).compliance
+---
+
+<ScreenCycle
+  id="compliance"
+  lang={lang}
+  label={s.label}
+  title={s.windowTitle}
+  class={className}
+  shots={[
+    { src: docker, label: s.docker },
+    { src: kubernetes, label: s.kubernetes },
+  ]}
+/>

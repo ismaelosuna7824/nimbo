@@ -2,7 +2,7 @@ export const en = {
   meta: {
     title: "Nimbo — Design, deploy and load-test cloud infrastructure on your laptop",
     description:
-      "Nimbo is a free desktop app to design cloud infrastructure by connecting nodes, export or import Terraform, deploy to a private local cloud (AWS, Azure, GCP, OCI), run Docker Compose and Kubernetes projects on your machine, load-test them, check their production readiness and learn with graded challenges — without touching a real account.",
+      "Nimbo is a free desktop app to design cloud infrastructure by connecting nodes and deploy it to a private local cloud (AWS, Azure, GCP, OCI), Docker Compose or Kubernetes on your machine. See the Terraform plan on the canvas, load-test with live traffic and failure tests, pre-audit against CIS benchmarks, check production readiness, learn with graded challenges and export Terraform with a CI/CD pipeline — without touching a real account.",
     ogImageAlt: "Nimbo mascot next to the headline: Design, deploy and load-test cloud infrastructure on your laptop.",
   },
   a11y: {
@@ -15,6 +15,7 @@ export const en = {
     externalNew: "(opens GitHub)",
   },
   nav: {
+    whatsNew: "What's new",
     features: "Features",
     how: "How it works",
     agents: "AI agents",
@@ -47,6 +48,53 @@ export const en = {
     title: "From idea to tested infrastructure in four steps",
     sub: "Design it, run it locally, put it under load, then take the Terraform with you.",
   },
+  whatsNew: {
+    eyebrow: "What's new",
+    title: "A calmer Nimbo that does more",
+    sub: "A new look and a new way to move around, plus four new things to do with your design before it reaches production.",
+    items: [
+      {
+        id: "navigation",
+        title: "A rail on every screen",
+        body: "Home, Learn and Connections open over the editor and leave your workflow where it was. Keep several workflows open, like files in an editor.",
+      },
+      {
+        id: "editor",
+        title: "A cleaner editor",
+        body: "Deploy is a split button with Validate, Plan and its runs; Destroy comes last and asks first. Everything else lives in a ⋯ menu.",
+      },
+      {
+        id: "redesign",
+        title: "A calmer look",
+        body: "Cards with one status dot, animated deployed edges and an Inspector grouped by Networking, Security, Capacity and more. Red only when something is broken.",
+      },
+      {
+        id: "performance",
+        title: "Much faster",
+        body: "About 5× less JavaScript at startup and far fewer renders and requests. A 500-node workflow loads from the engine in 19 ms instead of 107.",
+      },
+      {
+        id: "plan",
+        title: "Plan on the canvas",
+        body: "+ ~ ± − on every card a Terraform plan changes, with attribute diffs in the Inspector.",
+      },
+      {
+        id: "live-traffic",
+        title: "Live traffic & failure tests",
+        body: "Watch a load test flow across the canvas, then break a dependency on purpose and get a verdict.",
+      },
+      {
+        id: "compliance",
+        title: "CIS pre-audit",
+        body: "About 300 CIS controls for every cloud, Docker and Kubernetes, checked against your design.",
+      },
+      {
+        id: "cicd",
+        title: "CI/CD export",
+        body: "Export a GitHub Actions or GitLab CI pipeline along with your Terraform, Compose or Kubernetes files.",
+      },
+    ],
+  },
   features: {
     eyebrow: "Features",
     title: "Everything between the whiteboard and production",
@@ -60,6 +108,7 @@ export const en = {
           "Guided mode: required fields first, sensible defaults and one-click recipes like “SQS → Lambda trigger”",
           "Pro mode: every attribute, raw HCL expressions, meta-arguments and a ⌘K command palette",
           "Per-environment variables, with secrets masked",
+          "An Inspector grouped by Networking, Security, Capacity, Logging, Backup and Tags — for every cloud, Docker and Kubernetes",
         ],
       },
       terraform: {
@@ -114,6 +163,16 @@ export const en = {
           "Environments from compose.<env>.yaml and .env.<env>, Kustomize overlays or Helm values, with compare and edit",
         ],
       },
+      compliance: {
+        eyebrow: "Compliance pre-audit",
+        title: "Check your design against the CIS benchmarks.",
+        body: "Nimbo checks your design against the CIS benchmarks for AWS, Azure, Google Cloud, OCI, Docker and Kubernetes: about 300 controls, around 200 of them checked automatically. Show on canvas highlights what each finding affects, manual controls can be attested, and the report exports as Markdown for your auditors.",
+        bullets: [
+          "A pre-audit of the design, not a certification: find what to fix before the real audit",
+          "Every automatic control names the resources or services it fails on",
+          "Attest manual controls with how they're met; the note and the date go into the report",
+        ],
+      },
       learn: {
         eyebrow: "Learn",
         title: "Roadmaps and challenges that Nimbo grades for real.",
@@ -134,6 +193,16 @@ export const en = {
           "Local URLs and test credentials stay the same across restarts",
         ],
       },
+      plan: {
+        eyebrow: "Plan on the canvas",
+        title: "See what Deploy will change before it does.",
+        body: "Run a Terraform plan and Nimbo marks every card it touches: + create, ~ update, ± replace, − delete. Select a card and the Inspector shows its diff attribute by attribute, with the reason when it has to be replaced.",
+        bullets: [
+          "A legend counts each kind of change, including resources whose cards you removed",
+          "The plan is flagged as outdated when you edit the design or deploy after it",
+          "Each environment has its own plan; the canvas shows the active one's",
+        ],
+      },
       endpoints: {
         eyebrow: "Endpoints & Try it",
         title: "Every API, queue, bucket and table — ready to use.",
@@ -152,6 +221,26 @@ export const en = {
           "Live p50 / p95 / p99 latency, error rate and stability score",
           "HTTP endpoints and AWS operations: SQS, S3, DynamoDB, Lambda, SNS, Kinesis, EventBridge, Step Functions",
           "Run history and side-by-side comparison",
+        ],
+      },
+      traffic: {
+        eyebrow: "Live traffic & failure tests",
+        title: "Watch the traffic flow. Then break something on purpose.",
+        body: "While a load test runs, the canvas shows requests per second, p95 latency and errors on the target; add Prometheus monitoring and you also get traffic per service on animated edges. On Docker and Kubernetes workspaces, right-click a card and choose Test a failure: stop a dependency, add latency, kill a replica or flush a cache while the traffic flows.",
+        bullets: [
+          "Live impact on the cards while the failure lasts, and Nimbo always puts things back",
+          "A verdict at the end: survived, degraded, failed or not assessed",
+          "Every failure test counts as evidence for the Readiness score",
+        ],
+      },
+      cicd: {
+        eyebrow: "CI/CD pipeline export",
+        title: "Ship the pipeline with the code.",
+        body: "When you export a workflow, add a GitHub Actions or GitLab CI pipeline: checks on every push, a plan on pull requests, one environment after the other with an approval before production, images built and pushed, Kubernetes deploys and a smoke check.",
+        bullets: [
+          "For Terraform, Docker Compose and Kubernetes projects",
+          "Its header and the README list every secret and variable to set",
+          "Plain YAML in your repository: nothing in it needs Nimbo to run",
         ],
       },
       mcp: {
@@ -244,7 +333,12 @@ export const en = {
       {
         id: "export",
         q: "Can I export my Terraform?",
-        a: "Yes. Every workflow exports as idiomatic, terraform fmt–clean files with a .tfvars per environment. It's plain Terraform you can commit and apply anywhere. You can also import an existing folder and get the diagram back.",
+        a: "Yes. Every workflow exports as idiomatic, terraform fmt–clean files with a .tfvars per environment. It's plain Terraform you can commit and apply anywhere, and you can add a GitHub Actions or GitLab CI pipeline to the export. You can also import an existing folder and get the diagram back.",
+      },
+      {
+        id: "compliance",
+        q: "Does the compliance check certify my infrastructure?",
+        a: "No. It's a pre-audit of your design against the CIS benchmarks for AWS, Azure, Google Cloud, OCI, Docker and Kubernetes. About two thirds of the controls are checked automatically; the rest, like host or account settings, you attest yourself. The Markdown report helps you prepare for an audit, but it isn't a certification.",
       },
       {
         id: "agents",

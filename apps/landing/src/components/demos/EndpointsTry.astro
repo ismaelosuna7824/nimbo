@@ -6,6 +6,7 @@ import Code from "./ui/Code.astro";
 import Cursor from "./ui/Cursor.astro";
 import DemoFrame from "./ui/DemoFrame.astro";
 import Icon from "./ui/Icon.astro";
+import Status from "./ui/Status.astro";
 
 interface Props {
   lang: Lang;
@@ -36,7 +37,7 @@ const response = `{
           <span class="name">{s.api}</span>
           <span class="addr">aws_apigatewayv2_api.http</span>
         </span>
-        <span class="pill-dep"><Icon name="circle-check" size={9} strokeWidth={2.5} />{c.deployed}</span>
+        <Status tone="ok" label={c.deployed} />
       </div>
 
       <div class="url-row">
@@ -166,19 +167,6 @@ const response = `{
     font-size: 10px;
     white-space: nowrap;
     text-overflow: ellipsis;
-  }
-  .pill-dep {
-    display: inline-flex;
-    flex-shrink: 0;
-    align-items: center;
-    gap: 3px;
-    height: 17px;
-    padding: 0 6px;
-    border-radius: 999px;
-    background: rgb(52 211 153 / 0.14);
-    color: var(--color-green);
-    font-size: 9.5px;
-    font-weight: 500;
   }
 
   .url-row {

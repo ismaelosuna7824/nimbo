@@ -1,0 +1,75 @@
+---
+import Icon from "../Icon.astro";
+import SectionHeading from "../SectionHeading.astro";
+import PixelTile from "../demos/ui/PixelTile.astro";
+import type { GlyphId, TileColorId } from "../demos/lib/pixel";
+import { t, type Lang } from "../../i18n";
+
+interface Props {
+  lang: Lang;
+}
+
+const s = t(Astro.props.lang);
+
+/** Tile per item; items with a feature row below link to it. */
+const look: Record<string, { glyph: GlyphId; color: TileColorId; href?: string }> = {
+  navigation: { glyph: "network", color: "violet" },
+  editor: { glyph: "gear", color: "slate" },
+  redesign: { glyph: "star", color: "pink" },
+  performance: { glyph: "bolt", color: "amber" },
+  plan: { glyph: "diamond", color: "cyan", href: "#plan" },
+  "live-traffic": { glyph: "broadcast", color: "pink", href: "#live-traffic" },
+  compliance: { glyph: "key", color: "blue", href: "#compliance" },
+  cicd: { glyph: "rocket", color: "lime", href: "#cicd" },
+};
+---
+
+<section id="whats-new" class="relative border-t border-border py-24 sm:py-32" aria-labelledby="whats-new-title">
+  <div class="container-page">
+    <SectionHeading id="whats-new-title" eyebrow={s.whatsNew.eyebrow} title={s.whatsNew.title} sub={s.whatsNew.sub} />
+    <ul class="mt-14 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+      {
+        s.whatsNew.items.map((item) => {
+          const { glyph, color, href } = look[item.id]!;
+          const content = (
+            <>
+              <div class="flex items-center gap-3">
+                <PixelTile glyph={glyph} color={color} size={30} />
+                <h3 class="text-[1.0625rem] font-semibold tracking-tight">{item.title}</h3>
+              </div>
+              <p class="mt-3 text-[0.9375rem] leading-relaxed text-pretty text-muted">{item.body}</p>
+              {href && (
+                <span class="mt-auto flex justify-end pt-3 text-primary-soft" aria-hidden="true">
+                  <Icon name="arrowRight" size={16} />
+                </span>
+              )}
+            </>
+          );
+          return (
+            <li class="reveal flex">
+              {href ? (
+                <a href={href} class="card new-card flex w-full flex-col p-5">
+                  {content}
+                </a>
+              ) : (
+                <div class="card flex w-full flex-col p-5">{content}</div>
+              )}
+            </li>
+          );
+        })
+      }
+    </ul>
+  </div>
+</section>
+
+<style>
+  .new-card {
+    transition:
+      border-color 150ms,
+      background-color 150ms;
+  }
+  .new-card:hover {
+    border-color: rgb(139 92 246 / 0.45);
+    background: var(--color-surface-2);
+  }
+</style>

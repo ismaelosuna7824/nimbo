@@ -3,6 +3,7 @@ import FeatureRow from "./FeatureRow.astro";
 import SectionHeading from "./SectionHeading.astro";
 import Hero from "./sections/Hero.astro";
 import Modes from "./sections/Modes.astro";
+import WhatsNew from "./sections/WhatsNew.astro";
 import GetStarted from "./sections/GetStarted.astro";
 import Faq from "./sections/Faq.astro";
 import FinalCta from "./sections/FinalCta.astro";
@@ -29,10 +30,14 @@ const rows = [
   { id: "docker", demo: "docker", glyph: "server", color: "blue", item: f.docker },
   { id: "kubernetes", demo: "kubernetes", glyph: "gear", color: "violet", item: f.kubernetes },
   { id: "readiness", demo: "readiness", glyph: "shield", color: "lime", item: f.readiness },
+  { id: "compliance", demo: "compliance", glyph: "key", color: "blue", item: f.compliance },
   { id: "learn", demo: "learn", glyph: "star", color: "amber", item: f.learn },
   { id: "local-cloud", demo: "sandbox", glyph: "cloud", color: "cyan", item: f.sandbox },
+  { id: "plan", demo: "plan", glyph: "diamond", color: "cyan", item: f.plan },
   { id: "endpoints", demo: "endpoints", glyph: "globe", color: "lime", item: f.endpoints },
   { id: "load-testing", demo: "loadtest", glyph: "fire", color: "amber", item: f.loadtest },
+  { id: "live-traffic", demo: "traffic", glyph: "broadcast", color: "pink", item: f.traffic },
+  { id: "cicd", demo: "cicd", glyph: "rocket", color: "lime", item: f.cicd },
 ] as const;
 
 const agents = ["Claude Code", "Claude Desktop", "Cursor", "Codex", "VS Code", "Windsurf", "Gemini CLI"];
@@ -42,6 +47,8 @@ const Connections = getDemo("connections").component;
 <Hero lang={lang}>
   <HeroDemo lang={lang} />
 </Hero>
+
+<WhatsNew lang={lang} />
 
 <section id="how-it-works" class="relative border-t border-border py-24 sm:py-32" aria-labelledby="how-title">
   <div class="container-page">

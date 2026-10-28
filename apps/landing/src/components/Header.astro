@@ -15,6 +15,7 @@ const { lang, alternates } = Astro.props;
 const s = t(lang);
 const home = homePath(lang);
 const links = [
+  { href: `${home}#whats-new`, label: s.nav.whatsNew },
   { href: `${home}#how-it-works`, label: s.nav.how },
   { href: `${home}#features`, label: s.nav.features },
   { href: `${home}#ai-agents`, label: s.nav.agents },

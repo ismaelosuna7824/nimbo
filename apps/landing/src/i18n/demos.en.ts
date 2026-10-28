@@ -17,12 +17,17 @@ export const demosEn = {
     kubernetes: "Kubernetes workspaces",
     readiness: "Production readiness",
     learn: "Learn roadmaps and challenges",
+    plan: "Terraform plan on the canvas",
+    traffic: "Live traffic and failure tests",
+    compliance: "CIS compliance pre-audit",
+    cicd: "CI/CD pipeline export",
   },
   common: {
     local: "Local",
     deployed: "Deployed",
     module: "Module",
     deploy: "Deploy",
+    test: "Test",
     guided: "Guided",
     pro: "Pro",
     sandboxOff: "Sandbox off",
@@ -38,9 +43,8 @@ export const demosEn = {
     label:
       "Animated preview of the Nimbo app: an API Gateway, a Lambda function and a DynamoDB table are dragged from the resource palette onto the canvas and connected. Deploy is pressed, the local sandbox starts, each resource is marked Deployed and a notification shows the API's local URL.",
     windowTitle: "Nimbo",
-    workflow: "orders-api",
-    palette: "Resources",
-    search: "Search…",
+    workflow: "Orders API",
+    search: "Search AWS…",
     toastTitle: "Deployed — your API is live",
     endpoints: "Open Endpoints",
     loadTest: "Load test",
@@ -156,38 +160,66 @@ export const demosEn = {
   },
   architecture: {
     label:
-      "The same orders pipeline in Nimbo's two views. Build shows the editable canvas of Terraform resources; Architecture draws it as a cloud architecture diagram with official AWS icons: Users reach an API Gateway, two Lambda functions read and write DynamoDB, S3, SQS and SNS, inside AWS Cloud and the us-east-1 region, with a legend.",
-    windowTitle: "Orders pipeline",
+      "The Orders API workflow in Nimbo's two views. Build shows the editable canvas of Terraform resources (an HTTP API with its stage, route and integration, a Lambda function, a DynamoDB table, an IAM role and policies and a log group), each card with its Local status. Architecture draws the same design as a cloud architecture diagram with official AWS icons: users reach an API Gateway, which calls a Lambda function that reads and writes a DynamoDB table, with CloudWatch Logs and an IAM role, inside AWS Cloud and the us-east-1 region, with a legend.",
+    windowTitle: "Orders API",
     build: "Build",
     architecture: "Architecture",
   },
   docker: {
     label:
-      "A Node.js API with PostgreSQL and Redis from a compose file, running in Nimbo: service cards with their technology icons, healthy state, live CPU and memory, depends_on edges and named volumes. Then its load test: requests ramp to 1,000 per second and the verdict says the api reached 99% of its 0.25 CPU limit at 717 requests per second, CPU-bound, while the database and cache stay low.",
+      "A Node.js API with PostgreSQL and Redis from a compose file, running in Nimbo with monitoring added: service cards with their technology icons, a green healthy dot, live CPU and memory, depends_on edges and named volumes, and the api's inspector grouped into Running, Image & build, Ports & networking, Environment and Volumes & storage. Then a passed load test at 50 requests per second: 4,000 requests, p95 3.4 ms, no errors, and a verdict that says no container was the bottleneck, the busiest one, api, peaking at 11% of its CPU limit.",
     windowTitle: "Notes API · compose.yaml",
     running: "Running",
     loadTest: "Load test",
   },
   kubernetes: {
     label:
-      "A Kubernetes app running on its local k3s cluster in Nimbo: an Ingress routes to frontend and backend Services and Deployments scaled by HorizontalPodAutoscalers, with a Redis Deployment, live pods and CPU. Then the Convert to Kubernetes dialog turning a compose project into a Helm chart, with the mapping from each compose setting to Kubernetes objects.",
+      "A Kubernetes app running on its local k3s cluster in Nimbo: in the shop namespace an Ingress routes to frontend and backend Services and Deployments scaled by HorizontalPodAutoscalers, with a Redis Deployment, ready dots and live CPU. Then the Convert to Kubernetes dialog turning a compose project into a Helm chart sized from a load test, with autoscaling in prod and the mapping from each compose setting to Kubernetes objects.",
     windowTitle: "Shop on Kubernetes",
     cluster: "Local cluster",
     convert: "Compose → K8s",
   },
   readiness: {
     label:
-      "The Readiness tab of a Docker workspace in Nimbo: the prod environment's score with reliability, performance, resilience, monitoring, security and hygiene scores, a row per service with its checks, load test, incidents and capacity plan, and the checklist. Then a load test with an incident: one API replica is killed mid-test and the verdict says whether the service survived, with the fault window shaded on the charts.",
-    windowTitle: "Notes API · prod",
+      "The Readiness tab of a Docker workspace in Nimbo: a score of 85 out of 100 that needs work, with reliability, performance, resilience, monitoring, security and hygiene scores, a confidence of 78% and a row per service with its rules, health, resources, monitoring and load. Resilience is 0 because a failure test failed. Then the capacity planner for 100 requests per second: replicas, vCPU and memory per service from what the load test measured, and the cheapest monthly compute across the clouds.",
+    windowTitle: "Notes API",
     score: "Readiness",
-    incident: "Incident",
+    capacity: "Capacity",
   },
   learn: {
     label:
-      "Nimbo's Learn page: the Docker roadmap from beginner to expert with its steps, linked challenges and official docs. Then a challenge workflow after Check my solution: the problem, the requirements and the graded goals, passed after Nimbo deployed the project, killed a replica during a load test and measured the error rate.",
+      "Nimbo's Learn page: the Docker roadmap from beginner to expert with its steps, linked challenges and official docs. Then a Docker challenge, An API and its PostgreSQL database: the problem, the requirements and the seven goals Nimbo grades, from a valid compose project to a stack that deploys.",
     windowTitle: "Learn · Docker",
     roadmap: "Roadmap",
     challenge: "Challenge",
+  },
+  plan: {
+    label:
+      "A deployed AWS workflow after a Terraform plan, shown on the canvas: a plus marker on a new SQS queue, a tilde on the Lambda function and an IAM policy that change in place, a replace marker on the DynamoDB table, and a legend reading plus 1, tilde 2, replace 1, minus 1. Then the table's inspector with its planned changes: replace, because hash_key changes from id to pk, which forces replacement, followed by every attribute that changes.",
+    windowTitle: "Orders API · dev",
+    canvas: "Canvas",
+    diff: "Diff",
+  },
+  traffic: {
+    label:
+      "A Docker workspace under a load test in Nimbo: the api card shows its live rate and latency, 50 requests per second at p95 4.8 ms, while a panel at the bottom follows the run. Then a failure test that took the Redis cache down during the test: the cache card is marked Failed and the api shows 40 requests per second, p95 1.77 s and 18.3% errors, with the verdict Failed.",
+    windowTitle: "Notes API · load test",
+    live: "Live",
+    failure: "Failure test",
+  },
+  compliance: {
+    label:
+      "The Compliance tab of a Docker workspace in Nimbo: the CIS Docker Benchmark v1.8.0 checked against the design, with 22 of 27 automatic controls met, 5 violated and 24 manual, marked as a pre-audit, not a certification. The violated controls (capabilities, read-only root filesystem, host interface, no-new-privileges, PIDs limit) list the services they affect, highlighted on the canvas. Then the CIS Kubernetes Benchmark v2.0.1 for a Kubernetes workspace: 12 of 17 automatic controls met, with pod security findings on the Deployments.",
+    windowTitle: "Compliance · CIS",
+    docker: "Docker",
+    kubernetes: "Kubernetes",
+  },
+  cicd: {
+    label:
+      "Nimbo's export dialog with a CI/CD pipeline. For a Terraform workflow with dev and prod environments: a root per environment and a service module, plus a GitHub Actions workflow that checks every push, plans each environment on pull requests and applies from the default branch with production last, behind required reviewers, and a smoke check after each deploy. Then a Docker project exported with GitLab CI: images built and pushed to the GitLab registry, deploys over SSH, one environment after the other with a manual start for production.",
+    windowTitle: "Export · CI/CD pipeline",
+    github: "GitHub Actions",
+    gitlab: "GitLab CI",
   },
   modes: {
     label:
