@@ -268,3 +268,52 @@ func TestInjectionErrorFails(t *testing.T) {
 		t.Errorf("%+v", res)
 	}
 }
+
+// A target already failing before the fault (a 404 path, a broken service)
+// can't show the fault's effect: no survived / failed, whatever happens.
+func TestBaselineFailingIsInconclusive(t *testing.T) {
+	spec := model.ScenarioSpec{ID: model.ScenarioDependencyDown, Target: "service:db", AtSec: 20, DurationSec: 15}
+	obs := Observation{Back: true, Verified: true, VerifyDetail: "unpaused db-1"}
+	for name, tl := range map[string][]model.LoadSample{
+		"every request fails": timeline(70, func(_ int, s *model.LoadSample) { s.Errors = 50 }),
+		"60% fail":            timeline(70, func(_ int, s *model.LoadSample) { s.Errors = 30 }),
+	} {
+		res := Evaluate(Input{Spec: spec, TargetName: "db", Timeline: tl, InjectedAt: 20, RevertedAt: 35, TimeoutMs: 5000, Observation: obs})
+		if res.Verdict != model.ScenarioInconclusive || !strings.Contains(res.Message, "already failing before the fault") {
+			t.Errorf("%s: %s %q", name, res.Verdict, res.Message)
+		}
+		if c := check(t, res, "Healthy before the fault"); c.Passed {
+			t.Errorf("%s: %+v", name, c)
+		}
+		if c := check(t, res, "Fault reverted"); !c.Passed {
+			t.Errorf("%s: revert not reported: %+v", name, c)
+		}
+	}
+	// No traffic at all before the fault.
+	res := Evaluate(Input{Spec: spec, Timeline: timeline(70, func(sec int, s *model.LoadSample) {
+		if sec <= 20 {
+			s.RPS = 0
+		}
+	}), InjectedAt: 20, RevertedAt: 35, Observation: obs})
+	if res.Verdict != model.ScenarioInconclusive || check(t, res, "Healthy before the fault").Detail != "No request succeeded before the fault." {
+		t.Errorf("no baseline: %+v", res)
+	}
+}
+
+// A run the user stopped gets no verdict, but still says the fault is back.
+func TestStoppedRunHasNoVerdict(t *testing.T) {
+	spec := model.ScenarioSpec{ID: model.ScenarioDependencyDown, Target: "service:db", AtSec: 20, DurationSec: 15}
+	tl := timeline(22, func(sec int, s *model.LoadSample) {
+		if sec > 20 {
+			s.RPS, s.InFlight = 0, 100
+		}
+	})
+	res := Evaluate(Input{Spec: spec, TargetName: "db", Timeline: tl, InjectedAt: 20, RevertedAt: 21.4, Stopped: true,
+		Observation: Observation{Verified: true, VerifyDetail: "unpaused db-1"}})
+	if res.Verdict != "" || !strings.HasPrefix(res.Message, "Stopped before the end: no verdict") || res.RecoveredAtSec != nil {
+		t.Fatalf("%+v", res)
+	}
+	if len(res.Checks) != 1 || !check(t, res, "Fault reverted").Passed {
+		t.Errorf("checks %+v", res.Checks)
+	}
+}

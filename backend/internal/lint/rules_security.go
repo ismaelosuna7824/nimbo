@@ -19,18 +19,18 @@ import (
 // bp_open_ingress
 
 var adminPorts = map[int]string{
-	22: "SSH", 23: "Telnet", 3389: "RDP", 3306: "MySQL", 5432: "PostgreSQL", 1433: "SQL Server",
+	22: "SSH", 23: "Telnet", 3389: "RDP", 445: "SMB", 3306: "MySQL", 5432: "PostgreSQL", 1433: "SQL Server",
 	1521: "Oracle", 27017: "MongoDB", 6379: "Redis", 9200: "Elasticsearch", 5439: "Redshift",
 	11211: "Memcached", 2379: "etcd", 5984: "CouchDB", 9042: "Cassandra",
 }
 
 const allPorts = -1
 
-// exposedPorts lists the admin/database ports in [from, to] ("22 (SSH)");
-// from == allPorts means every port.
-func exposedPorts(from, to int) []string {
+// exposedPorts lists the admin/database ports in [from, to], sorted;
+// from == allPorts means every port ([allPorts]).
+func exposedPorts(from, to int) []int {
 	if from == allPorts {
-		return []string{"all ports"}
+		return []int{allPorts}
 	}
 	var ports []int
 	for p := range adminPorts {
@@ -39,11 +39,46 @@ func exposedPorts(from, to int) []string {
 		}
 	}
 	sort.Ints(ports)
+	return ports
+}
+
+// portLabels renders ports for a message: "22 (SSH)", "all ports".
+func portLabels(ports []int) []string {
 	var out []string
 	for _, p := range ports {
-		out = append(out, fmt.Sprintf("%d (%s)", p, adminPorts[p]))
+		if p == allPorts {
+			out = append(out, "all ports")
+		} else {
+			out = append(out, fmt.Sprintf("%d (%s)", p, adminPorts[p]))
+		}
 	}
 	return out
+}
+
+// portFacet is the Facet of a bp_open_ingress finding: its exposed ports,
+// sorted, deduplicated and comma-separated ("22,3389"), or "all".
+func portFacet(ports []int) string {
+	if slices.Contains(ports, allPorts) {
+		return "all"
+	}
+	ports = slices.Clone(ports)
+	slices.Sort(ports)
+	ports = slices.Compact(ports)
+	out := make([]string, len(ports))
+	for i, p := range ports {
+		out[i] = strconv.Itoa(p)
+	}
+	return strings.Join(out, ",")
+}
+
+// ExposesPort reports whether d, a bp_open_ingress finding, is about port:
+// its Facet lists the port or is "all". Compliance controls about one port
+// (SSH, RDP) count only those findings.
+func ExposesPort(d model.Diagnostic, port int) bool {
+	if d.Code != "bp_open_ingress" {
+		return false
+	}
+	return d.Facet == "all" || slices.Contains(strings.Split(d.Facet, ","), strconv.Itoa(port))
 }
 
 func isOpenCIDR(s string) bool { return s == "0.0.0.0/0" || s == "::/0" }
@@ -95,13 +130,13 @@ func parsePorts(specs []string) [][2]int {
 }
 
 func checkOpenIngress(p *pass) {
-	report := func(n *model.Node, path, source string, ports []string) {
+	report := func(n *model.Node, path, source string, ports []int) {
 		if len(ports) == 0 {
 			return
 		}
 		p.report(finding{
-			node: n, attribute: path,
-			message: fmt.Sprintf("%s allows %s to %s", addr(n), source, strings.Join(ports, ", ")),
+			node: n, attribute: path, facet: portFacet(ports),
+			message: fmt.Sprintf("%s allows %s to %s", addr(n), source, strings.Join(portLabels(ports), ", ")),
 			why:     "Admin and database ports open to the whole internet are scanned within minutes and brute-forced; a weak password or unpatched service is then remotely exploitable.",
 			fix:     "Restrict the source to your VPN/office CIDR or a security group (source_security_group_id), or reach the host through SSM Session Manager or a bastion.",
 		})
@@ -144,7 +179,7 @@ func checkOpenIngress(p *pass) {
 			for i, blk := range blocks(&n.Body, "allow") {
 				proto, _ := attrString(&blk.Body, "protocol")
 				specs := attrStrings(&blk.Body, "ports")
-				var exposed []string
+				var exposed []int
 				switch {
 				case proto == "all" || (proto == "tcp" || proto == "udp") && getAttr(&blk.Body, "ports") == nil:
 					exposed = exposedPorts(allPorts, allPorts)
@@ -165,7 +200,7 @@ func checkOpenIngress(p *pass) {
 	}
 }
 
-func (p *pass) azureRule(n *model.Node, b *model.Body, path string, report func(*model.Node, string, string, []string)) {
+func (p *pass) azureRule(n *model.Node, b *model.Body, path string, report func(*model.Node, string, string, []int)) {
 	dir, _ := attrString(b, "direction")
 	access, _ := attrString(b, "access")
 	if !strings.EqualFold(dir, "Inbound") || !strings.EqualFold(access, "Allow") {
@@ -182,7 +217,7 @@ func (p *pass) azureRule(n *model.Node, b *model.Body, path string, report func(
 	if open == "" {
 		return
 	}
-	var exposed []string
+	var exposed []int
 	for _, r := range parsePorts(append(attrStrings(b, "destination_port_ranges"), attrStrings(b, "destination_port_range")...)) {
 		exposed = append(exposed, exposedPorts(r[0], r[1])...)
 	}

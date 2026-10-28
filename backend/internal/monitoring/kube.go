@@ -282,6 +282,8 @@ type KubeOutput struct {
 	// HTTP lists every workload's request-metrics sources.
 	HTTP       []model.MonitoringHTTP
 	Thresholds HTTPThresholds
+	// Live is how each workload's requests are read live.
+	Live []LiveSeries
 }
 
 func dig(m any, path ...string) any {
@@ -507,7 +509,7 @@ func Kube(in KubeInput) KubeOutput {
 	}
 	sources := httpSources(workloads, services, backends, scrapes)
 	out := KubeOutput{Files: map[string][]byte{}, Alerts: []model.MonitoringAlert{}, Scrapes: []model.MonitoringScrape{},
-		HTTP: httpSummary(workloads, sources), Thresholds: t}
+		HTTP: httpSummary(workloads, sources), Thresholds: t, Live: kubeLive(workloads, sources)}
 
 	// Alerts: one rule group per workload (its HTTP recording rules first).
 	var groups []promGroup

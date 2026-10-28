@@ -53,7 +53,7 @@ func findings(t *testing.T, src, code string) []model.Diagnostic {
 
 // caseFindings runs the rules over tc.src (main.tf of the root) with its
 // local modules (tc.modules: directory -> main.tf), environments and layout,
-// and returns the findings of code.
+// and returns the findings of code (opt-in rules on, so their cases run).
 func caseFindings(t *testing.T, tc structureCase, code string) []model.Diagnostic {
 	t.Helper()
 	wf := importHCL(t, tc.src)
@@ -76,7 +76,13 @@ func caseFindings(t *testing.T, tc structureCase, code string) []model.Diagnosti
 		}
 	}
 	var out []model.Diagnostic
-	for _, d := range Check(wf, testCatalog, model.BestPracticeSettings{}, mods) {
+	all := model.BestPracticeSettings{}
+	for _, r := range Rules() {
+		if r.DefaultOff {
+			all.EnabledRules = append(all.EnabledRules, r.Code)
+		}
+	}
+	for _, d := range Check(wf, testCatalog, all, mods) {
 		if d.Severity == model.SeverityError {
 			t.Fatalf("error-severity finding %+v", d)
 		}
@@ -364,6 +370,27 @@ variable "location" {
     cidr_blocks = ["0.0.0.0/0"]
   }
 }`, 0},
+			{"smb from anywhere", pinned + `resource "aws_security_group" "sg" {
+  ingress {
+    from_port   = 445
+    to_port     = 445
+    protocol    = "tcp"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+}`, 1},
+			{"azure smb", pinned + `resource "azurerm_network_security_rule" "r" {
+  name                        = "smb"
+  priority                    = 100
+  direction                   = "Inbound"
+  access                      = "Allow"
+  protocol                    = "Tcp"
+  source_port_range           = "*"
+  destination_port_range      = "445"
+  source_address_prefix       = "Internet"
+  destination_address_prefix  = "*"
+  resource_group_name         = "rg"
+  network_security_group_name = "nsg"
+}`, 1},
 			{"sg rule postgres", pinned + `resource "aws_security_group_rule" "r" {
   type              = "ingress"
   security_group_id = "sg-1"

@@ -72,12 +72,8 @@ func IsScaffold(name string, content []byte) bool {
 // without one: the default of its cloud (nil without a cloud), partial so
 // the storage location stays out of the code.
 func backendTfExample(wf *model.Workflow) []byte {
-	if wf.Terraform != nil {
-		for _, b := range wf.Terraform.Blocks {
-			if b.Type == "backend" || b.Type == "cloud" {
-				return nil
-			}
-		}
+	if HasBackend(wf) {
+		return nil
 	}
 	plan := defaultBackend(primaryCloud(wf), ServiceName(wf))
 	if plan == nil {

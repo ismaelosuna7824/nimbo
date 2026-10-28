@@ -140,10 +140,14 @@ var reliability = []readiness.Check{
 }
 
 var security = []readiness.Check{
-	{ID: "secrets", Title: "Secrets", Codes: []string{"k8s_secret_env", "k8s_secret_in_configmap"},
-		Pass: "Credentials come from Secrets."},
-	{ID: "privileges", Title: "Pod privileges", Codes: []string{"k8s_privileged", "k8s_host_namespaces", "k8s_host_path", "k8s_run_as_root", "k8s_hardening"},
-		Pass: "Pods run unprivileged, as non-root and without host access."},
+	{ID: "secrets", Title: "Secrets", Codes: []string{"k8s_secret_env", "k8s_secret_in_configmap", "k8s_secret_env_ref"},
+		Pass: "Credentials come from Secrets mounted as files."},
+	{ID: "privileges", Title: "Pod privileges", Codes: []string{"k8s_privileged", "k8s_host_namespaces", "k8s_host_path", "k8s_run_as_root", "k8s_hardening",
+		"k8s_host_port", "k8s_windows_host_process", "k8s_net_raw", "k8s_capabilities", "k8s_seccomp", "k8s_automount_token"},
+		Pass: "Pods run unprivileged, as non-root, without capabilities or host access, under seccomp and without unused API tokens."},
+	{ID: "rbac", Title: "API permissions", Codes: []string{"k8s_rbac_cluster_admin", "k8s_rbac_system_masters", "k8s_rbac_default_sa", "k8s_rbac_wildcard",
+		"k8s_rbac_secrets", "k8s_rbac_create_pods", "k8s_rbac_escalate", "k8s_rbac_create_pv", "k8s_rbac_node_proxy", "k8s_rbac_csr_approval", "k8s_rbac_webhook_config", "k8s_rbac_sa_token"},
+		Pass: "Roles and bindings grant narrow permissions to dedicated identities."},
 	{ID: "network_policies", Title: "Network policies", Codes: []string{"k8s_network_policy"},
 		Pass: "Every workload is selected by a NetworkPolicy."},
 }

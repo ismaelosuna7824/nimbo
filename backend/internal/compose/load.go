@@ -289,7 +289,13 @@ func (p *Project) composeRel(rel string) string {
 }
 
 func (p *Project) diag(sev model.Severity, code, file string, line int, node, msg, fix string) {
-	d := model.Diagnostic{Severity: sev, Code: code, Message: msg, File: file, Line: line, NodeID: node, Fix: fix}
+	p.diagAt(sev, code, file, line, node, "", msg, fix)
+}
+
+// diagAt is diag with the service attribute the finding is about, for rules
+// that flag several settings (benchmark controls count each setting apart).
+func (p *Project) diagAt(sev model.Severity, code, file string, line int, node, attr, msg, fix string) {
+	d := model.Diagnostic{Severity: sev, Code: code, Message: msg, File: file, Line: line, NodeID: node, Attribute: attr, Fix: fix}
 	if r, ok := ruleByCode[code]; ok {
 		d.Detail, d.Docs = r.Why, r.Docs
 	}

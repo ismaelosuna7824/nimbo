@@ -567,3 +567,32 @@ func deref(p *int) any {
 	}
 	return *p
 }
+
+// Runs without a verdict (target already failing, stopped by the user)
+// neither pass nor fail resilience: the last graded run counts, else a todo
+// that says why there is no verdict.
+func TestUngradedScenarioRunsDontCount(t *testing.T) {
+	dir, wf := dockerTemplate(t, "docker-node-postgres-redis", nil)
+	now := time.Now()
+	stopped := scenarioRun("s3", model.ScenarioDependencyDown, "service:db", "", now.Add(3*time.Minute))
+	stopped.Scenario.Message = "Stopped before the end: no verdict."
+	src := Sources{Runs: []model.LoadTestRun{
+		stopped,
+		scenarioRun("s2", model.ScenarioKillReplica, "service:api", model.ScenarioInconclusive, now.Add(2*time.Minute)),
+		scenarioRun("s1", model.ScenarioKillReplica, "service:api", model.ScenarioSurvived, now.Add(time.Minute)),
+	}}
+	env := dockerEnv(t, Docker(context.Background(), dir, wf, model.BestPracticeSettings{}, src, nil), "")
+	if it := item(t, env, model.ScenarioKillReplica); it.Status != model.ItemPass {
+		t.Errorf("kill replica after an inconclusive rerun: %+v", it)
+	}
+	if it := item(t, env, model.ScenarioDependencyDown); it.Status != model.ItemTodo || !strings.Contains(it.Message, "No verdict yet: Stopped before the end") {
+		t.Errorf("dependency down only stopped: %+v", it)
+	}
+	for _, c := range env.Components {
+		if c.Name == "db" {
+			if r := cell(t, c, model.CellResilience); r.Status != model.ItemTodo {
+				t.Errorf("db resilience cell %+v", r)
+			}
+		}
+	}
+}

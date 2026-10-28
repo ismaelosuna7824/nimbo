@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"sync"
 
 	"github.com/hashicorp/hcl/v2"
 	"github.com/hashicorp/hcl/v2/hclsyntax"
@@ -37,6 +38,7 @@ type finding struct {
 	severity  model.Severity // "" = the rule's severity
 	node      *model.Node
 	attribute string
+	facet     string // model.Diagnostic.Facet
 	message   string
 	why       string
 	fix       string
@@ -47,7 +49,7 @@ func (p *pass) report(f finding) {
 	if sev == "" {
 		sev = p.rule.Severity
 	}
-	d := model.Diagnostic{Severity: sev, Code: p.rule.Code, Message: f.message, Detail: f.why, Fix: f.fix, Attribute: f.attribute}
+	d := model.Diagnostic{Severity: sev, Code: p.rule.Code, Message: f.message, Detail: f.why, Fix: f.fix, Attribute: f.attribute, Facet: f.facet}
 	if f.node != nil {
 		d.NodeID = f.node.ID
 	}
@@ -127,7 +129,7 @@ func source(v model.Value) string {
 func literal(v model.Value) any {
 	raw := v.Literal
 	if len(raw) == 0 && v.Expr != "" {
-		raw, _ = hclcodec.LiteralFromExpr(v.Expr)
+		raw = exprLiteral(v.Expr)
 	}
 	if len(raw) == 0 {
 		return nil
@@ -137,6 +139,35 @@ func literal(v model.Value) any {
 		return nil
 	}
 	return out
+}
+
+// maxLiteralCache bounds literalCache; it is cleared when full. Real
+// workflows have far fewer distinct non-literal expressions.
+const maxLiteralCache = 8192
+
+var (
+	literalMu    sync.Mutex
+	literalCache = map[string]json.RawMessage{} // nil = not constant
+)
+
+// exprLiteral is hclcodec.LiteralFromExpr memoized across checks. Values
+// reach literal() with an empty Literal mostly because they are references,
+// so without the memo every rule re-parsed each of them on every review.
+func exprLiteral(expr string) json.RawMessage {
+	literalMu.Lock()
+	raw, hit := literalCache[expr]
+	literalMu.Unlock()
+	if hit {
+		return raw
+	}
+	raw, _ = hclcodec.LiteralFromExpr(expr)
+	literalMu.Lock()
+	if len(literalCache) >= maxLiteralCache {
+		clear(literalCache)
+	}
+	literalCache[expr] = raw
+	literalMu.Unlock()
+	return raw
 }
 
 func attrString(b *model.Body, name string) (string, bool) {

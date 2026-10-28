@@ -125,6 +125,7 @@ func run(in input) []model.Diagnostic {
 	c.checkQuotas()
 	c.checkImageDigests()
 	c.checkNetworkPolicies()
+	c.checkCIS()
 	return c.diags
 }
 

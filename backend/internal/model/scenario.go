@@ -26,12 +26,22 @@ const (
 	ScenarioTrafficSpike = "traffic_spike"
 )
 
-// Scenario verdicts (ScenarioResult.Verdict).
+// Scenario verdicts (ScenarioResult.Verdict). "" once the run is over means
+// no verdict: it was stopped before the end.
 const (
 	ScenarioSurvived = "survived" // errors and latency stayed within bounds
 	ScenarioDegraded = "degraded" // the system recovered, with a visible impact
 	ScenarioFailed   = "failed"   // errors stayed high or it never recovered
+	// ScenarioInconclusive: the target was already failing before the
+	// fault, so its effect could not be measured (neither passed nor failed).
+	ScenarioInconclusive = "inconclusive"
 )
+
+// ScenarioGraded reports whether a verdict says how the system coped
+// (survived, degraded, failed): readiness counts only those.
+func ScenarioGraded(verdict string) bool {
+	return verdict == ScenarioSurvived || verdict == ScenarioDegraded || verdict == ScenarioFailed
+}
 
 // ScenarioSpec asks a load test to inject a fault. Target is the graph node
 // id of the compose service or Kubernetes workload acted on (unused by

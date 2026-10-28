@@ -164,6 +164,7 @@ func (r *runner) scenarioResult() *model.ScenarioResult {
 		Spec: *sc, Timeline: r.run.Timeline, TimeoutMs: r.run.Spec.TimeoutMs,
 		Closed: r.run.Spec.Profile.Mode == model.ModeConcurrency, Resources: r.run.Resources,
 		Kubernetes: r.sc.kind == model.WorkflowKubernetes,
+		Stopped:    r.stopped.Load(),
 	}
 	end := r.sched.duration()
 	if !r.stopTime.IsZero() {

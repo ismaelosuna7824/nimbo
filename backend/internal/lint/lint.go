@@ -63,7 +63,7 @@ var rules = []rule{
 	{info("bp_name_prefix", "Names use local.name_prefix", CategoryNaming,
 		"When the workflow defines local.name_prefix, resource names are derived from it instead of fixed strings."), checkNamePrefix},
 	{warning("bp_open_ingress", "No admin/database ports open to the internet", CategorySecurity,
-		"Firewall rules don't allow 0.0.0.0/0 (or ::/0) to SSH, RDP or database ports."), checkOpenIngress},
+		"Firewall rules don't allow 0.0.0.0/0 (or ::/0) to SSH, RDP, SMB/CIFS (445) or database ports."), checkOpenIngress},
 	{warning("bp_public_bucket", "Buckets are private unless meant to be public", CategorySecurity,
 		"Public bucket access (public ACLs, open public access blocks, allUsers bindings, public containers) needs an explicit intent: a website configuration or a Public = \"true\" tag."), checkPublicBucket},
 	{warning("bp_unencrypted_storage", "Storage is encrypted at rest", CategorySecurity,
@@ -119,9 +119,10 @@ func Rules() []model.BestPracticeRule {
 func IsFinding(d model.Diagnostic) bool { return strings.HasPrefix(d.Code, Prefix) }
 
 // Check runs the enabled rules over wf, which must be normalized (value
-// pairs filled, edges derived). mods are the local modules wf calls
-// (LocalModules; nil when it calls none or they can't be read). It never
-// returns error-severity findings.
+// pairs filled, edges derived): every rule but the ones in DisabledRules,
+// and opt-in (DefaultOff) rules only when listed in EnabledRules. mods are
+// the local modules wf calls (LocalModules; nil when it calls none or they
+// can't be read). It never returns error-severity findings.
 func Check(wf *model.Workflow, cat *catalog.Catalog, cfg model.BestPracticeSettings, mods *model.ModuleTree) []model.Diagnostic {
 	if cfg.Disabled {
 		return nil
@@ -129,7 +130,7 @@ func Check(wf *model.Workflow, cat *catalog.Catalog, cfg model.BestPracticeSetti
 	p := newPass(wf, cat, mods)
 	for i := range rules {
 		r := &rules[i]
-		if slices.Contains(cfg.DisabledRules, r.Code) {
+		if slices.Contains(cfg.DisabledRules, r.Code) || r.DefaultOff && !slices.Contains(cfg.EnabledRules, r.Code) {
 			continue
 		}
 		p.rule = r

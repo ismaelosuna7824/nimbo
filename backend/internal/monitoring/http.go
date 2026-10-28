@@ -258,42 +258,59 @@ func (r httpRecs) recordRules(total, errors, buckets string, labels map[string]s
 
 // recordings are the recording rules of one workload's source.
 func recordings(w *kubeWorkload, s httpSource) []promRule {
-	var total, errors, buckets string
+	total, errors, buckets := workloadExprs(w, s, rangeRate("rate", "5m"))
+	labels := map[string]string{"namespace": w.namespace, "workload": w.name, "workload_type": w.typ(), "source": s.kind}
+	return workloadRecs.recordRules(total, errors, buckets, labels)
+}
+
+// rangeRate applies a counter function over a window to a series
+// selector: rangeRate("rate", "5m")(`x{a="b"}`) is `rate(x{a="b"}[5m])`.
+func rangeRate(fn, window string) func(series string) string {
+	return func(series string) string { return fn + "(" + series + "[" + window + "])" }
+}
+
+// workloadExprs are a workload source's request rate, 5xx rate and latency
+// buckets (summed by le), each counter read through rate.
+func workloadExprs(w *kubeWorkload, s httpSource, rate func(string) string) (total, errors, buckets string) {
 	switch s.kind {
 	case SourceTraefik:
 		sel := fmt.Sprintf(`service=~%q`, regexAlt(s.traefik))
-		total = fmt.Sprintf(`sum(rate(traefik_service_requests_total{%s}[5m]))`, sel)
-		errors = fmt.Sprintf(`sum(rate(traefik_service_requests_total{%s, code=~"5.."}[5m]))`, sel)
-		buckets = fmt.Sprintf(`sum by (le) (rate(traefik_service_request_duration_seconds_bucket{%s}[5m]))`, sel)
+		total = fmt.Sprintf(`sum(%s)`, rate(`traefik_service_requests_total{`+sel+`}`))
+		errors = fmt.Sprintf(`sum(%s)`, rate(`traefik_service_requests_total{`+sel+`, code=~"5.."}`))
+		buckets = fmt.Sprintf(`sum by (le) (%s)`, rate(`traefik_service_request_duration_seconds_bucket{`+sel+`}`))
 	case SourceIngressNginx:
 		var ings, svcs []string
 		for _, p := range s.nginx {
 			ings, svcs = append(ings, p[0]), append(svcs, p[1])
 		}
 		sel := fmt.Sprintf(`exported_namespace=%q, ingress=~%q, exported_service=~%q`, w.namespace, regexAlt(compactSorted(ings)), regexAlt(compactSorted(svcs)))
-		total = fmt.Sprintf(`sum(rate(nginx_ingress_controller_requests{%s}[5m]))`, sel)
-		errors = fmt.Sprintf(`sum(rate(nginx_ingress_controller_requests{%s, status=~"5.."}[5m]))`, sel)
-		buckets = fmt.Sprintf(`sum by (le) (rate(nginx_ingress_controller_request_duration_seconds_bucket{%s}[5m]))`, sel)
+		total = fmt.Sprintf(`sum(%s)`, rate(`nginx_ingress_controller_requests{`+sel+`}`))
+		errors = fmt.Sprintf(`sum(%s)`, rate(`nginx_ingress_controller_requests{`+sel+`, status=~"5.."}`))
+		buckets = fmt.Sprintf(`sum by (le) (%s)`, rate(`nginx_ingress_controller_request_duration_seconds_bucket{`+sel+`}`))
 	case SourceOTel:
 		own := " * on (namespace, pod) group_left () " + ownerOf(w.namespace, w.name, w.typ())
 		ns := fmt.Sprintf(`namespace=%q`, w.namespace)
-		total = fmt.Sprintf(`sum(rate(http_server_request_duration_seconds_count{%s}[5m])%s)`, ns, own)
-		errors = fmt.Sprintf(`sum(rate(http_server_request_duration_seconds_count{%s, http_response_status_code=~"5.."}[5m])%s)`, ns, own)
-		buckets = fmt.Sprintf(`sum by (le) (rate(http_server_request_duration_seconds_bucket{%s}[5m])%s)`, ns, own)
+		total = fmt.Sprintf(`sum(%s%s)`, rate(`http_server_request_duration_seconds_count{`+ns+`}`), own)
+		errors = fmt.Sprintf(`sum(%s%s)`, rate(`http_server_request_duration_seconds_count{`+ns+`, http_response_status_code=~"5.."}`), own)
+		buckets = fmt.Sprintf(`sum by (le) (%s%s)`, rate(`http_server_request_duration_seconds_bucket{`+ns+`}`), own)
 	}
-	labels := map[string]string{"namespace": w.namespace, "workload": w.name, "workload_type": w.typ(), "source": s.kind}
-	return workloadRecs.recordRules(total, errors, buckets, labels)
+	return total, errors, buckets
 }
 
 // otelRecordings record a compose service's OpenTelemetry HTTP metrics
 // (Prometheus job = the service).
 func otelServiceRecordings(service string) []promRule {
+	total, errors, buckets := otelServiceExprs(service, rangeRate("rate", "5m"))
+	return serviceRecs.recordRules(total, errors, buckets, map[string]string{"service": service, "source": SourceOTel})
+}
+
+// otelServiceExprs are a compose service's request rate, 5xx rate and
+// latency buckets, each counter read through rate.
+func otelServiceExprs(service string, rate func(string) string) (total, errors, buckets string) {
 	job := fmt.Sprintf(`job=%q`, service)
-	return serviceRecs.recordRules(
-		fmt.Sprintf(`sum(rate(http_server_request_duration_seconds_count{%s}[5m]))`, job),
-		fmt.Sprintf(`sum(rate(http_server_request_duration_seconds_count{%s, http_response_status_code=~"5.."}[5m]))`, job),
-		fmt.Sprintf(`sum by (le) (rate(http_server_request_duration_seconds_bucket{%s}[5m]))`, job),
-		map[string]string{"service": service, "source": SourceOTel})
+	return fmt.Sprintf(`sum(%s)`, rate(`http_server_request_duration_seconds_count{`+job+`}`)),
+		fmt.Sprintf(`sum(%s)`, rate(`http_server_request_duration_seconds_count{`+job+`, http_response_status_code=~"5.."}`)),
+		fmt.Sprintf(`sum by (le) (%s)`, rate(`http_server_request_duration_seconds_bucket{`+job+`}`))
 }
 
 // httpAlerts are the HTTP alerts of one workload or service (sel selects

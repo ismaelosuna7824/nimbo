@@ -266,40 +266,53 @@ func (cs *cloudServices) serviceOf(typ string) *curatedService {
 	return nil
 }
 
-// serviceInfo classifies typ: Floci service key, category, icon and support.
+// serviceInfo classifies a type: Floci service key, category, icon and
+// curated support.
 type serviceInfo struct {
 	key      string
 	category string
 	icon     string
 	floci    bool
+
+	known bool // the cloud has curated services (else nothing is supported)
+	local bool // a local data source (caller identity, policy documents…)
 }
 
-func (c *Catalog) serviceInfo(kind model.NodeKind, typ string, cloud model.Cloud) serviceInfo {
+// staticServiceInfo classifies typ without the live services: floci is the
+// curated support only (see supported). It never changes, so summaries keep
+// it.
+func (c *Catalog) staticServiceInfo(kind model.NodeKind, typ string, cloud model.Cloud) serviceInfo {
 	cs := c.clouds[cloud]
 	if cs == nil {
 		return serviceInfo{category: "Other"}
 	}
-	var si serviceInfo
+	si := serviceInfo{known: true, local: kind == model.KindData && cs.local[typ]}
 	if svc := cs.serviceOf(typ); svc != nil {
-		si = serviceInfo{key: svc.Key, category: svc.Category, icon: svc.Icon, floci: svc.Floci}
+		si.key, si.category, si.icon, si.floci = svc.Key, svc.Category, svc.Icon, svc.Floci
 	} else {
 		tail := strings.TrimPrefix(typ, cs.prefix)
-		first, _, _ := strings.Cut(tail, "_")
-		si.key = first
+		si.key, _, _ = strings.Cut(tail, "_")
 		si.category = c.categoryByKeywords(tail)
 	}
+	return si
+}
+
+// supported reports Floci support of a staticServiceInfo result under the
+// current live services.
+func (c *Catalog) supported(cloud model.Cloud, si serviceInfo) bool {
+	if !si.known {
+		return false
+	}
+	floci := si.floci
 	if cloud == model.CloudAWS {
-		si.floci = c.awsKeySupported(si.key)
-	} else if !si.floci {
+		floci = c.awsKeySupported(si.key)
+	} else if !floci {
 		c.mu.RLock()
-		si.floci = c.live[cloud][si.key]
+		floci = c.live[cloud][si.key]
 		c.mu.RUnlock()
 	}
-	// Local data sources (caller identity, policy documents…) need no service.
-	if kind == model.KindData && cs.local[typ] {
-		si.floci = true
-	}
-	return si
+	// Local data sources need no service.
+	return floci || si.local
 }
 
 func (c *Catalog) awsKeySupported(key string) bool {

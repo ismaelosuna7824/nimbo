@@ -49,15 +49,33 @@ func (m *Manager) State(ctx context.Context, wf *model.Workflow) (*model.Deploye
 	if hit && cached.key == key {
 		return m.stateFrom(cached.raw, wf, info)
 	}
+	raw, err := m.showJSON(ctx, wf.ID)
+	if err != nil {
+		return nil, err
+	}
+	st, err := m.stateFrom(raw, wf, info)
+	if err != nil {
+		return nil, err
+	}
+	m.mu.Lock()
+	m.stateCache[wf.ID] = stateEntry{key: key, raw: raw}
+	m.mu.Unlock()
+	return st, nil
+}
+
+// showJSON runs `terraform show -json [file]` in the workflow's workdir,
+// offline, and returns its output: the state, or the saved plan file.
+func (m *Manager) showJSON(ctx context.Context, wfID string, file ...string) ([]byte, error) {
 	image := m.terraformImage()
 	if err := m.ensureImage(ctx, image, func(string) {}); err != nil {
 		return nil, err
 	}
 	var stdout bytes.Buffer
 	for attempt := 0; ; attempt++ {
-		name := "nimbo-" + wf.ID + "-tf-show-" + newRunID()
-		args := m.terraformArgs(name, wf.ID, "none")
+		name := "nimbo-" + wfID + "-tf-show-" + newRunID()
+		args := m.terraformArgs(name, wfID, "none")
 		args = append(args, image, "show", "-json", "-no-color")
+		args = append(args, file...)
 		cmd := exec.CommandContext(ctx, m.dockerBin(), args...)
 		var stderr bytes.Buffer
 		stdout.Reset()
@@ -67,7 +85,7 @@ func (m *Manager) State(ctx context.Context, wf *model.Workflow) (*model.Deploye
 		err := cmd.Run()
 		pluginCacheMu.RUnlock()
 		if err == nil {
-			break
+			return bytes.Clone(stdout.Bytes()), nil
 		}
 		if ctx.Err() != nil {
 			return nil, ctx.Err()
@@ -85,15 +103,6 @@ func (m *Manager) State(ctx context.Context, wf *model.Workflow) (*model.Deploye
 		}
 		return nil, fmt.Errorf("terraform show: %s", msg)
 	}
-	raw := bytes.Clone(stdout.Bytes())
-	st, err := m.stateFrom(raw, wf, info)
-	if err != nil {
-		return nil, err
-	}
-	m.mu.Lock()
-	m.stateCache[wf.ID] = stateEntry{key: key, raw: raw}
-	m.mu.Unlock()
-	return st, nil
 }
 
 // stateKey identifies a version of terraform.tfstate.
@@ -140,9 +149,8 @@ func ParseState(data []byte, wf *model.Workflow) (*model.DeployedState, error) {
 	return parseState(data, wf)
 }
 
-// parseState maps `terraform show -json` output onto workflow nodes. Root
-// resources match the node with the same mode, type and name; resources in
-// module calls belong to the root module node.
+// parseState maps `terraform show -json` output onto workflow nodes (see
+// nodeIndex).
 func parseState(data []byte, wf *model.Workflow) (*model.DeployedState, error) {
 	var doc struct {
 		Values *struct {
@@ -168,17 +176,7 @@ func parseState(data []byte, wf *model.Workflow) (*model.DeployedState, error) {
 		}
 	}
 
-	nodes := map[string]string{} // "resource.type.name" / "data.type.name" / "module.name" -> node ID
-	for _, n := range wf.Nodes {
-		switch n.Kind {
-		case model.KindResource:
-			nodes["managed."+n.Type+"."+n.Name] = n.ID
-		case model.KindData:
-			nodes["data."+n.Type+"."+n.Name] = n.ID
-		case model.KindModule:
-			nodes["module."+n.Name] = n.ID
-		}
-	}
+	nodes := newNodeIndex(wf)
 
 	var walk func(mod tfModule)
 	walk = func(mod tfModule) {
@@ -189,11 +187,7 @@ func parseState(data []byte, wf *model.Workflow) (*model.DeployedState, error) {
 			if dr.Values == nil {
 				dr.Values = map[string]any{}
 			}
-			if mod.Address == "" {
-				dr.NodeID = nodes[r.Mode+"."+r.Type+"."+r.Name]
-			} else {
-				dr.NodeID = nodes[rootModuleCall(mod.Address)]
-			}
+			dr.NodeID = nodes.of(mod.Address, r.Mode, r.Type, r.Name)
 			st.Resources = append(st.Resources, dr)
 		}
 		for _, child := range mod.ChildModules {
@@ -202,6 +196,35 @@ func parseState(data []byte, wf *model.Workflow) (*model.DeployedState, error) {
 	}
 	walk(doc.Values.RootModule)
 	return st, nil
+}
+
+// nodeIndex finds the node of a Terraform resource instance. Root resources
+// match the node with the same mode, type and name; resources in module
+// calls belong to the root module node.
+type nodeIndex map[string]string // "managed.type.name" / "data.type.name" / "module.name" -> node ID
+
+func newNodeIndex(wf *model.Workflow) nodeIndex {
+	nodes := nodeIndex{}
+	for _, n := range wf.Nodes {
+		switch n.Kind {
+		case model.KindResource:
+			nodes["managed."+n.Type+"."+n.Name] = n.ID
+		case model.KindData:
+			nodes["data."+n.Type+"."+n.Name] = n.ID
+		case model.KindModule:
+			nodes["module."+n.Name] = n.ID
+		}
+	}
+	return nodes
+}
+
+// of returns the node of a resource in the module instance moduleAddr ("" =
+// root), or "" when no node declares it anymore.
+func (ni nodeIndex) of(moduleAddr, mode, typ, name string) string {
+	if moduleAddr == "" {
+		return ni[mode+"."+typ+"."+name]
+	}
+	return ni[rootModuleCall(moduleAddr)]
 }
 
 // rootModuleCall returns "module.<name>" for a module instance address such

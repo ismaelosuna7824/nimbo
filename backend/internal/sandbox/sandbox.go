@@ -252,7 +252,9 @@ func (m *Manager) inspect(ctx context.Context, sb *sandbox) (model.SandboxStatus
 	} else if ok {
 		st.Network = networkName(wfID)
 	}
-	var ports map[int]int
+	// A pod that isn't running publishes no ports: record that as known so
+	// EmulatorURL lookups until the next start don't each ask docker.
+	ports := map[int]int{}
 	if pod != nil && pod.running() {
 		if ports, err = m.hostPorts(ctx, pod.Names); err != nil {
 			return st, err
@@ -973,6 +975,11 @@ func (m *Manager) hostPort(wfID string, port int) int {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	ports, err := m.hostPorts(ctx, podName(wfID))
+	if err != nil && strings.Contains(err.Error(), "No such container") {
+		// No pod, no ports until Start publishes them (it refreshes the
+		// cache); without caching, every URL lookup would spawn docker.
+		ports, err = map[int]int{}, nil
+	}
 	if err != nil {
 		return 0
 	}

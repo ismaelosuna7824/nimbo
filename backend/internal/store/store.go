@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -30,6 +31,20 @@ var validID = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{0,63}$`)
 type Store struct {
 	dir string
 	mu  sync.Mutex
+
+	// summaries caches List entries per workflow by workflow.json version,
+	// so listing re-parses only workflows changed since the last List
+	// instead of every full workflow (nodes, files, diagnostics) each time.
+	summaryMu sync.Mutex
+	summaries map[string]cachedSummary
+}
+
+// cachedSummary is a List entry and the workflow.json it was read from.
+// write replaces the file (a new inode), so a save never matches even on
+// file systems with coarse timestamps; in-place edits change mtime or size.
+type cachedSummary struct {
+	file os.FileInfo
+	sum  model.WorkflowSummary
 }
 
 // Open creates <home>/workflows if needed and returns a store rooted there.
@@ -38,7 +53,7 @@ func Open(home string) (*Store, error) {
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return nil, fmt.Errorf("create workflows dir: %w", err)
 	}
-	return &Store{dir: dir}, nil
+	return &Store{dir: dir, summaries: map[string]cachedSummary{}}, nil
 }
 
 // List returns every readable workflow, most recently updated first.
@@ -53,40 +68,78 @@ func (s *Store) List() ([]model.WorkflowSummary, error) {
 		if !e.IsDir() || !validID.MatchString(e.Name()) {
 			continue
 		}
-		wf, err := s.read(e.Name())
+		sum, err := s.summary(e.Name())
 		if err != nil {
 			continue
 		}
-		clouds := wf.Clouds
-		if clouds == nil {
-			clouds = []model.Cloud{}
-		}
-		count := len(wf.Nodes)
-		if wf.IsDocker() && wf.Compose != nil {
-			count = 0
-			for _, n := range wf.Compose.Graph.Nodes {
-				if n.Kind == model.ComposeService {
-					count++
-				}
-			}
-		}
-		if wf.IsKubernetes() && wf.Kubernetes != nil {
-			count = len(wf.Kubernetes.Graph.Nodes)
-		}
-		out = append(out, model.WorkflowSummary{
-			ID:          wf.ID,
-			Name:        wf.Name,
-			Description: wf.Description,
-			Kind:        wf.Kind,
-			UpdatedAt:   wf.UpdatedAt,
-			NodeCount:   count,
-			Clouds:      clouds,
-			Archived:    wf.Archived,
-			Icon:        wf.Icon,
-		})
+		out = append(out, sum)
 	}
 	sort.SliceStable(out, func(i, j int) bool { return out[i].UpdatedAt.After(out[j].UpdatedAt) })
 	return out, nil
+}
+
+// summary returns the List entry of workflow id, parsing workflow.json
+// only when it is not the version cached.
+func (s *Store) summary(id string) (model.WorkflowSummary, error) {
+	f, err := os.Open(filepath.Join(s.dir, id, workflowFile))
+	if err != nil {
+		return model.WorkflowSummary{}, err
+	}
+	defer f.Close()
+	info, err := f.Stat()
+	if err != nil {
+		return model.WorkflowSummary{}, err
+	}
+	s.summaryMu.Lock()
+	c, hit := s.summaries[id]
+	s.summaryMu.Unlock()
+	if hit && os.SameFile(c.file, info) && c.file.Size() == info.Size() && c.file.ModTime().Equal(info.ModTime()) {
+		return c.sum, nil
+	}
+	data, err := io.ReadAll(f)
+	if err != nil {
+		return model.WorkflowSummary{}, err
+	}
+	wf, err := decode(id, data)
+	if err != nil {
+		return model.WorkflowSummary{}, err
+	}
+	sum := summarize(wf)
+	s.summaryMu.Lock()
+	s.summaries[id] = cachedSummary{file: info, sum: sum}
+	s.summaryMu.Unlock()
+	return sum, nil
+}
+
+func summarize(wf *model.Workflow) model.WorkflowSummary {
+	clouds := wf.Clouds
+	if clouds == nil {
+		clouds = []model.Cloud{}
+	}
+	count := len(wf.Nodes)
+	if wf.IsDocker() && wf.Compose != nil {
+		count = 0
+		for _, n := range wf.Compose.Graph.Nodes {
+			if n.Kind == model.ComposeService {
+				count++
+			}
+		}
+	}
+	if wf.IsKubernetes() && wf.Kubernetes != nil {
+		count = len(wf.Kubernetes.Graph.Nodes)
+	}
+	return model.WorkflowSummary{
+		ID:          wf.ID,
+		Name:        wf.Name,
+		Description: wf.Description,
+		Kind:        wf.Kind,
+		UpdatedAt:   wf.UpdatedAt,
+		NodeCount:   count,
+		Clouds:      clouds,
+		UsedClouds:  wf.UsedClouds,
+		Archived:    wf.Archived,
+		Icon:        wf.Icon,
+	}
 }
 
 // Get loads one workflow.
@@ -105,11 +158,17 @@ func (s *Store) read(id string) (*model.Workflow, error) {
 	if err != nil {
 		return nil, err
 	}
+	return decode(id, data)
+}
+
+func decode(id string, data []byte) (*model.Workflow, error) {
 	var wf model.Workflow
 	if err := json.Unmarshal(data, &wf); err != nil {
 		return nil, fmt.Errorf("parse workflow %s: %w", id, err)
 	}
 	wf.ID = id
+	// Derived, so files saved before the field existed get it too.
+	wf.UsedClouds = wf.ResourceClouds()
 	return &wf, nil
 }
 
@@ -212,6 +271,13 @@ func (s *Store) write(wf *model.Workflow) error {
 	return os.Rename(tmp.Name(), filepath.Join(dir, workflowFile))
 }
 
+// forget drops the cached List entry of workflow id.
+func (s *Store) forget(id string) {
+	s.summaryMu.Lock()
+	delete(s.summaries, id)
+	s.summaryMu.Unlock()
+}
+
 // Delete removes the workflow directory including its assets.
 func (s *Store) Delete(id string) error {
 	if !validID.MatchString(id) {
@@ -223,7 +289,11 @@ func (s *Store) Delete(id string) error {
 	if _, err := os.Stat(filepath.Join(dir, workflowFile)); errors.Is(err, os.ErrNotExist) {
 		return ErrNotFound
 	}
-	return os.RemoveAll(dir)
+	if err := os.RemoveAll(dir); err != nil {
+		return err
+	}
+	s.forget(id)
+	return nil
 }
 
 // AssetsDir is where non-Terraform files of a workflow (Lambda sources,

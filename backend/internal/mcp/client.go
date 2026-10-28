@@ -101,6 +101,11 @@ func (c *client) do(ctx context.Context, method, path string, body, out any) err
 	if out == nil || res.StatusCode == http.StatusNoContent {
 		return nil
 	}
+	// Text endpoints (the compliance report's Markdown) are read as is.
+	if s, ok := out.(*string); ok && !strings.HasPrefix(res.Header.Get("Content-Type"), "application/json") {
+		*s = string(data)
+		return nil
+	}
 	return json.Unmarshal(data, out)
 }
 

@@ -35,6 +35,11 @@ type evaluator struct {
 	base       *hcl.EvalContext // cached context; reset after each vertex
 	entities   []*entity
 	notes      []string
+	// exprs memoizes parsed sources: references, ordering and evaluation
+	// each read every expression, and parsing dominated a design pass.
+	exprs    map[string]hclsyntax.Expression
+	nodes    map[string]*model.Node // by vertex
+	typeObjs map[string]cty.Value   // typeObject results by type key
 }
 
 var metaAttrs = map[string]bool{"count": true, "for_each": true, "provider": true, "depends_on": true}
@@ -51,6 +56,14 @@ func evaluateDesign(wf *model.Workflow) ([]*entity, []string) {
 		data:       map[string]map[string]cty.Value{},
 		funcs:      functions(),
 		referenced: map[string]map[string]bool{},
+		exprs:      map[string]hclsyntax.Expression{},
+		nodes:      make(map[string]*model.Node, len(wf.Nodes)),
+		typeObjs:   map[string]cty.Value{},
+	}
+	for i := range wf.Nodes {
+		if v := vertexOf(&wf.Nodes[i]); ev.nodes[v] == nil {
+			ev.nodes[v] = &wf.Nodes[i] // the first, like a linear search
+		}
 	}
 	ev.evalVariables()
 	ev.collectReferences()
@@ -59,7 +72,7 @@ func evaluateDesign(wf *model.Workflow) ([]*entity, []string) {
 		case strings.HasPrefix(v, "local."):
 			ev.evalLocal(strings.TrimPrefix(v, "local."))
 		default:
-			ev.evalNode(ev.nodeByVertex(v))
+			ev.evalNode(ev.nodes[v])
 		}
 		ev.base = nil
 	}
@@ -126,19 +139,21 @@ func parseExpr(src string) hclsyntax.Expression {
 	return e
 }
 
+// parse is parseExpr memoized for the evaluator's lifetime (nil = empty or
+// invalid source). Parsed expressions are never mutated, only evaluated.
+func (ev *evaluator) parse(src string) hclsyntax.Expression {
+	e, ok := ev.exprs[src]
+	if !ok {
+		e = parseExpr(src)
+		ev.exprs[src] = e
+	}
+	return e
+}
+
 // ---------------------------------------------------------------------------
 // Dependency order
 
 func vertexOf(n *model.Node) string { return hclcodec.Address(n) }
-
-func (ev *evaluator) nodeByVertex(v string) *model.Node {
-	for i := range ev.wf.Nodes {
-		if vertexOf(&ev.wf.Nodes[i]) == v {
-			return &ev.wf.Nodes[i]
-		}
-	}
-	return nil
-}
 
 // refVertex maps a traversal to the vertex it reads ("aws_vpc.main",
 // "data.aws_x.y", "local.z") and the attribute read from a resource.
@@ -191,8 +206,8 @@ func bodyExprs(b *model.Body, fn func(src string)) {
 	}
 }
 
-func traversals(src string) []hcl.Traversal {
-	e := parseExpr(src)
+func (ev *evaluator) traversals(src string) []hcl.Traversal {
+	e := ev.parse(src)
 	if e == nil {
 		return nil
 	}
@@ -201,7 +216,7 @@ func traversals(src string) []hcl.Traversal {
 
 func (ev *evaluator) collectReferences() {
 	note := func(src string) {
-		for _, t := range traversals(src) {
+		for _, t := range ev.traversals(src) {
 			v, attr := refVertex(t)
 			if v == "" || attr == "" || strings.HasPrefix(v, "local.") {
 				continue
@@ -241,7 +256,7 @@ func (ev *evaluator) order() []string {
 		add("local." + l.Name)
 	}
 	link := func(v, src string) {
-		for _, t := range traversals(src) {
+		for _, t := range ev.traversals(src) {
 			if d, _ := refVertex(t); d != "" && d != v {
 				if _, ok := deps[d]; ok {
 					deps[v][d] = true
@@ -317,21 +332,33 @@ func (ev *evaluator) ctx() *hcl.EvalContext {
 		"module":    cty.DynamicVal,
 	}
 	for typ, byName := range ev.resources {
-		vars[typ] = objectOrEmpty(byName)
+		vars[typ] = ev.typeObject(typ, byName)
 	}
 	data := map[string]cty.Value{}
 	for typ, byName := range ev.data {
-		data[typ] = objectOrEmpty(byName)
+		data[typ] = ev.typeObject("data."+typ, byName)
 	}
 	vars["data"] = objectOrEmpty(data)
 	ev.base = &hcl.EvalContext{Variables: vars, Functions: ev.funcs}
 	return ev.base
 }
 
+// typeObject returns the object of one resource (or "data.") type's
+// instances. Only the type of the vertex just evaluated changes between
+// contexts, so rebuilding every type per vertex made a pass quadratic.
+func (ev *evaluator) typeObject(key string, byName map[string]cty.Value) cty.Value {
+	v, ok := ev.typeObjs[key]
+	if !ok {
+		v = objectOrEmpty(byName)
+		ev.typeObjs[key] = v
+	}
+	return v
+}
+
 // eval evaluates src; any error (unknown reference, unsupported function,
 // type mismatch) gives an unknown value.
-func eval(src string, ctx *hcl.EvalContext) cty.Value {
-	e := parseExpr(src)
+func (ev *evaluator) eval(src string, ctx *hcl.EvalContext) cty.Value {
+	e := ev.parse(src)
 	if e == nil {
 		return cty.DynamicVal
 	}
@@ -345,7 +372,7 @@ func eval(src string, ctx *hcl.EvalContext) cty.Value {
 func (ev *evaluator) evalLocal(name string) {
 	for _, l := range ev.wf.Locals {
 		if l.Name == name {
-			ev.locals[name] = eval(l.Value.Expr, ev.ctx())
+			ev.locals[name] = ev.eval(l.Value.Expr, ev.ctx())
 		}
 	}
 }
@@ -376,7 +403,7 @@ func (ev *evaluator) evalNode(n *model.Node) {
 	var value cty.Value
 	switch {
 	case forEachA != nil:
-		fe := eval(forEachA.Value.Expr, base)
+		fe := ev.eval(forEachA.Value.Expr, base)
 		items, ok := forEachItems(fe)
 		if !ok {
 			child := base.NewChild()
@@ -393,7 +420,7 @@ func (ev *evaluator) evalNode(n *model.Node) {
 		}
 		value = objectOrEmpty(objs)
 	case countA != nil:
-		c := eval(countA.Value.Expr, base)
+		c := ev.eval(countA.Value.Expr, base)
 		cnt, ok := countOf(c)
 		if !ok {
 			child := base.NewChild()
@@ -416,14 +443,15 @@ func (ev *evaluator) evalNode(n *model.Node) {
 	default:
 		value = instance(base, addr, "", false)
 	}
-	target := ev.resources
+	target, key := ev.resources, n.Type
 	if n.Kind == model.KindData {
-		target = ev.data
+		target, key = ev.data, "data."+n.Type
 	}
 	if target[n.Type] == nil {
 		target[n.Type] = map[string]cty.Value{}
 	}
 	target[n.Type][n.Name] = value
+	delete(ev.typeObjs, key)
 }
 
 func forEachItems(v cty.Value) (map[string]cty.Value, bool) {
@@ -485,7 +513,7 @@ func (ev *evaluator) bodyValue(b *model.Body, ctx *hcl.EvalContext) cty.Value {
 		if metaAttrs[a.Name] {
 			continue
 		}
-		vals[a.Name] = eval(a.Value.Expr, ctx)
+		vals[a.Name] = ev.eval(a.Value.Expr, ctx)
 	}
 	lists := map[string][]cty.Value{}
 	unknownList := map[string]bool{}
@@ -513,9 +541,9 @@ func (ev *evaluator) bodyValue(b *model.Body, ctx *hcl.EvalContext) cty.Value {
 			for _, a := range blk.Body.Attrs {
 				switch a.Name {
 				case "for_each":
-					fe = eval(a.Value.Expr, ctx)
+					fe = ev.eval(a.Value.Expr, ctx)
 				case "iterator":
-					if e := parseExpr(a.Value.Expr); e != nil {
+					if e := ev.parse(a.Value.Expr); e != nil {
 						if tr, diags := hcl.AbsTraversalForExpr(e); !diags.HasErrors() {
 							iter = tr.RootName()
 						}

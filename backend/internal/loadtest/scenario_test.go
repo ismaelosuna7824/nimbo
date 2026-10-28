@@ -165,6 +165,10 @@ func TestScenarioRevertedWhenRunStops(t *testing.T) {
 	if got.Status != model.LoadStopped || got.Scenario == nil || got.Scenario.RevertedAtSec == nil || *got.Scenario.RevertedAtSec > 8 {
 		t.Errorf("status %s scenario %+v", got.Status, got.Scenario)
 	}
+	// Stopped by the user: no verdict on a fault watched for a second.
+	if got.Scenario != nil && (got.Scenario.Verdict != "" || !strings.HasPrefix(got.Scenario.Message, "Stopped before the end")) {
+		t.Errorf("stopped run graded %q: %s", got.Scenario.Verdict, got.Scenario.Message)
+	}
 }
 
 func TestShutdownRevertsRunningFaults(t *testing.T) {

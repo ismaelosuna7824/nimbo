@@ -254,6 +254,12 @@ func checkWorkspaceBranching(p *pass) {
 }
 
 func referencesWorkspace(v model.Value) bool {
+	// Parsing every attribute was this rule's whole cost. A reference is
+	// spelled out in Expr (literals have none), so without the word there
+	// is nothing to find.
+	if !strings.Contains(v.Expr, "workspace") {
+		return false
+	}
 	for _, r := range references(v) {
 		if r == "terraform.workspace" {
 			return true

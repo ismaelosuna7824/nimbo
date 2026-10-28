@@ -52,9 +52,11 @@ func (p *Project) practices() {
 	for _, name := range names {
 		s := m.Services[name]
 		p.servicePractices(name, s, dependents[name], oneShot(name))
+		p.cisService(name, s)
 		if s.Build != nil {
 			if df := p.dockerfilePath(s); df != "" && p.Dockerfiles[df] != nil {
 				p.dockerfilePractices(name, s, df, seen)
+				p.cisDockerfile(name, s, df, seen)
 			}
 			if ctx := p.contextPath(s); ctx != "" && !strings.HasPrefix(ctx, "..") && !contexts[ctx] && p.isDir(ctx) {
 				contexts[ctx] = true
@@ -133,7 +135,7 @@ func (p *Project) servicePractices(name string, s types.ServiceConfig, dependent
 	for _, h := range host {
 		if h.on {
 			file, line := p.fieldLine(name, h.field)
-			p.diag(model.SeverityWarning, "dk_privileged", file, line, id, fmt.Sprintf("%s runs with %s", name, h.what),
+			p.diagAt(model.SeverityWarning, "dk_privileged", file, line, id, h.field, fmt.Sprintf("%s runs with %s", name, h.what),
 				fmt.Sprintf("Remove %s; grant only what the service needs (cap_add: one capability, devices: one device, ports: for networking).", h.field))
 		}
 	}

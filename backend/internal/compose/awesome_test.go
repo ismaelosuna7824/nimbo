@@ -64,7 +64,7 @@ func TestAwesomeCompose(t *testing.T) {
 		services += len(p.Model.Services)
 		hit := map[string]bool{}
 		// Every rule, opt-in ones included (marked in the summary).
-		for _, d := range FilterSettings(slices.Clone(p.Diagnostics), allRules) {
+		for _, d := range FilterSettings(slices.Clone(p.Diagnostics), allRules()) {
 			if d.Severity == model.SeverityError {
 				continue
 			}
@@ -196,8 +196,9 @@ func TestAwesomeCompose(t *testing.T) {
 	}
 }
 
-// allRules turns every opt-in rule on.
-var allRules = func() model.BestPracticeSettings {
+// allRules turns every opt-in rule on (a function: files of the package
+// append rules from init).
+func allRules() model.BestPracticeSettings {
 	var s model.BestPracticeSettings
 	for _, r := range rules {
 		if r.DefaultOff {
@@ -205,7 +206,7 @@ var allRules = func() model.BestPracticeSettings {
 		}
 	}
 	return s
-}()
+}
 
 func envSpecs(env []model.ServiceEnv) []EnvSpec {
 	out := make([]EnvSpec, 0, len(env))

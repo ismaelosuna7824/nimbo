@@ -34,10 +34,30 @@ type Catalog struct {
 
 	summariesOnce sync.Once
 	summaries     []summary
+	summaryIdx    map[schemaKey]int // summaries index by kind and type
+
+	// schemas memoizes decoded schema entries with curated metadata
+	// applied: both are immutable, and decoding the entry's JSON dominated
+	// every lint/validate pass (one lookup per node and rule).
+	schemaMu sync.RWMutex
+	schemas  map[schemaKey]*cachedSchema
 
 	mu        sync.RWMutex
 	live      map[model.Cloud]map[string]bool
 	awsRegion string // region of new aws provider blocks; "" = us-east-1
+}
+
+type schemaKey struct {
+	kind model.NodeKind
+	typ  string
+}
+
+// cachedSchema is the immutable part of a ResourceSchema. Its Block is
+// shared by every Schema result, so callers must treat it as read-only.
+type cachedSchema struct {
+	description string
+	docsURL     string
+	block       model.SchemaBlock
 }
 
 // provider is one embedded provider schema, decompressed on first use.
@@ -83,10 +103,11 @@ func Load() (*Catalog, error) {
 		return nil, err
 	}
 	c := &Catalog{
-		byName: map[string]*provider{},
-		cur:    cur,
-		clouds: buildCloudServices(cur),
-		live:   map[model.Cloud]map[string]bool{},
+		byName:  map[string]*provider{},
+		cur:     cur,
+		clouds:  buildCloudServices(cur),
+		live:    map[model.Cloud]map[string]bool{},
+		schemas: map[schemaKey]*cachedSchema{},
 	}
 	for _, m := range providerMeta {
 		var ip *schemafile.IndexProvider
@@ -252,6 +273,7 @@ func (c *Catalog) ResourceFile(typ string) string {
 }
 
 // Schema returns the full schema of a type with curated metadata applied.
+// The returned Block is shared between calls and must not be modified.
 func (c *Catalog) Schema(kind model.NodeKind, typ string) (*model.ResourceSchema, bool) {
 	if kind != model.KindResource && kind != model.KindData {
 		return nil, false
@@ -260,24 +282,43 @@ func (c *Catalog) Schema(kind model.NodeKind, typ string) (*model.ResourceSchema
 	if !ok {
 		return nil, false
 	}
+	cs, ok := c.cachedSchema(p, kind, typ)
+	if !ok {
+		return nil, false
+	}
+	// The summary reflects live emulator services, so it is built per call.
+	return &model.ResourceSchema{
+		ResourceSummary: c.summarize(kind, typ, p),
+		Provider:        p.info.Source,
+		Description:     cs.description,
+		DocsURL:         cs.docsURL,
+		Block:           cs.block,
+	}, true
+}
+
+func (c *Catalog) cachedSchema(p *provider, kind model.NodeKind, typ string) (*cachedSchema, bool) {
+	key := schemaKey{kind, typ}
+	c.schemaMu.RLock()
+	cs, hit := c.schemas[key]
+	c.schemaMu.RUnlock()
+	if hit {
+		return cs, true
+	}
 	e, ok := p.entry(kind, typ)
 	if !ok {
 		return nil, false
 	}
-	rs := &model.ResourceSchema{
-		ResourceSummary: c.summarize(kind, typ, p),
-		Provider:        p.info.Source,
-		Description:     e.Description,
-		DocsURL:         docsURL(p, kind, typ),
-		Block:           e.Block,
-	}
+	cs = &cachedSchema{description: e.Description, docsURL: docsURL(p, kind, typ), block: e.Block}
 	if cr := c.cur.lookup(kind, typ); cr != nil {
 		if cr.Description != "" {
-			rs.Description = cr.Description
+			cs.description = cr.Description
 		}
-		applyAttrMeta(&rs.Block, cr.Attrs)
+		applyAttrMeta(&cs.block, cr.Attrs)
 	}
-	return rs, true
+	c.schemaMu.Lock()
+	c.schemas[key] = cs
+	c.schemaMu.Unlock()
+	return cs, true
 }
 
 // NamingAttr returns the attribute that names the cloud resource of a

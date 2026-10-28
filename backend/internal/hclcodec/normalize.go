@@ -23,6 +23,7 @@ func Normalize(wf *model.Workflow) []model.Diagnostic {
 	n.walkAll()
 	wf.Edges = n.sortedEdges()
 	wf.Clouds = cloudsOf(wf)
+	wf.UsedClouds = wf.ResourceClouds()
 	n.diags = append(n.diags, fileDiags(wf)...)
 	return dedupDiags(n.diags)
 }
@@ -444,34 +445,14 @@ func dedupDiags(diags []model.Diagnostic) []model.Diagnostic {
 	return out
 }
 
-// cloudOfType maps a resource type or provider name to its cloud.
-func cloudOfType(s string) (model.Cloud, bool) {
-	p, _, _ := strings.Cut(s, "_")
-	switch p {
-	case "aws":
-		return model.CloudAWS, true
-	case "azurerm", "azuread", "azapi":
-		return model.CloudAzure, true
-	case "google", "google-beta":
-		return model.CloudGCP, true
-	case "oci":
-		return model.CloudOCI, true
-	}
-	return "", false
-}
-
 func cloudsOf(wf *model.Workflow) []model.Cloud {
 	found := map[model.Cloud]bool{}
-	for _, nd := range wf.Nodes {
-		if nd.Kind == model.KindModule {
-			continue
-		}
-		if c, ok := cloudOfType(nd.Type); ok {
-			found[c] = true
-		}
+	for _, c := range wf.ResourceClouds() {
+		found[c] = true
 	}
+	// Declared providers count too: the sandbox and the export configure every one of them, used or not.
 	for _, p := range wf.Providers {
-		if c, ok := cloudOfType(p.Name); ok {
+		if c, ok := model.CloudOfType(p.Name); ok {
 			found[c] = true
 		}
 	}

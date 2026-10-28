@@ -88,7 +88,7 @@ func Summarize(files map[string][]byte) Summary {
 	clouds := map[model.Cloud]bool{}
 	for p := range providers {
 		s.Providers = append(s.Providers, p)
-		if c, ok := cloudOfType(p); ok {
+		if c, ok := model.CloudOfType(p); ok {
 			clouds[c] = true
 		}
 	}

@@ -13,6 +13,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/ismaelosuna7824/nimbo/backend/internal/cicd"
 	"github.com/ismaelosuna7824/nimbo/backend/internal/hclcodec"
 	"github.com/ismaelosuna7824/nimbo/backend/internal/model"
 )
@@ -160,10 +161,35 @@ func (s *Server) exportFiles(wf *model.Workflow, environments bool) (generated m
 	return generated, assets, nil
 }
 
+// exportPipeline adds the CI/CD pipeline ci (provider name; "" or "none":
+// nothing) to an export from exportFiles: the pipeline file and its README
+// section (cicd.Files), which replace workflow files with the same path.
+func (s *Server) exportPipeline(wf *model.Workflow, generated map[string][]byte, assets map[string]string, ci string, smoke bool) error {
+	provider, err := cicd.ParseProvider(ci)
+	if err != nil {
+		return errorf(http.StatusBadRequest, "%s", err.Error())
+	}
+	own := make(map[string]bool, len(assets))
+	for p := range assets {
+		own[p] = true
+	}
+	files, err := cicd.Files(wf, generated, own, cicd.Options{Provider: provider, Smoke: smoke})
+	if err != nil {
+		return errorf(http.StatusBadRequest, "CI/CD pipeline: %s", err.Error())
+	}
+	for p, data := range files {
+		generated[p] = data
+		delete(assets, p)
+	}
+	return nil
+}
+
 func (s *Server) exportDir(w http.ResponseWriter, r *http.Request) error {
 	var req struct {
 		Dir          string `json:"dir"`
 		Environments bool   `json:"environments"`
+		CI           string `json:"ci"`
+		Smoke        bool   `json:"smoke"`
 	}
 	if err := decode(w, r, maxBody, &req); err != nil {
 		return err
@@ -178,6 +204,9 @@ func (s *Server) exportDir(w http.ResponseWriter, r *http.Request) error {
 	}
 	generated, assets, err := s.exportFiles(wf, req.Environments)
 	if err != nil {
+		return err
+	}
+	if err := s.exportPipeline(wf, generated, assets, req.CI, req.Smoke); err != nil {
 		return err
 	}
 	assetsRoot := s.cfg.Store.AssetsDir(wf.ID)
@@ -207,8 +236,12 @@ func (s *Server) exportZip(w http.ResponseWriter, r *http.Request) error {
 	if err != nil {
 		return err
 	}
-	generated, assets, err := s.exportFiles(wf, r.URL.Query().Get("environments") == "true")
+	q := r.URL.Query()
+	generated, assets, err := s.exportFiles(wf, q.Get("environments") == "true")
 	if err != nil {
+		return err
+	}
+	if err := s.exportPipeline(wf, generated, assets, q.Get("ci"), q.Get("smoke") == "true"); err != nil {
 		return err
 	}
 	names := make([]string, 0, len(generated))

@@ -821,6 +821,38 @@ func (l *envLayout) rootRequiredVersion() string {
 	return atLeast(requiredVersion(l.wf), l.backend.minTF)
 }
 
+// RequiredVersion is the Terraform version constraint the exported code
+// needs ("" without one): the roots' required_version (the workflow's,
+// raised in the environments layout to what the state backend needs) and,
+// in the single layout, what backend.tf.example needs once copied to
+// backend.tf.
+func RequiredVersion(wf *model.Workflow) string {
+	if layout, err := ResolveLayout(wf); err == nil && layout == model.LayoutEnvironments {
+		if l, err := newEnvLayout(wf); err == nil {
+			return l.rootRequiredVersion()
+		}
+	}
+	if !HasBackend(wf) {
+		if plan := defaultBackend(primaryCloud(wf), ServiceName(wf)); plan != nil {
+			return atLeast(requiredVersion(wf), plan.minTF)
+		}
+	}
+	return requiredVersion(wf)
+}
+
+// HasBackend reports a backend or cloud block of the workflow.
+func HasBackend(wf *model.Workflow) bool {
+	if wf.Terraform == nil {
+		return false
+	}
+	for _, b := range wf.Terraform.Blocks {
+		if b.Type == "backend" || b.Type == "cloud" {
+			return true
+		}
+	}
+	return false
+}
+
 // ---------------------------------------------------------------------------
 // Export
 

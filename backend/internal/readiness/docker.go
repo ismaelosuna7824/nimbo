@@ -62,15 +62,17 @@ var dockerReliability = []Check{
 var dockerSecurity = []Check{
 	{ID: "secrets", Title: "Secrets", Codes: []string{"dk_secret_env", "dk_secret_build"},
 		Pass: "Credentials come from .env files or secrets, not from the compose files or build arguments."},
-	{ID: "privileges", Title: "Container privileges", Codes: []string{"dk_root_user", "dk_docker_sock", "dk_privileged", "dk_hardening"},
-		Pass: "Containers run unprivileged, as non-root and without the Docker socket."},
-	{ID: "exposure", Title: "Published ports", Codes: []string{"dk_db_published"},
-		Pass: "Databases are reached inside the project network only."},
+	{ID: "privileges", Title: "Container privileges", Codes: []string{"dk_root_user", "dk_docker_sock", "dk_privileged", "dk_hardening",
+		"dk_cap_add", "dk_net_raw", "dk_read_only", "dk_no_new_privileges", "dk_apparmor_unconfined", "dk_selinux_disabled", "dk_seccomp_unconfined", "dk_pids_limit",
+		"dk_host_dirs", "dk_host_ipc", "dk_host_uts", "dk_host_userns", "dk_devices", "dk_mount_propagation"},
+		Pass: "Containers run unprivileged, as non-root, with Docker's security profiles and a process limit, without the Docker socket or host access."},
+	{ID: "exposure", Title: "Published ports", Codes: []string{"dk_db_published", "dk_port_interface", "dk_privileged_port", "dk_default_bridge"},
+		Pass: "Ports are published on a specific interface and unprivileged host ports, databases stay inside the project network and services use the project's networks."},
 }
 
 var dockerHygiene = []Check{
 	{ID: "images", Title: "Image pinning", Codes: []string{"dk_latest_tag"}, Pass: "Images are pinned."},
-	{ID: "builds", Title: "Dockerfiles", Codes: []string{"dk_single_stage", "dk_heavy_base", "dk_dockerignore", "dk_layer_order", "dk_cache_mount", "dk_apt_install", "dk_pip_cache", "dk_apk_cache", "dk_add", "dk_shell_form", "dk_workdir"},
+	{ID: "builds", Title: "Dockerfiles", Codes: []string{"dk_single_stage", "dk_heavy_base", "dk_dockerignore", "dk_layer_order", "dk_cache_mount", "dk_apt_install", "dk_pip_cache", "dk_apk_cache", "dk_add", "dk_add_any", "dk_update_alone", "dk_shell_form", "dk_workdir"},
 		Pass: "Builds are small, cached and use exec-form commands."},
 	{ID: "logs", Title: "Log rotation", Codes: []string{"dk_log_rotation"}, Pass: "Container logs are rotated."},
 	{ID: "ports", Title: "Port wiring", Codes: []string{"dk_expose_mismatch"}, Pass: "Published ports match what the images listen on."},

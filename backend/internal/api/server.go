@@ -76,6 +76,9 @@ type Server struct {
 
 	// challenges runs "Check my solution" of challenge workflows.
 	challenges *challenge.Checker
+
+	// liveSeries caches the live traffic queries per workflow version.
+	liveSeries liveSeriesCache
 }
 
 const (
@@ -235,6 +238,10 @@ func (s *Server) routes() {
 	h("GET "+p+"/workflows/{id}/monitoring", s.getMonitoring)
 	h("POST "+p+"/workflows/{id}/monitoring", s.addMonitoring)
 	h("GET "+p+"/workflows/{id}/readiness", s.workflowReadiness)
+	h("GET "+p+"/workflows/{id}/compliance", s.workflowCompliance)
+	h("GET "+p+"/workflows/{id}/compliance/report", s.complianceReport)
+	h("PUT "+p+"/workflows/{id}/compliance/attestations/{framework}/{control}", s.attestControl)
+	h("DELETE "+p+"/workflows/{id}/compliance/attestations/{framework}/{control}", s.unattestControl)
 	h("GET "+p+"/workflows/{id}/endpoints", s.getEndpoints)
 	h("POST "+p+"/workflows/{id}/endpoints/try", s.tryEndpoint)
 	h("GET "+p+"/workflows/{id}/endpoints/postman.json", s.postmanCollection)
@@ -248,6 +255,7 @@ func (s *Server) routes() {
 	h("GET "+p+"/loadtests/{runId}", s.getLoadTest)
 	h("POST "+p+"/loadtests/{runId}/stop", s.stopLoadTest)
 	h("GET "+p+"/workflows/{id}/scenarios", s.scenarios)
+	h("GET "+p+"/workflows/{id}/traffic", s.liveTraffic)
 
 	// capacity plans from load tests (capacity.go)
 	h("POST "+p+"/workflows/{id}/capacity-plan", s.planCapacity)

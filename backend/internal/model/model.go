@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"math/rand/v2"
 	"regexp"
+	"strings"
 	"time"
 )
 
@@ -23,6 +24,43 @@ const (
 
 // AllClouds lists every cloud in display order.
 var AllClouds = []Cloud{CloudAWS, CloudAzure, CloudGCP, CloudOCI}
+
+// CloudOfType maps a resource type ("aws_s3_bucket") or provider name ("google-beta") to its cloud.
+func CloudOfType(s string) (Cloud, bool) {
+	p, _, _ := strings.Cut(s, "_")
+	switch p {
+	case "aws":
+		return CloudAWS, true
+	case "azurerm", "azuread", "azapi":
+		return CloudAzure, true
+	case "google", "google-beta":
+		return CloudGCP, true
+	case "oci":
+		return CloudOCI, true
+	}
+	return "", false
+}
+
+// ResourceClouds are the clouds of the workflow's resources and data sources, in AllClouds order (modules don't
+// count: their contents aren't nodes).
+func (wf *Workflow) ResourceClouds() []Cloud {
+	found := map[Cloud]bool{}
+	for _, nd := range wf.Nodes {
+		if nd.Kind == KindModule {
+			continue
+		}
+		if c, ok := CloudOfType(nd.Type); ok {
+			found[c] = true
+		}
+	}
+	out := []Cloud{}
+	for _, c := range AllClouds {
+		if found[c] {
+			out = append(out, c)
+		}
+	}
+	return out
+}
 
 // NodeKind is the Terraform block kind a canvas node represents.
 type NodeKind string
@@ -230,8 +268,11 @@ type Workflow struct {
 	Service string `json:"service,omitempty"`
 
 	// Derived on every save (read-only for clients).
-	Edges       []Edge       `json:"edges"`
-	Clouds      []Cloud      `json:"clouds"`
+	Edges  []Edge  `json:"edges"`
+	Clouds []Cloud `json:"clouds"`
+	// UsedClouds are the clouds of the resources and data sources on the canvas, without providers that are
+	// declared but used by nothing (Clouds counts those, because the sandbox and the export configure them).
+	UsedClouds  []Cloud      `json:"usedClouds"`
 	Diagnostics []Diagnostic `json:"diagnostics"`
 	// NodeFiles maps node ID -> the root .tf file export writes it to
 	// (Node.File, or the recommended layout when it is empty).
@@ -280,6 +321,7 @@ type WorkflowSummary struct {
 	UpdatedAt   time.Time     `json:"updatedAt"`
 	NodeCount   int           `json:"nodeCount"`
 	Clouds      []Cloud       `json:"clouds"`
+	UsedClouds  []Cloud       `json:"usedClouds"` // see Workflow.UsedClouds
 	Archived    bool          `json:"archived,omitempty"`
 	Icon        *WorkflowIcon `json:"icon,omitempty"`
 }
@@ -401,6 +443,9 @@ type Diagnostic struct {
 	Docs      string `json:"docs,omitempty"`
 	NodeID    string `json:"nodeId,omitempty"`
 	Attribute string `json:"attribute,omitempty"`
+	// Facet is a rule-specific sub-kind, e.g. the ports a bp_open_ingress
+	// finding is about ("22,3389" or "all"); used by compliance grading.
+	Facet string `json:"facet,omitempty"`
 	// File and Line locate code diagnostics (Terraform syntax errors) in
 	// the file that was imported; Line is 1-based.
 	File string `json:"file,omitempty"`
@@ -682,6 +727,60 @@ type PlanSummary struct {
 	Destroy int `json:"destroy"`
 }
 
+// PlanAction is what a plan does to one resource instance.
+type PlanAction string
+
+const (
+	PlanCreate  PlanAction = "create"
+	PlanUpdate  PlanAction = "update"  // in place
+	PlanReplace PlanAction = "replace" // destroy and create (either order)
+	PlanDelete  PlanAction = "delete"
+	PlanRead    PlanAction = "read" // data source read during apply
+	PlanNoOp    PlanAction = "no-op"
+)
+
+// PlannedChange is one resource instance of a saved plan (`resource_changes`
+// of `terraform show -json <planfile>`).
+type PlannedChange struct {
+	Address string `json:"address"` // "aws_s3_bucket.b[0]", "module.vpc.aws_vpc.this"
+	// NodeID is the node declaring the resource ("" when none does anymore,
+	// e.g. the delete of a removed node); module resources map to the
+	// module node.
+	NodeID string     `json:"nodeId,omitempty"`
+	Mode   string     `json:"mode"` // managed | data
+	Type   string     `json:"type"`
+	Name   string     `json:"name"`
+	Index  any        `json:"index,omitempty"`
+	Action PlanAction `json:"action"`
+	// Reason is Terraform's action_reason ("replace_because_cannot_update",
+	// "delete_because_no_resource_config", …).
+	Reason string `json:"reason,omitempty"`
+	// Attributes are the top-level attributes the change sets, by name;
+	// empty for delete, read and no-op.
+	Attributes []AttributeChange `json:"attributes,omitempty"`
+}
+
+// AttributeChange is one top-level attribute of a planned change.
+type AttributeChange struct {
+	Name   string `json:"name"`
+	Before any    `json:"before,omitempty"`
+	After  any    `json:"after,omitempty"`
+	// Sensitive: Terraform marks (part of) the value sensitive, so Before
+	// and After are withheld.
+	Sensitive bool `json:"sensitive,omitempty"`
+	// Unknown: the whole new value is known only after apply (After is
+	// unset). Partly unknown values carry UnknownValue in place of the
+	// unknown parts.
+	Unknown bool `json:"unknown,omitempty"`
+	// ForcesReplacement: changing this attribute is why the resource is
+	// replaced.
+	ForcesReplacement bool `json:"forcesReplacement,omitempty"`
+}
+
+// UnknownValue stands for the parts of a planned value known only after
+// apply.
+const UnknownValue = "(known after apply)"
+
 // Run is one Terraform invocation against a sandbox.
 type Run struct {
 	ID          string       `json:"id"`
@@ -694,7 +793,13 @@ type Run struct {
 	EndedAt     *time.Time   `json:"endedAt,omitempty"`
 	ExitCode    int          `json:"exitCode"`
 	Plan        *PlanSummary `json:"plan,omitempty"`
-	Error       string       `json:"error,omitempty"`
+	// Changes (plan runs) are the resource instances of the saved plan;
+	// omitted in list responses.
+	Changes []PlannedChange `json:"changes,omitempty"`
+	// WorkflowVersion is the workflow's updatedAt the run was started from:
+	// a plan describes that version only.
+	WorkflowVersion *time.Time `json:"workflowVersion,omitempty"`
+	Error           string     `json:"error,omitempty"`
 	// Compose runs: the service the action was limited to ("" = all) and
 	// whether down also removed the named volumes (Kubernetes: the PVCs).
 	Service       string `json:"service,omitempty"`

@@ -916,3 +916,28 @@ func TestEnvVarsOnlyEnvironmentRoundTrip(t *testing.T) {
 		t.Errorf("env line diagnostics = %v", invalid)
 	}
 }
+
+// A provider declared but used by no resource still counts in Clouds (the sandbox and the export configure it) but
+// not in UsedClouds, which the app shows as the workflow's clouds.
+func TestUsedCloudsIgnoreUnusedProviders(t *testing.T) {
+	wf := &model.Workflow{
+		Nodes: []model.Node{{ID: "aws_s3_bucket.b", Kind: model.KindResource, Type: "aws_s3_bucket", Name: "b"}},
+		Providers: []model.NamedBlock{
+			{Name: "aws"}, {Name: "azurerm"}, {Name: "google"}, {Name: "oci"},
+		},
+	}
+	Normalize(wf)
+	if want := []model.Cloud{model.CloudAWS, model.CloudAzure, model.CloudGCP, model.CloudOCI}; !slices.Equal(wf.Clouds, want) {
+		t.Errorf("clouds = %v, want %v", wf.Clouds, want)
+	}
+	if want := []model.Cloud{model.CloudAWS}; !slices.Equal(wf.UsedClouds, want) {
+		t.Errorf("used clouds = %v, want %v", wf.UsedClouds, want)
+	}
+
+	// No resources yet: nothing is used.
+	empty := &model.Workflow{Providers: []model.NamedBlock{{Name: "aws"}}}
+	Normalize(empty)
+	if len(empty.UsedClouds) != 0 {
+		t.Errorf("used clouds of an empty workflow = %v", empty.UsedClouds)
+	}
+}

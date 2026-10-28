@@ -72,6 +72,8 @@ type ComposeOutput struct {
 	// Ports are the host ports of Grafana and Prometheus.
 	GrafanaPort, PrometheusPort int
 	Summary                     model.MonitoringSummary
+	// Live is how each scraped service's requests are read live.
+	Live []LiveSeries
 }
 
 // ConflictError is a service of the user's files named like a service of
@@ -253,6 +255,7 @@ providers:
 		Credentials: &model.MonitoringCredentials{User: grafanaUser, Password: out.Password, Source: ".env " + GrafanaPasswordVar},
 		Cost:        composeCost, Notes: notes,
 	}
+	out.Live = composeLive(scrapes)
 	return out, nil
 }
 

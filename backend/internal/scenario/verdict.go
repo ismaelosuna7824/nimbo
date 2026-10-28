@@ -137,6 +137,9 @@ type Input struct {
 	Kubernetes bool
 	// Detail is Fault.Detail.
 	Detail string
+	// Stopped: the user stopped the run before its end, so the fault's
+	// effect and the recovery were not watched through: no verdict.
+	Stopped bool
 }
 
 // stats are aggregates over a range of seconds.
@@ -148,6 +151,8 @@ type stats struct {
 	inFlight    float64 // median
 	peakFlight  int
 	rps, target float64 // sums
+	// succeeded is how many requests completed without error.
+	succeeded float64
 }
 
 func errRate(s model.LoadSample) float64 {
@@ -191,6 +196,7 @@ func window(tl []model.LoadSample, from, to float64) stats {
 		st.peakFlight = max(st.peakFlight, s.InFlight)
 		st.rps += s.RPS
 		st.target += s.Target
+		st.succeeded += math.Max(s.RPS-float64(s.Errors), 0)
 	}
 	if attempts > 0 {
 		st.errRate = errs / attempts
@@ -295,7 +301,32 @@ func Evaluate(in Input) model.ScenarioResult {
 	reverted := int(math.Round(in.RevertedAt))
 	res.RevertedAtSec = &reverted
 
-	b := newBounds(window(in.Timeline, in.InjectedAt-BaselineWindowSec, in.InjectedAt))
+	addReverted := func() {
+		if in.Observation.VerifyDetail != "" {
+			res.Checks = append(res.Checks, model.ScenarioCheck{Name: "Fault reverted", Passed: in.Observation.Verified, Detail: in.Observation.VerifyDetail})
+		}
+	}
+	if in.Stopped {
+		res.Message = "Stopped before the end: no verdict (the fault's effect and the recovery were not watched through)."
+		addReverted()
+		return res
+	}
+	base := window(in.Timeline, in.InjectedAt-BaselineWindowSec, in.InjectedAt)
+	// A target that already fails says nothing about the fault: grading it
+	// would call an outage "survived" (as many errors as before).
+	if base.succeeded == 0 || base.errRate >= ErrorRateFailed {
+		res.Verdict = model.ScenarioInconclusive
+		detail := "No request succeeded before the fault."
+		if base.succeeded > 0 {
+			detail = fmt.Sprintf("%s of requests failed before the fault.", pct(base.errRate))
+		}
+		res.Message = "Not assessed: the target was already failing before the fault (" + strings.TrimSuffix(detail, ".") +
+			"): fix it or pick a path that answers, then try again."
+		res.Checks = append(res.Checks, model.ScenarioCheck{Name: "Healthy before the fault", Passed: false, Detail: detail})
+		addReverted()
+		return res
+	}
+	b := newBounds(base)
 	from := in.RevertedAt
 	if Instant(in.Spec.ID) {
 		from = in.InjectedAt
@@ -322,9 +353,7 @@ func Evaluate(in Input) model.ScenarioResult {
 		res.Verdict = model.ScenarioFailed
 		res.Message = "Unknown scenario " + in.Spec.ID
 	}
-	if in.Observation.VerifyDetail != "" {
-		res.Checks = append(res.Checks, model.ScenarioCheck{Name: "Fault reverted", Passed: in.Observation.Verified, Detail: in.Observation.VerifyDetail})
-	}
+	addReverted()
 	return res
 }
 

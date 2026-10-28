@@ -1,0 +1,414 @@
+package cicd
+
+import (
+	"os"
+	"os/exec"
+	"path/filepath"
+	"slices"
+	"strings"
+	"testing"
+
+	"go.yaml.in/yaml/v4"
+
+	"github.com/ismaelosuna7824/nimbo/backend/internal/hclcodec"
+	"github.com/ismaelosuna7824/nimbo/backend/internal/model"
+)
+
+const tfSource = `terraform {
+  required_version = "~> 1.11.0"
+  required_providers {
+    aws = {
+      source  = "hashicorp/aws"
+      version = "~> 6.0"
+    }
+  }
+}
+
+provider "aws" {
+  region = var.region
+}
+
+variable "region" {
+  type    = string
+  default = "us-east-1"
+}
+
+variable "api_key" {
+  type      = string
+  sensitive = true
+}
+
+resource "aws_s3_bucket" "orders" {
+  bucket = "orders-${var.region}"
+}
+
+resource "aws_ssm_parameter" "key" {
+  name  = "/orders/api-key"
+  type  = "SecureString"
+  value = var.api_key
+}
+`
+
+// terraformWorkflow imports tfSource (plus extra files) with envs.
+func terraformWorkflow(t *testing.T, layout string, extra map[string]string, envs ...string) *model.Workflow {
+	t.Helper()
+	files := map[string][]byte{"main.tf": []byte(tfSource)}
+	for n, c := range extra {
+		files[n] = []byte(c)
+	}
+	wf, _, err := hclcodec.Import("Orders API", files)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wf.Layout = layout
+	for _, e := range envs {
+		wf.Environments = append(wf.Environments, model.Environment{Name: e, Values: map[string]model.Value{"region": {Expr: `"eu-west-1"`}}})
+	}
+	hclcodec.Normalize(wf)
+	return wf
+}
+
+// exportOf is what an export of a Terraform workflow generates.
+func exportOf(t *testing.T, wf *model.Workflow) map[string][]byte {
+	t.Helper()
+	files, err := hclcodec.ExportLayout(wf, hclcodec.ExportOptions{Environments: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for n, d := range hclcodec.Scaffold(wf, nil) {
+		files[n] = d
+	}
+	return files
+}
+
+func dockerWorkflow() *model.Workflow {
+	return &model.Workflow{
+		ID: "shop", Name: "Shop", Kind: model.WorkflowDocker,
+		Environments: []model.Environment{{Name: "prod"}, {Name: "staging"}, {Name: "dev"}},
+		Compose: &model.ComposeModel{
+			Files: []string{"compose.yaml"},
+			Environments: []model.ComposeEnvironment{
+				{Name: "dev", EnvFile: ".env.dev"},
+				{Name: "prod", File: "compose.prod.yaml", EnvFile: ".env.prod"},
+				{Name: "staging", File: "compose.staging.yaml"},
+			},
+			Graph: model.ComposeGraph{Nodes: []model.ComposeNode{
+				{ID: "service:api", Kind: model.ComposeService, Name: "api", File: "compose.yaml", Service: &model.ServiceFacts{Build: &model.ServiceBuild{Context: "./api", Dockerfile: "api/Dockerfile"}}},
+				{ID: "service:web", Kind: model.ComposeService, Name: "Web", File: "compose.yaml", Service: &model.ServiceFacts{Build: &model.ServiceBuild{Context: "./web", Dockerfile: "web/Dockerfile"}}},
+				{ID: "service:db", Kind: model.ComposeService, Name: "db", File: "compose.yaml", Service: &model.ServiceFacts{Image: &model.ImageRef{Ref: "postgres:16"}}},
+				{ID: "service:debug", Kind: model.ComposeService, Name: "debug", File: "compose.staging.yaml", Service: &model.ServiceFacts{Build: &model.ServiceBuild{Context: "./debug"}}},
+			}},
+		},
+	}
+}
+
+func kubeWorkflow() *model.Workflow {
+	return &model.Workflow{
+		ID: "shop", Name: "Shop K8s", Kind: model.WorkflowKubernetes,
+		Environments: []model.Environment{{Name: "dev"}, {Name: "prod"}},
+		Kubernetes: &model.KubernetesModel{
+			Sources: []model.KubeSource{
+				{Kind: model.KubeKustomize, Path: "base", EnvPaths: map[string]string{"dev": "overlays/dev", "prod": "overlays/prod"}},
+				{Kind: model.KubeHelm, Path: "charts/api", Namespace: "shop", ValuesFiles: []string{"charts/api/values-common.yaml"},
+					EnvPaths: map[string]string{"prod": "charts/api/values-prod.yaml"}, Chart: &model.KubeChart{Name: "api"}},
+				{Kind: model.KubeManifests, Path: "extra", Namespace: "tools"},
+			},
+			Builds: []model.KubeBuild{{Image: "api:dev", Context: "api"}},
+		},
+	}
+}
+
+func generate(t *testing.T, wf *model.Workflow, generated map[string][]byte, own map[string]bool, opts Options) map[string][]byte {
+	t.Helper()
+	out, err := Files(wf, generated, own, opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return out
+}
+
+// pipeline parses the pipeline file of out and checks it with actionlint
+// (GitHub) when the machine has it.
+func pipeline(t *testing.T, out map[string][]byte) (string, map[string]any) {
+	t.Helper()
+	var file string
+	for n := range out {
+		if strings.HasPrefix(n, ".github/") || n == ".gitlab-ci.yml" {
+			file = n
+		}
+	}
+	if file == "" {
+		t.Fatalf("no pipeline in %v", keys(out))
+	}
+	var doc map[string]any
+	if err := yaml.Unmarshal(out[file], &doc); err != nil {
+		t.Fatalf("%s does not parse: %v\n%s", file, err, out[file])
+	}
+	if strings.HasPrefix(file, ".github/") {
+		actionlint(t, file, out[file])
+	}
+	return file, doc
+}
+
+func actionlint(t *testing.T, file string, data []byte) {
+	t.Helper()
+	bin, err := exec.LookPath("actionlint")
+	if err != nil {
+		t.Log("actionlint is not installed: the GitHub workflow is only parsed")
+		return
+	}
+	dir := t.TempDir()
+	p := filepath.Join(dir, filepath.FromSlash(file))
+	if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(p, data, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cmd := exec.Command(bin, "-no-color", p)
+	cmd.Dir = dir
+	if res, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("actionlint %s: %v\n%s\n%s", file, err, res, data)
+	}
+}
+
+func keys(m map[string][]byte) []string {
+	out := make([]string, 0, len(m))
+	for k := range m {
+		out = append(out, k)
+	}
+	slices.Sort(out)
+	return out
+}
+
+func jobOf(t *testing.T, doc map[string]any, provider, id string) map[string]any {
+	t.Helper()
+	root := doc
+	if provider == GitHub {
+		root, _ = doc["jobs"].(map[string]any)
+	}
+	j, ok := root[id].(map[string]any)
+	if !ok {
+		t.Fatalf("no job %q", id)
+	}
+	return j
+}
+
+func TestTerraformEnvironmentsLayout(t *testing.T) {
+	wf := terraformWorkflow(t, model.LayoutEnvironments, nil, "dev", "prod", "staging")
+	generated := exportOf(t, wf)
+	if _, ok := generated["environments/prod/"+hclcodec.BackendExampleFile]; !ok {
+		t.Fatalf("export has no backend.hcl.example: %v", keys(generated))
+	}
+
+	out := generate(t, wf, generated, nil, Options{Provider: GitHub, Smoke: true})
+	file, doc := pipeline(t, out)
+	if file != ".github/workflows/orders-api.yml" {
+		t.Errorf("file = %s", file)
+	}
+	text := string(out[file])
+	for _, want := range []string{"make validate ENV=dev", "make plan ENV=staging", "make apply ENV=prod",
+		"terraform_version: \"1.11\"", "role-to-assume: ${{ vars.AWS_ROLE_ARN }}", "TF_VAR_api_key: ${{ secrets.TF_VAR_api_key }}",
+		"environments/prod/backend.hcl", "AWS_ROLE_ARN (variable, required)", "TF_BACKEND_CONFIG (variable, required)"} {
+		if !strings.Contains(text, want) {
+			t.Errorf("pipeline lacks %q", want)
+		}
+	}
+	// Promotion: dev, then the production-like ones (staging, prod) in order.
+	if needs := jobOf(t, doc, GitHub, "apply-prod")["needs"]; !slices.Equal(toStrings(needs), []string{"validate", "apply-staging"}) {
+		t.Errorf("apply-prod needs %v", needs)
+	}
+	if needs := jobOf(t, doc, GitHub, "apply-staging")["needs"]; !slices.Equal(toStrings(needs), []string{"validate", "apply-dev"}) {
+		t.Errorf("apply-staging needs %v", needs)
+	}
+	apply := jobOf(t, doc, GitHub, "apply-prod")
+	if apply["environment"] != "prod" || apply["permissions"].(map[string]any)["id-token"] != "write" {
+		t.Errorf("apply-prod = %v", apply)
+	}
+	if plan := jobOf(t, doc, GitHub, "plan-prod"); plan["environment"] != nil || plan["if"] != ghReview {
+		t.Errorf("plan-prod runs on %v in %v", plan["if"], plan["environment"])
+	}
+	if smoke := jobOf(t, doc, GitHub, "smoke-prod"); !strings.Contains(smoke["env"].(map[string]any)["SMOKE_URL"].(string), "needs.apply-prod.outputs.smoke_url") {
+		t.Errorf("smoke-prod env = %v", smoke["env"])
+	}
+	readme := string(out[readmeFile])
+	if !hclcodec.IsScaffold(readmeFile, out[readmeFile]) || !strings.Contains(readme, "## GitHub Actions pipeline") || !strings.Contains(readme, "| `TF_BACKEND_CONFIG` |") {
+		t.Errorf("README:\n%s", readme)
+	}
+
+	out = generate(t, wf, generated, nil, Options{Provider: GitLab})
+	_, doc = pipeline(t, out)
+	prod := jobOf(t, doc, GitLab, "apply-prod")
+	rule := prod["rules"].([]any)[0].(map[string]any)
+	if rule["when"] != "manual" || prod["allow_failure"] != false || prod["resource_group"] != "terraform-prod" {
+		t.Errorf("apply-prod = %v", prod)
+	}
+	if rule := jobOf(t, doc, GitLab, "apply-dev")["rules"].([]any)[0].(map[string]any); rule["when"] != nil {
+		t.Errorf("apply-dev is gated: %v", rule)
+	}
+	if img := jobOf(t, doc, GitLab, "plan-dev")["image"].(map[string]any)["name"]; img != "hashicorp/terraform:1.11" {
+		t.Errorf("plan image = %v", img)
+	}
+	if ids := jobOf(t, doc, GitLab, "plan-dev")["id_tokens"].(map[string]any); ids["AWS_ID_TOKEN"] == nil {
+		t.Errorf("plan id_tokens = %v", ids)
+	}
+	if _, ok := doc["smoke-prod"]; ok {
+		t.Error("smoke job without the smoke option")
+	}
+}
+
+func TestTerraformSingleLayout(t *testing.T) {
+	gcp := `resource "google_storage_bucket" "assets" {
+  name     = "assets"
+  location = "EU"
+}
+`
+	wf := terraformWorkflow(t, model.LayoutSingle, map[string]string{"gcs.tf": gcp}, "dev", "prod")
+	if !slices.Contains(wf.Clouds, model.CloudGCP) || !slices.Contains(wf.Clouds, model.CloudAWS) {
+		t.Fatalf("clouds = %v", wf.Clouds)
+	}
+	generated := exportOf(t, wf)
+	for _, provider := range []string{GitHub, GitLab} {
+		out := generate(t, wf, generated, nil, Options{Provider: provider, Smoke: true})
+		file, doc := pipeline(t, out)
+		text := string(out[file])
+		for _, want := range []string{"terraform workspace select -or-create=true prod", "-var-file=environments/prod.tfvars",
+			"cp backend.tf.example backend.tf", "GCP_WORKLOAD_IDENTITY_PROVIDER", "terraform init -backend=false"} {
+			if !strings.Contains(text, want) {
+				t.Errorf("%s: pipeline lacks %q", provider, want)
+			}
+		}
+		if strings.Contains(text, "make ") {
+			t.Errorf("%s: the single layout has no Makefile:\n%s", provider, text)
+		}
+		jobOf(t, doc, provider, "smoke-dev")
+	}
+}
+
+func TestTerraformWithoutEnvironments(t *testing.T) {
+	wf := terraformWorkflow(t, "", nil)
+	out := generate(t, wf, exportOf(t, wf), nil, Options{Provider: GitHub})
+	file, doc := pipeline(t, out)
+	if strings.Contains(string(out[file]), "workspace") {
+		t.Error("one environment uses the default workspace")
+	}
+	jobOf(t, doc, GitHub, "apply-default")
+}
+
+func TestCompose(t *testing.T) {
+	wf := dockerWorkflow()
+	own := map[string]bool{"compose.yaml": true, "compose.prod.yaml": true, "README.md": true}
+	for _, provider := range []string{GitHub, GitLab} {
+		out := generate(t, wf, map[string][]byte{}, own, Options{Provider: provider, Smoke: true})
+		file, doc := pipeline(t, out)
+		text := string(out[file])
+		if !strings.Contains(text, "build Web api\n") {
+			t.Errorf("%s: built services:\n%s", provider, text)
+		}
+		for _, want := range []string{"-f compose.yaml -f compose.prod.yaml", "--env-file .env.prod", "${IMAGE_PREFIX}/web:${IMAGE_TAG}", "up -d --no-build"} {
+			if !strings.Contains(text, want) {
+				t.Errorf("%s: pipeline lacks %q", provider, want)
+			}
+		}
+		// dev first, then the production-like environments.
+		if needs := toStrings(jobOf(t, doc, provider, "deploy-staging")["needs"]); !slices.Equal(needs, []string{"build", "deploy-dev"}) {
+			t.Errorf("%s: deploy-staging needs %v", provider, needs)
+		}
+		// The workflow has its own README: the pipeline is documented in CI.md.
+		if _, ok := out[readmeFile]; ok || !strings.Contains(string(out[notesFile]), "DEPLOY_SSH_KEY") {
+			t.Errorf("%s: docs = %v", provider, keys(out))
+		}
+		if provider == GitHub {
+			if p := jobOf(t, doc, provider, "build")["permissions"].(map[string]any); p["packages"] != "write" {
+				t.Errorf("build permissions = %v", p)
+			}
+		} else if img := jobOf(t, doc, provider, "build")["services"]; !slices.Equal(toStrings(img), []string{imageDockerDind}) {
+			t.Errorf("build services = %v", img)
+		}
+	}
+}
+
+func TestComposeWithoutBuilds(t *testing.T) {
+	wf := dockerWorkflow()
+	wf.Compose.Graph.Nodes = wf.Compose.Graph.Nodes[2:3]
+	wf.Compose.Environments, wf.Environments = nil, nil
+	out := generate(t, wf, map[string][]byte{}, nil, Options{Provider: GitHub})
+	file, doc := pipeline(t, out)
+	if _, ok := doc["jobs"].(map[string]any)["build"]; ok {
+		t.Error("build job without services that build")
+	}
+	if !strings.Contains(string(out[file]), "up -d --build") {
+		t.Errorf("deploy:\n%s", out[file])
+	}
+	// No README in the export: one is written.
+	if !strings.HasPrefix(string(out[readmeFile]), "# Shop\n") {
+		t.Errorf("README:\n%s", out[readmeFile])
+	}
+}
+
+func TestKubernetes(t *testing.T) {
+	wf := kubeWorkflow()
+	for _, provider := range []string{GitHub, GitLab} {
+		out := generate(t, wf, map[string][]byte{}, nil, Options{Provider: provider, Smoke: true})
+		file, doc := pipeline(t, out)
+		text := string(out[file])
+		for _, want := range []string{"kubectl kustomize overlays/prod", "kubectl apply -k overlays/dev",
+			"helm upgrade --install api charts/api --namespace shop -f charts/api/values-common.yaml -f charts/api/values-prod.yaml",
+			"kubeconform -ignore-missing-schemas", "kubectl apply -n tools -f extra", "api:dev"} {
+			if !strings.Contains(text, want) {
+				t.Errorf("%s: pipeline lacks %q", provider, want)
+			}
+		}
+		// dev's Helm release has no values-dev.yaml.
+		if strings.Contains(text, "values-dev") {
+			t.Errorf("%s: dev renders a values file it lacks", provider)
+		}
+		deploy := jobOf(t, doc, provider, "deploy-prod")
+		if provider == GitHub {
+			if deploy["environment"] != "prod" || deploy["env"].(map[string]any)["KUBECONFIG_DATA"] != "${{ secrets.KUBECONFIG }}" {
+				t.Errorf("deploy-prod = %v", deploy)
+			}
+		} else if deploy["image"] != imageKube {
+			t.Errorf("deploy-prod image = %v", deploy["image"])
+		}
+	}
+}
+
+func TestTerraformVersion(t *testing.T) {
+	for constraint, want := range map[string]string{
+		"":                    "",
+		">= 1.5":              "",
+		"~> 1.9":              "",
+		"~> 1.9.0":            "1.9",
+		"1.5.7":               "1.5.7",
+		"= 1.6":               "1.6.0",
+		">= 1.5, < 1.8":       "1.7",
+		"~> 1.9.0, < 1.9.5":   "1.9.4",
+		"~> 1.10.0, >= 1.10":  "1.10",
+		"<= 1.8.2":            "1.8.2",
+		"not a version, ~> x": "",
+	} {
+		if got := terraformVersion(constraint); got != want {
+			t.Errorf("terraformVersion(%q) = %q, want %q", constraint, got, want)
+		}
+	}
+}
+
+func TestParseProvider(t *testing.T) {
+	for in, want := range map[string]string{"": "", "none": "", "github": GitHub, "gitlab": GitLab} {
+		if got, err := ParseProvider(in); err != nil || got != want {
+			t.Errorf("ParseProvider(%q) = %q, %v", in, got, err)
+		}
+	}
+	if _, err := ParseProvider("jenkins"); err == nil {
+		t.Error("jenkins accepted")
+	}
+}
+
+func toStrings(v any) []string {
+	var out []string
+	for _, x := range v.([]any) {
+		out = append(out, x.(string))
+	}
+	return out
+}

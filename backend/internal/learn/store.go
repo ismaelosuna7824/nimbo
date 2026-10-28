@@ -426,17 +426,36 @@ func (s *Store) Roadmap(provider string) (model.Roadmap, bool, error) {
 }
 
 // Providers lists every provider (model.LearnProviders order) with its
-// challenge counts per level and the user's completions.
+// challenge counts per level and the user's completions. SQLite counts:
+// decoding and sorting every challenge just to count them made this the
+// slowest Learn query.
 func (s *Store) Providers() ([]model.LearnProvider, error) {
 	if err := s.ready(); err != nil {
 		return nil, err
 	}
-	all, err := s.Challenges(model.ChallengeFilter{})
+	type key struct{ provider, level string }
+	counts := map[key]model.LearnLevelCount{}
+	rows, err := s.db.Query(`SELECT c.provider, c.level, COUNT(*), COUNT(p.challenge_id)
+		FROM challenges c LEFT JOIN progress p ON p.challenge_id = c.id AND p.status = ?
+		GROUP BY c.provider, c.level`, model.LearnStatusCompleted)
 	if err != nil {
 		return nil, err
 	}
+	for rows.Next() {
+		var k key
+		var lc model.LearnLevelCount
+		if err := rows.Scan(&k.provider, &k.level, &lc.Challenges, &lc.Completed); err != nil {
+			rows.Close()
+			return nil, err
+		}
+		counts[k] = lc
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
 	roadmaps := map[string]bool{}
-	rows, err := s.db.Query(`SELECT provider FROM roadmaps`)
+	rows, err = s.db.Query(`SELECT provider FROM roadmaps`)
 	if err != nil {
 		return nil, err
 	}
@@ -456,16 +475,8 @@ func (s *Store) Providers() ([]model.LearnProvider, error) {
 	for _, id := range model.LearnProviders {
 		p := model.LearnProvider{ID: id, Title: ProviderTitle(id), HasRoadmap: roadmaps[id], Levels: make([]model.LearnLevelCount, 0, len(model.LearnLevels))}
 		for _, lvl := range model.LearnLevels {
-			lc := model.LearnLevelCount{Level: lvl}
-			for _, c := range all {
-				if c.Provider != id || c.Level != lvl {
-					continue
-				}
-				lc.Challenges++
-				if c.Progress.Status == model.LearnStatusCompleted {
-					lc.Completed++
-				}
-			}
+			lc := counts[key{id, lvl}]
+			lc.Level = lvl
 			p.Challenges += lc.Challenges
 			p.Completed += lc.Completed
 			p.Levels = append(p.Levels, lc)

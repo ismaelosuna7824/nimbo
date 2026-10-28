@@ -78,6 +78,7 @@ func (m *Manager) Run(ctx context.Context, req RunRequest) (*model.Run, error) {
 		run: model.Run{
 			ID: newRunID(), WorkflowID: wfID, Action: req.Action,
 			Status: model.RunQueued, CreatedAt: time.Now().UTC(), Log: []model.LogLine{},
+			WorkflowVersion: new(req.Workflow.UpdatedAt),
 		},
 		sb:   sb,
 		done: make(chan struct{}),
@@ -117,13 +118,15 @@ func (m *Manager) Run(ctx context.Context, req RunRequest) (*model.Run, error) {
 	return &snap, nil
 }
 
-// snapshot copies the run; callers hold m.mu.
-func (m *Manager) snapshot(rs *runState, withLog bool) model.Run {
+// snapshot copies the run; detail keeps its log and planned changes, which
+// list responses and status events omit. Callers hold m.mu.
+func (m *Manager) snapshot(rs *runState, detail bool) model.Run {
 	r := rs.run
-	if withLog {
+	if detail {
+		// Changes is set once, before the run ends, and never mutated.
 		r.Log = slices.Clone(rs.run.Log)
 	} else {
-		r.Log = nil
+		r.Log, r.Changes = nil, nil
 	}
 	if r.Plan != nil {
 		p := *r.Plan
@@ -264,7 +267,8 @@ func (m *Manager) runSteps(ctx context.Context, rs *runState, req RunRequest) er
 	case model.ActionValidate:
 		args = []string{"validate", "-no-color"}
 	case model.ActionPlan:
-		args = []string{"plan", "-input=false", "-no-color"}
+		args = []string{"plan", "-input=false", "-no-color", "-out=" + planFile}
+		defer os.Remove(filepath.Join(work, filepath.FromSlash(planFile)))
 	case model.ActionApply:
 		args = []string{"apply", "-auto-approve", "-input=false", "-no-color"}
 	case model.ActionDestroy:
@@ -278,6 +282,21 @@ func (m *Manager) runSteps(ctx context.Context, rs *runState, req RunRequest) er
 	m.setExit(rs, code)
 	if code != 0 {
 		return fmt.Errorf("terraform %s exited with code %d", req.Action, code)
+	}
+	if req.Action == model.ActionPlan {
+		// The plan itself succeeded: without the per-resource changes the run
+		// still reports the summary.
+		changes, err := m.readPlan(ctx, wf)
+		if err != nil {
+			if ctx.Err() != nil {
+				return ctx.Err()
+			}
+			m.logLine(rs, "system", "Warning: could not read the planned changes: "+err.Error())
+			return nil
+		}
+		m.mu.Lock()
+		rs.run.Changes = changes
+		m.mu.Unlock()
 	}
 	return nil
 }

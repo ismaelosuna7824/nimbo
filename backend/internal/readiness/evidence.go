@@ -31,8 +31,11 @@ type Evidence struct {
 	// none); Running a run of the environment still running.
 	Load    *model.LoadTestRun
 	Running bool
-	// scenarios are the scenario runs of the environment, newest first.
+	// scenarios are the graded scenario runs of the environment, newest
+	// first; ungraded ones (stopped, or the target already failing) neither
+	// pass nor fail anything and only explain a todo.
 	scenarios []*model.LoadTestRun
+	ungraded  []*model.LoadTestRun
 }
 
 // For collects the evidence of environment env; catalog is the scenarios
@@ -50,8 +53,10 @@ func (s Sources) For(env string, prodLike bool, catalog model.ScenarioCatalog) *
 		switch {
 		case r.Status == model.LoadRunning:
 			ev.Running = true
-		case r.Scenario != nil:
+		case r.Scenario != nil && model.ScenarioGraded(r.Scenario.Verdict):
 			ev.scenarios = append(ev.scenarios, r)
+		case r.Scenario != nil:
+			ev.ungraded = append(ev.ungraded, r)
 		case r.Spec.Scenario == nil && ev.Load == nil:
 			ev.Load = r
 		}
@@ -296,6 +301,16 @@ func (ev *Evidence) latestScenario(id string) *model.LoadTestRun {
 	return nil
 }
 
+// latestUngraded is the newest ungraded run of scenario id (nil: none).
+func (ev *Evidence) latestUngraded(id string) *model.LoadTestRun {
+	for _, r := range ev.ungraded {
+		if r.Scenario.ID == id {
+			return r
+		}
+	}
+	return nil
+}
+
 // ResilienceItems are one item per scenario: applicable ones are verified
 // by their latest run in the environment (todo until one ran), the others
 // are skipped with the catalog's reason.
@@ -309,6 +324,9 @@ func (ev *Evidence) ResilienceItems() []model.ReadinessItem {
 		if r == nil {
 			item.Status = model.ItemTodo
 			item.Message = fmt.Sprintf("Not tested yet: run a load test with this incident in %s.", ev.Label)
+			if u := ev.latestUngraded(id); u != nil {
+				item.Message = fmt.Sprintf("No verdict yet: %s (%s).", strings.TrimSuffix(u.Scenario.Message, "."), when(u))
+			}
 			item.Action = &model.ReadinessAction{Kind: model.ActionRunScenario, Label: "Run scenario", Scenario: id, Target: target}
 			out = append(out, item)
 			return

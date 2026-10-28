@@ -68,7 +68,7 @@ func registerTools(r *registry, t *tools) {
 	addTool(r, "apply_terraform_code", "Apply Terraform code", "Edit the workflow by writing code. Docker workflows: files maps any file path (compose.yaml, api/Dockerfile, .env, app sources) -> full content, \"\" deletes it; YAML/Dockerfile syntax errors are refused with file:line and the graph is re-derived. Terraform workflows: files maps file name -> full content and is merged over the current files from get_terraform; an empty string deletes that file. The code is re-imported; node IDs, positions and environments are kept by address. Use for complex blocks that are awkward with update_node.", t.applyTerraformCode)
 	addTool(r, "scan_terraform_folder", "Scan Terraform folder", "Scan a local folder (e.g. a repository) for Terraform projects without importing: every directory with *.tf files, with resource/data/module counts, providers, clouds, tfvars files, backend, layout and parse diagnostics. Directories used only as local modules are not separate projects, and an environments tree (environments/<env>/ roots that each only call one ../../modules/<service>) is one project with layout \"environments\" and its environments. Pass the chosen paths to import_terraform as projects.", t.scanTerraformFolder)
 	addTool(r, "import_terraform", "Import Terraform", "Import existing Terraform as new workflows, from a local directory or from files (relative path -> content). Local modules (source = \"./modules/x\") are kept as assets and can be opened in the app. An environments tree (as export_terraform writes it) becomes one workflow: the service module's content with one environment per environments/<env> root. By default only the root folder is imported; pass projects (paths from scan_terraform_folder, \".\" = root) to import several projects, one workflow each.", t.importTerraform)
-	addTool(r, "export_terraform", "Export Terraform", "Write the workflow's Terraform (plus assets such as Lambda sources, local modules and the dependency lock file) to a local directory, in the workflow's layout (structure.layout from get_workflow). Single layout: one root; with environments=true each environment's values go to the variable file it was imported from (e.g. terraform.tfvars), else environments/<name>.tfvars, plus .env.example files. Environments layout (auto from two environments): modules/<service>/ with the workflow's resources, its local modules under modules/, and one root per environment under environments/<env>/ (backend.tf with its own state, main.tf calling the service module, providers.tf, versions.tf, variables.tf, outputs.tf; environments=true adds terraform.tfvars and .env.example), plus README.md, .gitignore and a Makefile. Comments are kept.", t.exportTerraform)
+	addTool(r, "export_terraform", "Export Terraform", "Write the workflow's Terraform (plus assets such as Lambda sources, local modules and the dependency lock file) to a local directory, in the workflow's layout (structure.layout from get_workflow). Single layout: one root; with environments=true each environment's values go to the variable file it was imported from (e.g. terraform.tfvars), else environments/<name>.tfvars, plus .env.example files. Environments layout (auto from two environments): modules/<service>/ with the workflow's resources, its local modules under modules/, and one root per environment under environments/<env>/ (backend.tf with its own state, main.tf calling the service module, providers.tf, versions.tf, variables.tf, outputs.tf; environments=true adds terraform.tfvars and .env.example), plus README.md, .gitignore and a Makefile. Comments are kept. Docker and Kubernetes workflows write their files as they are. ci=github|gitlab adds a ready-to-use pipeline (format/validate or render checks, a plan per environment on pull requests, gated per-environment applies/deploys on the default branch, smoke=true for an HTTP check after each deploy) whose header and README section list the secrets and variables to set.", t.exportTerraform)
 
 	r.group = groupRuns
 	addTool(r, "sandbox_status", "Sandbox status", "Show the workflow's local Floci sandbox: state, emulator URLs and running services.", t.sandboxStatus)
@@ -108,6 +108,7 @@ func registerTools(r *registry, t *tools) {
 	registerEnvironmentTools(r, t)
 	registerMonitoringTools(r, t)
 	registerReadinessTools(r, t)
+	registerComplianceTools(r, t)
 	registerCapacityTools(r, t)
 	registerLearnTools(r, t)
 	registerChallengeTools(r, t)
@@ -1009,6 +1010,8 @@ type exportIn struct {
 	Workflow     string `json:"workflow,omitempty" jsonschema:"workflow ID or name; omit or \"current\" for the workflow open in the Nimbo app"`
 	Dir          string `json:"dir" jsonschema:"absolute destination directory (created if missing; existing files with the same names are overwritten)"`
 	Environments bool   `json:"environments,omitempty" jsonschema:"also write each environment's values: terraform.tfvars and .env.example in environments/<env>/ (environments layout), or the imported variable file / environments/<name>.tfvars and .env.example (single layout)"`
+	CI           string `json:"ci,omitempty" jsonschema:"also write a CI/CD pipeline: none (default), github (.github/workflows/<name>.yml) or gitlab (.gitlab-ci.yml); its header and a README section list the secrets and variables to set"`
+	Smoke        bool   `json:"smoke,omitempty" jsonschema:"with ci: an HTTP smoke check of each environment's SMOKE_URL after every deploy"`
 }
 
 func (t *tools) exportTerraform(ctx context.Context, in exportIn) (any, error) {
@@ -1020,7 +1023,7 @@ func (t *tools) exportTerraform(ctx context.Context, in exportIn) (any, error) {
 		Dir   string   `json:"dir"`
 		Files []string `json:"files"`
 	}
-	body := map[string]any{"dir": in.Dir, "environments": in.Environments}
+	body := map[string]any{"dir": in.Dir, "environments": in.Environments, "ci": in.CI, "smoke": in.Smoke}
 	if err := t.c.do(ctx, http.MethodPost, "/workflows/"+pathEscape(wf.ID)+"/export", body, &res); err != nil {
 		return nil, err
 	}

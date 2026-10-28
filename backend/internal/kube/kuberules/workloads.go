@@ -334,15 +334,28 @@ func (c *checker) podSecurity(w *workload) {
 				"Set securityContext: {runAsNonRoot: true, runAsUser: 10001} on the pod (the image must not need root: use an unprivileged variant such as nginxinc/nginx-unprivileged).")
 		}
 	}
-	if b := boolAt(pod, "automountServiceAccountToken"); b == nil || *b {
-		if sa := c.get("ServiceAccount", o.namespace, orStr(str(pod, "serviceAccountName") == "", "default", str(pod, "serviceAccountName"))); sa == nil || boolAt(sa.node, "automountServiceAccountToken") == nil || *boolAt(sa.node, "automountServiceAccountToken") {
-			if !c.usesAPI(w) {
-				c.diag(model.SeverityInfo, "k8s_hardening", o, w.podPath,
-					fmt.Sprintf("%s mounts a Kubernetes API token it does not seem to use", w.label()),
-					"Set automountServiceAccountToken: false in the pod spec (or the ServiceAccount).")
-			}
+	if c.unusedToken(w) {
+		c.diag(model.SeverityInfo, "k8s_hardening", o, w.podPath,
+			fmt.Sprintf("%s mounts a Kubernetes API token it does not seem to use", w.label()),
+			"Set automountServiceAccountToken: false in the pod spec (or the ServiceAccount).")
+	}
+}
+
+// unusedToken: the pods get a Kubernetes API token mounted (neither the pod
+// nor its ServiceAccount turn automountServiceAccountToken off) although
+// their ServiceAccount is bound to no Role.
+func (c *checker) unusedToken(w *workload) bool {
+	pod := w.pod
+	if b := boolAt(pod, "automountServiceAccountToken"); b != nil && !*b {
+		return false
+	}
+	sa := c.get("ServiceAccount", w.o.namespace, orStr(str(pod, "serviceAccountName") == "", "default", str(pod, "serviceAccountName")))
+	if sa != nil {
+		if b := boolAt(sa.node, "automountServiceAccountToken"); b != nil && !*b {
+			return false
 		}
 	}
+	return !c.usesAPI(w)
 }
 
 // usesAPI reports whether the workload runs as a ServiceAccount bound to a

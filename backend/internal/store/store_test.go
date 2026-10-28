@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"strings"
 	"testing"
 	"time"
 
@@ -81,6 +82,43 @@ func TestListSortedByUpdatedAtDesc(t *testing.T) {
 		if list[i].ID != id {
 			t.Fatalf("list[%d] = %s, want %s", i, list[i].ID, id)
 		}
+	}
+}
+
+// List caches summaries; a same-size rewrite by the store and an in-place
+// edit outside the app must both show up on the next List.
+func TestListReflectsChanges(t *testing.T) {
+	s, _ := Open(t.TempDir())
+	wf := &model.Workflow{ID: NewID("a"), Name: "aaaa"}
+	if err := s.Save(wf); err != nil {
+		t.Fatal(err)
+	}
+	name := func() string {
+		t.Helper()
+		list, err := s.List()
+		if err != nil || len(list) != 1 {
+			t.Fatalf("List = %v, %v", list, err)
+		}
+		return list[0].Name
+	}
+	if got := name(); got != "aaaa" {
+		t.Fatalf("name = %q", got)
+	}
+	wf.Name = "bbbb"
+	if err := s.write(wf); err != nil { // same size, timestamps untouched
+		t.Fatal(err)
+	}
+	if got := name(); got != "bbbb" {
+		t.Fatalf("after save, name = %q", got)
+	}
+	path := filepath.Join(s.dir, wf.ID, workflowFile)
+	data, _ := os.ReadFile(path)
+	edited := strings.Replace(string(data), `"bbbb"`, `"cccccc"`, 1)
+	if err := os.WriteFile(path, []byte(edited), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if got := name(); got != "cccccc" {
+		t.Fatalf("after outside edit, name = %q", got)
 	}
 }
 

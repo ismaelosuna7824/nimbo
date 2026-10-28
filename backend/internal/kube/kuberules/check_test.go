@@ -142,6 +142,12 @@ func TestRulesOnBadApp(t *testing.T) {
 		"info:k8s_network_policy@app.yaml:14",
 		"info:k8s_hardening@app.yaml:14", // API token mounted
 		"info:k8s_recommended_labels@app.yaml:3",
+		// CIS opt-in rules: the container keeps every capability and runs
+		// without seccomp; the pod mounts a token it doesn't use.
+		"info:k8s_capabilities@app.yaml:26",
+		"info:k8s_net_raw@app.yaml:26",
+		"info:k8s_seccomp@app.yaml:14",
+		"info:k8s_automount_token@app.yaml:14",
 	}
 	if len(got) != len(want) {
 		t.Errorf("got %d findings, want %d", len(got), len(want))

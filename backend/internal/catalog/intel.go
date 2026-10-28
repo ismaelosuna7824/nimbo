@@ -18,6 +18,7 @@ const KindProvider model.NodeKind = "provider"
 // reflects the current (live) Floci support; utility types always run
 // locally.
 func (c *Catalog) Types() []model.TypeInfo {
+	all := c.allSummaries()
 	n := 0
 	for _, p := range c.providers {
 		n += len(p.resources) + len(p.data)
@@ -38,13 +39,13 @@ func (c *Catalog) Types() []model.TypeInfo {
 					out = append(out, model.TypeInfo{Kind: kind, Type: typ, Label: label, Local: true})
 					continue
 				}
-				s := c.newSummary(kind, typ, p)
+				s := &all[c.summaryIdx[schemaKey{kind, typ}]]
 				out = append(out, model.TypeInfo{
 					Kind:  kind,
 					Type:  typ,
 					Cloud: p.cloud,
 					Label: s.label,
-					Local: c.serviceInfo(kind, typ, p.cloud).floci,
+					Local: c.supported(p.cloud, s.svc),
 				})
 			}
 		}
