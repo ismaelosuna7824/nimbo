@@ -29,7 +29,8 @@ account. AI agents can do the same through the built-in MCP server.
   legend. Helpers stay out of the way: security groups, route tables, target
   groups and the like fold into the cards and subnets using them. Module
   calls are drawn as the services they create (one card per ECS service
-  call, "ECS services (6)" groups), then export PNG (1–4×) or SVG.
+  call, "ECS services (6)" groups), then export PNG (1–4×) or SVG, or an
+  animated GIF / MP4 of requests flowing through it, sized for social posts.
 - **Environments**: per-workflow variable values and process env vars
   (secrets masked), applied to runs and exported as tfvars.
 - **Test locally**: each workflow gets its own Docker sandbox running the

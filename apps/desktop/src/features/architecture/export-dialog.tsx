@@ -7,7 +7,7 @@ import { useArchUi } from "./store"
 // like the Architecture view, instead of with the editor.
 const ExportForm = lazy(() => import("./export-form").then((m) => ({ default: m.ExportForm })))
 
-/** Export image dialog: the Architecture diagram (PNG/SVG) or the Build canvas (PNG). */
+/** Export dialog: the Architecture diagram (PNG/SVG, animated GIF/video) or the Build canvas (PNG). */
 export function ExportImageDialog() {
   const target = useArchUi((s) => s.exportTarget)
   const close = useArchUi((s) => s.closeExport)

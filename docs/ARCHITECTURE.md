@@ -3299,13 +3299,37 @@ their official icon (`aws_eks_cluster` is EKS, not Kubernetes).
   Geist font (Latin + Latin Extended) and every icon embedded as data URLs;
   PNG rasterizes that SVG on a canvas at 1×–4× (default 2×; lowered when the
   image would exceed 16384 px per side or 140 MP), white or transparent,
-  with or without title and legend. The Build canvas exports as PNG through
+  with or without title and legend. **Animated GIF and video**
+  (`animate.ts`, `animation-export.ts`, `encode-gif.ts`, `encode-video.ts`):
+  pulses in the accent color travel along every arrow in its direction, in
+  waves starting at the items nothing points at (users, ingress) — each
+  edge starts where the shortest route from an entry reaches its source, so
+  the flow reads left → right — and a card glows briefly when a pulse
+  arrives. Positions depend only on t mod duration (4, 6 or 10 s), so the
+  loop is seamless. Sizes: Fit diagram (1–4×, capped at 1920 px for GIF,
+  3840 px for video) or Square 1080×1080, Portrait 1080×1350 and Landscape
+  1920×1080 with the diagram centered on white (5% padding, never above
+  3×; the dialog preselects the one that shows the diagram largest). The SVG
+  is rasterized once at the frame's scale; each frame copies it and stamps
+  a pre-drawn pulse sprite on a 2D canvas, yielding to the UI between
+  frames (progress bar, Cancel). GIF (gifenc, 20 fps, 15 above Full HD):
+  one 255-color palette from the still plus sample pulse frames, then every
+  frame stores only the pixels that changed (the rest is the transparent
+  index, disposal "keep"), ~0.5 MB for 6 s at 1080×1350. Video: WebCodecs
+  `VideoEncoder` H.264 (High → Main → Baseline at the lowest level that
+  fits, checked with `isConfigSupported`) muxed by Mediabunny into a
+  fast-start MP4, 30 fps — 180 frames at 1080×1350 take under a second on
+  Apple silicon in Chromium and WebKit. Without WebCodecs H.264 (some
+  WebKitGTK builds) MediaRecorder records the canvas in real time: MP4 when
+  `isTypeSupported` allows, else WebM (labelled and named WebM, with a note
+  to convert it); with neither, the Video option is disabled with a tooltip.
+  The Build canvas exports as PNG through
   the same dialog (html-to-image of the React Flow viewport). Files are
   saved with the native save dialog in the desktop app, as downloads in a
   browser. Since the desktop app is a WKWebView on macOS, the architecture
   e2e spec also runs in Playwright's `webkit` project (part of
   `bun run test:e2e`), switching views, checking the diagram stays
-  read-only and exporting the 2× PNG.
+  read-only and exporting the 2× PNG and a square GIF.
 - **MCP**: there is no export tool. Rendering needs the browser (elkjs
   layout, text measurement, icon assets); the daemon cannot draw the
   diagram without duplicating the view in Go.

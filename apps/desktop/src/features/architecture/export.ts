@@ -10,6 +10,16 @@ import type { Scene } from "./use-scene"
 
 export type ImageFormat = "png" | "svg"
 export type ImageScale = 1 | 2 | 3 | 4
+/** Every file the export dialog writes. */
+export type FileFormat = ImageFormat | "gif" | "mp4" | "webm"
+
+const FILE_TYPES: Record<FileFormat, { name: string; mime: string }> = {
+  png: { name: "PNG image", mime: "image/png" },
+  svg: { name: "SVG image", mime: "image/svg+xml" },
+  gif: { name: "GIF animation", mime: "image/gif" },
+  mp4: { name: "MP4 video", mime: "video/mp4" },
+  webm: { name: "WebM video", mime: "video/webm" },
+}
 
 export interface ImageOptions {
   format: ImageFormat
@@ -109,8 +119,17 @@ export async function diagramSvg(scene: Scene, opts: ImageOptions): Promise<{ sv
   return { svg, width: bounds.width, height: bounds.height }
 }
 
-/** Rasterizes an SVG document at `scale` into a PNG. */
-export async function svgToPng(svg: string, width: number, height: number, scale: number, background?: string): Promise<Blob> {
+/** Where an SVG lands on a canvas: `scale` pixels per SVG unit, its top-left at (dx, dy). */
+export interface Placement {
+  width: number
+  height: number
+  scale: number
+  dx: number
+  dy: number
+}
+
+/** Draws an SVG document (`width`×`height` units) on a new canvas, rasterized at the placement's scale. */
+export async function rasterizeSvg(svg: string, width: number, height: number, at: Placement, background?: string): Promise<HTMLCanvasElement> {
   const url = URL.createObjectURL(new Blob([svg], { type: "image/svg+xml;charset=utf-8" }))
   try {
     const img = new Image()
@@ -118,8 +137,8 @@ export async function svgToPng(svg: string, width: number, height: number, scale
     img.src = url
     await img.decode()
     const canvas = document.createElement("canvas")
-    canvas.width = Math.round(width * scale)
-    canvas.height = Math.round(height * scale)
+    canvas.width = at.width
+    canvas.height = at.height
     const ctx = canvas.getContext("2d")
     if (!ctx) throw new Error("This system cannot draw images (no 2D canvas)")
     const draw = () => {
@@ -129,19 +148,26 @@ export async function svgToPng(svg: string, width: number, height: number, scale
         ctx.fillStyle = background
         ctx.fillRect(0, 0, canvas.width, canvas.height)
       }
-      ctx.setTransform(scale, 0, 0, scale, 0, 0)
+      ctx.setTransform(at.scale, 0, 0, at.scale, at.dx, at.dy)
       ctx.drawImage(img, 0, 0, width, height)
     }
     // WebKit may lay out an SVG image's embedded fonts after the first paint: draw again a moment later.
     draw()
     await new Promise((r) => setTimeout(r, 120))
     draw()
-    return await new Promise<Blob>((resolve, reject) =>
-      canvas.toBlob((b) => (b ? resolve(b) : reject(new Error("The image is too large to encode"))), "image/png"),
-    )
+    return canvas
   } finally {
     URL.revokeObjectURL(url)
   }
+}
+
+/** Rasterizes an SVG document at `scale` into a PNG. */
+export async function svgToPng(svg: string, width: number, height: number, scale: number, background?: string): Promise<Blob> {
+  const at = { width: Math.round(width * scale), height: Math.round(height * scale), scale, dx: 0, dy: 0 }
+  const canvas = await rasterizeSvg(svg, width, height, at, background)
+  return await new Promise<Blob>((resolve, reject) =>
+    canvas.toBlob((b) => (b ? resolve(b) : reject(new Error("The image is too large to encode"))), "image/png"),
+  )
 }
 
 export async function exportDiagram(scene: Scene, opts: ImageOptions): Promise<ExportedImage> {
@@ -153,12 +179,13 @@ export async function exportDiagram(scene: Scene, opts: ImageOptions): Promise<E
 }
 
 /** Saves `blob` as `fileName`: the native save dialog in the desktop app, a download in the browser. False when cancelled. */
-export async function saveImage(blob: Blob, fileName: string, format: ImageFormat): Promise<boolean> {
+export async function saveFile(blob: Blob, fileName: string, format: FileFormat): Promise<boolean> {
   if (isTauri()) {
+    const type = FILE_TYPES[format]
     const path = await save({
-      title: "Save image",
+      title: type.mime.startsWith("video/") ? "Save video" : "Save image",
       defaultPath: fileName,
-      filters: [format === "png" ? { name: "PNG image", extensions: ["png"] } : { name: "SVG image", extensions: ["svg"] }],
+      filters: [{ name: type.name, extensions: [format] }],
     })
     if (!path) return false
     await writeFile(path, new Uint8Array(await blob.arrayBuffer()))
@@ -174,7 +201,7 @@ export async function saveImage(blob: Blob, fileName: string, format: ImageForma
 }
 
 /** "Items API" → "items-api-architecture.png". */
-export function imageFileName(name: string, suffix: string, format: ImageFormat) {
+export function exportFileName(name: string, suffix: string, format: FileFormat) {
   const base = name.trim().toLowerCase().replace(/[^\w.-]+/g, "-").replace(/^-+|-+$/g, "") || "workflow"
   return `${base}-${suffix}.${format}`
 }

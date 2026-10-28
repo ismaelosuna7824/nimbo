@@ -7,7 +7,7 @@ function pngSize(bytes: Buffer) {
   return { width: bytes.readUInt32BE(16), height: bytes.readUInt32BE(20) }
 }
 
-test("draws the read-only architecture diagram and exports a 2× PNG", async ({ app, api, page }) => {
+test("draws the read-only architecture diagram and exports a 2× PNG and an animated GIF", async ({ app, api, page }) => {
   const wf = await app.openNew(api, "Diagram", "aws-serverless-api")
   const views = page.getByRole("radiogroup", { name: "Canvas view" })
   await expect(views.getByRole("radio", { name: "Build" })).toHaveAttribute("data-state", "on")
@@ -79,6 +79,23 @@ test("draws the read-only architecture diagram and exports a 2× PNG", async ({ 
   expect(pngSize(bytes)).toEqual({ width, height })
   expect(width).toBeGreaterThan(1200)
   expect(bytes.length).toBeGreaterThan(50_000)
+
+  // Animated export: a square GIF of the traffic flowing through the diagram.
+  await page.getByRole("button", { name: "Export image…" }).click()
+  await dialog.getByRole("radio", { name: "GIF" }).click()
+  await expect(dialog.getByRole("radio", { name: /^Video/ })).toBeVisible()
+  await dialog.getByRole("combobox", { name: "Size" }).click()
+  await page.getByRole("option", { name: "Square 1080 × 1080" }).click()
+  await dialog.getByRole("radio", { name: "4 s" }).click()
+  await expect(size).toHaveText(/^1080 × 1080 px · 4 s loop · 20 fps/)
+  const gifDownload = page.waitForEvent("download")
+  await dialog.getByRole("button", { name: "Export GIF" }).click()
+  const gif = await gifDownload
+  expect(gif.suggestedFilename()).toBe("diagram-architecture.gif")
+  const gifBytes = await readFile((await gif.path())!)
+  expect(gifBytes.subarray(0, 6).toString("ascii")).toBe("GIF89a")
+  expect([gifBytes.readUInt16LE(6), gifBytes.readUInt16LE(8)]).toEqual([1080, 1080])
+  expect(gifBytes.includes("NETSCAPE2.0")).toBe(true)
 
   // Back to Build with the keyboard shortcut: the canvas is unchanged.
   await page.keyboard.press("ControlOrMeta+Shift+A")
