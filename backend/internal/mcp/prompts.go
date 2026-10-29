@@ -7,6 +7,13 @@ import (
 	sdk "github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
+// checkpointStep makes the agent stop and agree the plan with the user before it creates anything.
+const checkpointStep = `Checkpoint (before creating or changing anything): reply to the user first and STOP until they answer. In one short message:
+- Questions for what the request leaves open, 3 to 7, each with the default you would pick so they can just say "ok": exposure (public or internal), expected traffic and peaks, latency target, data sensitivity/compliance, availability (dev/prototype or production), environments, build mode (architecture or full code; language if full) and anything specific to the request (e.g. payment provider, retries, notifications channel).
+- Your proposal: the style and patterns, the compute (functions, managed containers, Kubernetes or VMs) and the main services, each with a one-line why, and what you deliberately leave out.
+- What will run in the local sandbox and what is export-only (not emulated locally); when the chosen compute doesn't run locally, say so and offer the closest option that does (or a docker/Kubernetes workflow to prove the application code).
+Skip the questions only when the user already answered them, said not to ask ("just build it", "no preguntes"), or asked for a small change to an existing workflow; still state your assumptions in one line.`
+
 // modeStep is the build-mode step of the recipes that write code.
 const modeStep = `Build mode (once, before any code): get_workflow shows mode. Unless the user already said, ask once whether they want architecture (default: infrastructure, diagram and minimal smoke handlers that prove the wiring: health, a write/read per connected store, publish/consume a test message) or full code (real application code; ask which language, or propose options with reasons from code_guidelines). Set it with update_workflow mode (create_workflow mode for a new workflow). Full: run the spec_feature recipe first (no code while [NEEDS CLARIFICATION] remains), then code_guidelines (mode full, language, style, platform) for the layout, packaging and tests. Architecture: write only the smoke handlers from code_guidelines (mode architecture) Files. Application code always lives in services/<svc>/ asset files written with apply_terraform_code, never inline in Terraform (archive_file source_dir; a Dockerfile package stage when it needs a build).`
 
@@ -34,6 +41,8 @@ func registerPrompts(r *registry) {
 Platform: %s.
 
 The design is the spec. Do not drop, merge or swap components, and do not change the architecture on your own: improvements are proposals the user approves.
+
+`+checkpointStep+`
 
 `+modeStep+`
 
@@ -63,6 +72,8 @@ Nothing touches a real cloud: everything runs locally.`, design, platform), nil
 			return "", err
 		}
 		return fmt.Sprintf(`Build this Docker stack with the Nimbo tools: %s
+
+`+checkpointStep+`
 
 `+modeStep+`
 
@@ -103,6 +114,8 @@ Steps:
 		return fmt.Sprintf(`Build this infrastructure with the Nimbo tools: %s
 Cloud: %s.
 
+`+checkpointStep+`
+
 `+modeStep+`
 
 Steps:
@@ -134,6 +147,8 @@ Nothing touches a real cloud: everything runs in the local Floci emulator. Tell 
 			return "", err
 		}
 		return fmt.Sprintf(`Build this Kubernetes app with the Nimbo tools: %s
+
+`+checkpointStep+`
 
 `+modeStep+`
 
@@ -175,11 +190,13 @@ Steps:
 Platform: %s.
 Environment intent: %s.
 
+`+checkpointStep+`
+
 `+modeStep+`
 
 Steps:
 1. Requirements: restate the requirement in one or two lines, then the non-functional requirements to settle: exposure (public or internal), expected traffic and peaks, latency targets, consistency needs (strong vs eventual), data sensitivity and compliance (CIS, PCI, HIPAA), availability target, team/ops maturity, budget and environments. Ask the user only what you cannot reasonably assume; state every assumption you make.
-2. Architecture: architecture_patterns with the requirement and the platform; pattern=<id> for the candidates you keep. Choose one style and the fewest patterns that meet the requirements, each with a one-line justification tied to an NFR, and say what you deliberately did NOT add and why (check each pattern's avoidWhen: a simple CRUD API stays simple; no microservices, CQRS, event sourcing or sagas without the need that justifies them).
+2. Architecture (part of the checkpoint proposal; build only after the user answers): architecture_patterns with the requirement and the platform; pattern=<id> for the candidates you keep. Choose one style and the fewest patterns that meet the requirements, each with a one-line justification tied to an NFR, and say what you deliberately did NOT add and why (check each pattern's avoidWhen: a simple CRUD API stays simple; no microservices, CQRS, event sourcing or sagas without the need that justifies them).
 3. well_architected_guidance for the platform (every cloud the design uses): the practices that shape it and its layout (folders, environments).
 4. Structure: the plan_structure recipe for Terraform (groups, states, modules, environments); for docker/Kubernetes, the services/objects and environments from the layout. Present the plan with the chosen patterns mapped to concrete resources/services, and wait for an OK when the design is large.
 5. Build it: the create_infrastructure, create_docker_stack or create_kubernetes_app recipe (templates the patterns name are good starting points), applying the patterns' practices (idempotency, DLQs, retries with backoff and timeouts, outbox, health checks…). Fix every error diagnostic and best_practices finding the edits return.
