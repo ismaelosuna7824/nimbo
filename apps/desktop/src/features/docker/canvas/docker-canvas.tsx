@@ -56,7 +56,7 @@ import { layoutCanvas } from "./layout"
 import { buildCanvas, looseItems, placeNew, relativePosition, SERVICE_H, SERVICE_W, type CanvasItem } from "./model"
 import { DockerEdge, FrameNode, ServiceNode, SmallNode, type DockerFlowEdge, type DockerFlowNode } from "./nodes"
 import { useWalkthroughEdges, useWalkthroughNodes } from "@/features/walkthrough/highlight"
-import { FollowRequestButton, WalkthroughOverlay } from "@/features/walkthrough/overlay"
+import { GuidedTourButton, WalkthroughOverlay } from "@/features/walkthrough/overlay"
 import { useWalkthroughOpen } from "@/features/walkthrough/store"
 
 const nodeTypes = { service: ServiceNode, small: SmallNode, frame: FrameNode }
@@ -372,7 +372,7 @@ function CanvasInner() {
         </Panel>
         {hasItems && (
           <Panel position="top-right" className="flex items-center gap-2">
-            <FollowRequestButton />
+            <GuidedTourButton />
             <Button variant="outline" size="sm" className="bg-card/80 shadow-md backdrop-blur-md dark:bg-card/80" onClick={() => void tidy()}>
               <WandSparklesIcon />
               Tidy up

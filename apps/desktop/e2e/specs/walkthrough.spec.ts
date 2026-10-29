@@ -2,7 +2,9 @@ import { expect, test } from "../support/fixtures"
 
 test("follows a request through the Build canvas step by step", async ({ app, api, page }) => {
   await app.openNew(api, "Walk", "aws-serverless-api")
-  await page.getByRole("button", { name: "Follow a request" }).click()
+  // On the Build canvas, "Follow a request" is in the Guided tour menu.
+  await page.getByRole("button", { name: "More guided tours" }).click()
+  await page.getByRole("menuitem", { name: "Follow a request" }).click()
   const panel = page.getByTestId("walkthrough-panel")
   const counter = panel.getByTestId("walkthrough-step-counter")
   const caption = panel.getByTestId("walkthrough-caption")
@@ -42,8 +44,10 @@ test("follows a request through the Build canvas step by step", async ({ app, ap
   await expect(panel.getByTestId("walkthrough-name")).toHaveText("api")
   await expect(panel.getByTestId("walkthrough-via")).toContainText("the API Integration")
   await expect(panel.getByTestId("walkthrough-also")).toContainText("IAM Role lambda")
-  await expect(card("aws_lambda_function.api")).toHaveClass(/ring-primary/)
-  await expect(card("aws_apigatewayv2_api.http")).not.toHaveClass(/ring-primary/)
+  await expect(card("aws_lambda_function.api")).toHaveClass(/ring-2 ring-primary/)
+  // Where the request came from keeps a faint ring only.
+  await expect(card("aws_apigatewayv2_api.http")).not.toHaveClass(/ring-2/)
+  await expect(card("aws_apigatewayv2_api.http")).toHaveClass(/ring-primary\/40/)
   // The hop's edges are emphasized without their raw attribute paths: the caption says how they connect.
   await expect(page.locator(".react-flow__edgelabel-renderer").getByText(/integration_uri/)).toHaveCount(0)
 
@@ -112,4 +116,49 @@ test("from the command palette on Kubernetes: a fork asks which way, Show all pl
   await expect(panel.getByTestId("walkthrough-via")).toContainText("Service backend")
   await expect(page.locator('.react-flow__node[data-id="Deployment/shop/backend"]')).toHaveClass(/ring-primary/)
   await expect(panel.getByTestId("walkthrough-step-counter")).toHaveText("3/6")
+})
+
+test("tours the infrastructure from the resource group to what is built on it", async ({ app, api, page }) => {
+  await app.openNew(api, "Tour", "azure-api-gateway")
+  await page.getByRole("button", { name: "Guided tour", exact: true }).click()
+  const panel = page.getByTestId("walkthrough-panel")
+  await panel.getByRole("button", { name: "Pause (space)" }).click()
+  await expect(panel).toHaveAttribute("aria-label", "Tour the infrastructure")
+  const counter = panel.getByTestId("walkthrough-step-counter")
+  const card = (id: string) => page.locator(`.react-flow__node[data-id="${id}"]`)
+
+  // The root first: the resource group glows, the caption says why it is here; the random suffix comes along.
+  await expect(counter).toHaveText(/^1\/\d+$/)
+  await expect(panel.getByTestId("walkthrough-name")).toHaveText("Resource Group main")
+  await expect(panel.getByTestId("walkthrough-caption")).toContainText("Holds every resource of this design")
+  await expect(panel.getByTestId("walkthrough-also")).toContainText("suffix")
+  await expect(card("azurerm_resource_group.main")).toHaveClass(/tour-glow/)
+  await expect(card("azurerm_linux_web_app.service")).toHaveClass(/opacity-25/)
+  await expect(page.locator(".react-flow__minimap")).toHaveCount(0)
+
+  // The next layer: what is built on the resource group glows together; the resource group keeps a faint ring.
+  await page.keyboard.press("ArrowRight")
+  await expect(counter).toHaveText(/^2\/\d+$/)
+  await expect(panel.getByTestId("walkthrough-name")).toHaveText("Built on Resource Group main")
+  await expect(card("azurerm_service_plan.main")).toHaveClass(/tour-glow/)
+  await expect(card("azurerm_resource_group.main")).not.toHaveClass(/tour-glow/)
+  await expect(card("azurerm_resource_group.main")).toHaveClass(/ring-primary\/40/)
+
+  // To the end, then the summary.
+  const total = Number((await counter.textContent())!.split("/")[1])
+  for (let i = 2; i < total; i++) await page.keyboard.press("ArrowRight")
+  await expect(counter).toHaveText(`${total}/${total}`)
+  await expect(panel.getByTestId("tour-next")).toContainText("The end of the tour")
+  await page.keyboard.press("ArrowRight")
+  await expect(panel.getByTestId("walkthrough-summary")).toContainText("You toured")
+  await page.keyboard.press("Escape")
+  await expect(panel).toHaveCount(0)
+  await expect(card("azurerm_resource_group.main")).not.toHaveClass(/tour-glow|ring-primary/)
+})
+
+test("the Guided tour menu offers Follow a request only when something reaches the design", async ({ app, api, page }) => {
+  await app.openNew(api, "Worker", "aws-queue-worker")
+  await page.getByRole("button", { name: "More guided tours" }).click()
+  await expect(page.getByRole("menuitem", { name: "Tour the infrastructure" })).toBeEnabled()
+  await expect(page.getByRole("menuitem", { name: "Follow a request" })).toHaveAttribute("data-disabled", "")
 })

@@ -22,6 +22,7 @@ import {
   PlugIcon,
   PlusIcon,
   RouteIcon,
+  MapIcon,
   ShieldCheckIcon,
   SquareIcon,
   Trash2Icon,
@@ -325,7 +326,20 @@ export function PaletteBody() {
                   Export Build canvas as PNG…
                 </CommandItem>
               )}
-              <CommandItem value="follow a request walkthrough path trace flow tour how requests travel" onSelect={() => run(startWalkthrough)}>
+              <CommandItem
+                value="tour the infrastructure guided tour walkthrough explain resources layers dependencies"
+                onSelect={() =>
+                  run(() => {
+                    // The tour follows the Build canvas.
+                    switchView("build")
+                    startWalkthrough("tour")
+                  })
+                }
+              >
+                <MapIcon />
+                Tour the infrastructure
+              </CommandItem>
+              <CommandItem value="follow a request walkthrough path trace flow how requests travel" onSelect={() => run(() => startWalkthrough("request"))}>
                 <RouteIcon />
                 Follow a request
               </CommandItem>

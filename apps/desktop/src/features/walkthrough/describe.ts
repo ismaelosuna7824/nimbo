@@ -33,7 +33,8 @@ export interface Chip {
 }
 
 export interface Where {
-  tone: "deployed" | "local" | "export"
+  /** absent: in the design, but the active environment does not create it (count = 0). */
+  tone: "deployed" | "local" | "export" | "absent"
   text: string
 }
 
@@ -148,6 +149,9 @@ export function terraformRole(card: Pick<ArchCard, "type" | "category">): Role {
   }
 }
 
+/** Secrets that can hold a connection string. */
+const SECRET_TYPE = /^(azurerm_key_vault_secret|aws_secretsmanager_secret(_version)?|google_secret_manager_secret(_version)?|aws_ssm_parameter|oci_vault_secret)$/
+
 export function isSupportingType(card: Pick<ArchCard, "type" | "category" | "existing">): boolean {
   return !!SUPPORTING_CATEGORY[card.category] || SUPPORTING_TYPE.test(baseType(card.type)) || (!!card.existing && card.category === "networking")
 }
@@ -192,9 +196,11 @@ export interface TerraformInput {
   edges: WorkflowEdge[]
   schemaOf: (node: WorkflowNode) => ResourceSchema | undefined
   deployed: Set<string>
+  /** Nodes the active environment does not create (count = 0) though the design has them, with its name. */
+  absent?: { ids: Set<string>; env: string }
 }
 
-export function describeTerraform({ model, nodes, edges, schemaOf, deployed }: TerraformInput): Describer {
+export function describeTerraform({ model, nodes, edges, schemaOf, deployed, absent }: TerraformInput): Describer {
   const byId = new Map(nodes.map((n) => [n.id, n]))
   const cards = new Map(model.cards.map((c) => [c.id, c]))
   const cardOfNode = new Map(model.cards.map((c) => [c.nodeId, c.id]))
@@ -216,8 +222,9 @@ export function describeTerraform({ model, nodes, edges, schemaOf, deployed }: T
     const node = byId.get(c.nodeId)
     const { schema, label, type } = typeOf(c)
     const role = terraformRole(c)
-    const where: Where | undefined =
-      node?.kind === "module" || !schema
+    const where: Where | undefined = absent?.ids.has(c.nodeId)
+      ? { tone: "absent", text: `Not created in environment "${absent.env}" (count = 0)` }
+      : node?.kind === "module" || !schema
         ? undefined
         : node?.kind === "data"
           ? { tone: "local", text: "Existing resource the design only reads" }
@@ -294,9 +301,14 @@ export function describeTerraform({ model, nodes, edges, schemaOf, deployed }: T
       const other = referenceEdges.find((f) => (f.source === x && b.has(f.target)) || (f.target === x && b.has(f.source)))
       const helper = byId.get(x)
       if (!other || !helper) continue
-      if (e.source === x && other.target === x) through.push(referenceText(e, byId.get(e.target)))
+      const helperLabel = schemaOf(helper)?.label || typeLabel(helper.type)
+      // A connection string kept as a secret: the secret is the link ("the Key Vault Secret database-url").
+      if (SECRET_TYPE.test(baseType(helper.type))) {
+        const name = helper.body.attrs.find((x) => x.name === "name")?.value.literal
+        through.push(`the ${helperLabel} ${typeof name === "string" ? name : helper.name}`)
+      } else if (e.source === x && other.target === x) through.push(referenceText(e, byId.get(e.target)))
       else if (other.source === x && e.target === x) through.push(referenceText(other, byId.get(other.target)))
-      else through.push(`the ${schemaOf(helper)?.label || typeLabel(helper.type)}`)
+      else through.push(`the ${helperLabel}`)
     }
     // An environment variable says most about how a service finds the other end.
     return [...direct, ...through].find((t) => t.startsWith("environment variable")) ?? direct[0] ?? through[0]

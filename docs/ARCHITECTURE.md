@@ -3663,12 +3663,23 @@ are drawn as requests (api → db, the reverse of the graph's "source is
 used by target"), one arrow per pair. The subtitle is `Docker Compose ·
 <project>`; the legend adds internal/external networks when present.
 
-### Follow a request (`apps/desktop/src/features/walkthrough`)
+### Guided tour and Follow a request (`apps/desktop/src/features/walkthrough`)
 
 A guided walkthrough of the path a request takes, for beginners: *Follow a
-request* on the canvas toolbar (Build and Architecture, every workflow kind)
-or ⌘K. It reuses the Architecture model — `use-model.ts` derives it for the
-Build canvas too (no layout), so both views walk the same data-flow arrows.
+request* in the Architecture toolbar, in the Build toolbar's *Guided tour ▾*
+menu (disabled, with the reason, when nothing reaches the design;
+`entry-check.ts` derives it when the menu opens) and in ⌘K. It reuses the
+Architecture model — `use-model.ts` derives it for the Build canvas too (no
+layout), so both views walk the same data-flow arrows. The Build canvas draws
+every resource of the design, so its walk follows the whole design
+(`deriveArchitecture(…, { everyEnvironment: true })`: what the variables'
+defaults or any environment create); a hop the active environment does not
+create (`count = 0`) says so ("Not created in environment "local""). The
+Architecture view draws the active environment only: when its front door is
+not created there, the panel says so and offers the Build canvas. Connection
+strings kept as secrets (Key Vault, Secrets Manager, Secret Manager, SSM
+values naming a database) are data arrows from the services reading them
+(derive step 3c), the hop "connected by the Key Vault Secret database-url".
 `paths.ts` (pure, `paths.test.ts`): entries are the data arrows from *Users*
 (the *Internet* when no Users reach the design), one per front door, picked
 by the user when there are several; without any, the panel says "This design
@@ -3711,6 +3722,30 @@ traffic panel the newer one shows — a load test started during a
 walkthrough closes it; a walkthrough opened during a run tucks the run's
 panel away until it closes (cards and edges keep their live numbers). With
 `prefers-reduced-motion` the dot does not travel and the camera jumps.
+
+*Tour the infrastructure* (the Build toolbar's *Guided tour*, ⌘K; Build canvas
+only, `tour.ts` + `tour-graph.ts`, pure, `tour.test.ts`) walks the canvas as
+drawn, from its roots to its leaves, like a product tour. `tour-graph.ts`
+turns each canvas into nodes (title, name, what it is for, where it runs) and
+dependencies: Terraform edges point from the referenced resource, Docker and
+Kubernetes edges from the user to what it uses, and a frame (VPC, network,
+namespace) comes before what it holds. `buildTour` layers them by their
+longest dependency chain (the layout's columns); in a layer, siblings built on
+the same resource are one step glowing together (at most 8), read column by
+column, top to bottom. Plumbing — random names and passwords, client config
+lookups, associations, links, access policies, authorization rules, role
+policies and permissions — is no step: it shows as "also created here" on the
+step of the nearest real resource it serves. `tourCaption` says what each
+resource is for in this design from its kind and neighbours ("Holds every
+resource of this design", "The private network Subnet db and Subnet apps live
+in", "Firewall rules: decides which traffic may reach Subnet apps" through the
+NSG's association), what is built on it next ("→ used by …") and where it runs.
+The focus glows (`tour-glow`, a slow accent box-shadow, still with reduced
+motion), the step before keeps a faint ring, earlier steps stay at 60 %, the
+rest fades; the edges into the step light up; the camera eases to the step
+and what it is built on. The player (panel, keys, camera, marks:
+`player-ui.tsx`, `player-hooks.ts`) is shared with Follow a request; the store's
+`mode` says which runs. The summary counts the resources toured.
 
 ## Learn (`internal/learn`, `api/learn.go`, `apps/desktop/src/features/learn`)
 

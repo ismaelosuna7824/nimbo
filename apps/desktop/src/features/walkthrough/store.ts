@@ -4,8 +4,11 @@ import { useWorkflowStore } from "@/state/workflow-store"
 export type Speed = 0.5 | 1 | 2
 export const SPEEDS: Speed[] = [0.5, 1, 2]
 
-/** How an item shows on the canvas during a walkthrough. */
-export type NodeMark = "current" | "near" | "path"
+/** "request": follow a request along the data flow; "tour": tour the infrastructure on the Build canvas. */
+export type WalkthroughMode = "request" | "tour"
+
+/** How an item shows on the canvas during a walkthrough: in focus (glowing on the tour), just shown, on the path. */
+export type NodeMark = "current" | "glow" | "near" | "path"
 export type EdgeMark = "current" | "path"
 
 /** Marks keyed by the IDs of the canvas the walkthrough runs on (Build cards or Architecture items). */
@@ -17,6 +20,7 @@ export interface Highlight {
 interface WalkthroughState {
   /** Workflow the walkthrough is open on (null: closed). */
   workflowId: string | null
+  mode: WalkthroughMode
   /** When it was opened (ms): the live traffic panel and the walkthrough share the canvas bottom, the newer one shows. */
   startedAt: number
   /** Chosen entry point (its item ID); null until picked when there are several. */
@@ -31,15 +35,15 @@ interface WalkthroughState {
   highlight: Highlight | null
 }
 
-const CLOSED = { workflowId: null, startedAt: 0, entry: null, choices: {}, step: 0, playing: false, highlight: null } satisfies Partial<WalkthroughState>
+const CLOSED = { workflowId: null, mode: "request", startedAt: 0, entry: null, choices: {}, step: 0, playing: false, highlight: null } satisfies Partial<WalkthroughState>
 
 export const useWalkthrough = create<WalkthroughState>(() => ({ ...CLOSED, speed: 1 }))
 
-/** Opens the walkthrough on the open workflow, from its first step, playing. */
-export function startWalkthrough() {
+/** Opens the walkthrough (`mode`) on the open workflow, from its first step, playing. */
+export function startWalkthrough(mode: WalkthroughMode = "request") {
   const workflowId = useWorkflowStore.getState().workflow?.id
   if (!workflowId) return
-  useWalkthrough.setState({ ...CLOSED, workflowId, startedAt: Date.now(), playing: true })
+  useWalkthrough.setState({ ...CLOSED, workflowId, mode, startedAt: Date.now(), playing: true })
 }
 
 export function closeWalkthrough() {
@@ -51,8 +55,13 @@ export function replayWalkthrough() {
   useWalkthrough.setState({ step: 0, playing: true })
 }
 
-/** True while the walkthrough is open on the open workflow. */
-export function useWalkthroughOpen(): boolean {
+/** The mode open on the open workflow (null: none). */
+export function useWalkthroughMode(): WalkthroughMode | null {
   const id = useWorkflowStore((s) => s.workflow?.id)
-  return useWalkthrough((s) => !!id && s.workflowId === id)
+  return useWalkthrough((s) => (!!id && s.workflowId === id ? s.mode : null))
+}
+
+/** True while a walkthrough (either mode) is open on the open workflow. */
+export function useWalkthroughOpen(): boolean {
+  return useWalkthroughMode() !== null
 }

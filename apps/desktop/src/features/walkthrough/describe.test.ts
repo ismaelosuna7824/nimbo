@@ -105,6 +105,7 @@ const SCHEMAS: Record<string, Partial<ResourceSchema>> = {
   azurerm_container_app_environment: { label: "Container App Environment", flociSupported: true },
   azurerm_log_analytics_workspace: { label: "Log Analytics Workspace", flociSupported: false },
   azurerm_private_dns_zone: { label: "Private DNS Zone", flociSupported: true },
+  azurerm_key_vault_secret: { label: "Key Vault Secret", flociSupported: false },
 }
 
 describe("Terraform: the Azure Container Apps example", () => {
@@ -158,6 +159,58 @@ describe("Terraform: the Azure Container Apps example", () => {
     expect(notifier.text).toStartWith("Later, it picks the message up from main")
     expect(notifier.via).toBe("environment variable QUEUE_NAME")
     expect(notifier.where).toEqual({ tone: "local", text: "Runs locally in the sandbox" })
+  })
+})
+
+// The user's "Azure Orders API": the Container Apps, Key Vault and Service Bus have `count = local.managed`, which is
+// 0 in the sandbox environment "local" (sandbox_mode = true). The database URL reaches the API through a Key Vault
+// secret built from the server's FQDN.
+describe("Terraform: a front door the active environment skips (count = 0)", () => {
+  const managed = { count: "local.managed" }
+  const nodes = [
+    res("azurerm_resource_group.main", { name: '"rg-orders"', location: '"westeurope"' }),
+    res("azurerm_virtual_network.main", { ...RG, address_space: '["10.20.0.0/16"]' }),
+    res("azurerm_subnet.apps", { resource_group_name: "azurerm_resource_group.main.name", virtual_network_name: "azurerm_virtual_network.main.name" }),
+    res("azurerm_subnet.db", { resource_group_name: "azurerm_resource_group.main.name", virtual_network_name: "azurerm_virtual_network.main.name" }),
+    res("random_password.postgres", { length: "24" }),
+    res("azurerm_postgresql_flexible_server.main", { ...RG, delegated_subnet_id: "azurerm_subnet.db.id", administrator_password: "random_password.postgres.result" }),
+    res("azurerm_key_vault.main", { ...managed, ...RG, sku_name: '"standard"' }),
+    res("azurerm_key_vault_secret.database_url", {
+      ...managed,
+      name: '"database-url"',
+      key_vault_id: "azurerm_key_vault.main[0].id",
+      value: 'join("", ["postgres://u:", random_password.postgres.result, "@", azurerm_postgresql_flexible_server.main.fqdn, ":5432/orders"])',
+    }),
+    res("azurerm_container_app_environment.main", { ...RG, infrastructure_subnet_id: "azurerm_subnet.apps.id" }),
+    res(
+      "azurerm_container_app.api",
+      { ...managed, resource_group_name: "azurerm_resource_group.main.name", container_app_environment_id: "azurerm_container_app_environment.main.id" },
+      [
+        ["secret", { name: '"database-url"', key_vault_secret_id: "azurerm_key_vault_secret.database_url[0].versionless_id" }],
+        ["ingress", { external_enabled: "true", target_port: "8080" }],
+        ["template", {}, [["container", { name: '"api"' }, [["env", { name: '"DATABASE_URL"', secret_name: '"database-url"' }]]]]],
+      ],
+    ),
+  ]
+  const wf: DeriveWorkflow = {
+    ...design(nodes),
+    variables: [{ name: "sandbox_mode", body: toBody({ type: "bool", default: "false" }) }],
+    locals: [{ name: "managed", value: { expr: "var.sandbox_mode ? 0 : 1" } }],
+    environments: [{ name: "local", values: { sandbox_mode: { expr: "true", literal: true } }, envVars: [] }],
+    activeEnvironment: "local",
+  }
+
+  test("the active environment draws no front door; the whole design has the API as its entry", () => {
+    expect(walkEntries(deriveArchitecture(wf))).toEqual([])
+    const model = deriveArchitecture(wf, { everyEnvironment: true })
+    expect(walkEntries(model)).toEqual([{ target: "azurerm_container_app.api", actor: "actor:users" }])
+    const absent = { ids: new Set(["azurerm_container_app.api", "azurerm_key_vault.main"]), env: "local" }
+    const d = describeTerraform({ model, nodes: wf.nodes, edges: wf.edges, schemaOf: (n) => SCHEMAS[n.type] as ResourceSchema | undefined, deployed: new Set(), absent })
+    const walk = buildWalk(model, walkEntries(model)[0], {}, (id) => d.info.get(id)!)
+    // The connection string in Key Vault is how the API reaches the database.
+    expect(walk.steps.map((s) => s.at)).toEqual(["actor:users", "azurerm_container_app.api", "azurerm_postgresql_flexible_server.main"])
+    expect(captionOf(walk, 1, d).where).toEqual({ tone: "absent", text: 'Not created in environment "local" (count = 0)' })
+    expect(captionOf(walk, 2, d).via).toBe("the Key Vault Secret database-url")
   })
 })
 

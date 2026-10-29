@@ -60,7 +60,7 @@ import { KubeConnectDialog, type PendingKubeConnection, type PendingKubeEnd } fr
 import { buildKubeCanvas, layoutChart, layoutKubeCanvas, withChartSpots, WORKLOAD_H, WORKLOAD_W, type ChartSummary, type KubeCanvasItem } from "./model"
 import { ChartNode, FrameNode, KubeEdge, SmallNode, WorkloadNode, type KubeFlowEdge, type KubeFlowNode } from "./nodes"
 import { useWalkthroughEdges, useWalkthroughNodes } from "@/features/walkthrough/highlight"
-import { FollowRequestButton, WalkthroughOverlay } from "@/features/walkthrough/overlay"
+import { GuidedTourButton, WalkthroughOverlay } from "@/features/walkthrough/overlay"
 import { useWalkthroughOpen } from "@/features/walkthrough/store"
 
 const nodeTypes = { workload: WorkloadNode, small: SmallNode, frame: FrameNode, chart: ChartNode }
@@ -501,7 +501,7 @@ function CanvasInner() {
         </Panel>
         {hasItems && (
           <Panel position="top-right" className="flex items-center gap-2">
-            <FollowRequestButton />
+            <GuidedTourButton />
             <Button variant="outline" size="sm" className="bg-card/80 shadow-md backdrop-blur-md dark:bg-card/80" onClick={() => void tidy()}>
               <WandSparklesIcon />
               Tidy up

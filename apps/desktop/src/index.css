@@ -251,3 +251,25 @@
     animation: none;
   }
 }
+
+/* The guided tour's focus: a soft accent glow breathing slowly around the card(s) the caption talks about. */
+.tour-glow {
+  box-shadow:
+    0 0 0 2px var(--primary),
+    0 0 18px 4px color-mix(in oklab, var(--primary) 35%, transparent);
+  animation: tour-glow 2.4s ease-in-out infinite;
+}
+
+@keyframes tour-glow {
+  50% {
+    box-shadow:
+      0 0 0 2px var(--primary),
+      0 0 30px 8px color-mix(in oklab, var(--primary) 18%, transparent);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .tour-glow {
+    animation: none;
+  }
+}

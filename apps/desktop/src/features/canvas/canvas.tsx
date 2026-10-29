@@ -60,7 +60,7 @@ import { ModuleRefactorDialogs } from "./module-refactor"
 import { openExtractModule, openInlineModule } from "./module-refactor-store"
 import { GroupNode, RefEdge, ResourceNode, type RefFlowEdge, type ResourceFlowNode } from "./nodes"
 import { useWalkthroughEdges, useWalkthroughNodes } from "../walkthrough/highlight"
-import { FollowRequestButton, WalkthroughOverlay } from "../walkthrough/overlay"
+import { GuidedTourButton, WalkthroughOverlay } from "../walkthrough/overlay"
 import { useWalkthroughOpen } from "../walkthrough/store"
 
 const nodeTypes = { resource: ResourceNode, container: GroupNode }
@@ -633,7 +633,7 @@ function CanvasInner() {
           <PlanChip />
           {!empty && (
             <>
-              <FollowRequestButton />
+              <GuidedTourButton />
               <Button variant="outline" size="sm" className="bg-card/80 shadow-md backdrop-blur-md dark:bg-card/80" onClick={() => void tidy()}>
                 <WandSparklesIcon />
                 Tidy up

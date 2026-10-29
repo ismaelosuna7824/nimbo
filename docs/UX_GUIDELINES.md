@@ -145,6 +145,10 @@ instead of one-off colors, shadows or radii.
   explains each step in one floating panel at the bottom center (frosted, `shadow-lg`) with Play/Pause, ←/→, space
   and Esc; the camera eases to the hop and jumps instead with reduced motion. Floating panels never stack: the caption
   and the live traffic panel share the canvas bottom and the newer one shows (the minimap steps aside meanwhile).
+- **Guided tour.** The Build toolbar has one *Guided tour* split button: the button tours the infrastructure, its menu
+  also holds *Follow a request* (disabled with the reason when nothing reaches the design). The tour's focus is a soft
+  accent glow breathing slowly around the card(s) (`tour-glow`, still with reduced motion), never a status color; what
+  was just shown keeps a faint accent ring; plumbing is named on the step ("Also created here"), not toured.
 
 ## Review checklist
 

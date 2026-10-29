@@ -12,9 +12,11 @@ import type { ArchModel } from "./model"
 
 /**
  * The open Terraform workflow's architecture model (null while its module files load) and the catalog
- * label of a resource type. The Architecture view draws it; the request walkthrough follows its arrows.
+ * label of a resource type. The Architecture view draws it; the request walkthrough follows its arrows
+ * (on the Build canvas with `everyEnvironment`: the whole design, not only what the active environment creates).
  */
-export function useTerraformModel(): { model: ArchModel | null; labelOf: (type: string) => string | undefined } {
+export function useTerraformModel(opts: { everyEnvironment?: boolean } = {}): { model: ArchModel | null; labelOf: (type: string) => string | undefined } {
+  const everyEnvironment = !!opts.everyEnvironment
   const wf = useWorkflowStore((s) => s.workflow) as Workflow
   const version = useWorkflowStore((s) => s.version)
   const loadTests = useWorkflowStore((s) => s.loadTests)
@@ -52,8 +54,8 @@ export function useTerraformModel(): { model: ArchModel | null; labelOf: (type: 
     () =>
       modulesPending
         ? null
-        : deriveArchitecture({ nodes, edges, variables, locals, providers, environments, activeEnvironment }, { connections: used, labelOf, modules }),
-    [modulesPending, nodes, edges, variables, locals, providers, environments, activeEnvironment, used, labelOf, modules],
+        : deriveArchitecture({ nodes, edges, variables, locals, providers, environments, activeEnvironment }, { connections: used, labelOf, modules, everyEnvironment }),
+    [modulesPending, nodes, edges, variables, locals, providers, environments, activeEnvironment, used, labelOf, modules, everyEnvironment],
   )
   return { model, labelOf }
 }

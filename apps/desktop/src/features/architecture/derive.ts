@@ -19,6 +19,12 @@ export interface DeriveOptions {
   labelOf?: (type: string) => string | undefined
   /** Content of the module calls: readable modules are drawn as the services they create. */
   modules?: ModuleTree
+  /**
+   * Keep what any environment or the variables' defaults create, not only the active environment (the Build
+   * canvas' request walkthrough follows the whole design: a front door a sandbox environment skips with
+   * `count = 0` is still its entry point).
+   */
+  everyEnvironment?: boolean
 }
 
 const PROVIDERS: ArchProvider[] = ["aws", "azure", "gcp", "oci"]
@@ -103,6 +109,11 @@ const LINKS: Record<string, readonly [RegExp, RegExp]> = {
   oci_apigateway_deployment: [/^gateway_id$/, /^specification\.routes\.backend\.(url|function_id)$/],
   oci_ons_subscription: [/^topic_id$/, /^endpoint$/],
 }
+
+/** Secrets whose value can carry a connection string (see the secret flows of deriveArchitecture), and that value. */
+const SECRET_VALUE = /^(azurerm_key_vault_secret|aws_secretsmanager_secret_version|google_secret_manager_secret_version|aws_ssm_parameter|oci_vault_secret)$/
+const SECRET_VALUE_ATTR = /^(value|value_wo|secret_string|secret_string_wo|secret_data|secret_data_wo|insecure_value|secret_content\.content)$/
+
 /** DNS records: a name pointing at a resource (through LINKS, see dnsTargets). */
 const DNS_RECORD = /^(aws_route53_record|azurerm_dns_(a|aaaa|cname)_record|google_dns_record_set)$/
 /** Certificates whose DNS validation records (and validations) belong to them, not to the zone. */
@@ -582,10 +593,11 @@ export function deriveArchitecture(input: DeriveWorkflow, opts: DeriveOptions = 
     }
     return k
   }
-  // What exists: the active environment's design; with environments but none active, what any of
-  // them creates (a frontend only dev and qa enable is still part of the design).
-  const envs = input.activeEnvironment || !input.environments?.length ? [] : input.environments
-  const scenarios = envs.length ? envs.map((e) => makeResolver({ ...expanded.wf, activeEnvironment: e.name }, forEachSource)) : [r]
+  // What exists: the active environment's design; with environments but none active (or with every
+  // environment asked for), what any of them, or the defaults, creates (a frontend only dev and qa enable is
+  // still part of the design).
+  const envNames = opts.everyEnvironment ? [undefined, ...(input.environments ?? []).map((e) => e.name)] : input.activeEnvironment || !input.environments?.length ? [] : input.environments.map((e) => e.name)
+  const scenarios = envNames.length ? envNames.map((name) => makeResolver({ ...expanded.wf, activeEnvironment: name }, forEachSource)) : [r]
   // Blocks without instances (count = 0, an empty for_each, inside a module call with none) are not
   // drawn; AzAPI resources take the azurerm type of their ARM type.
   const kept = expanded.wf.nodes.flatMap((n): WorkflowNode[] => {
@@ -1508,6 +1520,18 @@ export function deriveArchitecture(input: DeriveWorkflow, opts: DeriveOptions = 
     if (principals.length === 0 || principals.length > 2) continue
     const scopes = unique(out.filter((x) => rule[1].test(x.attr)).map((x) => rep(x.id))).filter((c): c is string => !!c && isCard(c))
     for (const p of principals) for (const res of scopes) add(p, res, isMonitoring(res) || isControl(res) || REGISTRY_TYPE.test(typeOf(nodes.get(res)!)) ? "control" : "data", 1)
+  }
+  // 3c. Connection strings kept as secrets: a service reading a secret whose value names another service (a
+  // database URL in Key Vault, Secrets Manager, Secret Manager, SSM) reaches that service.
+  for (const n of ordered) {
+    if (!SECRET_VALUE.test(typeOf(n))) continue
+    const targets = unique(refsOf(n.id).filter((x) => SECRET_VALUE_ATTR.test(x.attr)).map((x) => rep(x.id))).filter(
+      (c): c is string => !!c && isCard(c) && !isControl(c) && !isMonitoring(c),
+    )
+    for (const u of usersOf(n.id)) {
+      const s = flowCard(u.id)
+      if (s && !isControl(s) && !isMonitoring(s)) for (const t of targets) add(s, t, "data", 1)
+    }
   }
   // 4. Internet gateways reach the public subnets routing to them. (Private subnets going out through
   // a NAT gateway show it as their "routes: 0.0.0.0/0 → NAT" line, not as an arrow.)
