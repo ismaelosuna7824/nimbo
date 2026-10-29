@@ -726,6 +726,10 @@ resource "aws_lambda_function" "c" {
   runtime       = "nodejs22.x"
 }`, 0},
 		},
+		"bp_emulator_host_loopback": {
+			{"cloud run env on localhost", cloudRunEnv("PUBSUB_EMULATOR_HOST", `"localhost.floci.io:4588"`), 1},
+			{"cloud run env from a variable", cloudRunEnv("PUBSUB_EMULATOR_HOST", `var.gcp_emulator_host`), 0},
+		},
 	}
 	for _, r := range Rules() {
 		if len(cases[r.Code]) == 0 && len(structureCases[r.Code]) == 0 {

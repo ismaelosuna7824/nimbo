@@ -69,6 +69,7 @@ var rulePillars = map[string][]model.Pillar{
 	"bp_state_too_large":       {model.PillarOperations, model.PillarPerformance},
 	"bp_workspace_branching":   {model.PillarOperations, model.PillarReliability},
 	"bp_count_over_list":       {model.PillarReliability, model.PillarOperations},
+	"bp_emulator_host_loopback": {model.PillarReliability, model.PillarOperations},
 
 	"bp_rds_minor_upgrade":          {model.PillarSecurity, model.PillarOperations},
 	"bp_rds_multi_az":               {model.PillarReliability},
@@ -209,6 +210,9 @@ var rules = []rule{
 	{documented(info("bp_count_over_list", "Lists use for_each, not count", CategoryReliability,
 		"Resources and module calls that create one instance per element of a list use for_each instead of count = length(list) with list[count.index], so removing or reordering an element doesn't destroy and recreate the instances after it."),
 		"https://developer.hashicorp.com/terraform/language/meta-arguments/count#when-to-use-for_each-instead-of-count"), checkCountOverList},
+	{documented(warning("bp_emulator_host_loopback", "Emulator addresses don't point at localhost", CategoryReliability,
+		"Compute resources (Cloud Run, Cloud Functions, Lambda, ECS, Container Apps, Function Apps) and environment values don't set an emulator address (PUBSUB_EMULATOR_HOST, STORAGE_EMULATOR_HOST, AWS_ENDPOINT_URL, …) to a loopback host: inside a container localhost is the container itself."),
+		"https://cloud.google.com/pubsub/docs/emulator"), checkEmulatorHostLoopback},
 }
 
 // info builds a rule's metadata with its pillars: rulePillars, else its
