@@ -126,6 +126,51 @@ resource "google_sql_database_instance" "db" {
 	}
 }
 
+// 3.11 is graded from the proxies' SSL policies: a proxy without one uses
+// the TLS 1.0 default, a RESTRICTED policy passes.
+func TestCISGCPSSLPolicyControl(t *testing.T) {
+	cat, err := catalog.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	fw, _ := compliance.Lookup("cis-gcp-5.0")
+	cfg := compliance.GradingSettings(model.BestPracticeSettings{}, fw)
+	proxy := func(extra string) string {
+		return `resource "google_compute_target_https_proxy" "p" {
+  name             = "p"
+  url_map          = "u"
+  ssl_certificates = ["c"]
+` + extra + `
+}
+`
+	}
+	cases := map[string]struct {
+		src  string
+		want compliance.Status
+	}{
+		"no proxy":          {`resource "google_compute_network" "n" { name = "n" }`, compliance.StatusNotApplicable},
+		"default policy":    {proxy(""), compliance.StatusViolated},
+		"compatible policy": {proxy(`  ssl_policy = google_compute_ssl_policy.s.id`) + `resource "google_compute_ssl_policy" "s" { name = "s" }`, compliance.StatusViolated},
+		"restricted policy": {proxy(`  ssl_policy = google_compute_ssl_policy.s.id`) + `resource "google_compute_ssl_policy" "s" {
+  name    = "s"
+  profile = "RESTRICTED"
+}`, compliance.StatusMet},
+	}
+	for name, tc := range cases {
+		wf, _, err := hclcodec.Import("gcp", map[string][]byte{"main.tf": []byte(tc.src)})
+		if err != nil {
+			t.Fatal(err)
+		}
+		hclcodec.Normalize(wf)
+		r := compliance.Evaluate(fw, wf, lint.Check(wf, cat, cfg, nil), cfg, nil)
+		for _, c := range r.Controls {
+			if c.ID == "3.11" && c.Status != tc.want {
+				t.Errorf("%s: 3.11 = %q, want %q", name, c.Status, tc.want)
+			}
+		}
+	}
+}
+
 // The Cloud SQL flag controls apply by engine; a database_version that is an
 // expression can't be read, so every engine's controls apply to it.
 func TestCISGCPFlagControlsByEngine(t *testing.T) {

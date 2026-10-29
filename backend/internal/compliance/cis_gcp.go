@@ -193,8 +193,12 @@ func init() {
 			{ID: "3.10", Title: "Ensure that VPC Flow Logs is Enabled for Every Subnet in a VPC Network", Section: gcpNetwork,
 				Rules: []string{"bp_gcp_flow_logs"}, AppliesTo: []string{"google_compute_subnetwork"},
 				Guidance: "Nimbo checks that every regular (PRIVATE) subnet in the design has log_config with aggregation_interval INTERVAL_5_SEC, flow_sampling = 1, metadata INCLUDE_ALL_METADATA and no filter_expr. Proxy-only, PSC and NAT subnets don't support flow logs and are skipped."},
-			{ID: "3.11", Title: "Ensure No HTTPS or SSL Proxy Load Balancers Permit SSL Policies With Weak Cipher Suites", Section: gcpNetwork, Manual: true,
-				Guidance: gcpConsole + "Attach to every target HTTPS/SSL proxy a google_compute_ssl_policy with profile MODERN and min_tls_version TLS_1_2, or profile RESTRICTED, or CUSTOM without weak features; proxies without an SSL policy use the GCP default, which allows TLS 1.0."},
+			{ID: "3.11", Title: "Ensure No HTTPS or SSL Proxy Load Balancers Permit SSL Policies With Weak Cipher Suites", Section: gcpNetwork,
+				Rules: []string{"bp_gcp_ssl_policy_weak", "bp_gcp_https_proxy_ssl_policy"}, AppliesTo: []string{
+					"google_compute_ssl_policy", "google_compute_region_ssl_policy",
+					"google_compute_target_https_proxy", "google_compute_region_target_https_proxy", "google_compute_target_ssl_proxy",
+				},
+				Guidance: "Nimbo flags target HTTPS/SSL proxies in the design without ssl_policy (the GCP default allows TLS 1.0) and google_compute_ssl_policy resources that keep the COMPATIBLE profile or a min_tls_version below TLS_1_2 (RESTRICTED passes). Attach a policy with profile MODERN and min_tls_version TLS_1_2, or RESTRICTED. Weak features listed in a CUSTOM profile aren't read."},
 			{ID: "3.12", Title: "Use Identity Aware Proxy (IAP) to Ensure Only Traffic From Google IP Addresses are 'Allowed'", Section: gcpNetwork, Manual: true,
 				Guidance: gcpConsole + "Enable IAP on the backend services or for TCP forwarding, and allow ingress to the VMs only from 35.235.240.0/20 (IAP) and the load balancer ranges 130.211.0.0/22 and 35.191.0.0/16."},
 

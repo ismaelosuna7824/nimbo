@@ -227,6 +227,7 @@ steps:
         name: shop-prod-alb
         load_balancer_type: application
         internal: false
+        drop_invalid_header_fields: true
         security_groups: {link: aws_security_group.alb.id, append: true}
         subnets: {link: aws_subnet.public.id, append: true}
   - set:

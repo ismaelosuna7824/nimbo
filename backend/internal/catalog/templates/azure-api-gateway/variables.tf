@@ -49,3 +49,9 @@ variable "app_image" {
   default     = "nginxdemos/hello:0.4-plain-text"
   description = "Container image of both backends (Docker Hub); it answers with the server name and the path it received."
 }
+
+variable "rate_limit_calls_per_minute" {
+  type        = number
+  default     = 60
+  description = "Calls per minute each subscription key may make to an operation before API Management answers 429."
+}

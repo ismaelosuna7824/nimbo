@@ -32,6 +32,18 @@ variable "lambda_memory_mb" {
   description = "Memory size of the API function."
 }
 
+variable "throttling_rate_limit" {
+  type        = number
+  default     = 50
+  description = "Steady-state requests per second the gateway lets through before answering 429."
+}
+
+variable "throttling_burst_limit" {
+  type        = number
+  default     = 100
+  description = "Requests the gateway accepts in a burst above the steady rate."
+}
+
 variable "log_retention_days" {
   type        = number
   default     = 14

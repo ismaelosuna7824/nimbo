@@ -50,7 +50,7 @@ resource "azurerm_api_management_api_operation" "list" {
   }
 }
 
-# Each operation goes to its own backend.
+# Each operation goes to its own backend, rate-limited per subscription key.
 resource "azurerm_api_management_api_operation_policy" "route" {
   for_each            = local.services
   api_name            = azurerm_api_management_api.shop.name
@@ -61,6 +61,7 @@ resource "azurerm_api_management_api_operation_policy" "route" {
     <policies>
       <inbound>
         <base />
+        <rate-limit calls="${var.rate_limit_calls_per_minute}" renewal-period="60" />
         <set-backend-service backend-id="${azurerm_api_management_backend.service[each.key].name}" />
       </inbound>
       <backend>
