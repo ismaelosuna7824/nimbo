@@ -392,8 +392,9 @@ func applyAttrMeta(b *model.SchemaBlock, metas *orderedMap[attrMeta]) {
 
 // SetLiveServices refines Floci support with the service list reported by a
 // running emulator (`/_floci/health` services map for AWS). For AWS the live
-// keys replace the built-in key list; for other clouds matching keys are
-// added to the curated support.
+// keys replace the built-in key list; for Azure and OCI matching keys are
+// added to the curated support; GCP keeps its curated support (see
+// supported).
 func (c *Catalog) SetLiveServices(cloud model.Cloud, services map[string]string) {
 	set := make(map[string]bool, len(services))
 	for k := range services {

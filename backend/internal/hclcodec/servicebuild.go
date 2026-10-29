@@ -99,9 +99,11 @@ func DetectBuilds(files map[string][]byte) Builds {
 
 // Container images (C5): an image reference nimbo.local/<svc>[:tag] in the
 // Terraform means "the image of services/<svc>/Dockerfile". The Nimbo
-// sandbox builds it as nimbo.local/<svc>:latest before Terraform runs, so
-// the emulators run it without a registry; an export pushes it to the
-// user's registry and sets the image variable (ImageVariable) instead.
+// sandbox builds it as nimbo.local/<svc>:latest and :<key> (workflow and
+// sources) before Terraform runs and sets the image variable
+// (ImageVariable) to the :<key> tag, so the emulators run it without a
+// registry and a source change rolls it; an export pushes it to the user's
+// registry and sets the image variable instead.
 
 // LocalImageRegistry is the registry host of images Nimbo builds.
 const LocalImageRegistry = "nimbo.local"

@@ -45,7 +45,7 @@ COPY --from=build /out/bootstrap /bootstrap
 
 	rs := &runState{}
 	start := time.Now()
-	if err := m.buildArtifacts(ctx, rs, work); err != nil {
+	if _, err := m.buildArtifacts(ctx, rs, work); err != nil {
 		t.Fatalf("build: %v\nlog: %+v", err, rs.run.Log)
 	}
 	t.Logf("build took %s", time.Since(start))
@@ -66,7 +66,7 @@ COPY --from=build /out/bootstrap /bootstrap
 
 	rs = &runState{}
 	start = time.Now()
-	if err := m.buildArtifacts(ctx, rs, work); err != nil {
+	if _, err := m.buildArtifacts(ctx, rs, work); err != nil {
 		t.Fatal(err)
 	}
 	t.Logf("cached run took %s", time.Since(start))
@@ -96,7 +96,7 @@ func TestBuildImagesRuntimeStage(t *testing.T) {
 	})
 	run := func() *runState {
 		rs := &runState{run: model.Run{WorkflowID: wfID}}
-		if err := m.buildArtifacts(ctx, rs, work); err != nil {
+		if _, err := m.buildArtifacts(ctx, rs, work); err != nil {
 			t.Fatalf("build: %v\nlog: %+v", err, rs.run.Log)
 		}
 		return rs

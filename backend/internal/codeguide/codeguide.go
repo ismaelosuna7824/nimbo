@@ -106,6 +106,9 @@ type Source struct {
 	URL   string `json:"url"`
 }
 
+// Guide is the guidance for one Options combination. Sandbox tells how the
+// code reaches the emulated services when it runs in Nimbo's local
+// sandbox (verified per platform).
 type Guide struct {
 	Mode          string           `json:"mode"`
 	Language      string           `json:"language,omitempty"`
@@ -117,6 +120,7 @@ type Guide struct {
 	Files         []File           `json:"files,omitempty"`
 	Packaging     Packaging        `json:"packaging"`
 	Compute       []ComputeOption  `json:"compute"`
+	Sandbox       []string         `json:"sandbox"`
 	Testing       []string         `json:"testing"`
 	Security      []string         `json:"security"`
 	Observability []string         `json:"observability"`
@@ -138,6 +142,7 @@ func Get(o Options) (Guide, error) {
 		Principles:    principles(o),
 		Layout:        layout(o),
 		Compute:       computeOptions(o.Platform),
+		Sandbox:       sandboxAccess[o.Platform],
 		Testing:       testPractices(o),
 		Security:      security,
 		Observability: observability(o.Platform),

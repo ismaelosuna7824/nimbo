@@ -308,9 +308,14 @@ func (c *Catalog) supported(cloud model.Cloud, si serviceInfo) bool {
 		return false
 	}
 	floci := si.floci
-	if cloud == model.CloudAWS {
+	switch {
+	case cloud == model.CloudAWS:
 		floci = c.awsKeySupported(si.key)
-	} else if !floci {
+	case !floci && cloud != model.CloudGCP:
+		// floci-gcp's health map lists every API it serves, including
+		// gRPC-only ones and ones Nimbo doesn't point the google provider
+		// at (Cloud Tasks, Logging, Firestore, Eventarc): there the curated
+		// support, which matches the provider wiring, decides.
 		c.mu.RLock()
 		floci = c.live[cloud][si.key]
 		c.mu.RUnlock()

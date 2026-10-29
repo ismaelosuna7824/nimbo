@@ -54,7 +54,7 @@ func TestGetEveryCombination(t *testing.T) {
 		}
 		n++
 		if g.Mode == "" || g.Style == "" || g.Platform == "" || g.Target == "" || len(g.Principles) == 0 || len(g.Layout) == 0 ||
-			len(g.Compute) == 0 || len(g.Testing) == 0 || len(g.Security) == 0 || len(g.Observability) == 0 || len(g.Sources) == 0 ||
+			len(g.Compute) == 0 || len(g.Sandbox) == 0 || len(g.Testing) == 0 || len(g.Security) == 0 || len(g.Observability) == 0 || len(g.Sources) == 0 ||
 			g.Packaging.Kind == "" || g.Packaging.How == "" || len(g.Spec.Questions) == 0 || len(g.Spec.Templates) == 0 || len(g.Spec.Gate) == 0 {
 			t.Errorf("%+v: empty required field: %+v", o, g)
 			continue
@@ -197,6 +197,35 @@ func TestErrors(t *testing.T) {
 	g, _ = Get(Options{Mode: "full", Platform: "gcp", Target: "function"})
 	if len(g.Languages) != 3 {
 		t.Fatalf("gcp function languages = %+v", g.Languages)
+	}
+}
+
+// Cloud Run gets the emulator address only through gcp_emulator_host (set
+// by the sandbox, empty on Google Cloud); full mode's DATABASE_URL is a
+// secret reference on Google Cloud and a plain value only in the sandbox.
+func TestGCPContainerEmulatorWiring(t *testing.T) {
+	for _, mode := range Modes {
+		g, err := Get(Options{Mode: mode, Language: "go", Platform: "gcp", Target: TargetContainer})
+		if err != nil {
+			t.Fatal(err)
+		}
+		tf := g.Packaging.Terraform
+		for _, want := range []string{
+			`variable "` + model.GCPEmulatorHostVar + `"`, `default     = ""`,
+			`PUBSUB_EMULATOR_HOST  = var.` + model.GCPEmulatorHostVar, `STORAGE_EMULATOR_HOST = "http://${var.` + model.GCPEmulatorHostVar + `}"`,
+			`for_each = local.emulator_env`, `name  = "GOOGLE_CLOUD_PROJECT"`,
+		} {
+			if !strings.Contains(tf, want) {
+				t.Errorf("%s: snippet lacks %q:\n%s", mode, want, tf)
+			}
+		}
+		full := strings.Contains(tf, "value_source") && strings.Contains(tf, "value = local.database_url")
+		if full != (mode == ModeFull) {
+			t.Errorf("%s: DATABASE_URL wiring present = %v:\n%s", mode, full, tf)
+		}
+		if !slices.ContainsFunc(g.Sandbox, func(s string) bool { return strings.Contains(s, model.GCPEmulatorHostVar) }) {
+			t.Errorf("%s: sandbox guidance doesn't name %s: %v", mode, model.GCPEmulatorHostVar, g.Sandbox)
+		}
 	}
 }
 

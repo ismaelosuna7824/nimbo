@@ -3,6 +3,8 @@ package codeguide
 import (
 	"fmt"
 	"strings"
+
+	"github.com/ismaelosuna7824/nimbo/backend/internal/model"
 )
 
 // lambdaRuntime is the Lambda runtime and handler per language, matching
@@ -40,13 +42,15 @@ func packaging(o Options) Packaging {
 	return p
 }
 
-// imageVariable declares the service image. The nimbo.local/<svc>:latest
-// default is built by Nimbo from services/<svc>/Dockerfile (runtime stage)
-// before Terraform runs; set it to a registry reference for the real cloud.
+// imageVariable declares the service image. Nimbo's sandbox builds
+// services/<svc>/Dockerfile (runtime stage) before Terraform runs and sets
+// the variable to that build's own tag (TF_VAR_<svc>_image); the
+// nimbo.local/<svc>:latest default covers runs without it. Set it to a
+// registry reference for the real cloud.
 func imageVariable(svc string) string {
 	return fmt.Sprintf(`variable "%[1]s_image" {
   type        = string
-  description = "Image of services/%[1]s: nimbo.local/%[1]s:latest is built by Nimbo locally; set a registry reference for the real cloud."
+  description = "Image of services/%[1]s: Nimbo's local sandbox sets it to the image it builds from there; set a registry reference for the real cloud."
   default     = "nimbo.local/%[1]s:latest"
 }
 `, svc)
@@ -208,7 +212,7 @@ resource "aws_lambda_function" "%[1]s" {
 	}
 }
 
-const imageHow = "The image variable defaults to nimbo.local/<svc>:latest: Nimbo builds it from services/<svc>/Dockerfile (runtime stage) before Terraform runs, so the local sandbox needs no registry. For the real cloud push the runtime stage to the platform registry (in CI) and set the variable to that reference."
+const imageHow = "Nimbo builds services/<svc>/Dockerfile (runtime stage) before Terraform runs and, in the sandbox, sets the image variable (TF_VAR_<svc>_image) to that build's own tag nimbo.local/<svc>:<hash>: a source change gives a new reference, so the next deploy rolls the service, and no registry is needed locally (the nimbo.local/<svc>:latest default is the same build). For the real cloud push the runtime stage to the platform registry (in CI) and set the variable to that reference."
 
 func containerPackaging(o Options, svc, dir string) Packaging {
 	switch o.Platform {
@@ -257,22 +261,7 @@ containers:
 }
 `, svc)}
 	case "gcp":
-		return Packaging{Kind: "image", How: imageHow + " Cloud Run runs the local image in Nimbo's sandbox.", Terraform: fmt.Sprintf(`resource "google_cloud_run_v2_service" "%[1]s" {
-  name     = "%[1]s"
-  location = var.gcp_region
-  template {
-    containers {
-      image = var.%[1]s_image
-      ports {
-        container_port = 8080
-      }
-    }
-    scaling {
-      max_instance_count = 5
-    }
-  }
-}
-`, svc)}
+		return gcpContainerPackaging(o, svc)
 	case "oci":
 		return Packaging{Kind: "image", How: imageHow + " OCI Container Instances are export only in Nimbo's sandbox.", Terraform: fmt.Sprintf(`resource "oci_container_instances_container_instance" "%[1]s" {
   compartment_id      = var.compartment_ocid
@@ -322,6 +311,97 @@ resource "aws_ecs_service" "%[1]s" {
   }
 }
 `, svc)}
+}
+
+// gcpContainerPackaging wires a Cloud Run service. floci-gcp passes the
+// container only PORT and K_*; the sandbox sets var.gcp_emulator_host to the
+// emulator's address on its network, and the client libraries switch to
+// the emulator when PUBSUB_EMULATOR_HOST/STORAGE_EMULATOR_HOST are set.
+// Its Cloud Run rejects env value_source, so a secret is a plain value
+// there only. Full mode wires the Postgres adapter's DATABASE_URL to Cloud
+// SQL, whose sandbox instance is a real PostgreSQL container at
+// first_ip_address (all verified on floci-gcp 0.11.0).
+func gcpContainerPackaging(o Options, svc string) Packaging {
+	how := imageHow + " Cloud Run runs the local image in Nimbo's sandbox. " +
+		"Emulator access: the Cloud Run container gets no emulator address and localhost there is the container itself, so " + model.GCPEmulatorHostVar + " (empty on Google Cloud) carries it: Nimbo's sandbox sets it, and while it is set the service gets PUBSUB_EMULATOR_HOST and STORAGE_EMULATOR_HOST, which the Pub/Sub and Cloud Storage client libraries follow by themselves. " +
+		"GOOGLE_CLOUD_PROJECT names the project, since there is no metadata server locally."
+	store := `      env {
+        name  = "PUBSUB_TOPIC" # one env var per connected store: GCS_BUCKET, PUBSUB_TOPIC, PUBSUB_SUBSCRIPTION, DATABASE_URL
+        value = google_pubsub_topic.events.name
+      }
+`
+	databaseURL := ""
+	if o.Mode == ModeFull {
+		how += " DATABASE_URL reaches the Cloud SQL instance at first_ip_address (in the sandbox a real PostgreSQL container; on Google Cloud give the instance a private IP and the service Direct VPC egress). " +
+			"On Google Cloud it comes from Secret Manager (a google_secret_manager_secret_version holding local.database_url; the service account needs roles/secretmanager.secretAccessor); the sandbox's Cloud Run rejects value_source, so there it is a plain value. Needs hashicorp/google >= 7.26 to create google_sql_database locally."
+		databaseURL = `
+  # random_password.db is google_sql_user.app's password.
+  database_url = "postgres://${google_sql_user.app.name}:${random_password.db.result}@${google_sql_database_instance.main.first_ip_address}:5432/${google_sql_database.app.name}"
+`
+		store = `      dynamic "env" {
+        for_each = var.` + model.GCPEmulatorHostVar + ` == "" ? ["DATABASE_URL"] : []
+        content {
+          name = env.value
+          value_source {
+            secret_key_ref {
+              secret  = google_secret_manager_secret.database_url.secret_id
+              version = "latest"
+            }
+          }
+        }
+      }
+      dynamic "env" {
+        for_each = var.` + model.GCPEmulatorHostVar + ` == "" ? [] : ["DATABASE_URL"]
+        content {
+          name  = env.value
+          value = local.database_url
+        }
+      }
+`
+	}
+	return Packaging{Kind: "image", How: how, Terraform: fmt.Sprintf(`variable "%[2]s" {
+  type        = string
+  description = "host:port of the GCP emulator as the service's containers reach it; empty on Google Cloud (Nimbo's local sandbox sets it)."
+  default     = ""
+}
+
+data "google_client_config" "current" {}
+
+locals {
+  # Set only with an emulator: the client libraries then talk to it.
+  emulator_env = var.%[2]s == "" ? {} : {
+    PUBSUB_EMULATOR_HOST  = var.%[2]s
+    STORAGE_EMULATOR_HOST = "http://${var.%[2]s}"
+  }
+%[3]s}
+
+resource "google_cloud_run_v2_service" "%[1]s" {
+  name     = "%[1]s"
+  location = var.gcp_region
+  template {
+    containers {
+      image = var.%[1]s_image
+      ports {
+        container_port = 8080
+      }
+      env {
+        name  = "GOOGLE_CLOUD_PROJECT"
+        value = data.google_client_config.current.project
+      }
+%[4]s      dynamic "env" {
+        for_each = local.emulator_env
+        content {
+          name  = env.key
+          value = env.value
+        }
+      }
+    }
+    scaling {
+      max_instance_count = 5
+    }
+  }
+}
+`, svc, model.GCPEmulatorHostVar, databaseURL, store)}
 }
 
 func vmPackaging(o Options, svc, dir string) Packaging {

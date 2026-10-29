@@ -246,10 +246,11 @@ func (m *Manager) runSteps(ctx context.Context, rs *runState, req RunRequest) er
 			return err
 		}
 	}
+	var imageVars []string
 	if req.Action != model.ActionValidate {
 		// Plan, apply and destroy read archive_file data sources and deploy
 		// images: the service builds and images must exist and be current.
-		if err := m.buildArtifacts(ctx, rs, work); err != nil {
+		if imageVars, err = m.buildArtifacts(ctx, rs, work); err != nil {
 			return err
 		}
 	}
@@ -261,7 +262,7 @@ func (m *Manager) runSteps(ctx context.Context, rs *runState, req RunRequest) er
 		return err
 	}
 
-	env, userEnv := runEnv(clouds, req.Environment, m.awsRegion())
+	env, userEnv := runEnv(wf.ID, clouds, req.Environment, m.awsRegion(), imageVars...)
 	if len(userEnv) > 0 {
 		keys := make([]string, len(userEnv))
 		for i, kv := range userEnv {
@@ -282,7 +283,8 @@ func (m *Manager) runSteps(ctx context.Context, rs *runState, req RunRequest) er
 		m.setExit(rs, code)
 		return fmt.Errorf("terraform init exited with code %d", code)
 	}
-	if after := readLockVersions(work); after["azurerm"] != versions["azurerm"] {
+	after := readLockVersions(work)
+	if wiringVersionsChanged(versions, after) {
 		// The wiring file set depends only on the workflow, so rewriting in
 		// place keeps the workdir manifest valid.
 		for name, content := range wiringFiles(wf, after) {
@@ -290,6 +292,9 @@ func (m *Manager) runSteps(ctx context.Context, rs *runState, req RunRequest) er
 				return err
 			}
 		}
+	}
+	if warning := legacyGoogleWarning(wf, after); warning != "" {
+		m.logLine(rs, "system", warning)
 	}
 
 	var args []string
@@ -380,10 +385,11 @@ func (m *Manager) writeAzureCert(ctx context.Context, wfID, work string) error {
 }
 
 // runEnv returns the emulator environment (KEY=VALUE, safe to pass as
-// arguments) and the user's environment variables, which are handed to the
-// docker CLI through its own environment so values never appear in process
-// arguments. User variables replace emulator defaults with the same key.
-func runEnv(clouds []model.Cloud, env *model.Environment, awsRegion string) (base, user []string) {
+// arguments) plus the run's image variables (buildImages), and the user's
+// environment variables, which are handed to the docker CLI through its
+// own environment so values never appear in process arguments. User
+// variables replace defaults with the same key.
+func runEnv(wfID string, clouds []model.Cloud, env *model.Environment, awsRegion string, imageVars ...string) (base, user []string) {
 	userKeys := map[string]bool{}
 	if env != nil {
 		for _, ev := range env.EnvVars {
@@ -394,7 +400,7 @@ func runEnv(clouds []model.Cloud, env *model.Environment, awsRegion string) (bas
 			user = append(user, ev.Key+"="+ev.Value)
 		}
 	}
-	for _, kv := range cloudEnv(clouds, awsRegion) {
+	for _, kv := range append(cloudEnv(wfID, clouds, awsRegion), imageVars...) {
 		k, _, _ := strings.Cut(kv, "=")
 		if !userKeys[k] {
 			base = append(base, kv)

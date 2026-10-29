@@ -165,7 +165,7 @@ func TestBuildServicesCache(t *testing.T) {
 	ctx := context.Background()
 
 	rs := &runState{}
-	if err := m.buildArtifacts(ctx, rs, work); err != nil {
+	if _, err := m.buildArtifacts(ctx, rs, work); err != nil {
 		t.Fatal(err)
 	}
 	if builds() != 1 || readDist(t, work, "index.mjs") != "v1" || readDist(t, work, "lib/util.mjs") != "util" {
@@ -176,7 +176,7 @@ func TestBuildServicesCache(t *testing.T) {
 	}
 
 	rs = &runState{}
-	if err := m.buildArtifacts(ctx, rs, work); err != nil {
+	if _, err := m.buildArtifacts(ctx, rs, work); err != nil {
 		t.Fatal(err)
 	}
 	if builds() != 1 || !logged(rs, "Sources unchanged") {
@@ -190,7 +190,7 @@ func TestBuildServicesCache(t *testing.T) {
 		t.Fatal(err)
 	}
 	rs = &runState{}
-	if err := m.buildArtifacts(ctx, rs, work); err != nil {
+	if _, err := m.buildArtifacts(ctx, rs, work); err != nil {
 		t.Fatal(err)
 	}
 	if builds() != 2 || readDist(t, work, "index.mjs") != "v2" || !logged(rs, "Sources changed") {
@@ -204,7 +204,7 @@ func TestBuildServicesCache(t *testing.T) {
 	// workflow files and copied over it) is rebuilt.
 	writeTree(t, work, map[string]string{"services/api/dist/index.mjs": "tampered"})
 	rs = &runState{}
-	if err := m.buildArtifacts(ctx, rs, work); err != nil {
+	if _, err := m.buildArtifacts(ctx, rs, work); err != nil {
 		t.Fatal(err)
 	}
 	if builds() != 3 || readDist(t, work, "index.mjs") != "v2" || !logged(rs, "modified outside the build") {
@@ -216,13 +216,13 @@ func TestBuildServicesFailure(t *testing.T) {
 	m, builds := fakeBuildDocker(t)
 	work := buildWork(t)
 	ctx := context.Background()
-	if err := m.buildArtifacts(ctx, &runState{}, work); err != nil {
+	if _, err := m.buildArtifacts(ctx, &runState{}, work); err != nil {
 		t.Fatal(err)
 	}
 
 	writeTree(t, work, map[string]string{"services/api/FAIL": ""})
 	rs := &runState{}
-	err := m.buildArtifacts(ctx, rs, work)
+	_, err := m.buildArtifacts(ctx, rs, work)
 	if err == nil || err.Error() != "build services/api: docker build exited with code 1: ERROR: failed to solve: boom" {
 		t.Fatalf("err = %v", err)
 	}
@@ -238,7 +238,7 @@ func TestBuildServicesFailure(t *testing.T) {
 	if err := os.Remove(filepath.Join(work, "services", "api", "FAIL")); err != nil {
 		t.Fatal(err)
 	}
-	if err := m.buildArtifacts(ctx, &runState{}, work); err != nil {
+	if _, err := m.buildArtifacts(ctx, &runState{}, work); err != nil {
 		t.Fatal(err)
 	}
 	if builds() != 3 || readDist(t, work, "index.mjs") != "v1" {
@@ -246,7 +246,7 @@ func TestBuildServicesFailure(t *testing.T) {
 	}
 
 	writeTree(t, work, map[string]string{"services/api/EMPTY": ""})
-	if err := m.buildArtifacts(ctx, &runState{}, work); err == nil || !strings.Contains(err.Error(), "package stage holds no files") {
+	if _, err := m.buildArtifacts(ctx, &runState{}, work); err == nil || !strings.Contains(err.Error(), "package stage holds no files") {
 		t.Fatalf("empty package stage: %v", err)
 	}
 }
@@ -258,7 +258,7 @@ func TestBuildServicesCancel(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	time.AfterFunc(300*time.Millisecond, cancel)
 	start := time.Now()
-	err := m.buildArtifacts(ctx, &runState{}, work)
+	_, err := m.buildArtifacts(ctx, &runState{}, work)
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("err = %v, want context.Canceled", err)
 	}
@@ -277,7 +277,7 @@ func TestBuildServicesNothingToBuild(t *testing.T) {
 		"main.tf":                    `data "archive_file" "py" { source_dir = "${path.module}/services/py/src" }`,
 		"services/py/src/handler.py": "def handler(e, c): return 1",
 	})
-	if err := m.buildArtifacts(context.Background(), &runState{}, work); err != nil || builds() != 0 {
+	if _, err := m.buildArtifacts(context.Background(), &runState{}, work); err != nil || builds() != 0 {
 		t.Fatalf("err %v, %d builds", err, builds())
 	}
 }
@@ -344,19 +344,31 @@ resource "google_cloud_run_v2_service" "orders" {
 		"services/orders/Dockerfile": "FROM golang:1.25 AS build\nRUN go build\nFROM alpine:3 AS runtime\nCMD [\"/app\"]\nFROM scratch AS package\n",
 		"services/orders/main.go":    "package main",
 	})
-	run := func() *runState {
+	runAs := func(wfID string) (*runState, []string) {
 		t.Helper()
-		rs := &runState{run: model.Run{WorkflowID: "wf-img"}}
-		if err := m.buildArtifacts(context.Background(), rs, work); err != nil {
+		rs := &runState{run: model.Run{WorkflowID: wfID}}
+		vars, err := m.buildArtifacts(context.Background(), rs, work)
+		if err != nil {
 			t.Fatal(err)
 		}
-		return rs
+		return rs, vars
+	}
+	run := func() (*runState, []string) { return runAs("wf-img") }
+	// The run's image variable names the workflow-scoped key tag the build
+	// made, so Terraform sees a new reference after every source change.
+	keyVar := func(vars []string) string {
+		t.Helper()
+		if len(vars) != 1 || !strings.HasPrefix(vars[0], "TF_VAR_orders_image=nimbo.local/orders:") || strings.HasSuffix(vars[0], ":latest") {
+			t.Fatalf("image vars %q", vars)
+		}
+		return strings.TrimPrefix(vars[0], "TF_VAR_orders_image=")
 	}
 
-	rs := run()
+	rs, vars := run()
+	v1 := keyVar(vars)
 	builds := countPrefix(calls(), "build ")
 	if builds != 1 || !slices.ContainsFunc(calls(), func(c string) bool {
-		return strings.HasPrefix(c, "build --progress plain --target runtime -t nimbo.local/orders:latest -t nimbo.local/orders:") &&
+		return strings.HasPrefix(c, "build --progress plain --target runtime -t nimbo.local/orders:latest -t "+v1+" ") &&
 			strings.HasSuffix(c, " --label io.nimbo.workflow=wf-img "+filepath.Join(work, "services", "orders"))
 	}) {
 		t.Fatalf("calls: %q", calls())
@@ -365,14 +377,22 @@ resource "google_cloud_run_v2_service" "orders" {
 		t.Errorf("log: %+v", rs.run.Log)
 	}
 
-	rs = run()
-	if countPrefix(calls(), "build ") != 1 || countPrefix(calls(), "tag ") != 1 || !logged(rs, "Sources unchanged") {
-		t.Fatalf("unchanged sources: calls %q, log %+v", calls(), rs.run.Log)
+	rs, vars = run()
+	if countPrefix(calls(), "build ") != 1 || countPrefix(calls(), "tag ") != 1 || !logged(rs, "Sources unchanged") || keyVar(vars) != v1 {
+		t.Fatalf("unchanged sources: calls %q, vars %q, log %+v", calls(), vars, rs.run.Log)
 	}
 
+	// Another workflow with the same service and sources gets its own tag.
+	if _, vars := runAs("wf-other"); keyVar(vars) == v1 {
+		t.Fatalf("workflows share the image tag %s", v1)
+	}
+
+	removed := countPrefix(calls(), "image rm nimbo.local/orders:")
 	writeTree(t, work, map[string]string{"services/orders/main.go": "package main // v2"})
-	run()
-	if countPrefix(calls(), "build ") != 2 || countPrefix(calls(), "image rm nimbo.local/orders:") != 1 {
+	if _, vars = run(); keyVar(vars) == v1 {
+		t.Fatalf("source change kept the image reference %s", v1)
+	}
+	if countPrefix(calls(), "build ") != 3 || countPrefix(calls(), "image rm nimbo.local/orders:") != removed+1 {
 		t.Fatalf("source change: calls %q", calls())
 	}
 
@@ -403,7 +423,7 @@ func TestBuildImagesProblems(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			work := t.TempDir()
 			writeTree(t, work, tc.files)
-			err := m.buildArtifacts(context.Background(), &runState{}, work)
+			_, err := m.buildArtifacts(context.Background(), &runState{}, work)
 			if err == nil || err.Error() != tc.want {
 				t.Fatalf("err = %v", err)
 			}

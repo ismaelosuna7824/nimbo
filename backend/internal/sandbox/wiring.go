@@ -208,6 +208,97 @@ var gcpEndpoints = []hclAttr{
 	{"cloudfunctions2_custom_endpoint", hclString(flociGCP + "/v2/")},
 }
 
+// gcpLegacyEndpoints replace gcpEndpoints entries for hashicorp/google and
+// google-beta before 7.26. Those versions strip the API version from a
+// custom endpoint only when it starts with https://, so resources built on
+// Google's API client libraries, which append the versioned path
+// themselves, requested doubled paths (/sql/v1beta4/sql/v1beta4/...,
+// /v1/v1/...) and got 404: Cloud SQL instances and users, project IAM
+// members, google_project_service, GKE. These roots serve them; the
+// resources generated from the REST definitions on the same APIs then miss
+// the version (google_sql_database), see legacyGoogleWarning.
+var gcpLegacyEndpoints = map[string]string{
+	"sql_custom_endpoint":              flociGCP + "/",
+	"resource_manager_custom_endpoint": flociGCP + "/",
+	"service_usage_custom_endpoint":    flociGCP + "/",
+	"container_custom_endpoint":        flociGCP + "/container/",
+}
+
+// legacyGoogle reports a hashicorp/google(-beta) version before 7.26
+// (false when unknown: init then selects the latest).
+func legacyGoogle(version string) bool {
+	major, minor := parseVersion(version)
+	return major > 0 && (major < 7 || major == 7 && minor < 26)
+}
+
+// gcpProviderEndpoints are the custom endpoints for a google provider of
+// version ("" when unknown).
+func gcpProviderEndpoints(version string) []hclAttr {
+	if !legacyGoogle(version) {
+		return gcpEndpoints
+	}
+	out := slices.Clone(gcpEndpoints)
+	for i, a := range out {
+		if v, ok := gcpLegacyEndpoints[a.name]; ok {
+			out[i].expr = hclString(v)
+		}
+	}
+	return out
+}
+
+// lockVersion is the version .terraform.lock.hcl selected for the provider
+// block named name of cloud c ("" when unknown or not version-dependent).
+func lockVersion(c model.Cloud, name string, versions map[string]string) string {
+	switch c {
+	case model.CloudAzure:
+		return versions["azurerm"]
+	case model.CloudGCP:
+		if name == "google-beta" {
+			return versions["google-beta"]
+		}
+		return versions["google"]
+	}
+	return ""
+}
+
+// wiringVersionsChanged reports whether the lock-file versions that select
+// wiring settings differ between before and after.
+func wiringVersionsChanged(before, after map[string]string) bool {
+	for _, p := range []string{"azurerm", "google", "google-beta"} {
+		if before[p] != after[p] {
+			return true
+		}
+	}
+	return false
+}
+
+// legacyGoogleWarning names the resources of wf that fail in the sandbox
+// because the lock file selected a google provider before 7.26 ("" when
+// none do).
+func legacyGoogleWarning(wf *model.Workflow, versions map[string]string) string {
+	var version string
+	for _, p := range []string{"google", "google-beta"} {
+		if legacyGoogle(versions[p]) {
+			version = "hashicorp/" + p + " " + versions[p]
+			break
+		}
+	}
+	if version == "" {
+		return ""
+	}
+	var failing []string
+	for _, n := range wf.Nodes {
+		if n.Kind == model.KindResource && n.Type == "google_sql_database" {
+			failing = append(failing, n.Type+"."+n.Name)
+		}
+	}
+	if len(failing) == 0 {
+		return ""
+	}
+	return fmt.Sprintf("Warning: %s predates 7.26: on the sandbox's local endpoints it requests Cloud SQL databases on a path the emulator doesn't serve, so creating %s fails locally (instances and users work). "+
+		"Require hashicorp/google >= 7.26 in required_providers (e.g. version = \"~> 7.26\") to deploy them in the sandbox.", version, strings.Join(failing, ", "))
+}
+
 // ociClients are the OCI SDK clients floci-oci implements.
 var ociClients = []string{
 	"oci_identity.IdentityClient",
@@ -228,9 +319,9 @@ var ociClients = []string{
 
 // providerSettings returns the floci settings merged into a provider block
 // of cloud c. body is the user's block (empty for generated blocks);
-// azurermVersion (from the lock file, "" when unknown) selects
-// version-specific azurerm settings.
-func providerSettings(c model.Cloud, body model.Body, azurermVersion string) (attrs []hclAttr, nested []string) {
+// version is the block's provider version from the lock file ("" when
+// unknown), selecting version-specific azurerm and google settings.
+func providerSettings(c model.Cloud, body model.Body, version string) (attrs []hclAttr, nested []string) {
 	nullIfSet := func(names ...string) {
 		for _, n := range names {
 			if hasAttr(body, n) {
@@ -277,7 +368,7 @@ func providerSettings(c model.Cloud, body model.Body, azurermVersion string) (at
 			{"use_msi", "false"},
 			{"use_oidc", "false"},
 		}
-		major, minor := parseVersion(azurermVersion)
+		major, minor := parseVersion(version)
 		if major > 0 && major < 4 {
 			attrs = append(attrs, hclAttr{"skip_provider_registration", "true"})
 		} else {
@@ -295,7 +386,7 @@ func providerSettings(c model.Cloud, body model.Body, azurermVersion string) (at
 			attrs = append(attrs, hclAttr{"project", hclString(gcpProject)})
 		}
 		attrs = append(attrs, hclAttr{"user_project_override", "false"})
-		attrs = append(attrs, gcpEndpoints...)
+		attrs = append(attrs, gcpProviderEndpoints(version)...)
 		nullIfSet("credentials", "impersonate_service_account")
 	case model.CloudOCI:
 		if !hasAttr(body, "tenancy_ocid") {
@@ -317,11 +408,11 @@ func providerSettings(c model.Cloud, body model.Body, azurermVersion string) (at
 }
 
 // wiringFiles renders the run-time override files for the clouds in
-// wf.Clouds. providerVersions maps provider type ("azurerm") to the version
-// selected in .terraform.lock.hcl (empty when not yet initialized).
+// wf.Clouds. providerVersions maps provider type ("azurerm", "google") to
+// the version selected in .terraform.lock.hcl (empty when not yet
+// initialized).
 func wiringFiles(wf *model.Workflow, providerVersions map[string]string) map[string][]byte {
 	required := requiredProviders(wf)
-	azVersion := providerVersions["azurerm"]
 	clouds := map[model.Cloud]bool{}
 	for _, c := range wf.Clouds {
 		clouds[c] = true
@@ -344,7 +435,7 @@ func wiringFiles(wf *model.Workflow, providerVersions map[string]string) map[str
 			continue
 		}
 		header := "provider " + strconv.Quote(p.Name)
-		attrs, nested := providerSettings(c, p.Body, azVersion)
+		attrs, nested := providerSettings(c, p.Body, lockVersion(c, p.Name, providerVersions))
 		if a, ok := findAttr(p.Body, "alias"); ok {
 			alias, ok := constString(a.Value)
 			if !ok {
@@ -375,7 +466,7 @@ func wiringFiles(wf *model.Workflow, providerVersions map[string]string) map[str
 			if unaliased[name] {
 				continue
 			}
-			attrs, nested := providerSettings(c, model.Body{}, azVersion)
+			attrs, nested := providerSettings(c, model.Body{}, lockVersion(c, name, providerVersions))
 			if c == model.CloudAzure && len(nested) == 0 {
 				nested = []string{"features {}"}
 			}
@@ -518,9 +609,13 @@ func tfvarsFileContent(env *model.Environment) []byte {
 	return []byte(b.String())
 }
 
-// cloudEnv returns the non-secret environment for Terraform runs targeting
-// clouds; awsRegion is the default AWS region.
-func cloudEnv(clouds []model.Cloud, awsRegion string) []string {
+// cloudEnv returns the non-secret environment for Terraform runs of
+// workflow wfID targeting clouds; awsRegion is the default AWS region. GCP
+// runs set model.GCPEmulatorHostVar to the sandbox pod's name on the
+// workflow network: floci-gcp injects no emulator address into the
+// containers it runs, and localhost (or localhost.floci.io) there is the
+// container itself.
+func cloudEnv(wfID string, clouds []model.Cloud, awsRegion string) []string {
 	env := []string{}
 	for _, c := range clouds {
 		switch c {
@@ -540,7 +635,8 @@ func cloudEnv(clouds []model.Cloud, awsRegion string) []string {
 				"ARM_TENANT_ID="+azureTenant,
 			)
 		case model.CloudGCP:
-			env = append(env, "GOOGLE_OAUTH_ACCESS_TOKEN=fake", "GOOGLE_PROJECT="+gcpProject)
+			env = append(env, "GOOGLE_OAUTH_ACCESS_TOKEN=fake", "GOOGLE_PROJECT="+gcpProject,
+				"TF_VAR_"+model.GCPEmulatorHostVar+"="+podName(wfID)+":"+strconv.Itoa(emulators[model.CloudGCP].port))
 		case model.CloudOCI:
 			overrides := make([]string, len(ociClients))
 			for i, cl := range ociClients {

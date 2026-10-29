@@ -2,6 +2,7 @@ package sandbox
 
 import (
 	"encoding/json"
+	"slices"
 	"strings"
 	"testing"
 
@@ -287,7 +288,7 @@ func TestTfvarsContent(t *testing.T) {
 }
 
 func TestRunEnvUserValuesWin(t *testing.T) {
-	base, user := runEnv([]model.Cloud{model.CloudAWS}, &model.Environment{EnvVars: []model.EnvVar{
+	base, user := runEnv("wf", []model.Cloud{model.CloudAWS}, &model.Environment{EnvVars: []model.EnvVar{
 		{Key: "AWS_REGION", Value: "eu-west-1"},
 		{Key: "API_TOKEN", Value: "s3cr3t", Secret: true},
 	}}, DefaultAWSRegion)
@@ -298,5 +299,87 @@ func TestRunEnvUserValuesWin(t *testing.T) {
 	}
 	if len(user) != 2 || user[1] != "API_TOKEN=s3cr3t" {
 		t.Errorf("user env = %v", user)
+	}
+}
+
+// The run's image variables reach Terraform unless the user sets the same
+// key.
+func TestRunEnvImageVars(t *testing.T) {
+	vars := []string{"TF_VAR_orders_api_image=nimbo.local/orders-api:abc123", "TF_VAR_web_image=nimbo.local/web:def456"}
+	base, user := runEnv("wf", nil, &model.Environment{EnvVars: []model.EnvVar{
+		{Key: "TF_VAR_web_image", Value: "registry.example.com/web:1"},
+	}}, DefaultAWSRegion, vars...)
+	if !slices.Contains(base, vars[0]) || slices.Contains(base, vars[1]) || len(user) != 1 {
+		t.Errorf("base %v user %v", base, user)
+	}
+}
+
+// GCP runs pass the emulator's address on the workflow network (the pod's
+// name) as TF_VAR_gcp_emulator_host; a user value of the same key wins.
+func TestRunEnvGCPEmulatorHost(t *testing.T) {
+	base, _ := runEnv("shop-ab12cd", []model.Cloud{model.CloudGCP}, nil, DefaultAWSRegion)
+	if !slices.Contains(base, "TF_VAR_gcp_emulator_host=nimbo-shop-ab12cd-pod:4588") {
+		t.Errorf("base env = %v", base)
+	}
+	base, user := runEnv("shop-ab12cd", []model.Cloud{model.CloudGCP}, &model.Environment{EnvVars: []model.EnvVar{
+		{Key: "TF_VAR_gcp_emulator_host", Value: "emulator:4588"},
+	}}, DefaultAWSRegion)
+	if slices.ContainsFunc(base, func(kv string) bool { return strings.HasPrefix(kv, "TF_VAR_gcp_emulator_host=") }) || len(user) != 1 {
+		t.Errorf("user value not winning: base %v user %v", base, user)
+	}
+}
+
+// google < 7.26 builds client-library request paths from custom endpoints
+// without stripping the version (http only): those endpoints point at the
+// emulator's root instead.
+func TestWiringGoogleLegacyEndpoints(t *testing.T) {
+	wf := &model.Workflow{
+		Clouds:    []model.Cloud{model.CloudGCP},
+		Providers: []model.NamedBlock{provider("google", attr("project", `var.project`)), provider("google-beta")},
+	}
+	for _, tc := range []struct {
+		versions                    map[string]string
+		sql, rm, container, storage string
+		beta                        string // google-beta's sql endpoint
+	}{
+		{nil, "/sql/v1beta4/", "/v1/", "/container/v1/", "/storage/v1/", "/sql/v1beta4/"},
+		{map[string]string{"google": "7.26.0", "google-beta": "8.9.0"}, "/sql/v1beta4/", "/v1/", "/container/v1/", "/storage/v1/", "/sql/v1beta4/"},
+		{map[string]string{"google": "6.50.0", "google-beta": "6.50.0"}, "/", "/", "/container/", "/storage/v1/", "/"},
+		{map[string]string{"google": "7.25.1", "google-beta": "8.0.0"}, "/", "/", "/container/", "/storage/v1/", "/sql/v1beta4/"},
+	} {
+		blocks := parseBlocks(t, wiringFiles(wf, tc.versions)[overrideFile])
+		g, beta := blocks["provider google"], blocks["provider google-beta"]
+		for attr, want := range map[string]string{
+			"sql_custom_endpoint": tc.sql, "resource_manager_custom_endpoint": tc.rm, "service_usage_custom_endpoint": tc.rm,
+			"container_custom_endpoint": tc.container, "storage_custom_endpoint": tc.storage,
+		} {
+			if got := g[attr]; got != `"http://localhost:4588`+want+`"` {
+				t.Errorf("%v: google %s = %s, want %s", tc.versions, attr, got, want)
+			}
+		}
+		if got := beta["sql_custom_endpoint"]; got != `"http://localhost:4588`+tc.beta+`"` {
+			t.Errorf("%v: google-beta sql_custom_endpoint = %s, want %s", tc.versions, got, tc.beta)
+		}
+	}
+}
+
+func TestLegacyGoogleWarning(t *testing.T) {
+	wf := &model.Workflow{Nodes: []model.Node{
+		{Kind: model.KindResource, Type: "google_sql_database_instance", Name: "db"},
+		{Kind: model.KindResource, Type: "google_sql_database", Name: "app"},
+	}}
+	if w := legacyGoogleWarning(wf, map[string]string{"google": "6.50.0"}); !strings.Contains(w, "hashicorp/google 6.50.0") || !strings.Contains(w, "google_sql_database.app") {
+		t.Errorf("warning %q", w)
+	}
+	for _, v := range []map[string]string{nil, {"google": "7.26.0"}, {"google": "8.9.0"}} {
+		if w := legacyGoogleWarning(wf, v); w != "" {
+			t.Errorf("%v: unexpected warning %q", v, w)
+		}
+	}
+	if w := legacyGoogleWarning(&model.Workflow{Nodes: wf.Nodes[:1]}, map[string]string{"google": "6.50.0"}); w != "" {
+		t.Errorf("warning without a google_sql_database: %q", w)
+	}
+	if !wiringVersionsChanged(nil, map[string]string{"google": "6.50.0"}) || wiringVersionsChanged(map[string]string{"aws": "6.0.0"}, nil) {
+		t.Error("wiringVersionsChanged")
 	}
 }

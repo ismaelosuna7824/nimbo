@@ -93,7 +93,7 @@ Go module: `github.com/ismaelosuna7824/nimbo/backend` (Go 1.26).
 |---|---|---|---|---|---|
 | AWS | `floci/floci:latest` | 4566 | `GET /_floci/health` → `{services:{key:"running"}, version}`; readiness `GET /_floci/init` → `completed.ready` | `POST /_floci/state/reset` | env `AWS_ENDPOINT_URL=http://localhost:4566`, `AWS_ACCESS_KEY_ID=test`, `AWS_SECRET_ACCESS_KEY=test`; provider override `s3_use_path_style=true`, `skip_credentials_validation`, `skip_metadata_api_check`, `skip_requesting_account_id` |
 | Azure | `floci/floci-az:latest` | 4577 | `GET /health` → `{status:"UP"}`; `GET /ready` | `POST /_admin/reset` | needs `FLOCI_AZ_TLS_ENABLED=true`; cert `GET /_floci/tls-cert`; provider `environment="stack"`, `metadata_host="localhost:4577"`, fake subscription/tenant/client ids, `skip_provider_registration=true` (v3) / `resource_provider_registrations="none"` (v4), `use_cli=false` |
-| GCP | `floci/floci-gcp:latest` | 4588 | `GET /_floci-gcp/health` | `POST /_floci-gcp/state/reset` | `GOOGLE_OAUTH_ACCESS_TOKEN=fake`; `*_custom_endpoint` per service (storage `/storage/v1/`, pubsub/kms/secret_manager/iam_beta/service_usage/resource_manager/cloud_scheduler `/v1/`, cloud_run(_v2)/cloudfunctions2 `/v2/`, sql `/sql/v1beta4/`, big_query `/bigquery/v2/`, container `/container/v1/`, compute `/compute/v1/`). Not deployable: Cloud Tasks (gRPC only), Cloud Functions v1 and Cloud Run v1 (`google_cloud_run_service`, knative API) return 404; Cloud Functions v2 has no update (re-applies with a diff fail) |
+| GCP | `floci/floci-gcp:latest` | 4588 | `GET /_floci-gcp/health` | `POST /_floci-gcp/state/reset` | `GOOGLE_OAUTH_ACCESS_TOKEN=fake`; `TF_VAR_gcp_emulator_host=nimbo-<wf>-pod:4588` (the emulator as Cloud Run containers reach it; they get only `PORT`/`K_*` and their localhost is themselves); `*_custom_endpoint` per service (storage `/storage/v1/`, pubsub/kms/secret_manager/iam_beta/service_usage/resource_manager/cloud_scheduler `/v1/`, cloud_run(_v2)/cloudfunctions2 `/v2/`, sql `/sql/v1beta4/`, big_query `/bigquery/v2/`, container `/container/v1/`, compute `/compute/v1/`). hashicorp/google(-beta) < 7.26 (lock file) strips versions only from `https://` endpoints, so client-library resources requested doubled paths (404): there sql/resource_manager/service_usage point at `/` and container at `/container/`; `google_sql_database` still fails on those versions (run warning). Cloud SQL runs a real `postgres`/`mysql` container per instance at `first_ip_address`. Not deployable: Cloud Tasks (gRPC only), Logging sinks/metrics and Monitoring alert policies/channels (no REST routes), KMS key/key-ring IAM (no `getIamPolicy`), Cloud Run env `value_source` (400), Cloud Functions v1 and Cloud Run v1 (`google_cloud_run_service`, knative API) return 404; Cloud Functions v2 has no update (re-applies with a diff fail). The catalog ignores floci-gcp's health service list (it names gRPC-only and unwired APIs) |
 | OCI | `floci/floci-oci:latest` | 4599 | `GET /_floci-oci/health` | `POST /_floci-oci/state/reset` | env `TF_VAR_CLIENT_HOST_OVERRIDES="oci_identity.IdentityClient=http://localhost:4599;oci_object_storage.ObjectStorageClient=http://localhost:4599;…"` (floci-oci README; other clients follow the same pattern); fake tenancy/user/fingerprint + any generated RSA key (signatures not verified); `disable_auto_retries=true` |
 
 Lambda Function URL path form: `/lambda-url/<urlId>/<path>`. API Gateway v1:
@@ -1243,9 +1243,15 @@ Sandbox behavior notes:
   folder's files (`dist/` excluded): when that tag exists only `latest` is
   moved onto it; a rebuild drops the workflow's older keys, and `Remove`
   deletes the workflow's `nimbo.local` images (best effort: an image in
-  use stays). `latest` is shared by workflows with the same service name;
-  the last run's build wins. Floci runs these local tags (verified
-  2026-10-29, `alpine` + Go HTTP image with `/health`):
+  use stays). The run passes `TF_VAR_<hclcodec.ImageVariable(svc)>=
+  nimbo.local/<svc>:<key>` (a user env var of the same key wins), so
+  Terraform that takes the image from `<svc>_image` sees a new reference
+  after every source change and Cloud Run/ECS/Lambda roll, and workflows
+  sharing a service name never run each other's build. `latest` is shared
+  by those workflows (the last run's build wins); a literal
+  `nimbo.local/<svc>:latest` in the Terraform doesn't roll. Floci runs these
+  local tags (verified 2026-10-29, `alpine` + Go HTTP image with `/health`;
+  keyed tags on Cloud Run 2026-10-28):
 
   | Service | Terraform | Runs locally |
   |---|---|---|

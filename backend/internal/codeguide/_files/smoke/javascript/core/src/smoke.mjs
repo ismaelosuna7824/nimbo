@@ -62,19 +62,26 @@ const checks = [
     return (await file.download())[0].toString() === id;
   }],
   ["pubsub", "PUBSUB_TOPIC", async (id) => {
-    const { PubSub, v1 } = await import("@google-cloud/pubsub");
-    const pubsub = new PubSub();
+    const { PubSub } = await import("@google-cloud/pubsub");
+    const pubsub = new PubSub(); // follows PUBSUB_EMULATOR_HOST; project from GOOGLE_CLOUD_PROJECT
     await pubsub.topic(env.PUBSUB_TOPIC).publishMessage({ data: Buffer.from(id) });
     if (!env.PUBSUB_SUBSCRIPTION) return true; // publish-only when no subscription is wired
-    const subscriber = new v1.SubscriberClient();
-    const subscription = subscriber.subscriptionPath(await pubsub.getProjectId(), env.PUBSUB_SUBSCRIPTION);
-    for (let i = 0; i < 5; i++) {
-      const [res] = await subscriber.pull({ subscription, maxMessages: 10 });
-      const msgs = res.receivedMessages ?? [];
-      if (msgs.length) await subscriber.acknowledge({ subscription, ackIds: msgs.map((m) => m.ackId) });
-      if (msgs.some((m) => m.message.data.toString() === id)) return true;
+    const subscription = pubsub.subscription(env.PUBSUB_SUBSCRIPTION);
+    try {
+      return await new Promise((resolve, reject) => {
+        const timer = setTimeout(() => resolve(false), 10000);
+        subscription.on("error", (err) => { clearTimeout(timer); reject(err); });
+        subscription.on("message", (m) => {
+          m.ack();
+          if (m.data.toString() === id) {
+            clearTimeout(timer);
+            resolve(true);
+          }
+        });
+      });
+    } finally {
+      await subscription.close();
     }
-    return false;
   }],
   ["postgres", "DATABASE_URL", async (id) => {
     const { default: pg } = await import("pg");

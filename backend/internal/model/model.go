@@ -25,6 +25,13 @@ const (
 // AllClouds lists every cloud in display order.
 var AllClouds = []Cloud{CloudAWS, CloudAzure, CloudGCP, CloudOCI}
 
+// GCPEmulatorHostVar is the Terraform variable the sandbox sets in GCP runs
+// (TF_VAR_gcp_emulator_host) to the GCP emulator's host:port as containers
+// it runs (Cloud Run) reach it. Code that declares it with an empty default
+// passes PUBSUB_EMULATOR_HOST and STORAGE_EMULATOR_HOST to them only in the
+// sandbox; on Google Cloud it stays empty.
+const GCPEmulatorHostVar = "gcp_emulator_host"
+
 // CloudOfType maps a resource type ("aws_s3_bucket") or provider name ("google-beta") to its cloud.
 func CloudOfType(s string) (Cloud, bool) {
 	p, _, _ := strings.Cut(s, "_")

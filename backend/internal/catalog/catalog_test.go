@@ -171,6 +171,19 @@ func TestFlociSupport(t *testing.T) {
 		{model.KindResource, "google_compute_router", "compute-other", false},
 		{model.KindResource, "google_firestore_database", "firestore", false},
 		{model.KindResource, "google_cloud_run_v2_service", "run", true},
+		// Cloud SQL runs a real PostgreSQL/MySQL container per instance.
+		{model.KindResource, "google_sql_database_instance", "sql", true},
+		{model.KindResource, "google_sql_database", "sql", true},
+		{model.KindResource, "google_sql_user", "sql", true},
+		{model.KindResource, "google_kms_crypto_key", "kms", true},
+		// floci-gcp (0.11.0, 2026-10-28): KMS keys and key rings have no
+		// getIamPolicy; Cloud Tasks is gRPC only; log sinks/metrics, alert
+		// policies and notification channels have no REST routes.
+		{model.KindResource, "google_kms_crypto_key_iam_member", "kms-iam", false},
+		{model.KindResource, "google_kms_key_ring_iam_binding", "kms-iam", false},
+		{model.KindResource, "google_cloud_tasks_queue", "cloudtasks", false},
+		{model.KindResource, "google_logging_project_sink", "logging", false},
+		{model.KindResource, "google_monitoring_alert_policy", "monitoring", false},
 		{model.KindResource, "oci_objectstorage_bucket", "objectstorage", true},
 		{model.KindResource, "oci_identity_compartment", "identity", true},
 		{model.KindResource, "oci_core_vcn", "core", false},
@@ -192,6 +205,18 @@ func TestFlociSupport(t *testing.T) {
 	}
 	if s, _ := c.Schema(model.KindResource, "aws_s3_bucket"); !s.FlociSupported {
 		t.Error("s3 unsupported despite live service")
+	}
+	// floci-gcp's health lists APIs the google provider can't use there:
+	// it never widens the curated support.
+	c.SetLiveServices(model.CloudGCP, map[string]string{"cloudtasks": "running", "firestore": "running", "pubsub": "running"})
+	if s, _ := c.Schema(model.KindResource, "google_cloud_tasks_queue"); s.FlociSupported {
+		t.Error("cloud tasks supported from floci-gcp's health")
+	}
+	if s, _ := c.Schema(model.KindResource, "google_firestore_database"); s.FlociSupported {
+		t.Error("firestore supported from floci-gcp's health")
+	}
+	if s, _ := c.Schema(model.KindResource, "google_pubsub_topic"); !s.FlociSupported {
+		t.Error("pubsub unsupported")
 	}
 }
 

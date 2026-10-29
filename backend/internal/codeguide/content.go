@@ -1,5 +1,7 @@
 package codeguide
 
+import "github.com/ismaelosuna7824/nimbo/backend/internal/model"
+
 // Principles, layouts, practices, compute options and sources. Claims follow
 // the sources listed at the end; Floci support (Local) matches Nimbo's
 // catalog (tested).
@@ -306,6 +308,35 @@ var compute = map[string][]ComputeOption{
 }
 
 func computeOptions(platform string) []ComputeOption { return compute[platform] }
+
+// sandboxAccess tells how code running in the local sandbox reaches the
+// emulated services, per platform. Verified on floci 2.3.0 (AWS) and
+// floci-gcp 0.11.0 by running code in Lambda, ECS and Cloud Run
+// (2026-10-28): the env each one gets and which hosts answer from inside.
+var sandboxAccess = map[string][]string{
+	"aws": {
+		"Lambda functions and ECS tasks get AWS_ENDPOINT_URL=http://localhost.floci.io:4566 (inside them localhost.floci.io is the sandbox), AWS_REGION and test credentials from the emulator: SDK clients built with the default configuration reach the emulated services, so set no endpoint in code or Terraform (verified with boto3 in Lambda and the AWS SDK for Go v2 in ECS: SQS, S3, DynamoDB).",
+		"S3: use path-style addressing when AWS_ENDPOINT_URL is set. SQS: queue URLs from Terraform read http://localhost:4566/...; send to the SDK's endpoint, not the URL's host (JavaScript SDK v3: useQueueUrlAsEndpoint: false; boto3 and the Go SDK v2 already do).",
+	},
+	"gcp": {
+		"Cloud Run containers get only PORT and K_SERVICE/K_REVISION/K_CONFIGURATION from the emulator, and localhost:4588 or localhost.floci.io:4588 inside them is the container itself. Declare variable \"" + model.GCPEmulatorHostVar + "\" (default \"\") and, while it is set, pass PUBSUB_EMULATOR_HOST = var." + model.GCPEmulatorHostVar + " and STORAGE_EMULATOR_HOST = \"http://${var." + model.GCPEmulatorHostVar + "}\" (packaging shows it): Nimbo's sandbox sets it to the emulator on the sandbox network (nimbo-<workflow id>-pod:4588); on Google Cloud it stays empty. The Pub/Sub and Cloud Storage client libraries then switch to the emulator by themselves (verified with the Go clients: publish and pull, write and read).",
+		"Pass GOOGLE_CLOUD_PROJECT (the resources' project, data.google_client_config.current.project): there is no metadata server locally.",
+		"Cloud SQL runs a real PostgreSQL or MySQL container per instance: connect with a normal driver to google_sql_database_instance.<name>.first_ip_address:5432 with the google_sql_user and google_sql_database Terraform creates (verified with pgx from Cloud Run). On Google Cloud that is the instance's IP: give it a private IP and the service Direct VPC egress. Creating google_sql_database locally needs hashicorp/google >= 7.26.",
+		"The sandbox's Cloud Run rejects env value_source (Secret Manager references): pass a secret as a plain value only while " + model.GCPEmulatorHostVar + " is set, and value_source on Google Cloud (packaging shows it for DATABASE_URL).",
+	},
+	"azure": {
+		"No Azure code runs in the sandbox: Function Apps are export only and Container Apps deploy without running their containers. Read every endpoint and connection string from env vars and prove the code on the docker platform.",
+	},
+	"oci": {
+		"OCI Functions and OKE workloads are not verified to reach the emulator from inside the sandbox, and Container Instances are export only: read every endpoint from env vars and prove the code on the docker platform.",
+	},
+	"docker": {
+		"Compose services reach each other by service name on a shared network (postgres://app@db:5432/app); publish only the ports you call from your computer.",
+	},
+	"kubernetes": {
+		"Pods reach each other through Services (http://<service>.<namespace>.svc:<port>); kubectl port-forward (or the workflow's forwarded ports) reaches them from your computer.",
+	},
+}
 
 var sources = []Source{
 	{"Hexagonal architecture (Alistair Cockburn)", "https://alistair.cockburn.us/hexagonal-architecture"},

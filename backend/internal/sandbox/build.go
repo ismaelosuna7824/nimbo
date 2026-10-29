@@ -76,18 +76,19 @@ func buildInputs(work string) (map[string][]byte, error) {
 
 // buildArtifacts builds what the configuration in work needs before
 // Terraform runs: the service dists it packages (hclcodec.ServiceBuilds)
-// and the nimbo.local images it runs (hclcodec.ServiceImages).
-func (m *Manager) buildArtifacts(ctx context.Context, rs *runState, work string) error {
+// and the nimbo.local images it runs (hclcodec.ServiceImages). It returns
+// the image variables for the run (see buildImages).
+func (m *Manager) buildArtifacts(ctx context.Context, rs *runState, work string) (imageVars []string, err error) {
 	files, err := buildInputs(work)
 	if err != nil {
-		return fmt.Errorf("find service builds: %w", err)
+		return nil, fmt.Errorf("find service builds: %w", err)
 	}
 	if err := m.buildServices(ctx, rs, work, hclcodec.ServiceBuilds(files)); err != nil {
-		return err
+		return nil, err
 	}
 	images, problems := hclcodec.ServiceImages(files)
 	if len(problems) > 0 {
-		return fmt.Errorf("container images: %s", strings.Join(problems, "; "))
+		return nil, fmt.Errorf("container images: %s", strings.Join(problems, "; "))
 	}
 	return m.buildImages(ctx, rs, work, images)
 }
@@ -272,29 +273,37 @@ func (m *Manager) buildServices(ctx context.Context, rs *runState, work string, 
 const imageVersion = "image-v1"
 
 // buildImages makes sure every image of images exists as
-// nimbo.local/<svc>:latest, the reference the Terraform uses: a build
-// tagged with its cache key too (nimbo.local/<svc>:<key>, from the
-// workflow, the target and the folder's files without dist/), or, when
-// that tag exists already, only the latest tag moved onto it. Builds are
-// labelled with the workflow (Remove deletes them); a rebuild drops the
-// workflow's older keys of that image.
-func (m *Manager) buildImages(ctx context.Context, rs *runState, work string, images []hclcodec.ServiceImage) error {
+// nimbo.local/<svc>:latest and as nimbo.local/<svc>:<key> (key from the
+// workflow, the target and the folder's files without dist/): a build
+// tagged with both, or, when the key tag exists already, only the latest
+// tag moved onto it. Builds are labelled with the workflow (Remove deletes
+// them); a rebuild drops the workflow's older keys of that image.
+//
+// It returns TF_VAR_<svc>_image=nimbo.local/<svc>:<key> per image
+// (hclcodec.ImageVariable) for the run: Terraform that takes the image
+// from that variable sees a new reference whenever the sources change, so
+// Cloud Run, ECS and Lambda roll to the new build, and workflows sharing a
+// service name never run each other's latest. A user env var of the same
+// key wins (runEnv).
+func (m *Manager) buildImages(ctx context.Context, rs *runState, work string, images []hclcodec.ServiceImage) ([]string, error) {
 	wfID := rs.run.WorkflowID
+	vars := make([]string, 0, len(images))
 	for _, img := range images {
 		if err := ctx.Err(); err != nil {
-			return err
+			return nil, err
 		}
 		prefix := "[image " + img.Dir + "]"
 		dir := filepath.Join(work, filepath.FromSlash(img.Dir))
 		digest, err := treeDigest(dir, "dist")
 		if err != nil {
-			return fmt.Errorf("image %s: hash sources: %w", img.Dir, err)
+			return nil, fmt.Errorf("image %s: hash sources: %w", img.Dir, err)
 		}
 		sum := sha256.Sum256([]byte(imageVersion + "\x00" + wfID + "\x00" + img.Target + "\x00" + digest))
 		latest, keyed := img.Ref(), hclcodec.LocalImageRegistry+"/"+img.Name+":"+hex.EncodeToString(sum[:6])
+		vars = append(vars, "TF_VAR_"+hclcodec.ImageVariable(img.Name)+"="+keyed)
 		if _, err := m.docker(ctx, "image", "inspect", "--format", "{{.Id}}", keyed); err == nil {
 			if _, err := m.docker(ctx, "tag", keyed, latest); err != nil {
-				return fmt.Errorf("image %s: %w", latest, err)
+				return nil, fmt.Errorf("image %s: %w", latest, err)
 			}
 			m.logLine(rs, "system", prefix+" Sources unchanged: reusing "+keyed+" as "+latest)
 			continue
@@ -308,14 +317,14 @@ func (m *Manager) buildImages(ctx context.Context, rs *runState, work string, im
 		start := time.Now()
 		if err := m.dockerBuild(ctx, rs, prefix, args...); err != nil {
 			if ctx.Err() != nil {
-				return ctx.Err()
+				return nil, ctx.Err()
 			}
-			return fmt.Errorf("image %s: %w", img.Dir, err)
+			return nil, fmt.Errorf("image %s: %w", img.Dir, err)
 		}
 		m.logLine(rs, "system", fmt.Sprintf("%s Built %s in %s", prefix, latest, time.Since(start).Round(100*time.Millisecond)))
 		m.pruneImages(ctx, img.Name, wfID, keyed)
 	}
-	return nil
+	return vars, nil
 }
 
 // localImages lists the nimbo.local images (repository:tag) wfID built,
