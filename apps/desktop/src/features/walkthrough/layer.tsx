@@ -3,7 +3,7 @@
 // current hop, marks the canvas (store highlight) and shows the caption panel; "Tour the infrastructure"
 // (tour-layer.tsx) walks the canvas graph from its roots. Loaded the first time someone starts one (see overlay.tsx).
 import { ViewportPortal, useStoreApi } from "@xyflow/react"
-import { ClockIcon, RotateCcwIcon, RouteIcon, SendIcon } from "lucide-react"
+import { ClockIcon, MapIcon, RotateCcwIcon, RouteIcon, SendIcon } from "lucide-react"
 import { useCallback, useEffect, useMemo, useRef, type ReactNode } from "react"
 import { Button } from "@/components/ui/button"
 import { measurePath, pointAt } from "@/features/architecture/animate"
@@ -15,12 +15,13 @@ import { isUsable, openEndpoints, useEndpoints } from "@/features/panels/endpoin
 import { isDocker, isKubernetes, type ComposeGraph, type KubeGraph } from "@/lib/api/types"
 import { cn } from "@/lib/utils"
 import { useWorkflowStore } from "@/state/workflow-store"
-import { captionOf, NO_ENTRY_HINT, summaryText, type Caption } from "./captions"
+import { captionOf, NO_ENTRY_HINT, noEntryText, summaryText, type Caption } from "./captions"
+import { operatorEntries, withClusterOperators } from "./clusters"
 import { describeDocker, describeKubernetes, describeTerraform, type Describer } from "./describe"
-import { buildWalk, flowStarts, SHOW_ALL, walkEntries, walkSummary, type Entry, type HopTraits, type Step, type Walk } from "./paths"
+import { buildWalk, flowStarts, leadsSomewhere, SHOW_ALL, walkEntries, walkSummary, type Entry, type HopTraits, type Step, type Walk } from "./paths"
 import { useFocusCamera, useHighlight, usePlayerKeys, useReducedMotion, type CameraFocus } from "./player-hooks"
 import { OneLine, PlayerPanel, WhereDot } from "./player-ui"
-import { replayWalkthrough, useWalkthrough, type EdgeMark, type Highlight, type NodeMark } from "./store"
+import { replayWalkthrough, startWalkthrough, useWalkthrough, type EdgeMark, type Highlight, type NodeMark } from "./store"
 import TourLayer from "./tour-layer"
 import { arrivalRoute, bridgeRoute, hopLinks, unionRect } from "./travel"
 
@@ -31,7 +32,7 @@ const DOT_SPEED = 320
 const TRAVEL_MS = { min: 600, max: 1600 }
 /** Reading time on each step at 1×. */
 const DWELL_MS = 2800
-const NO_TRAITS: HopTraits = { async: false, supporting: false }
+const NO_TRAITS: HopTraits = { async: false, supporting: false, plumbing: false }
 const EMPTY_COMPOSE: ComposeGraph = { nodes: [], edges: [] }
 const EMPTY_KUBE: KubeGraph = { nodes: [], edges: [] }
 
@@ -54,11 +55,14 @@ function useAbsent(design: ArchModel | null, active: ArchModel | null): { ids: S
 }
 
 // The Build canvas shows every resource of the design, so its walkthrough follows the whole design: a front door the
-// active environment skips (count = 0 in a sandbox environment) is still where requests come in.
+// active environment skips (count = 0 in a sandbox environment) is still where requests come in. Clusters with a
+// public API endpoint add the operator's path (kubectl → control plane → node pools).
 function TerraformBuildLayer() {
-  const { model } = useTerraformModel({ everyEnvironment: true })
+  const wf = useWorkflowStore((s) => s.workflow!)
+  const { model: design } = useTerraformModel({ everyEnvironment: true })
   const { model: active } = useTerraformModel()
-  const absent = useAbsent(model, active)
+  const absent = useAbsent(design, active)
+  const model = useMemo(() => (design ? withClusterOperators(design, wf) : null), [design, wf])
   return model ? <BuildLayer model={model} kind="terraform" absent={absent} /> : null
 }
 
@@ -146,12 +150,17 @@ function Player({ model, describer, surface, kind }: { model: ArchModel; describ
   const panel = useRef<HTMLDivElement>(null)
 
   const traits = useCallback((id: string) => describer.info.get(id) ?? NO_TRAITS, [describer])
-  const entries = useMemo(() => walkEntries(model), [model])
-  const starts = useMemo(() => (entries.length ? [] : flowStarts(model, traits)), [entries, model, traits])
+  // Entries that reach something handling requests (an internet gateway in front of empty subnets is none), then the
+  // operator's way into clusters with a public API endpoint.
+  const userEntries = useMemo(() => walkEntries(model).filter((e) => leadsSomewhere(model, e, traits)), [model, traits])
+  const opEntries = useMemo(() => operatorEntries(model), [model])
+  const entries = useMemo(() => [...userEntries, ...opEntries], [userEntries, opEntries])
+  const starts = useMemo(() => (entries.length ? [] : flowStarts(model, traits).filter((e) => leadsSomewhere(model, e, traits))), [entries, model, traits])
   const entry = useMemo(() => {
-    const key = chosenEntry ?? (entries.length === 1 ? entries[0].target : null)
+    // A lone way in starts at once; a cluster's operator path waits to be picked under the explanation.
+    const key = chosenEntry ?? (userEntries.length === 1 && !opEntries.length ? userEntries[0].target : null)
     return [...entries, ...starts].find((e) => e.target === key) ?? null
-  }, [chosenEntry, entries, starts])
+  }, [chosenEntry, entries, userEntries, opEntries, starts])
   const walk = useMemo(() => (entry ? buildWalk(model, entry, choices, traits) : null), [entry, model, choices, traits])
   const index = walk ? Math.min(stepIndex, walk.pending ? walk.pending.step : walk.steps.length) : 0
   const atSummary = !!walk && !walk.pending && index >= walk.steps.length
@@ -234,13 +243,23 @@ function Player({ model, describer, surface, kind }: { model: ArchModel; describ
 
   let body: ReactNode
   if (!walk) {
-    body = entries.length ? (
+    const explanation = noEntryText(model, describer, kind)
+    body = userEntries.length ? (
       <EntryPicker title="Where does the request come in?" options={entries} nameOf={nameOf} />
     ) : (
       <div data-testid="walkthrough-no-entry" className="flex flex-col gap-1.5">
-        <p className="font-medium">This design has no entry point yet</p>
-        <p className="text-xs text-muted-foreground">{NO_ENTRY_HINT[kind]}</p>
+        <p className="text-sm leading-snug" data-testid="walkthrough-no-entry-text">
+          {explanation ?? <span className="font-medium">This design has no entry point yet</span>}
+        </p>
+        {!explanation && <p className="text-xs text-muted-foreground">{NO_ENTRY_HINT[kind]}</p>}
+        {opEntries.length > 0 && <EntryPicker title="Follow an operator's request instead:" options={opEntries} nameOf={nameOf} />}
         {starts.length > 0 && <EntryPicker title="Or follow what flows from:" options={starts} nameOf={nameOf} />}
+        <div>
+          <Button size="xs" variant="outline" onClick={() => startWalkthrough("tour")}>
+            <MapIcon />
+            Tour the infrastructure instead
+          </Button>
+        </div>
       </div>
     )
   } else if (atSummary) {
@@ -286,7 +305,7 @@ function EntryPicker({ title, options, nameOf }: { title: string; options: Entry
             className={choiceChip(false)}
             onClick={() => useWalkthrough.setState({ entry: e.target, choices: {}, step: 0, playing: true })}
           >
-            {nameOf(e.target)}
+            {e.actor ? `${nameOf(e.actor)} → ${nameOf(e.target)}` : nameOf(e.target)}
           </Button>
         ))}
       </div>
@@ -323,6 +342,8 @@ function StepCaption({ caption: c, step, index, choice, nameOf }: { caption: Cap
         />
       )}
       {c.also.length > 0 && <OneLine testId="walkthrough-also" text={`Also involved: ${c.also.map((x) => x.label).join(", ")}`} />}
+      {c.through && <OneLine testId="walkthrough-through" text={`Passes through ${c.through}`} />}
+      {c.egress && <OneLine testId="walkthrough-egress" text={c.egress} />}
       {step.branches && !step.joins && (
         <div className="flex flex-wrap items-center gap-1.5" data-testid="walkthrough-choices">
           <span className="text-xs text-muted-foreground">Which way?</span>
@@ -355,7 +376,7 @@ function Summary({ model, walk, describer }: { model: ArchModel; walk: Walk; des
   const names = [...new Set(walk.steps.map((s) => describer.info.get(s.at)?.name ?? s.at))]
   return (
     <div className="flex flex-col gap-2" data-testid="walkthrough-summary">
-      <p className="font-medium">{summaryText(walkSummary(model, walk))}</p>
+      <p className="leading-snug font-medium">{summaryText(walkSummary(model, walk), describer)}</p>
       <p className="text-xs text-muted-foreground">{names.join(" → ")}</p>
       {walk.truncated && <p className="text-xs text-muted-foreground">The walk stopped after {walk.steps.length} steps; pick fewer ways to see the rest.</p>}
       <div className="flex items-center gap-2">

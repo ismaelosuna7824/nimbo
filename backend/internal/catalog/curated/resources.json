@@ -417,6 +417,9 @@
       "blocks": [{"type": "image_scanning_configuration", "attrs": {"scan_on_push": true}}]
     },
     "aws_eks_cluster": {"label": "EKS Cluster", "icon": "boxes"},
+    "aws_eks_node_group": {"label": "EKS Node Group", "icon": "server"},
+    "aws_eks_addon": {"label": "EKS Add-on", "icon": "plug"},
+    "aws_eks_pod_identity_association": {"label": "EKS Pod Identity Association", "icon": "key-round"},
     "aws_db_instance": {
       "label": "RDS Database", "icon": "database", "popular": true, "name": "database",
       "description": "Managed relational database (PostgreSQL by default) with encrypted storage.",
@@ -610,6 +613,7 @@
     "azurerm_network_interface": {"label": "Network Interface", "icon": "network"},
     "azurerm_linux_virtual_machine": {"label": "Linux Virtual Machine", "icon": "server"},
     "azurerm_kubernetes_cluster": {"label": "AKS Cluster", "icon": "boxes"},
+    "azurerm_kubernetes_cluster_node_pool": {"label": "AKS Node Pool", "icon": "server"},
     "azurerm_container_registry": {"label": "Container Registry", "icon": "package"},
     "azurerm_container_app": {"label": "Container App", "icon": "container"},
     "azurerm_container_group": {"label": "Container Instance", "icon": "container"},
@@ -704,6 +708,7 @@
     "google_compute_firewall": {"label": "Firewall Rule", "icon": "brick-wall"},
     "google_compute_instance": {"label": "Compute Instance", "icon": "server"},
     "google_container_cluster": {"label": "GKE Cluster", "icon": "boxes"},
+    "google_container_node_pool": {"label": "GKE Node Pool", "icon": "server"},
     "google_kms_key_ring": {"label": "KMS Key Ring", "icon": "key-round"},
     "google_kms_crypto_key": {"label": "KMS Crypto Key", "icon": "key-round"},
     "google_cloud_tasks_queue": {"label": "Cloud Tasks Queue", "icon": "list-checks"},
@@ -765,7 +770,8 @@
     "oci_identity_user": {"label": "OCI User", "icon": "user"},
     "oci_functions_application": {"label": "OCI Functions Application", "icon": "zap"},
     "oci_functions_function": {"label": "OCI Function", "icon": "zap"},
-    "oci_containerengine_cluster": {"label": "OCI Kubernetes Cluster (OKE)", "icon": "boxes"}
+    "oci_containerengine_cluster": {"label": "OCI Kubernetes Cluster (OKE)", "icon": "boxes"},
+    "oci_containerengine_node_pool": {"label": "OKE Node Pool", "icon": "server"}
   },
   "data": {
     "archive_file": {

@@ -91,6 +91,8 @@ const LINKS: Record<string, readonly [RegExp, RegExp]> = {
   aws_alb_listener_rule: [/^listener_arn$/, /target_group_arn$/],
   aws_lb_target_group_attachment: [/^target_group_arn$/, /^target_id$/],
   aws_alb_target_group_attachment: [/^target_group_arn$/, /^target_id$/],
+  // A target group serving an Auto Scaling group, or an EKS node group's (via its generated group name).
+  aws_autoscaling_attachment: [/^lb_target_group_arn$/, /^autoscaling_group_name$/],
   aws_route53_record: [/^zone_id$/, /^(alias\.name|alias\.zone_id|records)$/],
   azurerm_eventgrid_event_subscription: [/^scope$/, /(endpoint|function_id|queue_name|webhook)/],
   azurerm_dns_a_record: [/^zone_name$/, /^(records|target_resource_id)$/],
@@ -1774,6 +1776,14 @@ function isPublicEntry(n: WorkflowNode, r: Resolver): boolean {
       return n.body.blocks.some((b) => b.type === "website")
     case "azurerm_storage_account":
       return n.body.blocks.some((b) => b.type === "static_website")
+    // Kubernetes resources in a Terraform design: an Ingress (served by the cloud's ingress controller) or a Service
+    // the cloud gives a load balancer.
+    case "kubernetes_ingress":
+    case "kubernetes_ingress_v1":
+      return true
+    case "kubernetes_service":
+    case "kubernetes_service_v1":
+      return r.attr(n, "spec.type") === "LoadBalancer"
     default:
       return false
   }

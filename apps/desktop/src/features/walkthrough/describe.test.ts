@@ -3,9 +3,10 @@ import { deriveArchitecture, type DeriveWorkflow } from "@/features/architecture
 import { deriveDockerArchitecture } from "@/features/architecture/docker"
 import { deriveKubernetesArchitecture } from "@/features/architecture/kubernetes"
 import type { Body, ComposeGraph, ComposeNode, KubeGraph, KubeNode, ResourceSchema, WorkflowEdge, WorkflowNode } from "@/lib/api/types"
-import { captionOf, summaryText } from "./captions"
+import { captionOf, noEntryText, summaryText } from "./captions"
+import { OPERATOR_ACTOR, operatorEntries, withClusterOperators } from "./clusters"
 import { describeDocker, describeKubernetes, describeTerraform, firstSentence, referenceText } from "./describe"
-import { buildWalk, SHOW_ALL, walkEntries, walkSummary } from "./paths"
+import { buildWalk, leadsSomewhere, SHOW_ALL, walkEntries, walkSummary } from "./paths"
 
 // Terraform designs written as HCL expressions; references (edges) are derived from the expressions the way
 // the daemon does, with indexed block paths ("template[0].container[0].env[1].value").
@@ -132,7 +133,9 @@ describe("Terraform: the Azure Container Apps example", () => {
     expect(ids).not.toContain("azurerm_key_vault.main")
     expect(all.steps.find((s) => s.at === "azurerm_servicebus_namespace.main")).toMatchObject({ async: true })
     expect(all.steps.find((s) => s.at === "azurerm_container_app.notifier")).toMatchObject({ afterAsync: true, reversed: true, end: true })
-    expect(summaryText(walkSummary(model, all))).toBe("The request passed through 4 components; 1 continued asynchronously.")
+    expect(summaryText(walkSummary(model, all), d)).toBe(
+      "The request passed through 4 components; 1 continued asynchronously. It ended at PostgreSQL Flexible Server main and Container App notifier.",
+    )
   })
 
   test("captions: friendly type, role, connection, local support and the supporting pieces", () => {
@@ -320,5 +323,110 @@ describe("Kubernetes", () => {
     const redis = captionOf(walk, 3, d)
     expect(redis).toMatchObject({ type: "Kubernetes Deployment (Redis)", via: "environment variable REDIS_URL → Service redis" })
     expect(redis.text).toStartWith("It answers from memory")
+  })
+})
+
+// The user's EKS cluster: nodes in a private subnet that goes out through a NAT gateway in the public subnet, an
+// internet gateway, and nothing that exposes a workload.
+describe("Terraform: managed Kubernetes clusters", () => {
+  const VPC = { vpc_id: "aws_vpc.main.id" }
+  const eksNodes = (cluster: Record<string, string> = {}) => [
+    res("aws_vpc.main", { cidr_block: '"10.0.0.0/16"' }),
+    res("aws_subnet.nodes", { ...VPC, cidr_block: '"10.0.1.0/24"' }),
+    res("aws_subnet.public", { ...VPC, cidr_block: '"10.0.0.0/24"', map_public_ip_on_launch: "true" }),
+    res("aws_internet_gateway.main", VPC),
+    res("aws_eip.nat", { domain: '"vpc"' }),
+    res("aws_nat_gateway.main", { allocation_id: "aws_eip.nat.id", subnet_id: "aws_subnet.public.id" }),
+    res("aws_route_table.public", VPC, [["route", { cidr_block: '"0.0.0.0/0"', gateway_id: "aws_internet_gateway.main.id" }]]),
+    res("aws_route_table.nodes", VPC, [["route", { cidr_block: '"0.0.0.0/0"', nat_gateway_id: "aws_nat_gateway.main.id" }]]),
+    res("aws_route_table_association.public", { subnet_id: "aws_subnet.public.id", route_table_id: "aws_route_table.public.id" }),
+    res("aws_route_table_association.nodes", { subnet_id: "aws_subnet.nodes.id", route_table_id: "aws_route_table.nodes.id" }),
+    res("aws_iam_role.cluster", { name: '"eks-cluster"' }),
+    res("aws_iam_role.nodes", { name: '"eks-nodes"' }),
+    res("aws_eks_cluster.main", { name: '"main"', role_arn: "aws_iam_role.cluster.arn" }, [
+      ["vpc_config", { subnet_ids: "aws_subnet.nodes[*].id", endpoint_private_access: "true", ...cluster }],
+    ]),
+    res("aws_eks_node_group.workers", { cluster_name: "aws_eks_cluster.main.name", node_role_arn: "aws_iam_role.nodes.arn", subnet_ids: "aws_subnet.nodes[*].id" }),
+  ]
+  const AWS_SCHEMAS: Record<string, Partial<ResourceSchema>> = {
+    aws_eks_cluster: { label: "EKS Cluster", flociSupported: false },
+    aws_eks_node_group: { label: "EKS Node Group", flociSupported: false },
+    aws_nat_gateway: { label: "NAT Gateway", flociSupported: true },
+    aws_internet_gateway: { label: "Internet Gateway", flociSupported: true },
+    aws_lb: { label: "Load Balancer", flociSupported: true },
+  }
+  const walkthrough = (nodes: WorkflowNode[], provider = "aws") => {
+    const wf: DeriveWorkflow = { ...design(nodes), providers: [{ name: provider, body: toBody({}) }] }
+    const model = withClusterOperators(deriveArchitecture(wf), wf)
+    const schemas = { ...SCHEMAS, ...AWS_SCHEMAS }
+    const d = describeTerraform({ model, nodes: wf.nodes, edges: wf.edges, schemaOf: (n) => schemas[n.type] as ResourceSchema | undefined, deployed: new Set() })
+    const traits = (id: string) => d.info.get(id)!
+    return { model, d, traits, users: walkEntries(model).filter((e) => leadsSomewhere(model, e, traits)), operator: operatorEntries(model) }
+  }
+
+  test("no load balancer: nothing receives requests from the internet, and the panel says why", () => {
+    const { model, d, users } = walkthrough(eksNodes())
+    // The internet reaches the internet gateway, and the gateway only empty subnets: not a way in.
+    expect(walkEntries(model)).toEqual([{ target: "aws_internet_gateway.main", actor: "actor:internet" }])
+    expect(users).toEqual([])
+    expect(noEntryText(model, d, "terraform")).toBe(
+      "Nothing in this design receives requests from the internet yet: the EKS nodes run in private subnets and there is no load balancer or Ingress in front of them. Add an ALB/NLB (or an Ingress with the AWS Load Balancer Controller) to expose a workload.",
+    )
+  })
+
+  test("a public API endpoint: the operator's kubectl reaches the control plane, which runs the work on the nodes", () => {
+    const { model, d, traits, operator } = walkthrough(eksNodes())
+    expect(operator).toEqual([{ actor: OPERATOR_ACTOR, target: "aws_eks_cluster.main" }])
+    const walk = buildWalk(model, operator[0], {}, traits)
+    expect(walk.steps.map((s) => s.at)).toEqual([OPERATOR_ACTOR, "aws_eks_cluster.main", "aws_eks_node_group.workers"])
+    expect(captionOf(walk, 0, d)).toMatchObject({ name: "Operator", type: "kubectl" })
+    expect(captionOf(walk, 1, d).text).toBe("The Kubernetes control plane: its API checks who is calling and records the change. It schedules the work on workers (EKS Node Group).")
+    const nodes = captionOf(walk, 2, d)
+    expect(nodes.text).toStartWith("The worker nodes run your pods")
+    expect(nodes.egress).toBe("In private subnet nodes, outbound through NAT Gateway main → Internet Gateway main")
+    expect(summaryText(walkSummary(model, walk), d)).toBe("The request passed through 2 components. It ended at EKS Node Group workers.")
+  })
+
+  test("a private API endpoint offers no operator path", () => {
+    expect(walkthrough(eksNodes({ endpoint_public_access: "false" })).operator).toEqual([])
+  })
+
+  test("a load balancer in front of the node group: the users' request goes through it to the nodes", () => {
+    const { model, traits, users } = walkthrough([
+      ...eksNodes(),
+      res("aws_lb.web", { load_balancer_type: '"application"', subnets: "[aws_subnet.public.id]" }),
+      res("aws_lb_target_group.web", { port: "80", protocol: '"HTTP"', ...VPC }),
+      res("aws_lb_listener.http", { load_balancer_arn: "aws_lb.web.arn", port: "80" }, [["default_action", { type: '"forward"', target_group_arn: "aws_lb_target_group.web.arn" }]]),
+      res("aws_autoscaling_attachment.workers", {
+        autoscaling_group_name: "aws_eks_node_group.workers.resources[0].autoscaling_groups[0].name",
+        lb_target_group_arn: "aws_lb_target_group.web.arn",
+      }),
+    ])
+    expect(users).toEqual([{ target: "aws_lb.web", actor: "actor:users" }])
+    expect(buildWalk(model, users[0], {}, traits).steps.map((s) => s.at)).toEqual(["actor:users", "aws_lb.web", "aws_eks_node_group.workers"])
+  })
+
+  test("an Ingress in the design: the users' request goes through it to the workload", () => {
+    const { model, traits, users } = walkthrough([
+      ...eksNodes(),
+      res("kubernetes_deployment_v1.web", { wait_for_rollout: "true" }),
+      res("kubernetes_service_v1.web", {}, [["spec", { selector: "kubernetes_deployment_v1.web.metadata[0].labels" }]]),
+      res("kubernetes_ingress_v1.web", {}, [["spec", { ingress_class_name: '"alb"', service_name: "kubernetes_service_v1.web.metadata[0].name" }]]),
+    ])
+    expect(users).toEqual([{ target: "kubernetes_ingress_v1.web", actor: "actor:users" }])
+    const steps = buildWalk(model, users[0], {}, traits).steps.map((s) => s.at)
+    expect(steps).toEqual(["actor:users", "kubernetes_ingress_v1.web", "kubernetes_service_v1.web", "kubernetes_deployment_v1.web"])
+  })
+
+  test("AKS: a cluster that is not private offers the operator path; a private one does not", () => {
+    const aks = (attrs: Record<string, string>) => [
+      res("azurerm_resource_group.main", { name: '"rg"', location: '"westeurope"' }),
+      res("azurerm_kubernetes_cluster.main", { ...RG, dns_prefix: '"main"', ...attrs }, [["default_node_pool", { name: '"system"', vm_size: '"Standard_D2_v2"' }]]),
+    ]
+    const open = walkthrough(aks({}), "azurerm")
+    expect(open.operator).toEqual([{ actor: OPERATOR_ACTOR, target: "azurerm_kubernetes_cluster.main" }])
+    expect(open.users).toEqual([])
+    expect(noEntryText(open.model, open.d, "terraform")).toContain("Add an Application Gateway or a public Load Balancer")
+    expect(walkthrough(aks({ private_cluster_enabled: "true" }), "azurerm").operator).toEqual([])
   })
 })

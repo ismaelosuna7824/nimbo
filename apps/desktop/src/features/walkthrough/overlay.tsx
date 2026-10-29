@@ -28,12 +28,12 @@ export function WalkthroughOverlay() {
   )
 }
 
-/** Whether "Follow a request" can start: still checking, nothing reaches the design, or something does. */
-type EntryState = "checking" | "none" | "ok"
+/** Whether "Follow a request" can start: still checking, nothing handles requests (and why), or something does. */
+type EntryState = "checking" | "ok" | { none: string }
 
 /**
  * Build toolbar button: "Guided tour" starts the infrastructure tour; its menu also offers "Follow a request"
- * (disabled, with the reason, when nothing reaches the design).
+ * (disabled, with the reason said for the design, when nothing receives requests).
  */
 export function GuidedTourButton() {
   const mode = useWalkthroughMode()
@@ -44,8 +44,8 @@ export function GuidedTourButton() {
     if (!workflow) return
     setEntry("checking")
     void import("./entry-check")
-      .then((m) => m.hasRequestEntry(workflow, version))
-      .then((ok) => setEntry(ok ? "ok" : "none"))
+      .then((m) => m.checkRequestEntry(workflow, version))
+      .then((c) => setEntry(c.ok ? "ok" : { none: c.reason }))
       .catch(() => setEntry("ok"))
   }
   return (
@@ -70,7 +70,7 @@ export function GuidedTourButton() {
             <MapIcon />
             Tour the infrastructure
           </DropdownMenuItem>
-          {entry === "none" ? (
+          {typeof entry === "object" ? (
             <Tooltip>
               <TooltipTrigger asChild>
                 <div>
@@ -80,7 +80,9 @@ export function GuidedTourButton() {
                   </DropdownMenuItem>
                 </div>
               </TooltipTrigger>
-              <TooltipContent side="left">This design has no entry point yet: add a public front door (an API gateway, a load balancer, external ingress or a published port)</TooltipContent>
+              <TooltipContent side="left" className="max-w-80">
+                {entry.none}
+              </TooltipContent>
             </Tooltip>
           ) : (
             <DropdownMenuItem disabled={entry === "checking"} onSelect={() => startWalkthrough("request")}>

@@ -8,13 +8,17 @@ import { PROVIDER_SHORT, type ArchCard, type ArchModel } from "@/features/archit
 import { techIconFor, type TechIconId } from "@/components/tech-icons"
 import type { Body, ComposeGraph, KubeEdge, KubeGraph, ResourceSchema, WorkflowEdge, WorkflowNode } from "@/lib/api/types"
 import type { HopTraits } from "./paths"
+import { CLUSTER_TYPE, egressOf, NODE_POOL_TYPE, OPERATOR_ACTOR } from "./clusters"
 
 /** What an item does with a request (decides the wording of its step). */
 export type Role =
   | "users"
   | "internet"
+  | "operator"
   | "front"
   | "compute"
+  | "cluster"
+  | "nodes"
   | "database"
   | "cache"
   | "storage"
@@ -44,6 +48,8 @@ export interface ItemInfo extends HopTraits {
   name: string
   /** How sentences and choices name it when the name alone is ambiguous ("orders (SQS Queue)"); else `name`. */
   ref?: string
+  /** How a closing sentence names it in plain words ("DynamoDB Table orders"); else `name`. */
+  title?: string
   /** "Azure Container App", "PostgreSQL container", "Kubernetes Ingress". */
   type: string
   role: Role
@@ -55,6 +61,8 @@ export interface ItemInfo extends HopTraits {
   also: Chip[]
   /** Build canvas nodes the item stands for (none for actors). */
   nodeIds: string[]
+  /** Node pools: where they live and how they reach the internet ("Subnet nodes, outbound through NAT Gateway main → Internet Gateway main"). */
+  egress?: string
 }
 
 export interface Describer {
@@ -87,8 +95,10 @@ const unique = <T>(xs: T[], key: (x: T) => string) => {
 /** Actors and containers: the same in every kind of workspace. */
 function baseInfo(model: ArchModel, info: Map<string, ItemInfo>, cardInfo: (id: string) => ItemInfo | undefined) {
   for (const a of model.actors) {
-    const role: Role = a.kind === "users" ? "users" : a.kind === "internet" ? "internet" : "other"
-    info.set(a.id, { id: a.id, name: a.label, type: a.sublabel ?? (a.kind === "internet" ? "The public internet" : "Outside service"), role, facts: [], also: [], nodeIds: [], async: false, supporting: false })
+    const role: Role = a.id === OPERATOR_ACTOR ? "operator" : a.kind === "users" ? "users" : a.kind === "internet" ? "internet" : "other"
+    const type = a.sublabel ?? (a.kind === "internet" ? "The public internet" : "Outside service")
+    const ref = a.id === OPERATOR_ACTOR ? { ref: `${a.label} (${type})` } : {}
+    info.set(a.id, { id: a.id, name: a.label, ...ref, type, role, facts: [], also: [], nodeIds: [], async: false, supporting: false, plumbing: false })
   }
   for (const g of model.groups) {
     const members = model.cards.filter((c) => c.parent === g.id)
@@ -103,6 +113,8 @@ function baseInfo(model: ArchModel, info: Map<string, ItemInfo>, cardInfo: (id: 
       nodeIds: g.packed ? members.map((c) => c.nodeId) : g.nodeId ? [g.nodeId] : [],
       async: first?.async ?? false,
       supporting: false,
+      // A subnet or network is where requests pass, not where they are handled.
+      plumbing: first?.plumbing ?? true,
       ...(first?.where ? { where: first.where } : {}),
     })
   }
@@ -124,6 +136,8 @@ const SUPPORTING_CATEGORY: Partial<Record<ArchCard["category"], true>> = { ident
 
 export function terraformRole(card: Pick<ArchCard, "type" | "category">): Role {
   const t = baseType(card.type)
+  if (CLUSTER_TYPE.test(t)) return "cluster"
+  if (NODE_POOL_TYPE.test(t)) return "nodes"
   if (ASYNC_TYPE.test(t)) return "messaging"
   if (FRONT_TYPE.test(t) && !/private_dns/.test(t)) return "front"
   if (CACHE_TYPE.test(t)) return "cache"
@@ -218,6 +232,21 @@ export function describeTerraform({ model, nodes, edges, schemaOf, deployed, abs
     return c && { label: `${typeOf(c).label} ${c.label || c.name}`, nodeId: c.nodeId }
   }
 
+  const nodeLabel = (id: string) => {
+    const n = byId.get(id)
+    return n ? `${schemaOf(n)?.label || typeLabel(n.type)} ${n.label || n.name}` : id
+  }
+  /** Where a node pool runs and how it reaches the internet. */
+  const egressText = (pool: string): string | undefined => {
+    const subnet = edges.find((e) => e.target === pool && /subnet$/.test(baseType(byId.get(e.source)?.type ?? "")))?.source
+    if (!subnet) return undefined
+    const tier = model.groups.find((g) => g.nodeId === subnet)?.tier
+    const node = byId.get(subnet)!
+    const where = `In ${tier === "private" || tier === "public" ? `${tier} ` : ""}subnet ${node.label || node.name}`
+    const out = egressOf(subnet, nodes, edges)
+    return out.length ? `${where}, outbound through ${out.map(nodeLabel).join(" → ")}` : where
+  }
+
   for (const c of model.cards) {
     const node = byId.get(c.nodeId)
     const { schema, label, type } = typeOf(c)
@@ -238,6 +267,7 @@ export function describeTerraform({ model, nodes, edges, schemaOf, deployed, abs
       name: c.label || c.name,
       // Block names repeat across services ("main", "orders"): sentences and choices name the service too.
       ref: `${c.label || c.name} (${label})`,
+      title: `${label} ${c.label || c.name}`,
       type,
       role,
       about: firstSentence(schema?.description),
@@ -247,6 +277,9 @@ export function describeTerraform({ model, nodes, edges, schemaOf, deployed, abs
       nodeIds: [c.nodeId],
       async: role === "messaging",
       supporting: isSupportingType(c),
+      // Gateways, endpoints and subnets pass requests on; they never handle one.
+      plumbing: role === "network",
+      ...(role === "nodes" ? { egress: egressText(c.nodeId) } : {}),
     })
   }
 
@@ -354,6 +387,7 @@ export function describeDocker(model: ArchModel, graph: ComposeGraph): Describer
       nodeIds: [c.nodeId],
       async: role === "messaging",
       supporting: false,
+      plumbing: false,
     })
   }
   baseInfo(model, info, (id) => info.get(id))
@@ -409,6 +443,7 @@ export function describeKubernetes(model: ArchModel, graph: KubeGraph): Describe
       nodeIds: [c.nodeId],
       async: role === "messaging",
       supporting: false,
+      plumbing: false,
     })
   }
   baseInfo(model, info, (id) => info.get(id))

@@ -180,3 +180,105 @@ test("the Guided tour menu offers Follow a request only when something reaches t
   await expect(page.getByRole("menuitem", { name: "Tour the infrastructure" })).toBeEnabled()
   await expect(page.getByRole("menuitem", { name: "Follow a request" })).toHaveAttribute("data-disabled", "")
 })
+
+// An EKS cluster with its nodes in a private subnet (out through a NAT gateway) and nothing exposing a workload.
+const EKS = `
+resource "aws_vpc" "main" {
+  cidr_block = "10.0.0.0/16"
+}
+resource "aws_subnet" "public" {
+  vpc_id                  = aws_vpc.main.id
+  cidr_block              = "10.0.0.0/24"
+  map_public_ip_on_launch = true
+}
+resource "aws_subnet" "nodes" {
+  vpc_id     = aws_vpc.main.id
+  cidr_block = "10.0.1.0/24"
+}
+resource "aws_internet_gateway" "main" {
+  vpc_id = aws_vpc.main.id
+}
+resource "aws_eip" "nat" {
+  domain = "vpc"
+}
+resource "aws_nat_gateway" "main" {
+  allocation_id = aws_eip.nat.id
+  subnet_id     = aws_subnet.public.id
+}
+resource "aws_route_table" "public" {
+  vpc_id = aws_vpc.main.id
+  route {
+    cidr_block = "0.0.0.0/0"
+    gateway_id = aws_internet_gateway.main.id
+  }
+}
+resource "aws_route_table" "nodes" {
+  vpc_id = aws_vpc.main.id
+  route {
+    cidr_block     = "0.0.0.0/0"
+    nat_gateway_id = aws_nat_gateway.main.id
+  }
+}
+resource "aws_route_table_association" "public" {
+  subnet_id      = aws_subnet.public.id
+  route_table_id = aws_route_table.public.id
+}
+resource "aws_route_table_association" "nodes" {
+  subnet_id      = aws_subnet.nodes.id
+  route_table_id = aws_route_table.nodes.id
+}
+resource "aws_iam_role" "cluster" {
+  name               = "eks-cluster"
+  assume_role_policy = "{}"
+}
+resource "aws_iam_role" "nodes" {
+  name               = "eks-nodes"
+  assume_role_policy = "{}"
+}
+resource "aws_eks_cluster" "main" {
+  name     = "main"
+  role_arn = aws_iam_role.cluster.arn
+  vpc_config {
+    subnet_ids              = [aws_subnet.nodes.id]
+    endpoint_private_access = true
+    endpoint_public_access  = true
+  }
+}
+resource "aws_eks_node_group" "workers" {
+  cluster_name    = aws_eks_cluster.main.name
+  node_group_name = "workers"
+  node_role_arn   = aws_iam_role.nodes.arn
+  subnet_ids      = [aws_subnet.nodes.id]
+  scaling_config {
+    desired_size = 2
+    max_size     = 3
+    min_size     = 1
+  }
+}
+`
+
+test("an EKS cluster nothing exposes: the panel says why and follows the operator's kubectl instead", async ({ app, api, page }) => {
+  const wf = await api.createWorkflow("EKS")
+  await api.request("PUT", `/workflows/${wf.id}/terraform`, { changes: { "main.tf": EKS } })
+  await app.gotoHome()
+  await app.openWorkflow("EKS")
+  await page.getByRole("button", { name: "More guided tours" }).click()
+  await page.getByRole("menuitem", { name: "Follow a request" }).click()
+
+  const panel = page.getByTestId("walkthrough-panel")
+  const why = panel.getByTestId("walkthrough-no-entry")
+  await expect(why).toContainText("Nothing in this design receives requests from the internet yet: the EKS nodes run in private subnets")
+  await expect(why).toContainText("Add an ALB/NLB (or an Ingress with the AWS Load Balancer Controller)")
+  await expect(why.getByRole("button", { name: "Tour the infrastructure instead" })).toBeVisible()
+
+  await why.getByRole("button", { name: "Operator (kubectl) → main (EKS Cluster)" }).click()
+  await panel.getByRole("button", { name: "Pause (space)" }).click()
+  await expect(panel.getByTestId("walkthrough-step-counter")).toHaveText("1/3")
+  await page.keyboard.press("ArrowRight")
+  await expect(panel.getByTestId("walkthrough-caption")).toContainText("The Kubernetes control plane")
+  await page.keyboard.press("ArrowRight")
+  await expect(panel.getByTestId("walkthrough-name")).toHaveText("workers")
+  await expect(panel.getByTestId("walkthrough-egress")).toContainText("In private subnet nodes, outbound through NAT Gateway main → Internet Gateway main")
+  await page.keyboard.press("ArrowRight")
+  await expect(panel.getByTestId("walkthrough-summary")).toContainText("It ended at EKS Node Group workers.")
+})

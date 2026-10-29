@@ -16,6 +16,11 @@ export interface HopTraits {
   async: boolean
   /** Identity, keys, DNS, telemetry…: never a hop, shown as "also involved" on the steps it helps. */
   supporting: boolean
+  /**
+   * Network plumbing (an internet or NAT gateway, a subnet, a VPC endpoint): requests pass through it, nothing handles
+   * them there. Never a step: the next real component says the request "passes through" it.
+   */
+  plumbing: boolean
 }
 
 export type TraitsOf = (id: string) => HopTraits
@@ -36,6 +41,8 @@ export interface Step {
   /** The model edge travelled; drawn from `at` to `from` when `reversed` (a consumer pulling from its queue). */
   edge?: ArchEdge
   reversed?: boolean
+  /** Network plumbing the request passed on its way here (an internet gateway, a subnet). */
+  through?: string[]
   /** `at` is asynchronous (a queue, topic or event bus). */
   async?: boolean
   /** An asynchronous hop came before: this part runs later, on its own. */
@@ -88,7 +95,7 @@ export function flowStarts(model: ArchModel, traits: TraitsOf): Entry[] {
   const fed = new Set(model.edges.filter((e) => isData(e) && !actors.has(e.source) && !traits(e.source).supporting).map((e) => e.target))
   const starts = new Set<string>()
   for (const e of model.edges) {
-    if (!isData(e) || actors.has(e.source) || fed.has(e.source) || traits(e.source).supporting || traits(e.target).supporting) continue
+    if (!isData(e) || actors.has(e.source) || fed.has(e.source) || traits(e.source).supporting || traits(e.source).plumbing || traits(e.target).supporting) continue
     starts.add(e.source)
   }
   return [...starts].map((target) => ({ target }))
@@ -98,6 +105,8 @@ interface Hop {
   to: string
   edge: ArchEdge
   reversed: boolean
+  /** Network plumbing the request passed on its way. */
+  through?: string[]
 }
 
 /**
@@ -119,7 +128,7 @@ export function buildWalk(model: ArchModel, entry: Entry, choices: Record<string
   const groups = new Map(model.groups.map((g) => [g.id, g]))
   const packedParent = new Map(model.cards.flatMap((c) => (c.parent && groups.get(c.parent)?.packed ? [[c.id, c.parent] as const] : [])))
 
-  const nextHops = (at: string, path: Set<string>): Hop[] => {
+  const nextRaw = (at: string, path: Set<string>): Hop[] => {
     const hops: Hop[] = []
     const add = (to: string, edge: ArchEdge, reversed: boolean) => {
       if (path.has(to) || traits(to).supporting || hops.some((h) => h.to === to)) return
@@ -131,6 +140,23 @@ export function buildWalk(model: ArchModel, entry: Entry, choices: Record<string
     if (traits(at).async) for (const e of into.get(at) ?? []) if (!actors.has(e.source)) add(e.source, e, true)
     return hops
   }
+  /** Hops past network plumbing: to the real components behind it, remembering what the request passed through. */
+  const resolve = (hops: Hop[], path: Set<string>): Hop[] => {
+    const real: Hop[] = []
+    const add = (h: Hop) => {
+      if (!real.some((r) => r.to === h.to)) real.push(h)
+    }
+    for (const h of hops) {
+      if (!traits(h.to).plumbing) {
+        add(h)
+        continue
+      }
+      const inner = new Set([...path, h.to])
+      for (const f of resolve(nextRaw(h.to, inner), inner)) add({ ...f, through: [h.to, ...(f.through ?? [])] })
+    }
+    return real
+  }
+  const nextHops = (at: string, path: Set<string>) => resolve(nextRaw(at, path), path)
 
   const steps: Step[] = []
   const shown = new Set<string>()
@@ -151,7 +177,10 @@ export function buildWalk(model: ArchModel, entry: Entry, choices: Record<string
       return false
     }
     const onPath = [...path, step.at]
-    const hops = nextHops(step.at, new Set(onPath))
+    return follow(step, nextHops(step.at, new Set(onPath)), onPath)
+  }
+  /** Goes on from `step` along `hops` (a fork waits for its choice). */
+  const follow = (step: Step, hops: Hop[], onPath: string[]): boolean => {
     if (hops.length === 0) {
       step.end = true
       return true
@@ -162,6 +191,7 @@ export function buildWalk(model: ArchModel, entry: Entry, choices: Record<string
       from: step.at,
       edge: h.edge,
       ...(h.reversed ? { reversed: true } : {}),
+      ...(h.through ? { through: h.through } : {}),
       ...(traits(h.to).async ? { async: true } : {}),
       ...(afterAsync ? { afterAsync: true } : {}),
       ...(resumes ? { resumes: true } : {}),
@@ -182,21 +212,43 @@ export function buildWalk(model: ArchModel, entry: Entry, choices: Record<string
   }
 
   if (entry.actor) {
-    steps.push({ at: entry.actor })
+    const start: Step = { at: entry.actor }
+    steps.push(start)
     const edge = model.edges.find((e) => isData(e) && e.source === entry.actor && e.target === entry.target)
-    visit({ at: entry.target, from: entry.actor, edge, ...(traits(entry.target).async ? { async: true } : {}) }, [entry.actor])
+    // The front door itself may be plumbing (the Internet reaching an internet gateway): go on to what is behind it.
+    const first = edge ? resolve([{ to: entry.target, edge, reversed: false }], new Set([entry.actor])) : []
+    if (first.length) follow(start, first, [entry.actor])
   } else {
     visit({ at: entry.target, ...(traits(entry.target).async ? { async: true } : {}) }, [])
   }
   return { entry, steps, ...(pending ? { pending } : {}), ...(truncated ? { truncated } : {}) }
 }
 
-/** What the end of a walk tells: components passed (actors aside) and how many of them ran later, after a queue. */
-export function walkSummary(model: ArchModel, walk: Walk): { components: number; async: number } {
+/** Every way shown at every fork: what an entry leads to at most. */
+const EVERY_WAY: Record<string, string> = new Proxy({}, { get: () => SHOW_ALL })
+
+/** Whether a walk from `entry` reaches anything that handles requests (not only gateways and subnets). */
+export function leadsSomewhere(model: ArchModel, entry: Entry, traits: TraitsOf): boolean {
+  const actors = new Set(model.actors.map((a) => a.id))
+  return buildWalk(model, entry, EVERY_WAY, traits).steps.some((s) => !actors.has(s.at))
+}
+
+export interface WalkSummary {
+  /** Components passed (actors aside). */
+  components: number
+  /** Of them, the ones reached after a queue. */
+  async: number
+  /** Where the request (each way of it) ended. */
+  ends: string[]
+}
+
+/** What the end of a walk tells: components passed, how many ran later (after a queue), where it ended. */
+export function walkSummary(model: ArchModel, walk: Walk): WalkSummary {
   const actors = new Set(model.actors.map((a) => a.id))
   const items = walk.steps.filter((s) => !actors.has(s.at))
   return {
     components: new Set(items.map((s) => s.at)).size,
     async: new Set(items.filter((s) => s.afterAsync).map((s) => s.at)).size,
+    ends: [...new Set(items.filter((s) => s.end && !s.joins).map((s) => s.at))],
   }
 }

@@ -3667,9 +3667,9 @@ used by target"), one arrow per pair. The subtitle is `Docker Compose ·
 
 A guided walkthrough of the path a request takes, for beginners, on the Build
 canvas: *Follow a request* in the Build toolbar's *Guided tour ▾* menu
-(disabled, with the reason, when nothing reaches the design; `entry-check.ts`
-derives it when the menu opens) and in ⌘K, which switches to Build first;
-switching to Architecture closes a walkthrough. It reuses the Architecture
+(disabled when nothing receives requests, with the reason said for the design;
+`entry-check.ts` derives it when the menu opens) and in ⌘K, which switches to
+Build first; switching to Architecture closes a walkthrough. It reuses the Architecture
 model — `use-model.ts` derives it for the Build canvas (no layout), so the
 walk follows the arrows the Architecture view draws. The Build canvas draws
 every resource of the design, so its walk follows the whole design
@@ -3681,17 +3681,37 @@ values naming a database) are data arrows from the services reading them
 (derive step 3c), the hop "connected by the Key Vault Secret database-url".
 `paths.ts` (pure, `paths.test.ts`): entries are the data arrows from *Users*
 (the *Internet* when no Users reach the design), one per front door, picked
-by the user when there are several; without any, the panel says "This design
-has no entry point yet" with a hint per kind and offers the flow starts
-(items sending data that nothing feeds). The walk follows solid arrows in
+by the user when there are several. Network plumbing (internet and NAT
+gateways, subnets, VPC endpoints: the `plumbing` trait, Terraform role
+`network` and subnet/network groups) is never a step: the walk goes on to
+the real components behind it and the step there says the request "passes
+through" it, and an entry that only reaches plumbing (the Internet → an
+internet gateway → empty subnets) is not offered (`leadsSomewhere`). Managed
+Kubernetes clusters (`clusters.ts`: EKS, AKS, GKE, OKE) whose API endpoint is
+public (`endpoint_public_access`, `private_cluster_enabled`,
+`private_cluster_config.enable_private_endpoint`,
+`endpoint_config.is_public_ip_enabled`, each with its provider's default) add
+an *Operator (kubectl)* actor: kubectl → control plane → node pools, the node
+pool's step saying its subnet and way out ("In private subnet nodes, outbound
+through NAT Gateway main → Internet Gateway main", from the route tables).
+Users reach a cluster through a load balancer (a target group attached to the
+node group's Auto Scaling group) or a Kubernetes Ingress / `LoadBalancer`
+Service declared in Terraform. Without a way in, the panel explains it for the
+design (`noEntryText`: "the EKS nodes run in private subnets and there is no
+load balancer or Ingress in front of them. Add an ALB/NLB …"; else the hint per
+kind), offers the operator path and the flow starts (items sending data that
+nothing feeds), and *Tour the infrastructure instead*. The summary names where
+the request ended ("It ended at EKS Node Group workers") and what is missing
+when a walk stops early (a front door with no backend, a queue nobody consumes).
+The walk follows solid arrows in
 their direction, never back onto its own path, never into supporting pieces;
 at a fork it waits for a way (chips) or plays every way in turn ("Show
 all"; an item an earlier way reached ends that way). Queues, topics and
 event buses are asynchronous: the request returns there and the walk goes
 on to their consumers — arrows out of them, or services whose arrow points
 at them (a worker pulling from its queue). `describe.ts` (`describe.test.ts`,
-with the Azure Container Apps + PostgreSQL + Service Bus example) gives each
-item a name, a friendly type (catalog label; image technology for Docker;
+with the Azure Container Apps + PostgreSQL + Service Bus example and the EKS
+shapes) gives each item a name, a friendly type (catalog label; image technology for Docker;
 object kind for Kubernetes), a role, ports and routes from the card, where it
 runs (`flociSupported`/deployed; Docker and the local cluster always local)
 and "also involved" chips: dashed neighbours (IAM roles, Key Vault, managed

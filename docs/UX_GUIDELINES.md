@@ -155,6 +155,10 @@ instead of one-off colors, shadows or radii.
   accent glow breathing slowly around the card(s) (`tour-glow`, still with reduced motion), never a status color; what
   was just shown keeps a faint accent ring; plumbing is named on the step ("Also created here"), not toured. Small
   sibling groups are toured card by card; a large one gets an overview, then sub-steps (2a, 2b…) at a readable zoom.
+  A request path is never network plumbing: gateways and subnets are "passes through" context on the step after
+  them, a path ends on a component in plain words ("It ended at EKS Node Group workers"). When nothing receives
+  requests, the panel says why for this design and what to add, calm (no warning color), with the useful
+  alternatives as buttons (an operator's kubectl path to a public cluster, *Tour the infrastructure instead*).
 
 ## Review checklist
 

@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test"
 import type { ArchActor, ArchCard, ArchEdge, ArchGroup, ArchModel } from "@/features/architecture/model"
-import { buildWalk, flowStarts, MAX_STEPS, SHOW_ALL, walkEntries, walkSummary, type HopTraits } from "./paths"
+import { buildWalk, flowStarts, leadsSomewhere, MAX_STEPS, SHOW_ALL, walkEntries, walkSummary, type HopTraits } from "./paths"
 
 const card = (id: string, parent?: string): ArchCard => ({ id, nodeId: id, type: "t", kind: "resource", category: "compute", name: id, details: [], ...(parent ? { parent } : {}) })
 const data = (source: string, target: string): ArchEdge => ({ id: `flow:${source}->${target}`, source, target, kind: "data" })
@@ -16,8 +16,8 @@ const model = (cards: string[], edges: ArchEdge[], actors: ArchActor[] = [users]
   regions: [],
 })
 const traitsFrom =
-  (async: string[] = [], supporting: string[] = []) =>
-  (id: string): HopTraits => ({ async: async.includes(id), supporting: supporting.includes(id) })
+  (async: string[] = [], supporting: string[] = [], plumbing: string[] = []) =>
+  (id: string): HopTraits => ({ async: async.includes(id), supporting: supporting.includes(id), plumbing: plumbing.includes(id) })
 const at = (steps: { at: string }[]) => steps.map((s) => s.at)
 
 describe("walkEntries", () => {
@@ -51,7 +51,7 @@ describe("buildWalk", () => {
     expect(walk.steps[1]).toMatchObject({ from: "actor:users", edge: { id: "flow:actor:users->api" } })
     expect(walk.steps[2]).toMatchObject({ from: "api", end: true })
     expect(walk.pending).toBeUndefined()
-    expect(walkSummary(m, walk)).toEqual({ components: 2, async: 0 })
+    expect(walkSummary(m, walk)).toEqual({ components: 2, async: 0, ends: ["db"] })
   })
 
   test("stops at a fork until a way is chosen", () => {
@@ -90,7 +90,27 @@ describe("buildWalk", () => {
     expect(walk.steps[2]).toMatchObject({ async: true })
     expect(walk.steps[3]).toMatchObject({ from: "queue", reversed: true, afterAsync: true, edge: { id: "flow:notifier->queue" } })
     expect(walk.steps[4]).toMatchObject({ afterAsync: true, end: true })
-    expect(walkSummary(m, walk)).toEqual({ components: 4, async: 2 })
+    expect(walkSummary(m, walk)).toEqual({ components: 4, async: 2, ends: ["db"] })
+  })
+
+  test("network plumbing is never a step: the next component says the request passed through it", () => {
+    // Internet → internet gateway → public subnet → load balancer → nodes; the NAT on the side leads nowhere.
+    const m = model(["igw", "public", "lb", "nodes", "nat"], [data("actor:internet", "igw"), data("igw", "public"), data("public", "lb"), data("lb", "nodes"), data("igw", "nat")], [internet])
+    const traits = traitsFrom([], [], ["igw", "public", "nat"])
+    const walk = buildWalk(m, walkEntries(m)[0], {}, traits)
+    expect(at(walk.steps)).toEqual(["actor:internet", "lb", "nodes"])
+    expect(walk.steps[1]).toMatchObject({ from: "actor:internet", through: ["igw", "public"] })
+    expect(walk.steps[2].through).toBeUndefined()
+    expect(walkSummary(m, walk)).toEqual({ components: 2, async: 0, ends: ["nodes"] })
+  })
+
+  test("an entry that only reaches plumbing leads nowhere", () => {
+    const m = model(["igw", "public"], [data("actor:internet", "igw"), data("igw", "public")], [internet])
+    const traits = traitsFrom([], [], ["igw", "public"])
+    expect(leadsSomewhere(m, walkEntries(m)[0], traits)).toBe(false)
+    expect(at(buildWalk(m, walkEntries(m)[0], {}, traits).steps)).toEqual(["actor:internet"])
+    const served = model(["igw", "web"], [data("actor:internet", "igw"), data("igw", "web")], [internet])
+    expect(leadsSomewhere(served, walkEntries(served)[0], traits)).toBe(true)
   })
 
   test("never goes back onto its own path (cycles)", () => {
