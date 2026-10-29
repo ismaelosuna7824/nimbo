@@ -243,6 +243,7 @@ func (s *Server) routes() {
 	h("PUT "+p+"/workflows/{id}/compliance/attestations/{framework}/{control}", s.attestControl)
 	h("DELETE "+p+"/workflows/{id}/compliance/attestations/{framework}/{control}", s.unattestControl)
 	h("GET "+p+"/workflows/{id}/well-architected", s.workflowWellArchitected)
+	h("GET "+p+"/workflows/{id}/recommendations", s.workflowRecommendations)
 	h("GET "+p+"/workflows/{id}/endpoints", s.getEndpoints)
 	h("POST "+p+"/workflows/{id}/endpoints/try", s.tryEndpoint)
 	h("GET "+p+"/workflows/{id}/endpoints/postman.json", s.postmanCollection)

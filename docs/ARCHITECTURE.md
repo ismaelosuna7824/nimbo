@@ -760,6 +760,58 @@ CIS AWS rules (`lint/rules_cis_aws.go`, mapped by `compliance/cis_aws.go`, frame
 
 Framework `cis-aws-7.0`: 70 controls, 26 automatic (rules above plus `bp_iam_wildcard` for 2.14 and `bp_unencrypted_storage` for 3.2.1, 3.3.1, 6.1.1 on their own resource types), 44 manual (Organizations, account contacts, root user, IAM users/credentials, AWS Config, Macie, MFA Delete, web front-end access logs, all 5.x CloudWatch alarms, Security Hub, VPC peering routes, VPC endpoints). cisecurity.org lists v7.1.0 but its recommendation list isn't public; numbering follows v7.0.0 (Tenable v7.0.0 audits, Prowler `cis_7.0_aws`).
 
+Edge rules (`lint/rules_edge_{aws,azure,gcp,oci}.go`): the public entry points of a design (API gateways, load
+balancers, CDNs, WAFs) and the clusters, secrets and queues behind them. Category `security` (`bp_azure_law_retention`:
+`operations`), every rule with an official `Docs` link and pillars (security first; rate limits also reliability and
+cost). Warnings only for settings that expose traffic or data; production-only additions (a WAF in front of every load
+balancer, access logs, rotation, private clusters) are opt-in, so the local-sandbox templates and starters stay clean;
+reviews and the advisor's recommendations run them all. Expressions Nimbo can't evaluate, dynamic blocks and
+associations/policies pointing at a variable, data source or module output never fire. Local = the resource type runs on
+Floci (`catalog` `Types().Local`). Not in the corpus noise counts above.
+
+| Rule | Severity | Default | Trigger | Local |
+|---|---|---|---|---|
+| `bp_apigw_throttling` | info | on | `aws_apigatewayv2_stage` without `throttling_rate_limit`/`_burst_limit` in `default_route_settings`/`route_settings`; `aws_api_gateway_stage` without an `aws_api_gateway_method_settings` with throttling or an `aws_api_gateway_usage_plan` with `throttle_settings` | yes |
+| `bp_apigw_access_logs` | info | opt-in | API Gateway stage (REST, HTTP/WebSocket) without `access_log_settings` | yes |
+| `bp_apigw_route_auth` | info | opt-in | `aws_apigatewayv2_route` with `authorization_type` unset/`NONE`, `aws_api_gateway_method` with `authorization = "NONE"`; `OPTIONS`, `$disconnect`, `/health`, `/healthz`, `/ping`, `/status`, `/public` and `api_key_required` skipped | yes |
+| `bp_cloudfront_https` | warning | on | `viewer_protocol_policy = "allow-all"`; custom origin `origin_protocol_policy = "http-only"` (S3 website origins skipped) or `origin_ssl_protocols` with `SSLv3` | yes |
+| `bp_cloudfront_waf` | info | opt-in | `aws_cloudfront_distribution` without `web_acl_id` | yes |
+| `bp_alb_http_forward` | warning | on | `HTTP` listener of a known internet-facing `aws_lb` whose `default_action` type is `forward` | yes |
+| `bp_lb_tls_policy` | warning | on | `HTTPS`/`TLS` listener without `ssl_policy` (the API default `ELBSecurityPolicy-2016-08` accepts TLS 1.0) or with a policy that isn't `TLS13-1-2/1-3`, `TLS-1-2` or `FS-1-2` | yes |
+| `bp_alb_drop_invalid_headers` | warning | on | Application `aws_lb`/`aws_alb` without `drop_invalid_header_fields = true` (Security Hub ELB.4) | yes |
+| `bp_alb_waf` | info | opt-in | Internet-facing application load balancer without an `aws_wafv2_web_acl_association` | yes |
+| `bp_waf_rate_limit` | info | on | `aws_wafv2_web_acl` without a rule with `rate_based_statement` (custom rule groups, dynamic rules and non-literal `rule_json` skipped) | yes |
+| `bp_secret_rotation` | info | opt-in | `aws_secretsmanager_secret` without an `aws_secretsmanager_secret_rotation` | yes |
+| `bp_sqs_encryption` | info | on | `aws_sqs_queue` with `sqs_managed_sse_enabled = false` and no `kms_master_key_id` (SSE-SQS is the default) | yes |
+| `bp_azure_apim_rate_limit` | info | on | `azurerm_api_management` without a service/product/API/operation policy containing `<rate-limit`, `<rate-limit-by-key`, `<quota` or `<quota-by-key` (`xml_link` and `file()` content count) | yes |
+| `bp_azure_messaging_tls` | warning | on | Service Bus / Event Hubs namespace with `minimum_tls_version` `1.0` or `1.1` | yes |
+| `bp_azure_aks_rbac` | warning | on | `azurerm_kubernetes_cluster` with `role_based_access_control_enabled = false` | yes |
+| `bp_azure_aks_api_ranges` | warning | opt-in | AKS cluster neither private nor with `api_server_access_profile.authorized_ip_ranges` (or VNet integration) | yes |
+| `bp_azure_aks_azure_policy` | info | opt-in | AKS cluster without `azure_policy_enabled = true` | yes |
+| `bp_azure_kv_default_deny` | info | opt-in | `azurerm_key_vault` with a public endpoint and no `network_acls { default_action = "Deny" }` | yes |
+| `bp_azure_law_retention` | info | opt-in | `azurerm_log_analytics_workspace` with `retention_in_days` unset (30) or < 90 | yes |
+| `bp_gcp_ssl_policy_weak` | warning | on | `google_compute_ssl_policy` with the `COMPATIBLE` profile (the default) or `min_tls_version` below `TLS_1_2`; `RESTRICTED` passes (CIS GCP 3.11) | no |
+| `bp_gcp_https_proxy_ssl_policy` | warning | opt-in | Target HTTPS/SSL proxy (global or regional) without `ssl_policy` (CIS GCP 3.11) | no |
+| `bp_gcp_cloud_armor` | info | opt-in | External (`EXTERNAL`/`EXTERNAL_MANAGED`/unset) `google_compute_backend_service` without `security_policy` | no |
+| `bp_gcp_armor_rules` | info | on | `CLOUD_ARMOR` security policy with only the default rule, or no `throttle`/`rate_based_ban` rule (inline or `google_compute_security_policy_rule`) | no |
+| `bp_gcp_cloud_run_public` | info | on | `roles/run.invoker` for `allUsers`/`allAuthenticatedUsers` on a Cloud Run service unless its `ingress` isn't `INGRESS_TRAFFIC_ALL` (behind a load balancer) or it is labeled `public = "true"` | yes |
+| `bp_gcp_gke_legacy_abac` | warning | on | `google_container_cluster` with `enable_legacy_abac = true` | yes |
+| `bp_gcp_gke_release_channel` | info | on | `release_channel { channel = "UNSPECIFIED" }` | yes |
+| `bp_gcp_gke_private_nodes` | warning | opt-in | GKE cluster without `private_cluster_config.enable_private_nodes = true` | yes |
+| `bp_gcp_gke_control_plane_networks` | warning | opt-in | GKE cluster without `master_authorized_networks_config` or a private endpoint | yes |
+| `bp_gcp_gke_workload_identity` | warning | opt-in | Standard GKE cluster without `workload_identity_config` (Autopilot skipped) | yes |
+| `bp_oci_apigw_rate_limit` | info | on | `oci_apigateway_deployment` without `specification.request_policies.rate_limiting` | no |
+| `bp_oci_apigw_auth` | info | opt-in | Deployment without `request_policies.authentication` / `dynamic_authentication` | no |
+| `bp_oci_lb_http_listener` | warning | opt-in | `HTTP` listener of a known public load balancer without `ssl_configuration` or `rule_set_names` (redirect) | no |
+| `bp_oci_lb_waf` | info | opt-in | Public `oci_load_balancer_load_balancer` without an `oci_waf_web_app_firewall` on it (the `oci_waf_*` family; WAAS is legacy) | no |
+| `bp_oci_waf_rate_limit` | info | on | `oci_waf_web_app_firewall_policy` without `request_rate_limiting.rules` | no |
+| `bp_oci_secret_rotation` | info | opt-in | `oci_vault_secret` without `rotation_config { is_scheduled_rotation_enabled = true }` | yes |
+
+Not added because existing rules cover them: SQL public IP (`bp_gcp_sql_public_ip`), OCI NSG all-port ingress
+(`bp_oci_ssh_open`/`bp_oci_rdp_open` already fire on protocol all from 0.0.0.0/0). The `aws-serverless-api` template
+throttles its stage and `azure-api-gateway` rate-limits each operation (`<rate-limit>` per subscription key; the
+Consumption tier has no `rate-limit-by-key`). `cis-gcp-5.0` control 3.11 is automatic (both SSL policy rules).
+
 ### netcheck (network checks)
 
 ```go
@@ -1709,6 +1761,7 @@ view runs them even when they are opt-in.
 | `dk_shell_form` | warning | on | effective `ENTRYPOINT`, or `CMD` without ENTRYPOINT, in shell form (not `exec …`) and not overridden by compose | 2 |
 | `dk_workdir` | info | on | RUN starting with `cd <dir> &&` | 0 |
 | `dk_secret_build` | warning | on | `ARG` with a secret-looking name, or `ENV` with a secret name and a literal value | 0 |
+| `dk_secret_file` | warning | on | `COPY`/`ADD` (stages whose files reach the image) of `.netrc`, `.git-credentials`, `.dockercfg`, `.ssh`, `.aws`, `id_*` keys, an `.npmrc`/`.yarnrc.yml`/`.pypirc` holding a literal token, or an env file (`.env`, `.env.<env>`, `<env>.env`; examples skipped) holding a secret-named value — named, or carried by `COPY .` when the `.dockerignore` doesn't exclude it (CIS 4.10) | 0 (the `.npmrc` files there only set `ignore-scripts`) |
 | `dk_root_user` | info | on | built service without `user:` whose final stage has no USER or USER root/0 | 34 |
 | `dk_secret_env` | warning | on | secret-looking key with a literal value in a compose `environment` | 17 |
 | `dk_unresolved_var` | warning | on | `${VAR}` without value in .env and without default | 0 |
@@ -1741,6 +1794,7 @@ view runs them even when they are opt-in.
 | `dk_default_bridge` | info | on | `network_mode: bridge` (CIS 5.30) | 0 |
 | `dk_port_interface` | info | **opt-in** | published port without a host IP (or 0.0.0.0/::) (CIS 5.14) | 52 |
 | `dk_privileged_port` | info | **opt-in** | published host port below 1024 (CIS 5.8) | 19 |
+| `dk_network_internal` | info | **opt-in** | database/cache/broker publishing no ports on a non-internal, non-external network shared with a service that publishes ports | 15 |
 | `dk_update_alone` | info | on | RUN updating or upgrading packages (apt-get/apt/apk/yum/dnf/microdnf/zypper) without an install in the same RUN (CIS 4.7) | 0 |
 | `dk_add_any` | info | **opt-in** | any `ADD` in the stages the target builds (CIS 4.9) | 0 |
 
@@ -2203,6 +2257,9 @@ is info; limits alone count as requests; LimitRange defaults count.
 | `k8s_rollout_strategy` | warning (error / info) | prod-like: Deployment with 2+ replicas using Recreate without a ReadWriteOnce claim, or `maxUnavailable` (rounded down) ≥ replicas; error in any environment: `maxSurge` and `maxUnavailable` both 0; info: StatefulSet `updateStrategy: OnDelete` in prod |
 | `k8s_recommended_labels` | info | workload metadata without `app.kubernetes.io/name` or `instance` (part-of/version listed in the same finding) |
 | `k8s_resource_quota`, `k8s_image_digest` | info, opt-in | prod-like: namespace with workloads but no ResourceQuota / LimitRange; image not pinned by `@sha256:` digest (locally built images skipped) |
+| `k8s_startup_probe` | info, opt-in | container whose `livenessProbe.initialDelaySeconds` ≥ 30 and no `startupProbe` (fix sizes `failureThreshold` at period 10s) |
+| `k8s_ingress_tls` | info, opt-in | Ingress with rules or a default backend and no `spec.tls`; Gateway (gateway.networking.k8s.io) with HTTP listeners and no HTTPS/TLS one; hosts under `localhost` skipped |
+| `k8s_pss_namespace_label` | info, opt-in | Namespace of the workflow (system namespaces skipped) without the `pod-security.kubernetes.io/enforce` label (mentioned in the manual CIS 5.2.1 guidance) |
 | `k8s_host_port` | warning (info for DaemonSets) | container `ports[].hostPort` (CIS 5.2.12) |
 | `k8s_windows_host_process` | warning | pod or container `windowsOptions.hostProcess: true` (CIS 5.2.10) |
 | `k8s_net_raw`, `k8s_capabilities`, `k8s_seccomp` | info, opt-in | Linux container keeping NET_RAW (not dropped, added back, or privileged) / not dropping ALL or adding anything but NET_BIND_SERVICE / effective seccompProfile (container, else pod) not RuntimeDefault or Localhost (CIS 5.2.8, 5.2.9, 5.6.2) |

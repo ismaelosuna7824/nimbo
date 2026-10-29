@@ -5,12 +5,14 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/ismaelosuna7824/nimbo/backend/internal/advisor"
 	"github.com/ismaelosuna7824/nimbo/backend/internal/model"
 	"github.com/ismaelosuna7824/nimbo/backend/internal/wellarch"
 )
 
 // well_architected_guidance: GET /well-architected/{platform};
-// review_well_architected: GET /workflows/{id}/well-architected.
+// review_well_architected: GET /workflows/{id}/well-architected;
+// recommend_improvements: GET /workflows/{id}/recommendations.
 
 const groupWellArchitected = "Well-Architected"
 
@@ -25,6 +27,11 @@ func registerWellArchitectedTools(r *registry, t *tools) {
 		"Call before finishing a design: reviews the workflow against the Well-Architected pillars of its platforms (Terraform clouds, docker or Kubernetes). Runs every Nimbo rule — opt-in rules and rules turned off in Settings included — plus the network checks (Terraform), and groups the findings by pillar (security, reliability, performance, cost, operations): status ok | advice | risk, counts and each finding (severity, code, rule title, node, file:line, why, fix, docs). "+
 			"Fix warnings (and errors) first with the usual edit tools, then call it again; explain to the user any finding you leave (production-only advice such as multi-AZ or deletion protection is fine to leave in a local sandbox unless the user wants production parity).",
 		t.reviewWellArchitected)
+	addTool(r, "recommend_improvements", "Recommend improvements",
+		"Call after the first draft of a design and again before finishing: the companions a senior engineer would add to THIS design (e.g. a public API → WAF with a rate-based rule and stage throttling; a published local service → a rate-limiting reverse proxy; a queue consumer → a DLQ), highest value first. "+
+			"Each item: id, title, why, pillars, nodes that triggered it, add (resource types/keys to add and their purpose), snippet (minimal HCL/YAML using the design's real addresses), scope (recommended | production), local (runs locally, export only, or the local equivalent), skip (when not to add it), rules that check it and docs. "+
+			"Propose each item to the user with its one-line why; apply only what they accept or what clearly fits the request; production-scope items are proposals in a local sandbox and export-only ones are not emulated locally (say so). Applied items disappear on the next call; an empty list means nothing is left.",
+		t.recommendImprovements)
 }
 
 type wellArchitectedGuidanceIn struct {
@@ -67,7 +74,7 @@ func (t *tools) wellArchitectedGuidance(ctx context.Context, in wellArchitectedG
 		}
 		g.Pillars = keep
 	}
-	return wellArchitectedGuideView{Guide: g, Next: "Design with these practices as defaults (secure, reliable, scalable); production-only ones (multi-AZ, deletion protection, long backup retention) are advice in the local sandbox: mention them and apply them when the user wants production parity. Call review_well_architected before you finish."}, nil
+	return wellArchitectedGuideView{Guide: g, Next: "Design with these practices as defaults (secure, reliable, scalable) and lay files and environments out as layout shows; production-only ones (multi-AZ, deletion protection, long backup retention) are advice in the local sandbox: mention them and apply them when the user wants production parity. After the first draft call recommend_improvements; call review_well_architected before you finish."}, nil
 }
 
 func joinPillars() string {
@@ -101,7 +108,8 @@ type wafReview struct {
 		Framework string            `json:"framework"`
 		Sources   []wellarch.Source `json:"sources"`
 	} `json:"guidance"`
-	Note string `json:"note"`
+	Recommendations []advisor.Recommendation `json:"recommendations"`
+	Note            string                   `json:"note"`
 }
 
 type wafFindingView struct {
@@ -130,9 +138,43 @@ type wafReviewView struct {
 	Summary   string          `json:"summary"`
 	Pillars   []wafPillarView `json:"pillars"`
 	// Frameworks: "AWS Well-Architected Framework (https://…)".
-	Frameworks []string `json:"frameworks,omitempty"`
-	Note       string   `json:"note"`
-	Next       string   `json:"next,omitempty"`
+	Frameworks      []string         `json:"frameworks,omitempty"`
+	Recommendations []recommendBrief `json:"recommendations,omitempty"`
+	Note            string           `json:"note"`
+	Next            string           `json:"next,omitempty"`
+}
+
+// recommendBrief is a recommendation in review_well_architected
+// (recommend_improvements has the full item with its snippet).
+type recommendBrief struct {
+	ID    string `json:"id"`
+	Title string `json:"title"`
+	Why   string `json:"why"`
+	Scope string `json:"scope"`
+	Local string `json:"local"`
+}
+
+type recommendationsView struct {
+	Workflow        string                   `json:"workflow"`
+	Recommendations []advisor.Recommendation `json:"recommendations"`
+	Next            string                   `json:"next"`
+}
+
+func (t *tools) recommendImprovements(ctx context.Context, in workflowArg) (any, error) {
+	wf, err := t.c.workflow(ctx, in.Workflow)
+	if err != nil {
+		return nil, err
+	}
+	out := recommendationsView{Workflow: wf.Name, Recommendations: []advisor.Recommendation{}}
+	if err := t.c.get(ctx, "/workflows/"+pathEscape(wf.ID)+"/recommendations", &out.Recommendations); err != nil {
+		return nil, err
+	}
+	if len(out.Recommendations) == 0 {
+		out.Next = "Nothing to add: the design already has the companions Nimbo recommends. Call review_well_architected before you finish."
+		return out, nil
+	}
+	out.Next = "Propose each item to the user with its one-line why (say which are production-scope and which are export-only, not emulated locally); apply the accepted ones (snippet via apply_terraform_code, or the usual edit tools) and call recommend_improvements again; then review_well_architected."
+	return out, nil
 }
 
 func (t *tools) reviewWellArchitected(ctx context.Context, in workflowArg) (any, error) {
@@ -153,6 +195,13 @@ func (t *tools) reviewWellArchitected(ctx context.Context, in workflowArg) (any,
 		}
 		out.Frameworks = append(out.Frameworks, f)
 	}
+	for _, rec := range res.Recommendations {
+		out.Recommendations = append(out.Recommendations, recommendBrief{ID: rec.ID, Title: rec.Title, Why: rec.Why, Scope: rec.Scope, Local: rec.Local})
+	}
+	recsNext := ""
+	if len(out.Recommendations) > 0 {
+		recsNext = fmt.Sprintf(" %d recommendation(s) left: call recommend_improvements for their snippets and propose each to the user.", len(out.Recommendations))
+	}
 	risky, parts := 0, []string{}
 	for _, p := range res.Pillars {
 		v := wafPillarView{Pillar: p.Pillar, Status: p.Status, Counts: map[string]int{"warning": p.Counts.Warning, "info": p.Counts.Info}}
@@ -171,6 +220,7 @@ func (t *tools) reviewWellArchitected(ctx context.Context, in workflowArg) (any,
 	}
 	if len(parts) == 0 {
 		out.Summary = "Every pillar is ok: no findings from any rule."
+		out.Next = strings.TrimSpace(recsNext)
 		return out, nil
 	}
 	out.Summary = strings.Join(parts, "; ")
@@ -185,6 +235,7 @@ func (t *tools) reviewWellArchitected(ctx context.Context, in workflowArg) (any,
 	if risky == 0 {
 		out.Next = "Only advice is left: apply the info findings that fit the user's goal with " + edit + ", call review_well_architected again, and explain the ones you leave (production-only advice may stay in a local sandbox unless the user wants production parity)."
 	}
+	out.Next += recsNext
 	return out, nil
 }
 

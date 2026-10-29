@@ -5,6 +5,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/ismaelosuna7824/nimbo/backend/internal/advisor"
 	"github.com/ismaelosuna7824/nimbo/backend/internal/model"
 )
 
@@ -12,7 +13,8 @@ func TestWellArchitectedGuidance(t *testing.T) {
 	cs, _ := session(t)
 	var g wellArchitectedGuideView
 	mustTool(t, cs, "well_architected_guidance", map[string]any{"platform": "AWS"}, &g)
-	if g.Platform != "aws" || g.Framework == "" || len(g.Sources) == 0 || len(g.Pillars) != len(model.Pillars) || !strings.Contains(g.Next, "review_well_architected") {
+	if g.Platform != "aws" || g.Framework == "" || len(g.Sources) == 0 || len(g.Pillars) != len(model.Pillars) || !strings.Contains(g.Next, "review_well_architected") || !strings.Contains(g.Next, "recommend_improvements") ||
+		g.Layout == nil || !strings.Contains(g.Layout.Tree, "environments/") {
 		t.Fatalf("aws guidance = %+v", g)
 	}
 	for _, pg := range g.Pillars {
@@ -86,5 +88,56 @@ func TestReviewWellArchitected(t *testing.T) {
 	}
 	if !slices.Equal(r.Platforms, []string{"aws"}) || !slices.Contains(codes, "bp_name_prefix") || !strings.Contains(r.Next, "update_node") {
 		t.Errorf("terraform review = %+v", r)
+	}
+}
+
+func TestRecommendImprovements(t *testing.T) {
+	cs, _ := session(t)
+	var wf workflowView
+	mustTool(t, cs, "create_workflow", map[string]any{"name": "Shop API"}, &wf)
+	api := `resource "aws_api_gateway_rest_api" "api" {
+  name = "shop"
+}
+
+resource "aws_api_gateway_stage" "live" {
+  rest_api_id   = aws_api_gateway_rest_api.api.id
+  deployment_id = "abc123"
+  stage_name    = "live"
+}
+`
+	mustTool(t, cs, "apply_terraform_code", map[string]any{"workflow": wf.ID, "files": map[string]string{"main.tf": api}}, nil)
+
+	var r recommendationsView
+	mustTool(t, cs, "recommend_improvements", map[string]any{"workflow": wf.ID}, &r)
+	i := slices.IndexFunc(r.Recommendations, func(rec advisor.Recommendation) bool { return rec.ID == "aws_public_api_waf" })
+	if r.Workflow != "Shop API" || i < 0 || !strings.Contains(r.Next, "recommend_improvements") {
+		t.Fatalf("recommendations = %+v", r)
+	}
+	if rec := r.Recommendations[i]; rec.Why == "" || len(rec.Add) == 0 || rec.Scope == "" || rec.Local == "" {
+		t.Errorf("recommendation = %+v", rec)
+	}
+
+	// review_well_architected lists it compactly and points at the tool.
+	var review wafReviewView
+	mustTool(t, cs, "review_well_architected", map[string]any{"workflow": wf.ID}, &review)
+	if !slices.ContainsFunc(review.Recommendations, func(b recommendBrief) bool { return b.ID == "aws_public_api_waf" && b.Why != "" }) || !strings.Contains(review.Next, "recommend_improvements") {
+		t.Errorf("review recommendations %+v next %q", review.Recommendations, review.Next)
+	}
+
+	// Applying the companion removes it.
+	mustTool(t, cs, "apply_terraform_code", map[string]any{"workflow": wf.ID, "files": map[string]string{"main.tf": api + `
+resource "aws_wafv2_web_acl_association" "live" {
+  resource_arn = aws_api_gateway_stage.live.arn
+  web_acl_arn  = "arn:aws:wafv2:us-east-1:000000000000:regional/webacl/x/y"
+}
+`}}, nil)
+	r = recommendationsView{}
+	mustTool(t, cs, "recommend_improvements", map[string]any{"workflow": wf.ID}, &r)
+	if slices.ContainsFunc(r.Recommendations, func(rec advisor.Recommendation) bool { return rec.ID == "aws_public_api_waf" }) {
+		t.Errorf("still recommended after the association: %+v", r.Recommendations)
+	}
+
+	if text, isErr := callTool(t, cs, "recommend_improvements", map[string]any{"workflow": "nope"}); !isErr {
+		t.Errorf("unknown workflow: %s", text)
 	}
 }

@@ -26,6 +26,15 @@ type PillarGuide struct {
 	Practices []Practice   `json:"practices"`
 }
 
+// LayoutGuide is the recommended folder and environment layout of a
+// platform, matching what Nimbo exports.
+type LayoutGuide struct {
+	Summary      string   `json:"summary"`
+	Tree         string   `json:"tree"`
+	Environments []string `json:"environments"`
+	Sources      []Source `json:"sources"`
+}
+
 // Guide is the full guidance for one platform.
 type Guide struct {
 	Platform  string        `json:"platform"`
@@ -33,6 +42,7 @@ type Guide struct {
 	Framework string        `json:"framework"`
 	Sources   []Source      `json:"sources"`
 	Pillars   []PillarGuide `json:"pillars"`
+	Layout    *LayoutGuide  `json:"layout"`
 }
 
 var platforms = []string{"aws", "azure", "gcp", "oci", "docker", "kubernetes"}
@@ -58,7 +68,9 @@ func Get(platform string) (Guide, bool) {
 	if !ok {
 		return Guide{}, false
 	}
-	return fn(), true
+	g := fn()
+	g.Layout = layouts[platform]()
+	return g, true
 }
 
 // p builds a Practice; trailing variadic arguments are rule codes.

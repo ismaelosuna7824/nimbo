@@ -54,6 +54,15 @@ func TestGuides(t *testing.T) {
 				t.Errorf("%s: bad source %+v", name, s)
 			}
 		}
+		if l := g.Layout; l == nil || l.Summary == "" || l.Tree == "" || len(l.Environments) == 0 || len(l.Sources) == 0 {
+			t.Errorf("%s: incomplete layout %+v", name, g.Layout)
+		} else {
+			for _, s := range l.Sources {
+				if u, err := url.Parse(s.URL); err != nil || u.Scheme != "https" || s.Title == "" {
+					t.Errorf("%s: bad layout source %+v", name, s)
+				}
+			}
+		}
 		if len(g.Pillars) != len(model.Pillars) {
 			t.Fatalf("%s: %d pillars", name, len(g.Pillars))
 		}

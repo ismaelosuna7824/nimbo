@@ -716,14 +716,21 @@ tell the user which manual controls they need to check and attest.
 Agents design along the pillars AWS Well-Architected, Azure Well-Architected,
 the Google Cloud Architecture Framework and OCI Well-Architected share:
 security, reliability, performance (including scaling), cost and operations.
-Call `well_architected_guidance` at the start of a design and
-`review_well_architected` before finishing; prompt `design_well_architected`
-walks the loop. See [WELL_ARCHITECTED.md](WELL_ARCHITECTED.md).
+Call `well_architected_guidance` at the start of a design (its `layout`
+gives the folder and environment layout), `recommend_improvements` after
+the first draft and `review_well_architected` + `compliance_report` before
+finishing; prompt `design_well_architected` walks the loop. See
+[WELL_ARCHITECTED.md](WELL_ARCHITECTED.md).
+
+Loop: guidance → draft → `recommend_improvements` (propose each item with
+its why; apply what the user accepts) → again until nothing applies →
+`review_well_architected` (fix warnings) → deploy locally.
 
 | Tool | Inputs | What it does |
 |---|---|---|
-| `well_architected_guidance` | `platform` (`aws`, `azure`, `gcp`, `oci`, `docker`, `kubernetes`; `azurerm`, `google`, `k8s`… accepted), `pillar?` | The platform's framework, sources and, per pillar, a summary and practices (title, why, how with resource types/attributes or compose/Kubernetes fields, the Nimbo rule codes that check it) |
-| `review_well_architected` | `workflow` | Runs every rule (opt-in ones and rules turned off in Settings included; Terraform also the `net_*` network checks) and groups findings by their rule's main pillar: status `ok` / `advice` (info only) / `risk` (warnings or errors), counts, findings (severity, code, rule title, node, file:line, why, fix, docs), the frameworks that apply, a summary and next steps |
+| `well_architected_guidance` | `platform` (`aws`, `azure`, `gcp`, `oci`, `docker`, `kubernetes`; `azurerm`, `google`, `k8s`… accepted), `pillar?` | The platform's framework, sources, `layout` (summary, tree, what each environment adds, sources) and, per pillar, a summary and practices (title, why, how with resource types/attributes or compose/Kubernetes fields, the Nimbo rule codes that check it) |
+| `recommend_improvements` | `workflow` | Companions the design lacks, highest value first (`GET /workflows/{id}/recommendations`): id, title, why, pillars, triggering nodes, what to add, a snippet with the design's addresses, scope (`recommended` / `production`), local support (runs locally / export only / local equivalent), when to skip it, checking rules, docs. Applied items disappear; an empty list means nothing is left |
+| `review_well_architected` | `workflow` | Runs every rule (opt-in ones and rules turned off in Settings included; Terraform also the `net_*` network checks) and groups findings by their rule's main pillar: status `ok` / `advice` (info only) / `risk` (warnings or errors), counts, findings (severity, code, rule title, node, file:line, why, fix, docs), the frameworks that apply, open recommendations (id, title, why, scope, local), a summary and next steps |
 
 Production-only practices (multi-AZ, deletion protection, long backup
 retention) are info in a local sandbox: agents mention them and apply them
@@ -845,7 +852,8 @@ Conventions).
 | `check_challenge` | `workflow`, `wait?` | Grade a challenge workflow for real (static checks, deploy, http, load, scenarios, readiness); per-check measurements, passed, score |
 | `compliance_report` | `workflow`, `framework?`, `markdown?` | Read-only pre-audit of the design against its platforms' CIS benchmarks: summary, counts, open controls with findings and guidance; `markdown` returns the exportable report |
 | `well_architected_guidance` | `platform`, `pillar?` | Well-Architected practices of a platform per pillar (why, how, rule codes); call before designing |
-| `review_well_architected` | `workflow` | Every rule's findings grouped by pillar with status ok/advice/risk; call before finishing, fix warnings first |
+| `review_well_architected` | `workflow` | Every rule's findings grouped by pillar with status ok/advice/risk plus open recommendations; call before finishing, fix warnings first |
+| `recommend_improvements` | `workflow` | Companions the design lacks (WAF/rate limits on public entry points, reverse proxy, DLQs…) with why, snippet, scope and local support; call after the first draft and before finishing |
 | `get_access` | `workflow`, `node` | Structured permissions of a node (AWS policy statements, Azure role assignment, GCP IAM member/binding, OCI policy statements, Kubernetes RBAC) with least-privilege warnings |
 | `set_access` | `workflow`, `node`, provider structure | Write a node's permissions back from that structure; read-only parts are kept verbatim |
 | `grant_access` | `workflow`, `identity`, `resource`, `level?` | Give an identity Read/Write/Manage on a resource in the provider's model (lists the options without `level`) |

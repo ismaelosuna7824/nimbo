@@ -51,14 +51,59 @@ scaling, cost and operations advice is info. Production-only practices
 opt-in, so a local sandbox stays quiet; apply them when you want production
 parity.
 
+## Recommendations (advisor)
+
+`GET /api/v1/workflows/{id}/recommendations` (MCP `recommend_improvements`)
+lists the companions a senior engineer would add to *this* design, highest
+value first: a public API → WAF with a rate-based rule and stage
+throttling (or the provider's equivalent: Front Door/App Gateway WAF or
+APIM rate limits, Cloud Armor, OCI WAF/API Gateway rate limiting); a
+published local service → a rate-limiting reverse proxy; an Ingress → TLS
+and rate-limit annotations; a queue consumer → a DLQ. Each item has why,
+pillars, the nodes that triggered it, what to add, a snippet with the
+design's real addresses, `scope` (`recommended` everywhere or `production`
+only), `local` (runs locally, export only, or the local equivalent), when
+to skip it, the rules that check it and an official docs link. An item
+disappears once the design has the companion, so agents loop until the list
+is empty or the rest is declined. The review
+(`GET /workflows/{id}/well-architected`) carries the same list as
+`recommendations`. Dev and prototypes get fewer additions; production-only
+items are labelled as such.
+
+## Layouts
+
+Each guide has a `layout` (summary, tree, what each environment adds,
+sources) matching what Nimbo exports:
+
+| Platform | Layout |
+|---|---|
+| Terraform (`aws`, `azure`, `gcp`, `oci`) | One root, or `modules/<service>` + `environments/<env>/` roots with one remote state each; modules ≤2 levels, no provider blocks, outputs for every resource; no CLI workspaces; pinned versions, validated variables, tags from one locals map |
+| `docker` | Base `compose.yaml` + `compose.<env>.yaml` and/or `.env.<env>`; `secrets:`; no code bind mounts in prod |
+| `kubernetes` | Kustomize `base/` + `overlays/<env>/` (prod: HPA with bounds, PDB, NetworkPolicy, Pod Security labels) or Helm `values-<env>.yaml` |
+
 ## How agents use it
 
-1. `well_architected_guidance {platform}` before designing.
+1. `well_architected_guidance {platform}` before designing (practices and
+   layout); clarify public vs internal and dev vs production.
 2. Build with secure, reliable and scalable defaults.
-3. `review_well_architected {workflow}` before finishing: fix warnings
-   first, then the advice that fits the goal; explain what stays.
-4. Validate and deploy locally, then load-test and run failure scenarios
+3. `recommend_improvements {workflow}` after the first draft: propose each
+   item with its why, apply what the user accepts, call again.
+4. `review_well_architected {workflow}` and `compliance_report` before
+   finishing: fix warnings first, then the advice that fits the goal;
+   explain what stays.
+5. Validate and deploy locally, then load-test and run failure scenarios
    (docker/Kubernetes) and `production_readiness`.
 
 Prompt `design_well_architected {goal, platform?}` walks this loop; see
 [MCP.md](MCP.md#well-architected-pillar-guidance-and-review).
+
+## Sources
+
+Besides each framework, the guides cite AWS Prescriptive Guidance
+(Terraform structure), the HashiCorp style guide, Google Cloud's Terraform
+root-module and style guidance, Docker's Compose-in-production and `deploy`
+references, Kubernetes Pod Security Standards/Admission and Kustomize docs,
+the OWASP API Security Top 10 2023 (API4 unrestricted resource consumption)
+and the Terraform registry pages of the WAF resources
+(`aws_wafv2_web_acl`, `azurerm_cdn_frontdoor_firewall_policy`,
+`google_compute_security_policy`, `oci_waas_waas_policy`).

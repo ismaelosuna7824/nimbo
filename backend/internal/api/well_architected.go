@@ -5,6 +5,7 @@ import (
 	"slices"
 	"strings"
 
+	"github.com/ismaelosuna7824/nimbo/backend/internal/advisor"
 	"github.com/ismaelosuna7824/nimbo/backend/internal/compose"
 	"github.com/ismaelosuna7824/nimbo/backend/internal/kube/kuberules"
 	"github.com/ismaelosuna7824/nimbo/backend/internal/lint"
@@ -73,7 +74,9 @@ type wafReview struct {
 	Platforms []string      `json:"platforms"`
 	Pillars   []wafPillar   `json:"pillars"`
 	Guidance  []wafGuidance `json:"guidance"`
-	Note      string        `json:"note"`
+	// Recommendations are the companions the design lacks (advisor).
+	Recommendations []advisor.Recommendation `json:"recommendations"`
+	Note            string                   `json:"note"`
 }
 
 const wellArchitectedNote = "The review runs every rule, including opt-in rules and rules turned off in Settings; the workflow's own diagnostics follow the user's settings. Each finding is listed under its rule's main pillar. Production-only practices (multi-AZ, deletion protection, backup retention) are advice for a local sandbox."
@@ -92,7 +95,27 @@ func (s *Server) workflowWellArchitected(w http.ResponseWriter, r *http.Request)
 		meta[rule.Code] = rule
 	}
 	diags := s.gradingDiagnostics(r.Context(), wf, cfg)
-	return ok(w, buildWAFReview(wf, diags, meta))
+	out := buildWAFReview(wf, diags, meta)
+	out.Recommendations = s.recommend(wf)
+	return ok(w, out)
+}
+
+// workflowRecommendations is GET /workflows/{id}/recommendations: the
+// companions the design lacks (WAF on a public API, DLQs, …), highest
+// value first; empty once the design has them.
+func (s *Server) workflowRecommendations(w http.ResponseWriter, r *http.Request) error {
+	wf, err := s.cfg.Store.Get(r.PathValue("id"))
+	if err != nil {
+		return err
+	}
+	return ok(w, s.recommend(wf))
+}
+
+func (s *Server) recommend(wf *model.Workflow) []advisor.Recommendation {
+	if recs := advisor.Recommend(wf, s.cfg.Catalog); recs != nil {
+		return recs
+	}
+	return []advisor.Recommendation{}
 }
 
 // wellArchitectedReview groups diags by the first pillar of their rule.
