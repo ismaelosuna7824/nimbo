@@ -1,0 +1,283 @@
+package patterns
+
+func data() []Pattern {
+	return []Pattern{
+		{
+			ID:      "cache-aside",
+			Name:    "Cache-aside",
+			Kind:    KindPattern,
+			Problem: "Repeated reads of the same data load the database and add latency.",
+			UseWhen: []string{
+				"read-heavy workloads with data that tolerates brief staleness",
+				"expensive queries or third-party lookups",
+				"high traffic on catalog, profile or configuration data",
+			},
+			AvoidWhen: []string{
+				"data changes on every request or must be strongly consistent",
+				"the database already serves reads well within the latency target",
+				"session state only (use the cache as a session store instead)",
+			},
+			Tradeoffs: []string{
+				"lower latency and database load",
+				"stale reads and invalidation complexity; cold-cache stampedes",
+			},
+			Practices: []string{
+				"read: cache → on miss load from the database and populate with a TTL; write: update the database then invalidate the key",
+				"TTL with jitter to avoid synchronized expiry; request coalescing to avoid stampedes",
+				"cache in private subnets with TLS and AUTH; never the source of truth",
+				"treat cache outages as degradation, not failure (timeouts, fall through to the database)",
+				"monitor hit ratio and evictions",
+			},
+			Blocks: []Block{
+				aws("ElastiCache (Redis/Valkey) replication group next to the app; DynamoDB DAX or CloudFront for edge caching.", "aws_elasticache_replication_group", "aws_db_instance", "aws_dynamodb_table"),
+				azure("Azure Cache for Redis in front of Azure SQL/PostgreSQL/Cosmos DB.", "azurerm_redis_cache", "azurerm_postgresql_flexible_server"),
+				gcp("Memorystore for Redis in front of Cloud SQL.", "google_redis_instance", "google_sql_database_instance"),
+				oci("OCI Cache (Redis) cluster in front of Autonomous Database or MySQL.", "oci_redis_redis_cluster", "oci_database_autonomous_database"),
+				docker("Redis/Valkey container next to the app and database.", "redis", "valkey", "postgres"),
+				kube("Redis StatefulSet (or Deployment for a disposable cache) with a ClusterIP Service.", "StatefulSet", "Service", "Deployment"),
+			},
+			Related:   []string{"n-tier", "materialized-view", "static-content-hosting", "cqrs"},
+			Templates: []string{"docker-node-postgres-redis"},
+			Keywords:  []string{"cache", "caching", "cache aside", "cachear", "redis", "memcached", "read heavy", "muchas lecturas", "lecturas", "latency", "latencia", "rapido", "fast", "performance", "rendimiento", "high traffic", "alto trafico", "crud", "api"},
+			Sources: []Source{
+				azP("Cache-Aside pattern", "cache-aside"),
+			},
+		},
+		{
+			ID:      "cqrs",
+			Name:    "CQRS (Command and Query Responsibility Segregation)",
+			Kind:    KindPattern,
+			Problem: "Read and write workloads have very different shapes and scale; one model and store for both becomes complex and contended.",
+			UseWhen: []string{
+				"reads vastly outnumber writes or need very different shapes (search, dashboards)",
+				"complex domains where commands enforce rich business rules",
+				"together with event sourcing to build query models",
+			},
+			AvoidWhen: []string{
+				"simple CRUD where reads and writes use the same shape",
+				"the team cannot handle eventual consistency between write and read models",
+			},
+			Tradeoffs: []string{
+				"independently optimized and scaled read and write sides",
+				"eventual consistency between models; more code and infrastructure",
+			},
+			Practices: []string{
+				"commands validate and change state; queries never mutate",
+				"project write-side events into read models with idempotent, replayable projections",
+				"expose read-model staleness (version/timestamp) to clients; read-your-writes where needed",
+				"rebuild read models from the event log or a change stream",
+			},
+			Blocks: []Block{
+				aws("Writes to DynamoDB/RDS; DynamoDB Streams or EventBridge Pipes feed Lambda projections into OpenSearch or a read-optimized table.", "aws_dynamodb_table", "aws_pipes_pipe", "aws_lambda_function", "aws_opensearch_domain"),
+				azure("Cosmos DB write container; change feed processor updates read containers or SQL.", "azurerm_cosmosdb_account", "azurerm_cosmosdb_sql_container", "azurerm_mssql_database"),
+				gcp("Cloud SQL or Spanner for writes; Pub/Sub events project into BigQuery or Firestore read models.", "google_sql_database_instance", "google_pubsub_topic", "google_bigquery_table", "google_firestore_database"),
+				oci("Autonomous Database for writes; Streaming feeds projections into NoSQL tables.", "oci_database_autonomous_database", "oci_streaming_stream", "oci_nosql_table"),
+				docker("Postgres write model, events through Kafka/Redpanda, projections into Elasticsearch/OpenSearch or MongoDB.", "postgres", "redpanda", "opensearch", "mongo"),
+				kube("Command and query services as separate Deployments; stores as StatefulSets.", "Deployment", "StatefulSet", "Service"),
+			},
+			Related:  []string{"event-sourcing", "materialized-view", "event-driven", "cache-aside"},
+			Keywords: []string{"cqrs", "read model", "modelo de lectura", "write model", "separate reads", "separar lecturas", "lecturas y escrituras", "reads and writes", "dashboards", "search", "busqueda"},
+			Sources: []Source{
+				azP("CQRS pattern", "cqrs"),
+				msioP("CQRS", "data/cqrs.html"),
+				{"AWS Prescriptive Guidance: CQRS pattern", "https://docs.aws.amazon.com/prescriptive-guidance/latest/modernization-data-persistence/cqrs-pattern.html"},
+			},
+		},
+		{
+			ID:      "event-sourcing",
+			Name:    "Event sourcing",
+			Kind:    KindPattern,
+			Problem: "Systems need a complete, immutable history of every change (audit, temporal queries, replay), which state-overwriting CRUD loses.",
+			UseWhen: []string{
+				"full audit trail or history is a business requirement (finance, ledgers, compliance)",
+				"reconstructing past state or replaying to build new views",
+				"domains naturally expressed as events (orders, accounts, bookings)",
+			},
+			AvoidWhen: []string{
+				"simple CRUD domains; audit columns or a change log table suffice",
+				"the team has no experience with eventual consistency and schema evolution of events",
+				"data must be physically deleted on request without crypto-shredding",
+			},
+			Tradeoffs: []string{
+				"perfect audit log, temporal queries and replay",
+				"querying current state needs projections (usually CQRS)",
+				"event schema evolution and GDPR erasure are hard; steep learning curve",
+			},
+			Practices: []string{
+				"append-only event store with optimistic concurrency on the aggregate version",
+				"versioned event schemas with upcasters; never rewrite history",
+				"snapshots every N events to bound rehydration time",
+				"idempotent, replayable projections tracking their position",
+				"publish events to consumers via outbox or the store's change stream",
+				"crypto-shredding (per-subject keys) for personal data erasure",
+			},
+			Blocks: []Block{
+				aws("DynamoDB table keyed by aggregate ID + version (conditional writes) as the event store; DynamoDB Streams → Lambda projections; Kinesis for replayable streams; S3 for archives.", "aws_dynamodb_table", "aws_lambda_event_source_mapping", "aws_lambda_function", "aws_kinesis_stream", "aws_s3_bucket"),
+				azure("Cosmos DB container partitioned by aggregate ID as the event store, change feed for projections; Event Hubs for streaming out.", "azurerm_cosmosdb_account", "azurerm_cosmosdb_sql_container", "azurerm_eventhub"),
+				gcp("Events in Cloud SQL or Firestore with Pub/Sub for distribution and BigQuery for history analytics.", "google_sql_database_instance", "google_firestore_database", "google_pubsub_topic", "google_bigquery_table"),
+				oci("Events in Autonomous Database or NoSQL table; OCI Streaming for distribution.", "oci_nosql_table", "oci_database_autonomous_database", "oci_streaming_stream"),
+				docker("Postgres append-only events table (or Kafka/Redpanda with compaction off) with projection services.", "postgres", "kafka", "redpanda"),
+				kube("Event store and broker as StatefulSets with PVCs; projections as Deployments.", "StatefulSet", "PersistentVolumeClaim", "Deployment"),
+			},
+			Related:  []string{"cqrs", "transactional-outbox", "event-driven", "materialized-view"},
+			Keywords: []string{"event sourcing", "event store", "audit", "auditoria", "audit trail", "historial", "history", "historico", "ledger", "libro mayor", "replay", "reproducir", "immutable", "inmutable", "trazabilidad", "traceability"},
+			Sources: []Source{
+				azP("Event Sourcing pattern", "event-sourcing"),
+				awsP("Event sourcing pattern", "event-sourcing.html"),
+				msioP("Event sourcing", "data/event-sourcing.html"),
+			},
+		},
+		{
+			ID:      "saga",
+			Name:    "Saga",
+			Kind:    KindPattern,
+			Problem: "A business transaction spans several services, each with its own database, so a single ACID transaction is impossible.",
+			UseWhen: []string{
+				"multi-step business processes across services (order → payment → inventory → shipping)",
+				"each step can be compensated if a later step fails",
+			},
+			AvoidWhen: []string{
+				"all data lives in one database (use a local transaction)",
+				"steps cannot be compensated and strict isolation is required",
+			},
+			Tradeoffs: []string{
+				"consistency across services without distributed locks",
+				"no isolation: intermediate states are visible; compensations are application logic",
+				"choreography is simple but hard to follow; orchestration adds a coordinator",
+			},
+			Practices: []string{
+				"orchestration (Step Functions, Durable Functions, Workflows, Temporal) for more than 3–4 steps; choreography via events for few steps",
+				"every step idempotent with an idempotency key; compensating actions for each forward step",
+				"semantic locks/pending states to manage the lack of isolation",
+				"publish step events with the transactional outbox",
+				"timeouts per step and alerting on stuck sagas",
+			},
+			Blocks: []Block{
+				aws("Step Functions state machine orchestrates Lambda/ECS steps with Catch → compensation states; or choreography over EventBridge.", "aws_sfn_state_machine", "aws_lambda_function", "aws_cloudwatch_event_bus", "aws_dynamodb_table"),
+				azure("Durable Functions orchestration (or Logic Apps) with Service Bus messages per step.", "azurerm_linux_function_app", "azurerm_logic_app_workflow", "azurerm_servicebus_queue"),
+				gcp("Workflows orchestrates Cloud Run steps with try/except compensations; Pub/Sub for choreography.", "google_workflows_workflow", "google_cloud_run_v2_service", "google_pubsub_topic"),
+				oci("Choreography over OCI Streaming with functions per step.", "oci_streaming_stream", "oci_functions_function"),
+				docker("Temporal (with UI) as the orchestrator, or choreography over RabbitMQ/Kafka.", "temporal", "temporal-ui", "postgres", "rabbitmq"),
+				kube("Orchestrator Deployment (Temporal) and step services as Deployments; broker StatefulSet.", "Deployment", "StatefulSet", "Service"),
+			},
+			Related:   []string{"transactional-outbox", "microservices", "database-per-service", "event-driven", "retry"},
+			Templates: []string{"aws-step-functions"},
+			Keywords:  []string{"saga", "sagas", "distributed transaction", "transaccion distribuida", "transacciones distribuidas", "compensation", "compensacion", "orchestration", "orquestacion", "choreography", "coreografia", "workflow", "flujo de trabajo", "checkout", "payments", "pagos", "orders", "pedidos", "ordenes", "booking", "reservas"},
+			Sources: []Source{
+				azP("Saga distributed transactions pattern", "saga"),
+				awsP("Saga pattern", "saga.html"),
+				msioP("Saga", "data/saga.html"),
+			},
+		},
+		{
+			ID:      "database-per-service",
+			Name:    "Database per service",
+			Kind:    KindPattern,
+			Problem: "Services sharing a database are coupled through its schema and cannot deploy or scale independently.",
+			UseWhen: []string{
+				"microservices with independent teams",
+				"services with different storage needs (relational, document, key-value)",
+			},
+			AvoidWhen: []string{
+				"a monolith or modular monolith (use schema per module instead)",
+				"queries that constantly join data across services",
+			},
+			Tradeoffs: []string{
+				"loose coupling and polyglot persistence",
+				"cross-service queries and transactions need APIs, events, sagas and materialized views",
+			},
+			Practices: []string{
+				"only the owning service has credentials to its database",
+				"share data through APIs and events, never by reading another service's tables",
+				"sagas for cross-service consistency; materialized views for cross-service queries",
+				"backups, encryption and private networking per database",
+			},
+			Blocks: []Block{
+				aws("A DynamoDB table or RDS instance per service, with IAM/security groups scoped to that service.", "aws_dynamodb_table", "aws_db_instance", "aws_iam_role"),
+				azure("A Cosmos DB container or database per service, or separate SQL/PostgreSQL databases.", "azurerm_cosmosdb_sql_database", "azurerm_mssql_database", "azurerm_postgresql_flexible_server"),
+				gcp("Separate Cloud SQL databases or Firestore per service with separate service accounts.", "google_sql_database_instance", "google_firestore_database", "google_service_account"),
+				oci("Separate Autonomous Databases or NoSQL tables per service.", "oci_database_autonomous_database", "oci_nosql_table"),
+				docker("One database container per service on separate networks.", "postgres", "mongo", "mysql"),
+				kube("One database StatefulSet per service with NetworkPolicies allowing only its owner.", "StatefulSet", "NetworkPolicy", "Secret"),
+			},
+			Related:  []string{"microservices", "saga", "materialized-view", "cqrs"},
+			Keywords: []string{"database per service", "base de datos por servicio", "polyglot persistence", "persistencia poliglota", "own data", "datos propios"},
+			Sources: []Source{
+				msioP("Database per service", "data/database-per-service.html"),
+				{"AWS Prescriptive Guidance: Database-per-service pattern", "https://docs.aws.amazon.com/prescriptive-guidance/latest/modernization-data-persistence/database-per-service.html"},
+			},
+		},
+		{
+			ID:      "materialized-view",
+			Name:    "Materialized view",
+			Kind:    KindPattern,
+			Problem: "Queries need data shaped differently from how it is stored, or joined across stores, and computing it on every read is too slow.",
+			UseWhen: []string{
+				"dashboards, reports and search over data from several sources",
+				"read models for CQRS or cross-service queries",
+			},
+			AvoidWhen: []string{
+				"source data changes so fast the view is never useful",
+				"a simple indexed query already performs well",
+			},
+			Tradeoffs: []string{
+				"fast reads shaped for the query",
+				"storage cost and staleness; views must be rebuildable",
+			},
+			Practices: []string{
+				"update views from change streams/events with idempotent upserts",
+				"views are disposable: be able to rebuild from the source",
+				"record the source version/time the view reflects",
+			},
+			Blocks: []Block{
+				aws("DynamoDB Streams or EventBridge → Lambda updates a read table, OpenSearch index or Athena tables over S3.", "aws_dynamodb_table", "aws_lambda_function", "aws_opensearch_domain", "aws_athena_workgroup"),
+				azure("Cosmos DB change feed updates a read container.", "azurerm_cosmosdb_sql_container", "azurerm_eventgrid_topic"),
+				gcp("BigQuery tables (materialized views) fed by Pub/Sub.", "google_bigquery_dataset", "google_bigquery_table", "google_pubsub_subscription"),
+				oci("Streaming connector into NoSQL or Autonomous Database tables.", "oci_streaming_stream", "oci_nosql_table"),
+				docker("Postgres materialized views, or projections into OpenSearch/ClickHouse.", "postgres", "opensearch", "clickhouse"),
+				kube("Projection Deployment plus a CronJob to refresh views.", "Deployment", "CronJob", "StatefulSet"),
+			},
+			Related:  []string{"cqrs", "event-sourcing", "cache-aside", "database-per-service"},
+			Keywords: []string{"materialized view", "vista materializada", "reports", "reportes", "dashboard", "dashboards", "read model", "precompute", "precalcular", "agregados"},
+			Sources: []Source{
+				azP("Materialized View pattern", "materialized-view"),
+			},
+		},
+		{
+			ID:      "sharding",
+			Name:    "Sharding",
+			Kind:    KindPattern,
+			Problem: "A single database node cannot hold the data volume or handle the write throughput.",
+			UseWhen: []string{
+				"data or write volume beyond one node's limits",
+				"tenants or regions that must be isolated in separate partitions",
+			},
+			AvoidWhen: []string{
+				"vertical scaling, read replicas or caching still suffice",
+				"workloads with many cross-shard joins or transactions",
+			},
+			Tradeoffs: []string{
+				"near-linear scale of storage and writes",
+				"rebalancing, hot partitions and cross-shard queries are hard",
+			},
+			Practices: []string{
+				"choose a high-cardinality, evenly distributed shard key (tenant ID, hashed user ID)",
+				"prefer managed partitioning (DynamoDB, Cosmos DB, Spanner) over hand-rolled shards",
+				"monitor hot partitions; plan rebalancing up front",
+			},
+			Blocks: []Block{
+				aws("DynamoDB partitions by key automatically; Kinesis/MSK shard by partition key; Aurora for read scale.", "aws_dynamodb_table", "aws_rds_cluster", "aws_kinesis_stream"),
+				azure("Cosmos DB with a well-chosen partition key; Event Hubs partitions.", "azurerm_cosmosdb_sql_container", "azurerm_eventhub"),
+				gcp("Spanner or Bigtable split data automatically by key ranges.", "google_spanner_instance", "google_bigtable_instance"),
+				oci("NoSQL tables partition by shard key.", "oci_nosql_table"),
+				docker("CockroachDB, Cassandra/ScyllaDB or MongoDB sharded clusters.", "cockroachdb", "cassandra", "scylladb", "mongo"),
+				kube("Distributed database StatefulSet with one PVC per replica.", "StatefulSet", "PersistentVolumeClaim", "PodDisruptionBudget"),
+			},
+			Related:  []string{"deployment-stamps", "materialized-view"},
+			Keywords: []string{"sharding", "shard", "shards", "particion", "partitioning", "particionamiento", "billions", "millones de registros", "millions of rows", "terabytes", "massive scale", "escala masiva", "multi tenant", "multitenant"},
+			Sources: []Source{
+				azP("Sharding pattern", "sharding"),
+			},
+		},
+	}
+}
