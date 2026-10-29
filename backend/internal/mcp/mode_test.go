@@ -60,7 +60,7 @@ func TestWorkflowModeThroughTools(t *testing.T) {
 func TestApplyTerraformCodeStoresAppFilesAsAssets(t *testing.T) {
 	cs, _, base := sessionURL(t)
 	var wf workflowView
-	mustTool(t, cs, "create_workflow", map[string]any{"name": "Orders"}, &wf)
+	mustTool(t, cs, "create_workflow", map[string]any{"name": "Orders", "mode": "full"}, &wf)
 	tf := `data "archive_file" "orders" {
   type        = "zip"
   source_dir  = "${path.module}/services/orders/src"
@@ -107,6 +107,10 @@ func TestApplyTerraformCodeStoresAppFilesAsAssets(t *testing.T) {
 	mustTool(t, cs, "get_workflow", map[string]any{"workflow": wf.ID}, &code)
 	if len(code.Nodes) != 1 {
 		t.Fatalf("terraform not imported: %+v", code.Nodes)
+	}
+	// Writing code re-imports the Terraform; the build mode is the workflow's, not the code's.
+	if code.Mode != "full" {
+		t.Fatalf("mode after apply_terraform_code = %q, want full", code.Mode)
 	}
 
 	var spec []fileView
