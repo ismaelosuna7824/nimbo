@@ -1,0 +1,11 @@
+{
+  "name": "smoke",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "@google-cloud/pubsub": "^4.9.0",
+    "@google-cloud/storage": "^7.14.0",
+    "pg": "^8.13.0",
+    "redis": "^4.7.0"
+  }
+}

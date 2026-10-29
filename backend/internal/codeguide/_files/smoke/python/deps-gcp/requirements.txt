@@ -1,0 +1,4 @@
+google-cloud-pubsub>=2.27
+google-cloud-storage>=2.19
+psycopg[binary]>=3.2
+redis>=5.2

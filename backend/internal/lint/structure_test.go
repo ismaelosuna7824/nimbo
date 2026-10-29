@@ -251,6 +251,130 @@ resource "aws_vpc_security_group_egress_rule" "all" {
 }`,
 		}, want: 1},
 	},
+	"bp_inline_function_code": {
+		{name: "inline handler", src: `data "archive_file" "api" {
+  type        = "zip"
+  output_path = "${path.module}/build/api.zip"
+  source {
+    filename = "index.mjs"
+    content  = <<-EOT
+      export const handler = async (event) => {
+        return { statusCode: 200, body: "ok" };
+      };
+    EOT
+  }
+}`, want: 1},
+		{name: "inline python with interpolation", src: `data "archive_file" "job" {
+  type        = "zip"
+  output_path = "${path.module}/build/job.zip"
+  source {
+    filename = "main.py"
+    content  = <<-EOT
+      def handler(event, context):
+          return {"table": "${aws_dynamodb_table.t.name}"}
+    EOT
+  }
+}`, want: 1},
+		{name: "one finding per archive", src: `data "archive_file" "api" {
+  type        = "zip"
+  output_path = "${path.module}/build/api.zip"
+  source {
+    filename = "a.mjs"
+    content  = "import x from \"y\";\nexport const a = x;\n"
+  }
+  source {
+    filename = "b.mjs"
+    content  = "import x from \"y\";\nexport const b = x;\n"
+  }
+}`, want: 1},
+		{name: "single-line JSON config", src: `data "archive_file" "cfg" {
+  type        = "zip"
+  output_path = "${path.module}/build/cfg.zip"
+  source {
+    filename = "config.json"
+    content  = jsonencode({ table = "items", retries = 3 })
+  }
+  source {
+    filename = "settings.json"
+    content  = "{\"export\": true, \"import\": false}"
+  }
+}`, want: 0},
+		{name: "multi-line YAML config", src: `data "archive_file" "cfg" {
+  type        = "zip"
+  output_path = "${path.module}/build/cfg.zip"
+  source {
+    filename = "config.yaml"
+    content  = <<-EOT
+      table: items
+      retries: 3
+    EOT
+  }
+}`, want: 0},
+		{name: "source_dir", src: `data "archive_file" "api" {
+  type        = "zip"
+  source_dir  = "${path.module}/services/api/src"
+  output_path = "${path.module}/build/api.zip"
+}`, want: 0},
+		{name: "content from an expression is unknown", src: `data "archive_file" "api" {
+  type        = "zip"
+  output_path = "${path.module}/build/api.zip"
+  source {
+    filename = "index.mjs"
+    content  = file("${path.module}/handler.mjs")
+  }
+  source {
+    filename = "extra.mjs"
+    content  = local.extra_code
+  }
+}`, want: 0},
+		{name: "dynamic source blocks are not read", src: `data "archive_file" "proxy" {
+  type        = "zip"
+  output_path = "${path.module}/build/proxy.zip"
+  dynamic "source" {
+    for_each = local.files
+    content {
+      filename = source.key
+      content  = source.value
+    }
+  }
+}`, want: 0},
+		{name: "inside a local module", src: callApp, modules: map[string]string{
+			"modules/app": `data "archive_file" "worker" {
+  type        = "zip"
+  output_path = "${path.module}/build/worker.zip"
+  source {
+    filename = "index.js"
+    content  = <<-EOT
+      const run = (event) => event;
+      module.exports = { run };
+    EOT
+  }
+}`,
+		}, want: 1},
+		{name: "azure function file", src: `resource "azurerm_function_app_function" "hello" {
+  name            = "hello"
+  function_app_id = "app-id"
+  language        = "Python"
+  config_json     = jsonencode({ bindings = [] })
+  file {
+    name    = "__init__.py"
+    content = <<-EOT
+      import azure.functions as func
+      def main(req: func.HttpRequest) -> func.HttpResponse:
+          return func.HttpResponse("ok")
+    EOT
+  }
+}`, want: 1},
+		{name: "azure function config file", src: `resource "azurerm_function_app_function" "hello" {
+  name            = "hello"
+  function_app_id = "app-id"
+  config_json     = jsonencode({ bindings = [] })
+  file {
+    name    = "host.json"
+    content = "{\"version\": \"2.0\"}"
+  }
+}`, want: 0},
+	},
 	"bp_no_remote_backend": {
 		{name: "auto falls back to single", src: `resource "aws_sqs_queue" "q" {}`, envs: []string{"dev", "my prod"}, want: 1},
 		{name: "two environments in the single layout", src: `resource "aws_sqs_queue" "q" {}`, envs: []string{"dev", "prod"}, layout: model.LayoutSingle, want: 1},

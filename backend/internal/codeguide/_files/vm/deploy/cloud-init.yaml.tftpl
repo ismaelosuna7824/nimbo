@@ -1,0 +1,32 @@
+#cloud-config
+# Runs the service's container image under systemd on a VM. Rendered by Terraform:
+#   templatefile("${path.module}/services/<svc>/deploy/cloud-init.yaml.tftpl",
+#                { image = "...", registry_login = "...", env = { PORT = "8080" } })
+# env holds non-secret config only: read secrets at startup from the cloud's
+# secret store with the instance identity.
+write_files:
+  - path: /etc/app/env
+    permissions: "0600"
+    content: |
+%{ for k, v in env ~}
+      ${k}=${v}
+%{ endfor ~}
+  - path: /etc/systemd/system/app.service
+    content: |
+      [Unit]
+      Description=app container
+      After=docker.service network-online.target
+      Requires=docker.service
+      [Service]
+      Restart=always
+      RestartSec=5
+      ExecStartPre=-/usr/bin/docker rm -f app
+      ExecStartPre=/bin/sh -c '${registry_login == "" ? "true" : registry_login}'
+      ExecStart=/usr/bin/docker run --name app --env-file /etc/app/env -p 80:8080 ${image}
+      ExecStop=/usr/bin/docker stop app
+      [Install]
+      WantedBy=multi-user.target
+runcmd:
+  - [sh, -c, "command -v docker || (curl -fsSL https://get.docker.com | sh)"]
+  - [systemctl, daemon-reload]
+  - [systemctl, enable, --now, app.service]

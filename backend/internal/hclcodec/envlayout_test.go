@@ -76,7 +76,7 @@ func envTree(t *testing.T, wf *model.Workflow) map[string][]byte {
 	if err != nil {
 		t.Fatalf("ExportLayout: %v", err)
 	}
-	for name, data := range Scaffold(wf, testResourceFile) {
+	for name, data := range Scaffold(wf, testResourceFile, Builds{}) {
 		if _, taken := files[name]; !taken {
 			files[name] = data
 		}

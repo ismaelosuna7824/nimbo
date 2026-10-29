@@ -223,6 +223,8 @@ type createRequest struct {
 	// Kind "docker" creates a docker-compose workflow (implied by a docker
 	// template).
 	Kind string `json:"kind"`
+	// Mode is the build mode: "" or "architecture" (default) or "full".
+	Mode string `json:"mode"`
 }
 
 func (s *Server) createWorkflow(w http.ResponseWriter, r *http.Request) error {
@@ -231,6 +233,9 @@ func (s *Server) createWorkflow(w http.ResponseWriter, r *http.Request) error {
 		return err
 	}
 	req.Name = strings.TrimSpace(req.Name)
+	if err := model.ValidMode(req.Mode); err != nil {
+		return errorf(http.StatusBadRequest, "%v", err)
+	}
 	var (
 		wf    *model.Workflow
 		extra []model.Diagnostic
@@ -297,6 +302,12 @@ func (s *Server) createWorkflow(w http.ResponseWriter, r *http.Request) error {
 		// Templates are starters: they get the recommended layout, not
 		// the file split of their source.
 		hclcodec.UnpinFiles(wf, s.cfg.Catalog.ResourceFile)
+		// Function sources the template zips (services/<svc>/src).
+		wf.ID = store.NewID(req.Name)
+		if err := s.writeAssets(wf.ID, terraformAssets(files)); err != nil {
+			_ = s.cfg.Store.Delete(wf.ID)
+			return err
+		}
 	default:
 		if req.Name == "" {
 			return errorf(http.StatusBadRequest, "name is required")
@@ -308,11 +319,12 @@ func (s *Server) createWorkflow(w http.ResponseWriter, r *http.Request) error {
 	}
 	wf.Name = req.Name
 	wf.Description = req.Description
+	wf.Mode = req.Mode
 	// Random even for templates (their own icon only decorates the template
 	// card) so several workflows from one template stay distinguishable.
 	wf.Icon = s.randomIcon()
 	if err := s.save(wf, extra); err != nil {
-		if !wf.IsTerraform() {
+		if !wf.IsTerraform() || req.TemplateID != "" {
 			_ = s.cfg.Store.Delete(wf.ID)
 		}
 		return err
@@ -340,13 +352,19 @@ func (s *Server) getWorkflow(w http.ResponseWriter, r *http.Request) error {
 func (s *Server) putWorkflow(w http.ResponseWriter, r *http.Request) error {
 	var body struct {
 		model.Workflow
-		// Layout and Service shadow the workflow's fields to tell "empty"
-		// from "not sent".
+		// Layout, Service and Mode shadow the workflow's fields to tell
+		// "empty" from "not sent".
 		Layout  *string `json:"layout"`
 		Service *string `json:"service"`
+		Mode    *string `json:"mode"`
 	}
 	if err := decode(w, r, maxImportBody, &body); err != nil {
 		return err
+	}
+	if body.Mode != nil {
+		if err := model.ValidMode(*body.Mode); err != nil {
+			return errorf(http.StatusBadRequest, "%v", err)
+		}
 	}
 	in := body.Workflow
 	id := r.PathValue("id")
@@ -357,11 +375,19 @@ func (s *Server) putWorkflow(w http.ResponseWriter, r *http.Request) error {
 		if in.Kind != cur.Kind {
 			return nil, errorf(http.StatusBadRequest, "kind can't change (%q)", cur.Kind)
 		}
+		mode := cur.Mode
+		if body.Mode != nil {
+			mode = *body.Mode
+		}
 		if cur.IsDocker() {
-			return nil, putDocker(cur, in)
+			err := putDocker(cur, in)
+			cur.Mode = mode
+			return nil, err
 		}
 		if cur.IsKubernetes() {
-			return nil, putKube(cur, in)
+			err := putKube(cur, in)
+			cur.Mode = mode
+			return nil, err
 		}
 		createdAt, archived, icon, layout, service, challenge := cur.CreatedAt, cur.Archived, cur.Icon, cur.Layout, cur.Service, cur.Challenge
 		*cur = in
@@ -373,6 +399,7 @@ func (s *Server) putWorkflow(w http.ResponseWriter, r *http.Request) error {
 		if cur.Icon == nil {
 			cur.Icon = icon
 		}
+		cur.Mode = mode
 		cur.Layout, cur.Service = layout, service
 		if body.Layout != nil {
 			cur.Layout = *body.Layout
@@ -499,12 +526,43 @@ func (s *Server) addNode(w http.ResponseWriter, r *http.Request) error {
 		}
 		settleNewNodes(wf, before)
 		nodeID = id
-		return nil, nil
+		return nil, s.writeStarterFiles(wf, before)
 	})
 	if err != nil {
 		return err
 	}
 	return writeJSON(w, http.StatusCreated, map[string]any{"workflow": wf, "nodeId": nodeID})
+}
+
+// writeStarterFiles stores the workflow files the curated starters of the
+// nodes added since before read (e.g. a Lambda's services/<name>/src
+// handler), keeping files that already exist.
+func (s *Server) writeStarterFiles(wf *model.Workflow, before map[string]bool) error {
+	files := map[string][]byte{}
+	for i := range wf.Nodes {
+		if before[wf.Nodes[i].ID] {
+			continue
+		}
+		for rel, data := range s.cfg.Catalog.StarterFiles(&wf.Nodes[i]) {
+			if !s.assetExists(wf.ID, rel) {
+				files[rel] = data
+			}
+		}
+	}
+	return s.writeAssets(wf.ID, files)
+}
+
+// terraformAssets returns the files of a Terraform starter (template or
+// challenge) that hclcodec.Import doesn't read, e.g. function sources:
+// they are stored as workflow assets.
+func terraformAssets(files map[string][]byte) map[string][]byte {
+	out := map[string][]byte{}
+	for rel, data := range files {
+		if classify(rel) == "" {
+			out[rel] = data
+		}
+	}
+	return out
 }
 
 type nodePatch struct {

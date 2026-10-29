@@ -107,6 +107,31 @@ func TestExtractAndInlineModule(t *testing.T) {
 		}
 	}
 
+	// The worker's sources moved into the module with its archive_file,
+	// which keeps ${path.module}: both export layouts find them.
+	assets := e.st.AssetsDir(wf.ID)
+	if got, err := os.ReadFile(filepath.Join(assets, "modules", "worker", filepath.FromSlash(workerHandler))); err != nil || string(got) != string(templateHandler(t)) {
+		t.Errorf("module sources: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(assets, "services")); err == nil {
+		t.Error("services/ left in the root after extraction")
+	}
+	single := filepath.Join(t.TempDir(), "single")
+	e.mustCall(http.StatusOK, "POST", "/workflows/"+wf.ID+"/export", map[string]any{"dir": single}, nil)
+	if tree := readDirTree(t, single); tree["modules/worker/"+workerHandler] == nil || !zipsWorker(tree, "modules/worker/") {
+		t.Errorf("single export: sources or source_dir missing in modules/worker: %v", slices.Sorted(maps.Keys(tree)))
+	}
+	wf.Environments = []model.Environment{
+		{Name: "dev", Values: map[string]model.Value{}, EnvVars: []model.EnvVar{}},
+		{Name: "prod", Values: map[string]model.Value{}, EnvVars: []model.EnvVar{}},
+	}
+	e.mustCall(http.StatusOK, "PUT", "/workflows/"+wf.ID, wf, &wf)
+	envs := filepath.Join(t.TempDir(), "envs")
+	e.mustCall(http.StatusOK, "POST", "/workflows/"+wf.ID+"/export", map[string]any{"dir": envs, "environments": true}, nil)
+	if tree := readDirTree(t, envs); tree["modules/worker/"+workerHandler] == nil || !zipsWorker(tree, "modules/worker/") {
+		t.Errorf("environments export: sources or source_dir missing in modules/worker: %v", slices.Sorted(maps.Keys(tree)))
+	}
+
 	// The name is taken now.
 	if got := e.call("POST", "/workflows/"+wf.ID+"/modules/extract", model.ModuleExtractRequest{NodeIDs: []string{"aws_sqs_queue.dlq"}, Name: "worker"}, nil); got != http.StatusBadRequest && got != http.StatusConflict {
 		t.Errorf("taken name status %d", got)
@@ -126,6 +151,9 @@ func TestExtractAndInlineModule(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(e.st.AssetsDir(wf.ID), "modules", "worker")); err == nil {
 		t.Errorf("module files kept after inline")
+	}
+	if got, err := os.ReadFile(filepath.Join(assets, filepath.FromSlash(workerHandler))); err != nil || string(got) != string(templateHandler(t)) {
+		t.Errorf("sources not moved back to the root: %v", err)
 	}
 	if got := e.call("POST", "/workflows/"+wf.ID+"/modules/aws_sqs_queue.dlq/inline", nil, nil); got != http.StatusBadRequest {
 		t.Errorf("inline non-module status %d", got)

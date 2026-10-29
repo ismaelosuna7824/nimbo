@@ -10,8 +10,10 @@ import (
 	"github.com/ismaelosuna7824/nimbo/backend/internal/model"
 )
 
-// Each templates/<id>/ directory holds root-module *.tf files; metadata
-// lives in templates/index.json.
+// Each templates/<id>/ directory holds root-module *.tf files plus the
+// template's asset files in subfolders (application sources such as
+// services/<svc>/src/index.mjs, read by the Terraform through
+// path.module); metadata lives in templates/index.json.
 //
 //go:embed templates
 var templatesFS embed.FS
@@ -29,27 +31,34 @@ func (c *Catalog) Templates() []model.Template {
 	return ts
 }
 
-// TemplateFiles returns the Terraform files of a template (file name ->
-// content) for hclcodec.Import.
+// TemplateFiles returns the files of a template (slash path relative to the
+// template folder -> content): the root-level *.tf files, which
+// hclcodec.Import reads, and the asset files in subfolders, which belong in
+// the new workflow's assets directory.
 func (c *Catalog) TemplateFiles(id string) (map[string][]byte, bool) {
 	if id == "" || strings.ContainsAny(id, "/\\.") {
 		return nil, false
 	}
 	dir := path.Join("templates", id)
-	entries, err := fs.ReadDir(templatesFS, dir)
+	files := map[string][]byte{}
+	tf := 0
+	err := fs.WalkDir(templatesFS, dir, func(p string, d fs.DirEntry, err error) error {
+		if err != nil || d.IsDir() {
+			return err
+		}
+		b, err := templatesFS.ReadFile(p)
+		if err != nil {
+			return err
+		}
+		rel := strings.TrimPrefix(p, dir+"/")
+		if !strings.Contains(rel, "/") && strings.HasSuffix(rel, ".tf") {
+			tf++
+		}
+		files[rel] = b
+		return nil
+	})
 	if err != nil {
 		return nil, false
 	}
-	files := map[string][]byte{}
-	for _, e := range entries {
-		if e.IsDir() || !strings.HasSuffix(e.Name(), ".tf") {
-			continue
-		}
-		b, err := templatesFS.ReadFile(path.Join(dir, e.Name()))
-		if err != nil {
-			return nil, false
-		}
-		files[e.Name()] = b
-	}
-	return files, len(files) > 0
+	return files, tf > 0
 }

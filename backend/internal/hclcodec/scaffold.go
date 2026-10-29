@@ -35,16 +35,19 @@ const (
 // Environments layout: README.md (tree, usage, environments), .gitignore,
 // Makefile, modules/<service>/README.md and, with the cloud's default
 // backend, environments/<env>/backend.hcl.example. Callers skip names the
-// workflow already has as its own files.
-func Scaffold(wf *model.Workflow, resourceFile func(resourceType string) string) map[string][]byte {
+// workflow already has as its own files. builds are what the export must
+// build before Terraform runs (DetectBuilds of the exported files): the
+// README documents the commands (the Makefile runs the dist builds as
+// `make build`) and .gitignore leaves the dists out.
+func Scaffold(wf *model.Workflow, resourceFile func(resourceType string) string, builds Builds) map[string][]byte {
 	if layout, err := ResolveLayout(wf); err == nil && layout == model.LayoutEnvironments {
-		if out, err := envScaffold(wf, resourceFile); err == nil {
+		if out, err := envScaffold(wf, resourceFile, builds); err == nil {
 			return out
 		}
 	}
 	out := map[string][]byte{
-		ReadmeFile:    Readme(wf, ReadmeOptions{ResourceFile: resourceFile}),
-		GitignoreFile: []byte(gitignore),
+		ReadmeFile:    Readme(wf, ReadmeOptions{ResourceFile: resourceFile, Builds: builds}),
+		GitignoreFile: []byte(gitignore + buildGitignore(builds)),
 	}
 	if len(wf.Variables) > 0 {
 		out[TfvarsSampleFile] = tfvarsSample(wf)
@@ -53,6 +56,49 @@ func Scaffold(wf *model.Workflow, resourceFile func(resourceType string) string)
 		out[BackendTfExampleFile] = data
 	}
 	return out
+}
+
+// buildGitignore keeps service build output out of version control.
+func buildGitignore(b Builds) string {
+	if len(b.Dists) == 0 {
+		return ""
+	}
+	return "\n# Service build output: built from the sources before every plan (see README.md).\n**/services/*/dist/\n"
+}
+
+// buildSection documents the service builds and images; makefile: the
+// Makefile's build target runs the dist builds.
+func buildSection(wf *model.Workflow, b Builds, makefile bool, line func(...string)) {
+	if b.Empty() {
+		return
+	}
+	line("## Build the services", "")
+	if len(b.Dists) > 0 {
+		line("The Terraform packages build output that is not committed: build it before `terraform plan`, `apply` or `destroy`. "+
+			"Each service's Dockerfile has a `package` stage holding the deployable files; Docker (BuildKit, the default builder since Docker 23) exports it into the service's `dist/` folder:", "",
+			"```sh", ServiceBuildScript(b.Dists), "```", "")
+		if makefile {
+			line("`make build` runs these commands; `make plan` and `make apply` run it first.", "")
+		}
+	}
+	if len(b.Images) == 0 {
+		return
+	}
+	line("The Terraform runs container images that default to `"+LocalImageRegistry+"/<service>:latest`, which Nimbo builds locally before every run. "+
+		"For the cloud, build each image, push it to your registry and point its variable at it (the CI/CD pipeline does this when `IMAGE_REGISTRY` is set):", "",
+		"```sh", "REGISTRY=registry.example.com/project   # your registry repository", "TAG=1.0.0")
+	var missing []string
+	for _, img := range b.Images {
+		ref := "$REGISTRY/" + img.Name + ":$TAG"
+		line(ImageBuildCommand(img, ref), "docker push "+ref, "export TF_VAR_"+ImageVariable(img.Name)+"="+ref)
+		if !slices.ContainsFunc(wf.Variables, func(v model.NamedBlock) bool { return v.Name == ImageVariable(img.Name) }) {
+			missing = append(missing, "`"+ImageVariable(img.Name)+"`")
+		}
+	}
+	line("```", "")
+	if len(missing) > 0 {
+		line("Declare the variable "+strings.Join(missing, ", ")+" (default `"+LocalImageRegistry+"/<service>:latest`) and use it as the image: until then the Terraform always deploys the local image.", "")
+	}
 }
 
 // IsScaffold reports whether a project file is one Scaffold generated (its
@@ -140,6 +186,9 @@ type ReadmeOptions struct {
 	// ModuleSource, when set, documents a reusable module: the usage section
 	// shows a module call with this source and the required inputs.
 	ModuleSource string
+	// Builds are what to build before Terraform runs (Scaffold); a module
+	// README (ModuleSource) never lists them.
+	Builds Builds
 }
 
 // Readme renders terraform-docs-style documentation of wf: the workflow
@@ -163,6 +212,9 @@ func Readme(wf *model.Workflow, opts ReadmeOptions) []byte {
 		line(d, "")
 	}
 
+	if opts.ModuleSource == "" {
+		buildSection(wf, opts.Builds, false, line)
+	}
 	line("## Usage", "")
 	if opts.ModuleSource != "" {
 		args := [][2]string{{"source", fmt.Sprintf("%q", opts.ModuleSource)}}

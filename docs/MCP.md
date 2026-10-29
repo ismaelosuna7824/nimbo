@@ -82,9 +82,20 @@ tells the daemon what is open and the tools use it when no workflow is named.
 Step-by-step recipes for the tasks above; most clients show them as slash
 commands (e.g. `/mcp__nimbo__extend_workflow` in Claude Code).
 
+`build_from_design`, `design_from_requirements`, `create_infrastructure`,
+`create_docker_stack` and `create_kubernetes_app` start with a build-mode
+step: ask the user once for `architecture` (default: infrastructure plus
+smoke handlers from `code_guidelines` Files) or `full` (real code: the
+language, or options proposed with reasons), set it with `update_workflow`
+`mode`, and in full mode run `spec_feature` first. Application code always
+lives in `services/<svc>/` workflow files (`archive_file` `source_dir`; a
+`FROM scratch AS package` Dockerfile stage when it needs a build), never
+inline in Terraform.
+
 | Prompt | Arguments | What it guides |
 |---|---|---|
 | `create_infrastructure` | `request`, `cloud?` | Plan the structure (layers, modules, environments) → `list_templates` → `create_workflow` → `search_resources`/`describe_resource` → `add_node` → `connect` → one module per logical group with `extract_module` → environments → `review_terraform` (structure + findings) → `validate` → `deploy` → smoke test → summary |
+| `spec_feature` | `request`, `workflow?` (default `current`) | Spec before code (OpenSpec style): read/create `openspec/project.md` → clarification questions in batches (actors, use cases, happy/edge/failure paths, data and ownership, consistency/idempotency, authz, NFRs) → `openspec/changes/<id>/proposal.md`, `specs/<capability>/spec.md` (`### Requirement:` + `#### Scenario:` GIVEN/WHEN/THEN), `design.md` (ADR: `architecture_patterns` + `code_guidelines`), `tasks.md` → gate: no code while `[NEEDS CLARIFICATION]` remains → implement and check off tasks → merge deltas into `openspec/specs/` and archive the change |
 | `plan_structure` | `request` | Design before building: inventory per logical group, states by size (one workflow; modules; one workflow per layer past ~100 resources), environments and their inputs, modules per workflow; present a tree + table and wait for the user's OK, then build it |
 | `extend_workflow` | `request`, `workflow?` (default `current`) | Inspect the graph and its structure, place the addition in its logical group (or a new layer workflow past ~100 resources), add and connect services, extract a group that grew large into a module, `review_terraform`, `validate`, `plan` |
 | `import_terraform_folder` | `dir` | `scan_terraform_folder` → `import_terraform` → summary of projects, diagnostics and Floci support |
@@ -247,6 +258,13 @@ Rules the agents follow (and the `bp_*` rule that checks each):
   (`aws_vpc_security_group_ingress_rule`, `aws_iam_role_policy_attachment`)
   over inline blocks; mixing both styles is flagged (`bp_inline_sg_rules`,
   a warning when both target the same group).
+- **Function code.** Application code is never inline in Terraform
+  (`bp_inline_function_code`): it lives in workflow files under
+  `services/<svc>/` and an `archive_file` zips it with
+  `source_dir = "${path.module}/services/<svc>/src"` (`services/<svc>/dist`
+  when a `Dockerfile` `package` stage builds it); extract_module moves the
+  service folder into `modules/<name>/` with its blocks and inline moves it
+  back, so the paths hold in both layouts.
 
 `get_workflow`, `get_open_workflow`, `update_workflow` and
 `review_terraform` return a `structure` summary: `layout`, `states`,
@@ -734,6 +752,7 @@ its why; apply what the user accepts) → again until nothing applies →
 |---|---|---|
 | `architecture_patterns` | `requirement?`, `platform?` (aliases accepted), `pattern?` | Architecture styles and cloud design patterns (`GET /patterns`, `GET /patterns/{id}`). `requirement` (English or Spanish): ranked matches, styles first, each with id, name, kind, problem, `useWhen`, `avoidWhen` and the block for `platform` (Terraform types / compose services / Kubernetes kinds, local support); `pattern`: one pattern in full (trade-offs, practices, blocks, related, templates, sources); neither: the catalog. Pick the simplest that fits and tell the user the trade-offs and what was left out |
 | `well_architected_guidance` | `platform` (`aws`, `azure`, `gcp`, `oci`, `docker`, `kubernetes`; `azurerm`, `google`, `k8s`… accepted), `pillar?` | The platform's framework, sources, `layout` (summary, tree, what each environment adds, sources) and, per pillar, a summary and practices (title, why, how with resource types/attributes or compose/Kubernetes fields, the Nimbo rule codes that check it) |
+| `code_guidelines` | `workflow?`, `mode?`, `language?`, `style?`, `platform?`, `target?` (`function`, `container`, `vm`) | Application-code guidance (`internal/codeguide`, see [CODE_GUIDELINES.md](CODE_GUIDELINES.md)): principles scaled to the style, `services/<svc>/` layout, complete starter `files` (architecture: smoke handlers; full: hexagonal skeleton with tests and Dockerfile), `packaging` with the Terraform snippet, `compute` options (functions / managed containers / Kubernetes / VMs with when, avoidWhen, local support), testing, security, observability, OpenSpec `spec` guide, sources. `workflow` supplies mode and platform; full mode without `language` returns `languages` to propose |
 | `recommend_improvements` | `workflow` | Companions the design lacks, highest value first (`GET /workflows/{id}/recommendations`): id, title, why, pillars, triggering nodes, what to add, a snippet with the design's addresses, scope (`recommended` / `production`), local support (runs locally / export only / local equivalent), when to skip it, checking rules, docs. Applied items disappear; an empty list means nothing is left |
 | `review_well_architected` | `workflow` | Runs every rule (opt-in ones and rules turned off in Settings included; Terraform also the `net_*` network checks) and groups findings by their rule's main pillar: status `ok` / `advice` (info only) / `risk` (warnings or errors), counts, findings (severity, code, rule title, node, file:line, why, fix, docs), the frameworks that apply, open recommendations (id, title, why, scope, local), a summary and next steps |
 
@@ -810,9 +829,9 @@ Conventions).
 | `list_workflows` | `include_archived?` | Workflows, most recent first; the open one is flagged |
 | `get_open_workflow` | — | The workflow open in the desktop app, like `get_workflow` (or a message when none is) |
 | `list_templates` | — | Starter templates (`id`, `name`, `description`, `kind`, `cloud`, `difficulty`, `tags`); edge patterns add `category: "edge-patterns"` and `pattern` (`reverse-proxy`, `api-gateway`, `load-balancer`), one of each per kind and cloud |
-| `create_workflow` | `name`, `description?`, `template?`, `kind?` | New workflow, optionally from a template; `kind: "docker"` (or a `docker-*` template) makes a docker-compose workflow |
+| `create_workflow` | `name`, `description?`, `template?`, `kind?`, `mode?` | New workflow, optionally from a template; `kind: "docker"` (or a `docker-*` template) makes a docker-compose workflow; `mode` is the build mode: `architecture` (default: infrastructure plus smoke handlers that prove the wiring) or `full` (real application code; spec first with `spec_feature`) |
 | `get_workflow` | `workflow` | Compact workflow: nodes, edges, variables, outputs, environments, diagnostics, and `structure` (layout, states, resources per state, modules, nesting, backend) |
-| `update_workflow` | `workflow`, `name?`, `description?`, `layout?` (`auto`/`single`/`environments`), `environment?` | Rename a workflow, change its description or its export layout (only the given fields change; `description: ""` clears it); the Terraform is unchanged; returns the workflow with its `structure`. `environment` (docker and Kubernetes) switches the active environment (`""` = base; see Environments) |
+| `update_workflow` | `workflow`, `name?`, `description?`, `mode?` (`architecture`/`full`), `layout?` (`auto`/`single`/`environments`), `environment?` | Rename a workflow, change its description, build mode or export layout (only the given fields change; `description: ""` clears it); the Terraform is unchanged; returns the workflow with its `structure`. `environment` (docker and Kubernetes) switches the active environment (`""` = base; see Environments) |
 | `archive_workflow` / `unarchive_workflow` | `workflow` | Close a workflow (sandbox stopped keeping state, hidden, runs refused) or restore it |
 | `search_resources` | `query`, `cloud?`, `kind?`, `supported_only?`, `limit?` | Search the resource catalog |
 | `describe_resource` | `type`, `kind?` | Required/optional attributes, nested blocks, exported attributes, Floci support |
@@ -829,10 +848,11 @@ Conventions).
 | `remove_output` | `workflow`, `name` | Remove an output |
 | `set_environment` | `workflow`, `name`, `values?`, `env_vars?`, `secret_keys?`, `activate?` | Create/update an environment |
 | `get_terraform` | `workflow` | Rendered Terraform files |
+| `get_workflow_files` | `workflow`, `prefix?`, `path?` | Every file of the workflow (path, size, kind); `prefix` (e.g. `openspec/`) or `path` adds the content of the matching text files |
 | `review_terraform` | `workflow` | `structure` summary plus best-practice findings grouped by severity, with why and fix (see Code quality and Structure); on a docker workflow it returns the `review_docker` result, on a Kubernetes one `review_kubernetes` |
 | `review_docker` | `workflow` | Docker best-practice findings grouped by severity, each with file:line, why, fix and docs; disabled and opt-in rules (see Docker best practices) |
 | `review_kubernetes` | `workflow` | Kubernetes best-practice findings of the active environment grouped by severity, each with file:line, field, why, fix and docs; disabled and opt-in rules (see Kubernetes best practices) |
-| `apply_terraform_code` | `workflow`, `files` | Edit by code (merged over current files; `""` deletes a file, and its blocks are gone unless the same call writes them to another file). Every block stays in the file it is written in; applying the same files again changes nothing |
+| `apply_terraform_code` | `workflow`, `files` | Edit by code (merged over current files; `""` deletes a file, and its blocks are gone unless the same call writes them to another file). Paths that are not Terraform (`services/orders/src/index.mjs`, `openspec/project.md`) are stored as workflow files: exported and copied into the sandbox work dir; application code goes there, never inline in Terraform. Every block stays in the file it is written in; applying the same files again changes nothing |
 | `scan_terraform_folder` | `dir` | Terraform projects in a folder/repo (counts, providers, clouds, tfvars, backend, layout, environments, diagnostics) without importing; an `environments/<env>/` + `modules/<service>` tree is one project |
 | `import_terraform` | `dir?` \| `files?`, `projects?`, `name?` | Import Terraform as new workflows (default: the root only; `projects` from the scan, `"."` = root); an environments tree becomes one workflow with its environments |
 | `export_terraform` | `workflow`, `dir`, `environments?`, `ci?`, `smoke?` | Write Terraform + assets to a directory in the workflow's layout (single root, or `modules/<service>` + `environments/<env>/` roots; see Structure); `environments` adds each environment's values and `.env.example`. Docker and Kubernetes workflows write their files as they are. `ci`: `none` (default), `github` (`.github/workflows/<name>.yml`) or `gitlab` (`.gitlab-ci.yml`), a ready-to-use pipeline (checks, a plan/render per environment on pull requests, gated per-environment deploys from the default branch) whose header and a README section list the secrets and variables to set; `smoke` adds an HTTP check of each environment's `SMOKE_URL` after every deploy (see ARCHITECTURE.md, "CI/CD pipeline export") |
@@ -858,6 +878,7 @@ Conventions).
 | `compliance_report` | `workflow`, `framework?`, `markdown?` | Read-only pre-audit of the design against its platforms' CIS benchmarks: summary, counts, open controls with findings and guidance; `markdown` returns the exportable report |
 | `architecture_patterns` | `requirement?`, `platform?`, `pattern?` | Architecture styles and design patterns ranked for a requirement, or one in full, mapped to the platform's services; call at the start of a design, prefer the simplest |
 | `well_architected_guidance` | `platform`, `pillar?` | Well-Architected practices of a platform per pillar (why, how, rule codes); call before designing |
+| `code_guidelines` | `workflow?`, `mode?`, `language?`, `style?`, `platform?`, `target?` | Smoke handlers or a hexagonal skeleton per language, packaging snippet, compute options and spec guide; call before writing application code |
 | `review_well_architected` | `workflow` | Every rule's findings grouped by pillar with status ok/advice/risk plus open recommendations; call before finishing, fix warnings first |
 | `recommend_improvements` | `workflow` | Companions the design lacks (WAF/rate limits on public entry points, reverse proxy, DLQs…) with why, snippet, scope and local support; call after the first draft and before finishing |
 | `get_access` | `workflow`, `node` | Structured permissions of a node (AWS policy statements, Azure role assignment, GCP IAM member/binding, OCI policy statements, Kubernetes RBAC) with least-privilege warnings |

@@ -1,16 +1,7 @@
 data "archive_file" "check" {
   type        = "zip"
+  source_dir  = "${path.module}/services/check/src"
   output_path = "${path.module}/build/check.zip"
-
-  source {
-    filename = "index.mjs"
-    content  = <<-EOT
-      export const handler = async (input) => {
-        const amount = Number(input?.amount ?? 0);
-        return { ...input, amount, approved: amount <= 1000 };
-      };
-    EOT
-  }
 }
 
 resource "aws_iam_role" "lambda" {

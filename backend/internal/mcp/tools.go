@@ -38,9 +38,9 @@ func registerTools(r *registry, t *tools) {
 	addTool(r, "list_workflows", "List workflows", "List workflows (ID, name, node count, clouds), most recently updated first. Archived workflows are hidden unless include_archived=true.", t.listWorkflows)
 	addTool(r, "get_open_workflow", "Get open workflow", "Get the workflow currently open in the Nimbo desktop app (compact view with structure, like get_workflow), or a message when none is open. Every workflow argument also accepts \"current\" (or can be omitted) to mean this workflow.", t.getOpenWorkflow)
 	addTool(r, "list_templates", "List templates", "List starter templates that can seed create_workflow (e.g. aws-queue-worker, aws-serverless-api), with kind and cloud. Edge patterns (how client traffic reaches services) have category \"edge-patterns\" and pattern \"reverse-proxy\", \"api-gateway\" or \"load-balancer\", one of each per kind and cloud (e.g. docker-reverse-proxy, k8s-api-gateway).", t.listTemplates)
-	addTool(r, "create_workflow", "Create workflow", "Create a NEW workflow, optionally from a template ID (see list_templates). Only when the user asks for a new or separate workflow or nothing is open: to change the design the user has open (get_open_workflow), edit that one instead. Returns the compact workflow (with a notice when the user has another workflow open); use its id in every other tool.", t.createWorkflow)
+	addTool(r, "create_workflow", "Create workflow", "Create a NEW workflow, optionally from a template ID (see list_templates). Only when the user asks for a new or separate workflow or nothing is open: to change the design the user has open (get_open_workflow), edit that one instead. mode: \"architecture\" (default: infrastructure plus smoke handlers that prove the wiring) or \"full\" (real application code in services/<svc>/ asset files, spec first with spec_feature); ask the user once when unsure. Returns the compact workflow (with a notice when the user has another workflow open); use its id in every other tool.", t.createWorkflow)
 	addTool(r, "get_workflow", "Get workflow", "Get a compact view of a workflow: nodes (address, type, attributes as HCL expressions, nested blocks), derived edges (source.attr -> target.attribute), variables, outputs, locals, providers, environments (secret values redacted), diagnostics, the export layout and a structure summary (states, resources per state, modules with nesting, backend). Call this before editing.", t.getWorkflow)
-	addTool(r, "update_workflow", "Update workflow", "Change a workflow's name, description and/or export layout; pass only the fields that change (description \"\" clears it). layout: \"environments\" exports modules/<service> plus one root (and state, backend.tf) per environment under environments/<env>; \"single\" one root with a tfvars file per environment; \"auto\" picks environments from two environments up. Its Terraform is unchanged. Returns the compact workflow with its structure.", t.updateWorkflow)
+	addTool(r, "update_workflow", "Update workflow", "Change a workflow's name, description, build mode and/or export layout; pass only the fields that change (description \"\" clears it). mode: \"architecture\" (infrastructure plus smoke handlers) or \"full\" (real application code; run spec_feature first). layout: \"environments\" exports modules/<service> plus one root (and state, backend.tf) per environment under environments/<env>; \"single\" one root with a tfvars file per environment; \"auto\" picks environments from two environments up. Its Terraform is unchanged. Returns the compact workflow with its structure.", t.updateWorkflow)
 	addTool(r, "archive_workflow", "Archive workflow", "Archive (close) a workflow: its sandbox is stopped keeping state, it is hidden from list_workflows and runs/load tests are refused until unarchive_workflow.", t.archiveWorkflow)
 	addTool(r, "unarchive_workflow", "Unarchive workflow", "Restore an archived workflow so it can be edited, deployed and load-tested again.", t.unarchiveWorkflow)
 
@@ -65,7 +65,8 @@ func registerTools(r *registry, t *tools) {
 	r.group = groupTerraform
 	addTool(r, "get_terraform", "Get Terraform code", "Render the workflow as Terraform files. Imported projects keep their own files; new content follows Nimbo's layout: versions.tf, providers.tf, variables.tf, locals.tf, outputs.tf, data.tf, one file per service category (network.tf, compute.tf, storage.tf, messaging.tf, api.tf, iam.tf, ...) and main.tf for module calls (small projects: one main.tf). Move a node with update_node file.", t.getTerraform)
 	addTool(r, "review_terraform", "Review Terraform", "Check the workflow against Terraform best practices and return its structure (export layout, states, resources per state, modules with nesting, backend) and the findings grouped by severity (warnings: security, unpinned versions, providers in modules, oversized states; info: documentation, versions, hardcoded values, tags, naming, structure, modules, environments), each with why it matters and how to fix it. Local module contents are checked too. Call it before finishing any change; mutating tools already return the findings their change introduced as best_practices. Findings never block deploys.", t.reviewTerraform)
-	addTool(r, "apply_terraform_code", "Apply Terraform code", "Edit the workflow by writing code. Docker workflows: files maps any file path (compose.yaml, api/Dockerfile, .env, app sources) -> full content, \"\" deletes it; YAML/Dockerfile syntax errors are refused with file:line and the graph is re-derived. Terraform workflows: files maps file name -> full content and is merged over the current files from get_terraform; an empty string deletes that file. The code is re-imported; node IDs, positions and environments are kept by address. Use for complex blocks that are awkward with update_node.", t.applyTerraformCode)
+	addTool(r, "apply_terraform_code", "Apply Terraform code", "Edit the workflow by writing code. Docker workflows: files maps any file path (compose.yaml, api/Dockerfile, .env, app sources) -> full content, \"\" deletes it; YAML/Dockerfile syntax errors are refused with file:line and the graph is re-derived. Terraform workflows: files maps file name -> full content and is merged over the current files from get_terraform; an empty string deletes that file. The code is re-imported; node IDs, positions and environments are kept by address. Other paths are stored as workflow files (exported, copied into the sandbox): application code goes in services/<svc>/… (e.g. services/orders/src/index.mjs; a Dockerfile whose last stage is `FROM scratch AS package` when it needs a build, which Nimbo runs into services/<svc>/dist), specs in openspec/…; Terraform zips the folder with data \"archive_file\" source_dir = \"${path.module}/services/<svc>/src\" (or /dist). Never put application code inline in Terraform (archive_file source content heredocs). Use for complex blocks that are awkward with update_node.", t.applyTerraformCode)
+	addTool(r, "get_workflow_files", "Get workflow files", "List every file of a workflow (any kind: Terraform, application code under services/<svc>/, specs under openspec/, Dockerfiles) with size and kind; prefix (e.g. \"openspec/\" or \"services/orders/\") or path returns the content of the matching text files too. Write them with apply_terraform_code.", t.getWorkflowFiles)
 	addTool(r, "scan_terraform_folder", "Scan Terraform folder", "Scan a local folder (e.g. a repository) for Terraform projects without importing: every directory with *.tf files, with resource/data/module counts, providers, clouds, tfvars files, backend, layout and parse diagnostics. Directories used only as local modules are not separate projects, and an environments tree (environments/<env>/ roots that each only call one ../../modules/<service>) is one project with layout \"environments\" and its environments. Pass the chosen paths to import_terraform as projects.", t.scanTerraformFolder)
 	addTool(r, "import_terraform", "Import Terraform", "Import existing Terraform as new workflows, from a local directory or from files (relative path -> content). Local modules (source = \"./modules/x\") are kept as assets and can be opened in the app. An environments tree (as export_terraform writes it) becomes one workflow: the service module's content with one environment per environments/<env> root. By default only the root folder is imported; pass projects (paths from scan_terraform_folder, \".\" = root) to import several projects, one workflow each.", t.importTerraform)
 	addTool(r, "export_terraform", "Export Terraform", "Write the workflow's Terraform (plus assets such as Lambda sources, local modules and the dependency lock file) to a local directory, in the workflow's layout (structure.layout from get_workflow). Single layout: one root; with environments=true each environment's values go to the variable file it was imported from (e.g. terraform.tfvars), else environments/<name>.tfvars, plus .env.example files. Environments layout (auto from two environments): modules/<service>/ with the workflow's resources, its local modules under modules/, and one root per environment under environments/<env>/ (backend.tf with its own state, main.tf calling the service module, providers.tf, versions.tf, variables.tf, outputs.tf; environments=true adds terraform.tfvars and .env.example), plus README.md, .gitignore and a Makefile. Comments are kept. Docker and Kubernetes workflows write their files as they are. ci=github|gitlab adds a ready-to-use pipeline (format/validate or render checks, a plan per environment on pull requests, gated per-environment applies/deploys on the default branch, smoke=true for an HTTP check after each deploy) whose header and README section list the secrets and variables to set.", t.exportTerraform)
@@ -110,6 +111,7 @@ func registerTools(r *registry, t *tools) {
 	registerReadinessTools(r, t)
 	registerComplianceTools(r, t)
 	registerWellArchitectedTools(r, t)
+	registerCodeGuideTools(r, t)
 	registerCapacityTools(r, t)
 	registerLearnTools(r, t)
 	registerChallengeTools(r, t)
@@ -219,6 +221,7 @@ type createWorkflowIn struct {
 	Description string `json:"description,omitempty"`
 	Template    string `json:"template,omitempty" jsonschema:"optional template ID from list_templates"`
 	Kind        string `json:"kind,omitempty" jsonschema:"\"docker\" for a docker-compose workflow, \"kubernetes\" for manifests/Kustomize/Helm on a local cluster (implied by a docker-*/k8s-* template); omit for Terraform"`
+	Mode        string `json:"mode,omitempty" jsonschema:"build mode: \"architecture\" (default: infrastructure plus smoke handlers) or \"full\" (real application code in services/<svc>/ asset files)"`
 }
 
 func (t *tools) createWorkflow(ctx context.Context, in createWorkflowIn) (any, error) {
@@ -228,7 +231,7 @@ func (t *tools) createWorkflow(ctx context.Context, in createWorkflowIn) (any, e
 	}
 	_ = t.c.get(ctx, "/session", &session)
 	var wf model.Workflow
-	body := map[string]string{"name": in.Name, "description": in.Description, "templateId": in.Template, "kind": in.Kind}
+	body := map[string]string{"name": in.Name, "description": in.Description, "templateId": in.Template, "kind": in.Kind, "mode": strings.TrimSpace(in.Mode)}
 	if err := t.c.do(ctx, http.MethodPost, "/workflows", body, &wf); err != nil {
 		return nil, err
 	}
@@ -263,11 +266,12 @@ type updateWorkflowIn struct {
 	Description *string `json:"description,omitempty" jsonschema:"new description; \"\" clears it"`
 	Layout      *string `json:"layout,omitempty" jsonschema:"export layout: auto (default: environments from two environments up), single or environments"`
 	Environment *string `json:"environment,omitempty" jsonschema:"docker and Kubernetes workflows: the active environment (\"\" = base) the graph, rules and deploy render (list_environments)"`
+	Mode        *string `json:"mode,omitempty" jsonschema:"build mode: \"architecture\" (infrastructure plus smoke handlers) or \"full\" (real application code; run spec_feature first)"`
 }
 
 func (t *tools) updateWorkflow(ctx context.Context, in updateWorkflowIn) (any, error) {
-	if in.Name == nil && in.Description == nil && in.Layout == nil && in.Environment == nil {
-		return nil, errors.New("pass name, description, layout and/or environment")
+	if in.Name == nil && in.Description == nil && in.Layout == nil && in.Environment == nil && in.Mode == nil {
+		return nil, errors.New("pass name, description, mode, layout and/or environment")
 	}
 	wf, err := t.c.workflow(ctx, in.Workflow)
 	if err != nil {
@@ -282,6 +286,16 @@ func (t *tools) updateWorkflow(ctx context.Context, in updateWorkflowIn) (any, e
 	}
 	if in.Description != nil {
 		wf.Description = strings.TrimSpace(*in.Description)
+	}
+	if in.Mode != nil {
+		mode := strings.TrimSpace(*in.Mode)
+		if err := model.ValidMode(mode); err != nil {
+			return nil, err
+		}
+		if mode == "" {
+			mode = model.ModeArchitecture
+		}
+		wf.Mode = mode
 	}
 	if in.Layout != nil && !wf.IsTerraform() {
 		return nil, fmt.Errorf("%s workflows have no export layout", model.KindLabel(wf.Kind))
@@ -925,6 +939,18 @@ func (t *tools) applyTerraformCode(ctx context.Context, in applyCodeIn) (any, er
 	if !wf.IsTerraform() {
 		return t.applyFileChanges(ctx, wf, in.Files)
 	}
+	// Application code and specs (services/<svc>/…, openspec/…) are asset
+	// files: send every file as a change so the daemon re-imports the
+	// Terraform and stores the rest next to it, in one request.
+	if hasAppFiles(in.Files) {
+		var out model.Workflow
+		if err := t.c.do(ctx, http.MethodPut, "/workflows/"+pathEscape(wf.ID)+"/terraform", map[string]any{"changes": fileChanges(in.Files)}, &out); err != nil {
+			return nil, err
+		}
+		v := viewWorkflow(&out)
+		v.BestPractices = bpDelta(wf, &out)
+		return v, nil
+	}
 	files, err := t.terraformFiles(ctx, wf.ID)
 	if err != nil {
 		return nil, err
@@ -946,6 +972,89 @@ func (t *tools) applyTerraformCode(ctx context.Context, in applyCodeIn) (any, er
 	v := viewWorkflow(&out)
 	v.BestPractices = bpDelta(wf, &out)
 	return v, nil
+}
+
+// isTerraformPath reports a Terraform code file (.tf, .tf.json) or variable
+// file (.tfvars, .tfvars.json): what GET /terraform returns.
+func isTerraformPath(p string) bool {
+	for _, ext := range []string{".tf", ".tf.json", ".tfvars", ".tfvars.json"} {
+		if strings.HasSuffix(p, ext) {
+			return true
+		}
+	}
+	return false
+}
+
+// hasAppFiles reports a file that is not Terraform code.
+func hasAppFiles(files map[string]string) bool {
+	for p := range files {
+		if !isTerraformPath(p) {
+			return true
+		}
+	}
+	return false
+}
+
+// fileChanges turns apply_terraform_code files into a code request's
+// changes: "" deletes the file.
+func fileChanges(files map[string]string) map[string]*string {
+	changes := make(map[string]*string, len(files))
+	for p, c := range files {
+		if c == "" {
+			changes[p] = nil
+			continue
+		}
+		changes[p] = &c
+	}
+	return changes
+}
+
+type workflowFilesIn struct {
+	Workflow string `json:"workflow,omitempty" jsonschema:"workflow ID or name; omit or \"current\" for the workflow open in the Nimbo app"`
+	Prefix   string `json:"prefix,omitempty" jsonschema:"return the content of text files whose path starts with it, e.g. openspec/"`
+	Path     string `json:"path,omitempty" jsonschema:"return the content of this one file"`
+}
+
+// fileView is one workflow file; Content is set for the requested ones.
+type fileView struct {
+	Path    string `json:"path"`
+	Size    int64  `json:"size"`
+	Kind    string `json:"kind"`
+	Content string `json:"content,omitempty"`
+}
+
+func (t *tools) getWorkflowFiles(ctx context.Context, in workflowFilesIn) (any, error) {
+	wf, err := t.c.workflow(ctx, in.Workflow)
+	if err != nil {
+		return nil, err
+	}
+	base := "/workflows/" + pathEscape(wf.ID) + "/files"
+	if in.Path != "" {
+		var f model.WorkflowFileContent
+		if err := t.c.get(ctx, base+"/content?path="+url.QueryEscape(in.Path), &f); err != nil {
+			return nil, err
+		}
+		return fileView{Path: f.Path, Size: f.Size, Kind: string(f.Kind), Content: f.Content}, nil
+	}
+	var list struct {
+		Files []model.WorkflowFile `json:"files"`
+	}
+	if err := t.c.get(ctx, base, &list); err != nil {
+		return nil, err
+	}
+	out := make([]fileView, 0, len(list.Files))
+	for _, f := range list.Files {
+		v := fileView{Path: f.Path, Size: f.Size, Kind: string(f.Kind)}
+		if in.Prefix != "" && strings.HasPrefix(f.Path, in.Prefix) && !f.Binary {
+			var c model.WorkflowFileContent
+			if err := t.c.get(ctx, base+"/content?path="+url.QueryEscape(f.Path), &c); err != nil {
+				return nil, err
+			}
+			v.Content = c.Content
+		}
+		out = append(out, v)
+	}
+	return out, nil
 }
 
 type scanIn struct {

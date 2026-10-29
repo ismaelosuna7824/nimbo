@@ -82,6 +82,16 @@ func (g *gen) gitlabJob(j job) *yaml.Node {
 	default:
 		set(m, "image", imageAlpine)
 	}
+	if j.uses(toolTerraform) && j.uses(toolDockerBuild) {
+		// Service builds from the Terraform image: Alpine's docker CLI and
+		// Buildx against the dind service.
+		set(m, "services", strSeq(imageDockerDind))
+		set(vars, "DOCKER_HOST", "tcp://docker:2376")
+		set(vars, "DOCKER_TLS_CERTDIR", "/certs")
+		set(vars, "DOCKER_TLS_VERIFY", "1")
+		set(vars, "DOCKER_CERT_PATH", "/certs/client")
+		before = append(before, "apk add --no-cache docker-cli docker-cli-buildx")
+	}
 	ids := mapping()
 	for _, t := range j.tools {
 		switch t {

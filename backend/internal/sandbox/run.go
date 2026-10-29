@@ -246,6 +246,13 @@ func (m *Manager) runSteps(ctx context.Context, rs *runState, req RunRequest) er
 			return err
 		}
 	}
+	if req.Action != model.ActionValidate {
+		// Plan, apply and destroy read archive_file data sources and deploy
+		// images: the service builds and images must exist and be current.
+		if err := m.buildArtifacts(ctx, rs, work); err != nil {
+			return err
+		}
+	}
 
 	if err := m.ensureImage(ctx, m.terraformImage(), func(s string) { m.logLine(rs, "system", s) }); err != nil {
 		return err

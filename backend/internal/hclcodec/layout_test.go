@@ -174,7 +174,7 @@ func TestLayoutDeterministic(t *testing.T) {
 			}
 		}
 	}
-	a, b := Scaffold(wf, testResourceFile), Scaffold(wf, testResourceFile)
+	a, b := Scaffold(wf, testResourceFile, Builds{}), Scaffold(wf, testResourceFile, Builds{})
 	if !reflect.DeepEqual(a, b) {
 		t.Error("Scaffold is not deterministic")
 	}
@@ -364,7 +364,7 @@ func TestScaffold(t *testing.T) {
 	wf := largeProject()
 	wf.Environments = []model.Environment{{Name: "dev"}, {Name: "default", File: "terraform.tfvars"}}
 	wf.Layout = model.LayoutSingle
-	out := Scaffold(wf, testResourceFile)
+	out := Scaffold(wf, testResourceFile, Builds{})
 	if got := keysOf(out); !slices.Equal(got, []string{GitignoreFile, ReadmeFile, BackendTfExampleFile, TfvarsSampleFile}) {
 		t.Fatalf("scaffold files = %v", got)
 	}
@@ -426,7 +426,7 @@ func TestScaffold(t *testing.T) {
 
 	// No variables: no tfvars example.
 	wf.Variables = nil
-	if _, ok := Scaffold(wf, testResourceFile)[TfvarsSampleFile]; ok {
+	if _, ok := Scaffold(wf, testResourceFile, Builds{})[TfvarsSampleFile]; ok {
 		t.Error("tfvars example without variables")
 	}
 

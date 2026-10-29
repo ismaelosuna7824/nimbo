@@ -503,6 +503,13 @@ resource "aws_s3_bucket" "site" {
 	if !slices.Equal(assets, []string{".terraform.lock.hcl", "README.md", "src/index.js"}) {
 		t.Fatalf("assets = %v, want .terraform.lock.hcl, README.md and src/index.js", assets)
 	}
+	// A service's dist/ is its build output: the export leaves it out
+	// when the service has a Dockerfile (the sandbox builds it).
+	writeFile(t, filepath.Join(root, "services", "api", "Dockerfile"), "FROM scratch AS package\n")
+	writeFile(t, filepath.Join(root, "services", "api", "dist", "index.mjs"), "built")
+	writeFile(t, filepath.Join(root, "services", "py", "dist", "handler.py"), "kept")
+	writeFile(t, filepath.Join(root, "modules", "app", "services", "web", "Dockerfile"), "FROM scratch AS package\n")
+	writeFile(t, filepath.Join(root, "modules", "app", "services", "web", "dist", "index.mjs"), "built")
 
 	out := filepath.Join(t.TempDir(), "exported")
 	var res struct {
@@ -517,6 +524,12 @@ resource "aws_s3_bucket" "site" {
 		if _, err := os.Stat(filepath.Join(out, want)); err != nil {
 			t.Fatalf("%s not written: %v", want, err)
 		}
+	}
+	if slices.Contains(res.Files, "services/api/dist/index.mjs") || !slices.Contains(res.Files, "services/api/Dockerfile") || !slices.Contains(res.Files, "services/py/dist/handler.py") {
+		t.Fatalf("export files %v: want services/api/dist left out, the Dockerfile and services/py/dist kept", res.Files)
+	}
+	if slices.ContainsFunc(res.Files, func(f string) bool { return strings.HasSuffix(f, "services/web/dist/index.mjs") }) {
+		t.Fatalf("export files %v: want a module service's dist left out", res.Files)
 	}
 	tfvars, _ := os.ReadFile(filepath.Join(out, "environments", "dev.tfvars"))
 	if !strings.Contains(string(tfvars), `"dev-site"`) {

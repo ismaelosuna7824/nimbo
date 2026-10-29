@@ -8,8 +8,10 @@ import { WorkflowIconTile } from "@/components/workflow-icon/workflow-icon-tile"
 import { TechIcon } from "@/components/tech-icons/tech-icon"
 import { Badge } from "@/components/ui/badge"
 import { Empty, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from "@/components/ui/empty"
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Textarea } from "@/components/ui/textarea"
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip"
+import type { WorkflowMode } from "@/lib/api/types"
 import { cn } from "@/lib/utils"
 import { useWorkflowStore } from "@/state/workflow-store"
 import { dockerCode, kubernetesCode, terraformCode } from "../workspaces/code"
@@ -132,6 +134,23 @@ function WorkflowOverview() {
           onChange={(e) => setDescription(e.target.value)}
           onBlur={() => description !== (wf.description ?? "") && update((d) => ({ ...d, description }))}
         />
+      </div>
+      <div className="flex flex-col gap-1.5">
+        <label htmlFor="wf-mode" className="text-xs font-medium">
+          Build mode
+        </label>
+        <Select
+          value={wf.mode === "full" ? "full" : "architecture"}
+          onValueChange={(v) => v !== (wf.mode || "architecture") && update((d) => ({ ...d, mode: v as WorkflowMode }))}
+        >
+          <SelectTrigger id="wf-mode" className="w-full">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="architecture">Architecture</SelectItem>
+            <SelectItem value="full">Full code</SelectItem>
+          </SelectContent>
+        </Select>
       </div>
       {wf.kind === "kubernetes" && <KubeSources sources={wf.kubernetes?.sources ?? []} />}
       {wf.kind !== "docker" && wf.kind !== "kubernetes" && <ProvidersSection />}

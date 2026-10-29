@@ -1,0 +1,13 @@
+{
+  "name": "smoke",
+  "private": true,
+  "type": "module",
+  "main": "functions/*.mjs",
+  "dependencies": {
+    "@azure/functions": "^4.6.0",
+    "@azure/service-bus": "^7.9.5",
+    "@azure/storage-blob": "^12.26.0",
+    "pg": "^8.13.0",
+    "redis": "^4.7.0"
+  }
+}

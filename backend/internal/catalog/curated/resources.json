@@ -108,7 +108,7 @@
     },
     "aws_lambda_function": {
       "label": "Lambda Function", "icon": "zap", "popular": true, "name": "function",
-      "description": "Run code without servers. Starts with an inline Node.js handler, an execution role and a log group with 14-day retention.",
+      "description": "Run code without servers. Starts with a Node.js handler in the workflow file services/<name>/src/index.mjs (zipped by an archive_file), an execution role and a log group with 14-day retention.",
       "attrs": {
         "function_name": {"basic": true, "init": "{{slug}}", "naming": "${local.name_prefix}-{{slug}}"},
         "runtime": {"basic": true, "default": "nodejs22.x", "init": "nodejs22.x", "enum": [
@@ -122,7 +122,7 @@
         "package_type": {"enum": ["Zip", "Image"]}
       },
       "needs": [
-        {"kind": "data", "type": "archive_file", "new": true, "name": "{{name}}_code", "refs": {"filename": "output_path", "source_code_hash": "output_base64sha256"}},
+        {"kind": "data", "type": "archive_file", "new": true, "name": "{{name}}", "refs": {"filename": "output_path", "source_code_hash": "output_base64sha256"}},
         {"type": "aws_iam_role", "new": true, "name": "{{name}}_role", "refs": {"role": "arn"}}
       ],
       "companions": [
@@ -770,17 +770,16 @@
   "data": {
     "archive_file": {
       "label": "Archive (zip)", "icon": "file-archive", "name": "code",
-      "description": "Packages source code into a zip file at plan time (e.g. for Lambda).",
+      "description": "Zips a source folder of the workflow (source_dir = services/<name>/src) at plan time, e.g. for Lambda. Application code lives in those files, never inline in source blocks.",
       "attrs": {
         "type": {"basic": true, "enum": ["zip", "tar.gz", "tgz"], "init": "zip"},
+        "source_dir": {"basic": true, "expr": "\"${path.module}/services/{{name}}/src\""},
         "output_path": {"basic": true, "expr": "\"${path.module}/build/{{name}}.zip\""},
-        "source_dir": {"basic": true},
         "source_file": {"basic": true}
       },
-      "blocks": [{"type": "source", "attrs": {
-        "filename": "index.mjs",
-        "content": "export const handler = async (event) => {\n  return {\n    statusCode: 200,\n    headers: { \"content-type\": \"application/json\" },\n    body: JSON.stringify({ message: \"Hello from Lambda\", path: event.rawPath ?? event.path ?? null }),\n  };\n};\n"
-      }}]
+      "files": {
+        "services/{{name}}/src/index.mjs": "export const handler = async (event) => {\n  return {\n    statusCode: 200,\n    headers: { \"content-type\": \"application/json\" },\n    body: JSON.stringify({ message: \"Hello from Lambda\", path: event.rawPath ?? event.path ?? null }),\n  };\n};\n"
+      }
     },
     "aws_ami": {
       "label": "AMI Lookup", "icon": "search", "name": "al2023",

@@ -75,7 +75,7 @@ func exportOf(t *testing.T, wf *model.Workflow) map[string][]byte {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for n, d := range hclcodec.Scaffold(wf, nil) {
+	for n, d := range hclcodec.Scaffold(wf, nil, hclcodec.Builds{}) {
 		files[n] = d
 	}
 	return files
@@ -409,6 +409,133 @@ func toStrings(v any) []string {
 	var out []string
 	for _, x := range v.([]any) {
 		out = append(out, x.(string))
+	}
+	return out
+}
+
+// stepNames lists the names of a GitHub job's steps.
+func stepNames(j map[string]any) []string {
+	var out []string
+	for _, s := range j["steps"].([]any) {
+		if n, ok := s.(map[string]any)["name"].(string); ok {
+			out = append(out, n)
+		}
+	}
+	return out
+}
+
+// Exports with service builds build them before Terraform in every job;
+// exports without any never mention them.
+func TestTerraformServiceBuilds(t *testing.T) {
+	build := "rm -rf services/api/dist\ndocker build --target package --output type=local,dest=services/api/dist services/api"
+	single := terraformWorkflow(t, model.LayoutSingle, nil, "dev")
+	generated := exportOf(t, single)
+
+	out := generate(t, single, generated, nil, Options{Provider: GitHub, Builds: hclcodec.Builds{Dists: []string{"services/api"}}})
+	file, doc := pipeline(t, out)
+	for id, before := range map[string]string{"validate": "Validate", "plan-dev": "State backend", "apply-dev": "State backend"} {
+		names := stepNames(jobOf(t, doc, GitHub, id))
+		if i := slices.Index(names, "Build services"); i < 0 || i > slices.Index(names, before) {
+			t.Errorf("%s steps %v: want Build services before %s", id, names, before)
+		}
+	}
+	if text := string(out[file]); !strings.Contains(text, "rm -rf services/api/dist") || !strings.Contains(text, "--output type=local,dest=services/api/dist services/api") {
+		t.Errorf("pipeline lacks the build:\n%s", text)
+	}
+	if readme := string(out[readmeFile]); !strings.Contains(readme, "**Build services**") || !strings.Contains(readme, "`services/api`") {
+		t.Errorf("README:\n%s", readme)
+	}
+
+	out = generate(t, single, generated, nil, Options{Provider: GitLab, Builds: hclcodec.Builds{Dists: []string{"services/api"}}})
+	_, doc = pipeline(t, out)
+	for _, id := range []string{"validate", "plan-dev", "apply-dev"} {
+		j := jobOf(t, doc, GitLab, id)
+		vars, _ := j["variables"].(map[string]any)
+		if !slices.Equal(toStrings(j["services"]), []string{imageDockerDind}) || vars["DOCKER_HOST"] != "tcp://docker:2376" || vars["DOCKER_CERT_PATH"] != "/certs/client" ||
+			!slices.Contains(toStrings(j["before_script"]), "apk add --no-cache docker-cli docker-cli-buildx") {
+			t.Errorf("%s = %v", id, j)
+		}
+		if !slices.Contains(toStrings(j["script"]), build) {
+			t.Errorf("%s script = %v", id, j["script"])
+		}
+	}
+
+	env := terraformWorkflow(t, model.LayoutEnvironments, nil, "dev", "prod")
+	out = generate(t, env, exportOf(t, env), nil, Options{Provider: GitHub, Builds: hclcodec.Builds{Dists: []string{"modules/orders-api/services/api"}}})
+	_, doc = pipeline(t, out)
+	if names := stepNames(jobOf(t, doc, GitHub, "validate")); !slices.Contains(names, "Build services") {
+		t.Errorf("validate steps %v", names)
+	}
+	if names := stepNames(jobOf(t, doc, GitHub, "plan-dev")); slices.Contains(names, "Build services") {
+		t.Errorf("plan-dev builds twice (make plan builds): %v", names)
+	}
+	if text := string(out[".github/workflows/orders-api.yml"]); !strings.Contains(text, "run: make build") {
+		t.Errorf("environments pipeline lacks make build:\n%s", text)
+	}
+
+	for _, p := range []string{GitHub, GitLab} {
+		for _, wf := range []*model.Workflow{single, env} {
+			out := generate(t, wf, exportOf(t, wf), nil, Options{Provider: p})
+			for name, data := range out {
+				if s := string(data); strings.Contains(s, "docker build") || strings.Contains(s, "Build services") || strings.Contains(s, "dind") || strings.Contains(s, "IMAGE_REGISTRY") {
+					t.Errorf("%s %s mentions service builds without any:\n%s", p, name, s)
+				}
+			}
+		}
+	}
+}
+
+// Container images are built and pushed to IMAGE_REGISTRY before the
+// applies, and every plan points the image variables at them; nothing is
+// pushed while the registry is unset.
+func TestTerraformImages(t *testing.T) {
+	wf := terraformWorkflow(t, model.LayoutSingle, nil, "dev")
+	images := []hclcodec.ServiceImage{{Name: "orders", Dir: "services/orders", Target: "runtime"}, {Name: "web-ui", Dir: "services/web-ui"}}
+	for _, p := range []string{GitHub, GitLab} {
+		out := generate(t, wf, exportOf(t, wf), nil, Options{Provider: p, Builds: hclcodec.Builds{Images: images}})
+		file, doc := pipeline(t, out)
+		sha := map[string]string{GitHub: "$GITHUB_SHA", GitLab: "$CI_COMMIT_SHA"}[p]
+		push := jobOf(t, doc, p, "images")
+		var script string
+		if p == GitHub {
+			script = strings.Join(stepRuns(push), "\n")
+		} else {
+			script = strings.Join(toStrings(push["script"]), "\n")
+		}
+		for _, s := range []string{"IMAGE_REGISTRY is not set: the images are not pushed", "exit 0",
+			`docker login "${IMAGE_REGISTRY%%/*}" -u "$REGISTRY_USERNAME" --password-stdin`,
+			`docker build --target runtime -t "$IMAGE_REGISTRY/orders:` + sha + `" services/orders`,
+			`docker push "$IMAGE_REGISTRY/orders:` + sha + `"`,
+			`docker build -t "$IMAGE_REGISTRY/web-ui:` + sha + `" services/web-ui`} {
+			if !strings.Contains(script, s) {
+				t.Errorf("%s images job lacks %q:\n%s", p, s, script)
+			}
+		}
+		if needs := toStrings(jobOf(t, doc, p, "apply-dev")["needs"]); !slices.Contains(needs, "images") {
+			t.Errorf("%s apply-dev needs %v", p, needs)
+		}
+		text := string(out[file])
+		for _, s := range []string{`export TF_VAR_orders_image="$IMAGE_REGISTRY/orders:` + sha + `"`, `export TF_VAR_web_ui_image="$IMAGE_REGISTRY/web-ui:` + sha + `"`} {
+			if strings.Count(text, s) != 2 { // the plan of plan-dev and of apply-dev
+				t.Errorf("%s pipeline sets %q %d times:\n%s", p, s, strings.Count(text, s), text)
+			}
+		}
+		if readme := string(out[readmeFile]); !strings.Contains(readme, "| `IMAGE_REGISTRY` |") || !strings.Contains(readme, "**Build and push images**") {
+			t.Errorf("%s README:\n%s", p, readme)
+		}
+		if p == GitLab && !slices.Equal(toStrings(push["services"]), []string{imageDockerDind}) {
+			t.Errorf("gitlab images job = %v", push)
+		}
+	}
+}
+
+// stepRuns lists the run scripts of a GitHub job's steps.
+func stepRuns(j map[string]any) []string {
+	var out []string
+	for _, s := range j["steps"].([]any) {
+		if r, ok := s.(map[string]any)["run"].(string); ok {
+			out = append(out, r)
+		}
 	}
 	return out
 }

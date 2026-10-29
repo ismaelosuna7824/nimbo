@@ -165,7 +165,7 @@ func TestPrompts(t *testing.T) {
 		t.Fatal(err)
 	}
 	cat := PromptCatalog()
-	if len(res.Prompts) != len(cat) || len(cat) != 11 {
+	if len(res.Prompts) != len(cat) || len(cat) != 12 {
 		t.Fatalf("server lists %d prompts, catalog %d", len(res.Prompts), len(cat))
 	}
 	for i, p := range res.Prompts {
@@ -188,6 +188,12 @@ func TestPrompts(t *testing.T) {
 	}
 	if got := text("extend_workflow", map[string]string{"request": "add an SQS queue"}); !strings.Contains(got, "add an SQS queue") || !strings.Contains(got, `"current"`) {
 		t.Fatalf("extend_workflow defaults to current: %s", got)
+	}
+	if got := text("spec_feature", map[string]string{"request": "checkout orders"}); !strings.Contains(got, "checkout orders") || !strings.Contains(got, `"current"`) || !strings.Contains(got, "[NEEDS CLARIFICATION") || !strings.Contains(got, "#### Scenario:") {
+		t.Fatalf("spec_feature: %s", got)
+	}
+	if got := text("create_infrastructure", map[string]string{"request": "an API"}); !strings.Contains(got, "update_workflow mode") || !strings.Contains(got, "spec_feature") {
+		t.Fatalf("create_infrastructure lacks the mode step: %s", got)
 	}
 	if got := text("load_test", map[string]string{"workflow": "shop", "goal": "p95 < 200ms"}); !strings.Contains(got, `"shop"`) || !strings.Contains(got, "p95 < 200ms") {
 		t.Fatalf("load_test: %s", got)

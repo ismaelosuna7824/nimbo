@@ -7,6 +7,9 @@ import (
 	sdk "github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
+// modeStep is the build-mode step of the recipes that write code.
+const modeStep = `Build mode (once, before any code): get_workflow shows mode. Unless the user already said, ask once whether they want architecture (default: infrastructure, diagram and minimal smoke handlers that prove the wiring: health, a write/read per connected store, publish/consume a test message) or full code (real application code; ask which language, or propose options with reasons from code_guidelines). Set it with update_workflow mode (create_workflow mode for a new workflow). Full: run the spec_feature recipe first (no code while [NEEDS CLARIFICATION] remains), then code_guidelines (mode full, language, style, platform) for the layout, packaging and tests. Architecture: write only the smoke handlers from code_guidelines (mode architecture) Files. Application code always lives in services/<svc>/ asset files written with apply_terraform_code, never inline in Terraform (archive_file source_dir; a Dockerfile package stage when it needs a build).`
+
 // registerPrompts adds the guided multi-step recipes agents can offer to
 // the user (slash commands in most MCP clients).
 func registerPrompts(r *registry) {
@@ -31,6 +34,8 @@ func registerPrompts(r *registry) {
 Platform: %s.
 
 The design is the spec. Do not drop, merge or swap components, and do not change the architecture on your own: improvements are proposals the user approves.
+
+`+modeStep+`
 
 Steps:
 1. Inventory: list every component (service, resource, container, Kubernetes object), every connection and its direction, and every container/boundary (account, region, VPC, subnets, namespaces) the design shows. Mark actors that are not resources (users, operators, email recipients, external systems) and say how each is represented (an attribute such as an SNS email subscription, an output, or a note).
@@ -58,6 +63,8 @@ Nothing touches a real cloud: everything runs locally.`, design, platform), nil
 			return "", err
 		}
 		return fmt.Sprintf(`Build this Docker stack with the Nimbo tools: %s
+
+`+modeStep+`
 
 Steps:
 1. architecture_patterns (platform docker) with the request: pick the simplest style/patterns that fit (e.g. web-queue-worker when work can be async, cache-aside only for a measured read need) and tell the user what you left out. Then list_templates: if a docker-* template is close, create_workflow from it (templates are worked examples of every practice below; category "edge-patterns" has a reverse proxy, an API gateway and a load balancer); otherwise create_workflow kind "docker" with a short descriptive name.
@@ -96,6 +103,8 @@ Steps:
 		return fmt.Sprintf(`Build this infrastructure with the Nimbo tools: %s
 Cloud: %s.
 
+`+modeStep+`
+
 Steps:
 1. architecture_patterns with the request and the cloud: choose the simplest style and patterns that meet it (one-line why each, what you left out). Then plan the structure (the plan_structure recipe): list the resources per logical group (network foundation, data tier, security controls, each app/service) and estimate their count. Around 100 resources or more: one workflow per layer (network, data, app), each with its own state, upper layers finding lower ones with data sources by tags/IDs. Two or more environments (dev, prod, ...): the environments layout, one state per environment. Tell the user the plan in a few lines before building.
 2. list_templates; if one is close, create_workflow from it, otherwise create_workflow empty with a short descriptive name (one per layer when you split).
@@ -125,6 +134,8 @@ Nothing touches a real cloud: everything runs in the local Floci emulator. Tell 
 			return "", err
 		}
 		return fmt.Sprintf(`Build this Kubernetes app with the Nimbo tools: %s
+
+`+modeStep+`
 
 Steps:
 1. architecture_patterns (platform kubernetes) with the request: choose the simplest style/patterns that fit (one-line why each, what you left out). Then list_templates: if a k8s-* template is close (web app + PostgreSQL, Kustomize dev/prod, Helm chart, microservices with Ingress + HPA, CronJob worker, and the "edge-patterns" reverse proxy, API gateway and load balancer), create_workflow from it; with an existing docker workflow, deploy it and run_load_test against its HTTP service, then convert_to_kubernetes with format kustomize or helm (requests/limits sized from that run, HPAs in prod); otherwise create_workflow kind "kubernetes". Several environments: Kustomize overlays/<env> or Helm values-<env>.yaml.
@@ -163,6 +174,8 @@ Steps:
 		return fmt.Sprintf(`Design this as a senior architect with the Nimbo tools: %s
 Platform: %s.
 Environment intent: %s.
+
+`+modeStep+`
 
 Steps:
 1. Requirements: restate the requirement in one or two lines, then the non-functional requirements to settle: exposure (public or internal), expected traffic and peaks, latency targets, consistency needs (strong vs eventual), data sensitivity and compliance (CIS, PCI, HIPAA), availability target, team/ops maturity, budget and environments. Ask the user only what you cannot reasonably assume; state every assumption you make.
@@ -319,6 +332,37 @@ Do not add resources yet. Follow HashiCorp's style guide, Google Cloud's root-mo
      environments/dev  environments/prod   (one backend.tf and state each)
    plus a table: workflow → layer → modules → estimated resources → environments → how it finds the layers below.
 7. After the OK: create_workflow per workflow (descriptive names, e.g. "shop-network"), add each group's resources and connect them, extract_module per group (dry_run=true first), set_environment per environment, update_workflow layout if it should differ from auto, then review_terraform: its structure must match the plan and its findings should be fixed (warnings first); then recommend_improvements and propose its items to the user.`, req), nil
+	})
+
+	r.addPrompt(&sdk.Prompt{
+		Name:        "spec_feature",
+		Title:       "Spec a feature",
+		Description: "Spec-driven clarification before code (OpenSpec style): ask the questions that complete the flows, write the proposal, specs with scenarios, design and tasks in the workflow's openspec/ files, then implement the tasks.",
+		Arguments: []*sdk.PromptArgument{
+			{Name: "request", Description: "the feature or system to build, e.g. \"customers place orders that billing charges and shipping fulfils\"", Required: true},
+			{Name: "workflow", Description: "workflow ID or name (default: current, the workflow open in the app)"},
+		},
+	}, func(a map[string]string) (string, error) {
+		req, err := required(a, "request")
+		if err != nil {
+			return "", err
+		}
+		return fmt.Sprintf(`Spec this before writing any code, with the Nimbo tools: %s
+Workflow: %q.
+
+The spec lives in the workflow's files (read with get_workflow_files prefix "openspec/", write with apply_terraform_code), OpenSpec style: openspec/project.md (context and conventions), openspec/specs/<capability>/spec.md (the current truth) and openspec/changes/<change-id>/ (proposals being worked on).
+
+Steps:
+1. Context: read openspec/project.md (create it if missing: purpose, domain glossary, platform, language and code style, conventions) and the existing openspec/specs/. Set the workflow to full mode (update_workflow mode "full") if it is not.
+2. Clarify: ask the user in small batches (3-5 questions each, offering a sensible default per question) until the flows are complete: actors and their goals; use cases; the happy path, edge cases and failure paths of each; data, its owner and lifetime; consistency and idempotency (what may be eventual, duplicate deliveries, retries); authentication and authorization; non-functional requirements (traffic, latency, availability, retention, compliance). Never invent business rules: mark each open point [NEEDS CLARIFICATION: question] in the spec.
+3. Write the change (kebab-case <change-id>, e.g. add-order-checkout) with apply_terraform_code:
+   - openspec/changes/<change-id>/proposal.md: Why, What changes, Impact (capabilities, services, data).
+   - openspec/changes/<change-id>/specs/<capability>/spec.md: ## ADDED|MODIFIED|REMOVED Requirements, each "### Requirement: <name>" with SHALL/MUST text and at least one "#### Scenario: <name>" written as GIVEN / WHEN / THEN bullets (happy, edge and failure paths).
+   - openspec/changes/<change-id>/design.md: an ADR: context, decision (architecture style and patterns from architecture_patterns; code style, layout and language from code_guidelines: hexagonal ports and adapters, DDD only where the domain justifies it, modular monolith unless the requirements justify microservices, event sourcing, CQRS or sagas), alternatives and consequences.
+   - openspec/changes/<change-id>/tasks.md: numbered checkbox tasks ("- [ ] 1.1 ..."), infrastructure, code per service, tests, deploy and smoke test.
+4. Gate: show the user the proposal and the open questions. No design or code while any [NEEDS CLARIFICATION] remains; resolve each with the user and update the files.
+5. Implement tasks.md in order: application code in services/<svc>/ asset files per code_guidelines (never inline in Terraform), tests next to it, the infrastructure with the usual tools; check each task off ("- [x]") in tasks.md as it is done. Deploy and prove the scenarios (try_endpoint, a smoke load test).
+6. Archive: when every task is checked, merge the change's spec deltas into openspec/specs/<capability>/spec.md, move the change to openspec/changes/archive/<YYYY-MM-DD>-<change-id>/ (write the new files, delete the old ones with "") and summarize what was built and what stays open.`, req, workflowOrCurrent(a["workflow"])), nil
 	})
 
 	r.addPrompt(&sdk.Prompt{

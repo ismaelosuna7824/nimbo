@@ -2,6 +2,7 @@ package cicd
 
 import (
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -145,7 +146,45 @@ func (g *gen) terraform() error {
 	if envLayout {
 		tools = append(tools, toolMake)
 	}
-	validate := []step{{"Format", "terraform fmt -check -recursive -diff"}}
+	// build: the service builds the jobs run before Terraform. In the
+	// environments layout `make plan` and `make apply` build first, so
+	// only validate (which doesn't run them) needs the step.
+	dists, images := g.opts.Builds.Dists, g.opts.Builds.Images
+	var build, planBuild []step
+	if len(dists) > 0 {
+		tools = append(tools, toolDockerBuild)
+		if envLayout {
+			build = []step{{"Build services", "make build"}}
+		} else {
+			build = []step{{"Build services", hclcodec.ServiceBuildScript(dists)}}
+			planBuild = build
+		}
+	}
+	// imageVars points the image variables at the images the build job
+	// (pushJob) pushes, when a registry is set (else the Terraform keeps
+	// its defaults).
+	imageVars := ""
+	var pushJob *job
+	if len(images) > 0 {
+		g.use(setting{name: "IMAGE_REGISTRY", about: "Registry repository the container images are pushed to (e.g. <account>.dkr.ecr.<region>.amazonaws.com/<project>, <name>.azurecr.io/<project>, <region>-docker.pkg.dev/<project>/<repo>, <region>.ocir.io/<namespace>/<project>); unset: images are neither built for the cloud nor pushed, and the Terraform keeps its nimbo.local defaults"})
+		g.use(setting{name: "REGISTRY_USERNAME", about: "User the build job logs in to the registry with (docker login); unset: no login"})
+		g.use(setting{name: "REGISTRY_PASSWORD", secret: true, about: "Password or token of REGISTRY_USERNAME"})
+		var push, vars strings.Builder
+		push.WriteString("if [ -z \"${IMAGE_REGISTRY:-}\" ]; then\n  " + g.warn("IMAGE_REGISTRY is not set: the images are not pushed") + "\n  exit 0\nfi\n")
+		push.WriteString("if [ -n \"${REGISTRY_USERNAME:-}\" ]; then\n  printf '%s' \"$REGISTRY_PASSWORD\" | docker login \"${IMAGE_REGISTRY%%/*}\" -u \"$REGISTRY_USERNAME\" --password-stdin\nfi\n")
+		vars.WriteString("if [ -n \"${IMAGE_REGISTRY:-}\" ]; then\n")
+		for _, img := range images {
+			ref := "\"$IMAGE_REGISTRY/" + img.Name + ":" + g.sha() + "\""
+			push.WriteString(hclcodec.ImageBuildCommand(img, ref) + "\ndocker push " + ref + "\n")
+			vars.WriteString("  export TF_VAR_" + hclcodec.ImageVariable(img.Name) + "=" + ref + "\n")
+		}
+		vars.WriteString("fi\n")
+		imageVars = vars.String()
+		pushJob = &job{id: "images", name: "Build and push images", stage: stageBuild, on: release, needs: []string{"validate"},
+			tools: []tool{toolDockerBuild}, settings: []string{"IMAGE_REGISTRY", "REGISTRY_USERNAME", "REGISTRY_PASSWORD"},
+			steps: []step{{"Build and push", strings.TrimSuffix(push.String(), "\n")}}}
+	}
+	validate := append([]step{{"Format", "terraform fmt -check -recursive -diff"}}, build...)
 	if envLayout {
 		var b strings.Builder
 		for _, t := range tts {
@@ -156,24 +195,33 @@ func (g *gen) terraform() error {
 		validate = append(validate, step{"Validate", "terraform init -backend=false -input=false\nterraform validate"})
 	}
 	g.add(job{id: "validate", name: "Format and validate", stage: stageCheck, on: everyRun, tools: tools, steps: validate})
+	if pushJob != nil {
+		g.add(*pushJob)
+	}
 
 	settings := append([]string{"TF_BACKEND_CONFIG"}, sensitive...)
+	if len(images) > 0 {
+		settings = append(settings, "IMAGE_REGISTRY")
+	}
 	runTools := append(append([]tool(nil), tools...), clouds...)
 	prev := ""
 	for _, t := range tts {
 		planFile := "plan-" + t.id + ".txt"
-		plan := []step{g.tfBackend(t, false), g.tfInit(t)}
-		plan = append(plan, step{"Plan", g.tfPlan(t) + "\n" + g.tfShow(t, planFile) + g.summary("Terraform plan: "+t.name, planFile)})
+		plan := append(slices.Clone(planBuild), g.tfBackend(t, false), g.tfInit(t))
+		plan = append(plan, step{"Plan", imageVars + g.tfPlan(t) + "\n" + g.tfShow(t, planFile) + g.summary("Terraform plan: "+t.name, planFile)})
 		g.add(job{
 			id: "plan-" + t.id, name: "Plan " + t.name, stage: stagePlan, on: review, needs: []string{"validate"},
 			env: t.name, tools: runTools, settings: settings, steps: plan,
 			artifacts: []string{planFile}, artifactName: "terraform-plan-" + t.id,
 		})
 		needs := []string{"validate"}
+		if len(images) > 0 {
+			needs = append(needs, "images")
+		}
 		if prev != "" {
 			needs = append(needs, prev)
 		}
-		apply := []step{g.tfBackend(t, true), g.tfInit(t), {"Plan", g.tfPlan(t)}, {"Apply", g.tfApply(t)}}
+		apply := append(slices.Clone(planBuild), g.tfBackend(t, true), g.tfInit(t), step{"Plan", imageVars + g.tfPlan(t)}, step{"Apply", g.tfApply(t)})
 		id := "apply-" + t.id
 		g.add(job{
 			id: id, name: "Apply " + t.name, stage: stageDeploy, on: release, needs: needs,
@@ -191,6 +239,25 @@ func (g *gen) terraform() error {
 		envs[i] = "`" + t.name + "`"
 	}
 	g.overview = append(g.overview, "- **Format and validate** (every push and pull request): `terraform fmt -check -recursive`, then `terraform validate` of every root without touching the state.")
+	if len(dists) > 0 {
+		how := ""
+		if envLayout {
+			how = ": `make build`, which `make plan` and `make apply` run first"
+		}
+		g.overview = append(g.overview, "- **Build services** (before Terraform in every job"+how+"): `docker build --target package --output type=local,dest=<service>/dist <service>` "+
+			"exports the `package` stage of each service's Dockerfile ("+strings.Join(quoteAll(dists), ", ")+") into the `dist/` folder the Terraform packages, so a source change that doesn't build fails the pipeline before any plan.")
+		g.notes = append(g.notes, g.ifGitHub("Service builds use the Docker Engine and Buildx of the GitHub-hosted runner (self-hosted runners need both).",
+			"Service builds run in the Terraform jobs through a docker:dind service (the docker CLI and Buildx are installed from Alpine): the runner must allow privileged containers."))
+	}
+	if len(images) > 0 {
+		var names []string
+		for _, img := range images {
+			names = append(names, "`"+img.Name+"` ("+img.Dir+", variable `"+hclcodec.ImageVariable(img.Name)+"`)")
+		}
+		g.overview = append(g.overview, "- **Build and push images** (pushes to the default branch, before the applies): builds each container image the Terraform runs ("+strings.Join(names, ", ")+
+			") and pushes it as `$IMAGE_REGISTRY/<image>:<commit>`; every plan then sets `TF_VAR_<variable>` to that reference. Without `IMAGE_REGISTRY` nothing is pushed and the Terraform keeps its `nimbo.local/<image>:latest` defaults, which only the Nimbo sandbox can run.")
+		g.notes = append(g.notes, "Container images: set IMAGE_REGISTRY to a registry your cloud pulls from (ECR, ACR, Artifact Registry, OCIR) and REGISTRY_USERNAME/REGISTRY_PASSWORD to credentials that may push; registries with short-lived tokens (ECR, Artifact Registry) need a token refreshed by your pipeline, e.g. aws ecr get-login-password.")
+	}
 	if envLayout {
 		g.overview = append(g.overview,
 			"- **Plan** (pull requests, one job per environment: "+strings.Join(envs, ", ")+"): `make init plan ENV=<env>`; the plan is attached to the run as an artifact"+g.ifGitHub(" and shown on its summary page", " linked from the merge request")+".",

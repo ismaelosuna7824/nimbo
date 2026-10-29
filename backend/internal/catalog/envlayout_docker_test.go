@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -46,6 +47,18 @@ func envLayoutTree(t *testing.T, c *Catalog, id string) string {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { os.RemoveAll(dir) })
+	// Asset files (function sources) go where an export places them: into
+	// the service module, next to the archive_file reading them through
+	// path.module.
+	place := hclcodec.AssetPlacement(wf)
+	for name, data := range files {
+		if !strings.Contains(name, "/") {
+			continue
+		}
+		for _, dst := range place(name) {
+			out[dst] = data
+		}
+	}
 	for name, data := range out {
 		p := filepath.Join(dir, filepath.FromSlash(name))
 		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {

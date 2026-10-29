@@ -153,11 +153,13 @@ func (s *Server) createChallengeWorkflow(name string, c model.Challenge, st chal
 	}
 	wf.Name, wf.Description, wf.Challenge = name, c.Summary, c.ID
 	wf.Icon = s.randomIcon()
-	if !wf.IsTerraform() {
-		if err := s.writeAssets(wf.ID, files); err != nil {
-			_ = s.cfg.Store.Delete(wf.ID)
-			return nil, err
-		}
+	assets := files
+	if wf.IsTerraform() {
+		assets = terraformAssets(files) // e.g. a template's function sources
+	}
+	if err := s.writeAssets(wf.ID, assets); err != nil {
+		_ = s.cfg.Store.Delete(wf.ID)
+		return nil, err
 	}
 	if err := s.save(wf, extra); err != nil {
 		_ = s.cfg.Store.Delete(wf.ID)

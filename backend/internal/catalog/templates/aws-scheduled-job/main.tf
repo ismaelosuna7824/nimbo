@@ -1,17 +1,7 @@
 data "archive_file" "job" {
   type        = "zip"
+  source_dir  = "${path.module}/services/job/src"
   output_path = "${path.module}/build/job.zip"
-
-  source {
-    filename = "index.mjs"
-    content  = <<-EOT
-      export const handler = async (event) => {
-        const ranAt = new Date().toISOString();
-        console.log("scheduled job ran", ranAt, JSON.stringify(event));
-        return { ok: true, ranAt };
-      };
-    EOT
-  }
 }
 
 resource "aws_iam_role" "lambda" {

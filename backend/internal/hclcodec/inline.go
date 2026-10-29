@@ -19,6 +19,11 @@ type Inlining struct {
 	Dir string
 	// Moved are the root `moved` blocks added.
 	Moved []model.MovedAddress
+	// AssetMoves are the module's files its blocks read through
+	// "${path.module}/<path>" that move back to the root
+	// (modules/<name>/services/<svc> -> services/<svc>), the reverse of
+	// ExtractModule's.
+	AssetMoves []AssetMove
 }
 
 // InlineModule replaces the call of a local module (nodeRef: ID or address)
@@ -30,10 +35,14 @@ type Inlining struct {
 // a root `moved` block moves every resource and nested module call out of
 // the module (moved blocks in the opposite direction are dropped). files
 // are the module directory's files (name -> content; only *.tf are read).
+// Files the blocks read through "${path.module}/<path>" move back to the
+// root (AssetMoves) unless rootHas reports that path taken (nil: nothing
+// is) or the root reads it; those stay in the module folder, read through
+// ${path.module}/modules/<name>/<path>.
 //
 // Only modules called once and without count/for_each can be inlined. wf is
 // changed only on success; call Normalize afterwards.
-func InlineModule(wf *model.Workflow, nodeRef string, files map[string][]byte) (*Inlining, error) {
+func InlineModule(wf *model.Workflow, nodeRef string, files map[string][]byte, rootHas func(rel string) bool) (*Inlining, error) {
 	work, err := cloneWorkflow(wf)
 	if err != nil {
 		return nil, err
@@ -88,7 +97,8 @@ func InlineModule(wf *model.Workflow, nodeRef string, files map[string][]byte) (
 		}
 	}
 
-	in := &inliner{root: work, mod: mod, call: call, callAddr: callAddr, dir: dir, args: map[string]string{}, modAddr: map[string]bool{}}
+	in := &inliner{root: work, mod: mod, call: call, callAddr: callAddr, dir: dir, args: map[string]string{}, modAddr: map[string]bool{},
+		rootHas: rootHas, rootUnits: rootPathUnits(work, func(n *model.Node) bool { return n == call }), assetUnits: map[string]bool{}}
 	if err := in.prepare(); err != nil {
 		return nil, err
 	}
@@ -112,6 +122,15 @@ type inliner struct {
 	providers map[string]string // module provider configuration -> root configuration
 	modAddr   map[string]bool   // addresses of the module's nodes
 	dependsOn []string          // the call's depends_on elements
+
+	rootHas    func(rel string) bool
+	rootUnits  []string        // asset units the root reads
+	assetUnits map[string]bool // asset units moving back to the root
+}
+
+// movable reports whether the module's asset unit can move to the root.
+func (in *inliner) movable(unit string) bool {
+	return unit != "" && !overlapsAny(unit, in.rootUnits) && (in.rootHas == nil || !in.rootHas(unit))
 }
 
 // prepare resolves variable values and provider mappings and checks for
@@ -264,10 +283,19 @@ func (in *inliner) substAttr(a *model.Attr) error {
 		return fmt.Errorf("%s: %w", a.Name, err)
 	}
 	var spans []span
+	back := map[int]bool{}
+	for _, p := range pathRefs(e) {
+		if p.root == "module" && in.movable(p.unit) {
+			back[p.start] = true
+			in.assetUnits[p.unit] = true
+		}
+	}
 	for _, r := range references(e, func(string) bool { return false }) {
 		switch {
 		case r.addr == "path.module":
-			spans = append(spans, pathModuleSpan(expr, r, in.dir))
+			if !back[r.start] {
+				spans = append(spans, pathModuleSpan(expr, r, in.dir))
+			}
 		case strings.HasPrefix(r.addr, "var."):
 			name := strings.TrimPrefix(r.addr, "var.")
 			arg, ok := in.args[name]
@@ -517,7 +545,7 @@ func expandDependsOn(expr, callAddr string, addrs []string) (string, error) {
 
 // assemble puts the module blocks in place of the call and adds moved blocks.
 func (in *inliner) assemble(wf *model.Workflow) (*Inlining, error) {
-	res := &Inlining{Dir: in.dir, Moved: []model.MovedAddress{}}
+	res := &Inlining{Dir: in.dir, Moved: []model.MovedAddress{}, AssetMoves: assetMoves(in.assetUnits, in.dir, "")}
 	used := map[string]bool{}
 	callIdx := 0
 	for i := range in.root.Nodes {

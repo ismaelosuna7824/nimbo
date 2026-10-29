@@ -1,0 +1,2 @@
+functions-framework>=3.8
+psycopg[binary]>=3.2

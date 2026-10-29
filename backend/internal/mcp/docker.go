@@ -53,6 +53,7 @@ type dockerView struct {
 	Name         string   `json:"name"`
 	Description  string   `json:"description,omitempty"`
 	Kind         string   `json:"kind"`
+	Mode         string   `json:"mode"` // architecture | full
 	Project      string   `json:"project"`
 	ComposeFiles []string `json:"compose_files"`
 	Profiles     []string `json:"profiles,omitempty"`
@@ -74,7 +75,7 @@ type dockerView struct {
 }
 
 func viewDocker(wf *model.Workflow) dockerView {
-	v := dockerView{ID: wf.ID, Name: wf.Name, Description: wf.Description, Kind: wf.Kind, Services: []dockerServiceView{}}
+	v := dockerView{ID: wf.ID, Name: wf.Name, Description: wf.Description, Kind: wf.Kind, Mode: wf.EffectiveMode(), Services: []dockerServiceView{}}
 	if wf.Compose != nil {
 		c := wf.Compose
 		v.Project, v.ComposeFiles, v.Profiles, v.Unresolved = c.Project, c.Files, c.Profiles, c.Unresolved
@@ -248,15 +249,7 @@ func redactEnv(s string) string {
 // applyFileChanges writes files of a docker or Kubernetes workflow (PUT
 // /terraform changes): "" deletes a file.
 func (t *tools) applyFileChanges(ctx context.Context, wf *model.Workflow, files map[string]string) (any, error) {
-	changes := map[string]*string{}
-	for p, c := range files {
-		if c == "" {
-			changes[p] = nil
-			continue
-		}
-		c := c
-		changes[p] = &c
-	}
+	changes := fileChanges(files)
 	var out model.Workflow
 	if err := t.c.do(ctx, http.MethodPut, "/workflows/"+pathEscape(wf.ID)+"/terraform", map[string]any{"changes": changes}, &out); err != nil {
 		return nil, err

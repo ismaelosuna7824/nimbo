@@ -285,8 +285,12 @@ func TestExtractModule(t *testing.T) {
 		t.Fatalf("module diagnostics: %+v", diags)
 	}
 	worker := node(t, mod, "aws_lambda_function.worker")
-	if expr(t, &worker.Body, "role") != "var.lambda_arn" || expr(t, &worker.Body, "filename") != `"${path.root}/build/fn.zip"` {
+	// The zip it reads moves with it; the path keeps ${path.module}.
+	if expr(t, &worker.Body, "role") != "var.lambda_arn" || expr(t, &worker.Body, "filename") != `"${path.module}/build/fn.zip"` {
 		t.Errorf("worker = %+v", worker.Body.Attrs)
+	}
+	if !slices.Equal(ex.AssetMoves, []AssetMove{{From: "build/fn.zip", To: "modules/queue_worker/build/fn.zip"}}) {
+		t.Errorf("asset moves = %+v", ex.AssetMoves)
 	}
 	if attrOf(&worker.Body, "depends_on") != nil {
 		t.Errorf("worker keeps depends_on on a root resource")
@@ -332,7 +336,7 @@ func TestInlineModuleRoundTrip(t *testing.T) {
 		t.Fatal(err)
 	}
 	Normalize(wf)
-	res, err := InlineModule(wf, "module.queue_worker", moduleFiles(ex))
+	res, err := InlineModule(wf, "module.queue_worker", moduleFiles(ex), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -368,7 +372,7 @@ func TestInlineModuleRoundTrip(t *testing.T) {
 	for addr, attrs := range map[string]map[string]string{
 		"aws_sqs_queue.jobs":                {"name": `"${var.env}-jobs"`, "tags": "local.tags"},
 		"aws_sqs_queue.dlq":                 {"provider": "aws.east", "count": "2"},
-		"aws_lambda_function.worker":        {"role": "aws_iam_role.lambda.arn", "filename": `"${path.root}/build/fn.zip"`, "depends_on": "[aws_iam_role.lambda]"},
+		"aws_lambda_function.worker":        {"role": "aws_iam_role.lambda.arn", "filename": `"${path.module}/build/fn.zip"`, "depends_on": "[aws_iam_role.lambda]"},
 		"aws_lambda_event_source_mapping.m": {"event_source_arn": "aws_sqs_queue.jobs.arn", "function_name": "aws_lambda_function.worker.arn"},
 	} {
 		n := node(t, wf, addr)
@@ -389,6 +393,9 @@ func TestInlineModuleRoundTrip(t *testing.T) {
 			t.Errorf("import to = %s", getAttrValue(&b.Body, "to"))
 		}
 	}
+	if !slices.Equal(res.AssetMoves, []AssetMove{{From: "modules/queue_worker/build/fn.zip", To: "build/fn.zip"}}) {
+		t.Errorf("inline asset moves = %+v", res.AssetMoves)
+	}
 
 	// Extracting again replaces the reverse moved blocks instead of chaining a cycle.
 	if _, err := ExtractModule(wf, []string{"aws_sqs_queue.jobs"}, "queue_worker", ExtractOptions{}); err != nil {
@@ -398,6 +405,91 @@ func TestInlineModuleRoundTrip(t *testing.T) {
 		if m.From == "module.queue_worker.aws_sqs_queue.jobs" {
 			t.Errorf("reverse moved block kept: %+v", movedBlocks(wf))
 		}
+	}
+}
+
+// Files the moved blocks read move into the module with them (a service
+// folder as a whole) and keep ${path.module}; path.root becomes
+// path.module for them; a file the root still reads stays, read through
+// path.root. Inlining moves them back.
+func TestExtractInlineAssetPaths(t *testing.T) {
+	wf, _ := mustImport(t, map[string][]byte{"main.tf": []byte(`
+locals {
+  n = "api"
+}
+
+data "archive_file" "worker" {
+  type        = "zip"
+  source_dir  = "${path.module}/services/worker/src"
+  output_path = "${path.module}/build/worker.zip"
+}
+
+data "archive_file" "api" {
+  type        = "zip"
+  source_dir  = "${path.root}/services/api/src/"
+  output_path = "${path.module}/build/${local.n}.zip"
+}
+
+resource "aws_ssm_parameter" "cfg" {
+  name  = "cfg"
+  type  = "String"
+  value = file("${path.module}/shared/config.json")
+}
+
+resource "aws_ssm_parameter" "root_cfg" {
+  name  = "root-cfg"
+  type  = "String"
+  value = file("${path.module}/shared/config.json")
+}
+`)})
+	Normalize(wf)
+	ex, err := ExtractModule(wf, []string{"data.archive_file.worker", "data.archive_file.api", "aws_ssm_parameter.cfg"}, "app", ExtractOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []AssetMove{
+		{From: "build", To: "modules/app/build"},
+		{From: "services/api", To: "modules/app/services/api"},
+		{From: "services/worker", To: "modules/app/services/worker"},
+	}
+	if !slices.Equal(ex.AssetMoves, want) {
+		t.Errorf("asset moves = %+v, want %+v", ex.AssetMoves, want)
+	}
+	mod, _, err := Import("app", moduleFiles(ex))
+	if err != nil {
+		t.Fatal(err)
+	}
+	Normalize(mod)
+	for addr, attrs := range map[string]map[string]string{
+		"data.archive_file.worker": {"source_dir": `"${path.module}/services/worker/src"`, "output_path": `"${path.module}/build/worker.zip"`},
+		"data.archive_file.api":    {"source_dir": `"${path.module}/services/api/src/"`},
+		"aws_ssm_parameter.cfg":    {"value": `file("${path.root}/shared/config.json")`},
+	} {
+		for name, w := range attrs {
+			if got := expr(t, &node(t, mod, addr).Body, name); got != w {
+				t.Errorf("%s.%s = %s, want %s", addr, name, got, w)
+			}
+		}
+	}
+
+	Normalize(wf)
+	res, err := InlineModule(wf, "module.app", moduleFiles(ex), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	back := []AssetMove{
+		{From: "modules/app/build", To: "build"},
+		{From: "modules/app/services/api", To: "services/api"},
+		{From: "modules/app/services/worker", To: "services/worker"},
+	}
+	if !slices.Equal(res.AssetMoves, back) {
+		t.Errorf("inline asset moves = %+v, want %+v", res.AssetMoves, back)
+	}
+	if got := expr(t, &node(t, wf, "data.archive_file.worker").Body, "source_dir"); got != `"${path.module}/services/worker/src"` {
+		t.Errorf("inlined worker source_dir = %s", got)
+	}
+	if got := expr(t, &node(t, wf, "aws_ssm_parameter.cfg").Body, "value"); got != `file("${path.root}/shared/config.json")` {
+		t.Errorf("inlined cfg value = %s", got)
 	}
 }
 
@@ -585,17 +677,32 @@ moved {
 `)})
 	Normalize(wf)
 	wf.Nodes[1].Position = model.Position{X: 400, Y: 200}
-	res, err := InlineModule(wf, "module.svc", map[string][]byte{"main.tf": []byte(inlineModuleFiles), "policy.json": []byte("{}")})
+	// policy.json taken in the root: it stays in the module folder.
+	kept, err := cloneWorkflow(wf)
+	if err != nil {
+		t.Fatal(err)
+	}
+	keptRes, err := InlineModule(kept, "module.svc", map[string][]byte{"main.tf": []byte(inlineModuleFiles)}, func(rel string) bool { return rel == "policy.json" })
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := expr(t, &node(t, kept, "aws_sqs_queue.q").Body, "policy"); got != `file("${path.module}/modules/svc/policy.json")` || len(keptRes.AssetMoves) != 0 {
+		t.Errorf("taken policy.json: policy = %s, moves %+v", got, keptRes.AssetMoves)
+	}
+	res, err := InlineModule(wf, "module.svc", map[string][]byte{"main.tf": []byte(inlineModuleFiles), "policy.json": []byte("{}")}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if diags := Normalize(wf); hasErrors(diags) {
 		t.Fatalf("diagnostics: %+v", diags)
 	}
+	if !slices.Equal(res.AssetMoves, []AssetMove{{From: "modules/svc/policy.json", To: "policy.json"}}) {
+		t.Errorf("asset moves = %+v", res.AssetMoves)
+	}
 	q := node(t, wf, "aws_sqs_queue.q")
 	for name, want := range map[string]string{
 		"name":       `"${local.prefix}-${2}"`,
-		"policy":     `file("${path.module}/modules/svc/policy.json")`,
+		"policy":     `file("${path.module}/policy.json")`,
 		"provider":   "aws.east",
 		"depends_on": "[aws_sqs_queue.dep]",
 	} {
@@ -649,7 +756,7 @@ func TestInlineModuleRejects(t *testing.T) {
 			wf, _ := mustImport(t, map[string][]byte{"main.tf": []byte(tc.src)})
 			Normalize(wf)
 			before := toJSON(t, wf)
-			_, err := InlineModule(wf, "module.m", mod)
+			_, err := InlineModule(wf, "module.m", mod, nil)
 			if err == nil || !strings.Contains(err.Error(), tc.want) {
 				t.Fatalf("err = %v, want %q", err, tc.want)
 			}

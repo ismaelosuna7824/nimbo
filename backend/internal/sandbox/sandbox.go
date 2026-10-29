@@ -864,6 +864,7 @@ func (m *Manager) remove(ctx context.Context, sb *sandbox) error {
 	if err := m.removeSpawned(ctx, wfID); err != nil {
 		return err
 	}
+	m.removeImages(ctx, wfID)
 	if pod != nil {
 		if err := m.removeContainers(ctx, pod.Names); err != nil {
 			return err

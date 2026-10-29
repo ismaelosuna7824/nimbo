@@ -59,6 +59,10 @@ type curatedType struct {
 	Blocks      []initBlock           `json:"blocks"`
 	Needs       []need                `json:"needs"`
 	Companions  []companion           `json:"companions"`
+	// Files are workflow files the starter reads (slash path -> content,
+	// both with placeholders), e.g. the handler an archive_file zips with
+	// source_dir; see Catalog.StarterFiles.
+	Files *orderedMap[string] `json:"files"`
 }
 
 // attrMeta: Basic/Default/Enum annotate the schema; Init (constant) or Expr

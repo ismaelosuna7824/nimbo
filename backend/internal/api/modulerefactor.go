@@ -5,6 +5,7 @@ import (
 	"io/fs"
 	"net/http"
 	"os"
+	"path"
 	"path/filepath"
 	"strings"
 
@@ -93,13 +94,16 @@ func (s *Server) previewExtract(w http.ResponseWriter, r *http.Request) error {
 }
 
 // extractModule moves nodes into a new local module modules/<name> and
-// calls it in their place (see hclcodec.ExtractModule).
+// calls it in their place (see hclcodec.ExtractModule); the files the moved
+// blocks read move into the module folder with them.
 func (s *Server) extractModule(w http.ResponseWriter, r *http.Request) error {
 	req, dir, err := s.decodeExtract(w, r)
 	if err != nil {
 		return err
 	}
 	created := false
+	var root string
+	var moved []hclcodec.AssetMove
 	wf, err := s.mutate(r.PathValue("id"), func(wf *model.Workflow) ([]model.Diagnostic, error) {
 		if err := moduleDirTaken(dir, req.Name); err != nil {
 			return nil, err
@@ -109,7 +113,7 @@ func (s *Server) extractModule(w http.ResponseWriter, r *http.Request) error {
 			return nil, errorf(http.StatusBadRequest, "%s", err)
 		}
 		created = true
-		root := s.cfg.Store.AssetsDir(wf.ID)
+		root = s.cfg.Store.AssetsDir(wf.ID)
 		for p, data := range ex.Contents {
 			dst := filepath.Join(root, filepath.FromSlash(p))
 			if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
@@ -119,9 +123,11 @@ func (s *Server) extractModule(w http.ResponseWriter, r *http.Request) error {
 				return nil, err
 			}
 		}
-		return nil, nil
+		moved, err = moveAssets(root, ex.AssetMoves)
+		return nil, err
 	})
 	if err != nil {
+		undoAssetMoves(root, moved)
 		if created {
 			_ = os.RemoveAll(dir)
 		}
@@ -131,9 +137,11 @@ func (s *Server) extractModule(w http.ResponseWriter, r *http.Request) error {
 }
 
 // inlineModule replaces a local module call by the module's blocks (see
-// hclcodec.InlineModule) and deletes the module's Terraform files.
+// hclcodec.InlineModule), moves the files they read back to the root and
+// deletes the module's Terraform files.
 func (s *Server) inlineModule(w http.ResponseWriter, r *http.Request) error {
-	var dir string
+	var dir, root string
+	var moved []hclcodec.AssetMove
 	wf, err := s.mutate(r.PathValue("id"), func(wf *model.Workflow) ([]model.Diagnostic, error) {
 		nd, err := findNode(wf, r.PathValue("nodeId"))
 		if err != nil {
@@ -146,7 +154,7 @@ func (s *Server) inlineModule(w http.ResponseWriter, r *http.Request) error {
 		if !ok {
 			return nil, errorf(http.StatusBadRequest, "%s is not a local module inside the workflow files (its source is downloaded at deploy time); only local modules can be inlined", hclcodec.Address(nd))
 		}
-		root := s.cfg.Store.AssetsDir(wf.ID)
+		root = s.cfg.Store.AssetsDir(wf.ID)
 		dir = filepath.Join(root, filepath.FromSlash(rel))
 		if caller, err := otherModuleCaller(root, rel); err != nil {
 			return nil, err
@@ -160,12 +168,19 @@ func (s *Server) inlineModule(w http.ResponseWriter, r *http.Request) error {
 		if len(files) == 0 {
 			return nil, errorf(http.StatusNotFound, "%s has no Terraform files", rel)
 		}
-		if _, err := hclcodec.InlineModule(wf, nd.ID, files); err != nil {
+		rootHas := func(rel string) bool {
+			_, err := os.Lstat(filepath.Join(root, filepath.FromSlash(rel)))
+			return err == nil
+		}
+		res, err := hclcodec.InlineModule(wf, nd.ID, files, rootHas)
+		if err != nil {
 			return nil, errorf(http.StatusBadRequest, "%s", err)
 		}
-		return nil, nil
+		moved, err = moveAssets(root, res.AssetMoves)
+		return nil, err
 	})
 	if err != nil {
+		undoAssetMoves(root, moved)
 		return err
 	}
 	if err := removeModuleFiles(dir); err != nil {
@@ -224,4 +239,52 @@ func removeModuleFiles(dir string) error {
 		return os.Remove(dir)
 	}
 	return nil
+}
+
+// moveAssets moves the workflow files of moves that exist under the assets
+// directory root (creating parents, removing folders left empty) and
+// returns the moves done, for undoAssetMoves.
+func moveAssets(root string, moves []hclcodec.AssetMove) ([]hclcodec.AssetMove, error) {
+	var done []hclcodec.AssetMove
+	for _, m := range moves {
+		from := filepath.Join(root, filepath.FromSlash(m.From))
+		if _, err := os.Lstat(from); errors.Is(err, fs.ErrNotExist) {
+			continue
+		} else if err != nil {
+			return done, err
+		}
+		to := filepath.Join(root, filepath.FromSlash(m.To))
+		if _, err := os.Lstat(to); err == nil {
+			return done, errorf(http.StatusConflict, "%s already exists: move or delete it first", m.To)
+		}
+		if err := os.MkdirAll(filepath.Dir(to), 0o755); err != nil {
+			return done, err
+		}
+		if err := os.Rename(from, to); err != nil {
+			return done, err
+		}
+		pruneEmptyDirs(root, path.Dir(m.From))
+		done = append(done, m)
+	}
+	return done, nil
+}
+
+// undoAssetMoves moves the files of done back (best effort).
+func undoAssetMoves(root string, done []hclcodec.AssetMove) {
+	back := make([]hclcodec.AssetMove, 0, len(done))
+	for i := len(done) - 1; i >= 0; i-- {
+		back = append(back, hclcodec.AssetMove{From: done[i].To, To: done[i].From})
+	}
+	_, _ = moveAssets(root, back)
+}
+
+// pruneEmptyDirs removes the folder rel (slash path under root) and its
+// parents while they are empty.
+func pruneEmptyDirs(root, rel string) {
+	for rel != "." && rel != "" && rel != "/" {
+		if os.Remove(filepath.Join(root, filepath.FromSlash(rel))) != nil {
+			return
+		}
+		rel = path.Dir(rel)
+	}
 }

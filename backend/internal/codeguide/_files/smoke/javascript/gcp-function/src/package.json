@@ -1,0 +1,13 @@
+{
+  "name": "smoke",
+  "private": true,
+  "type": "module",
+  "main": "index.mjs",
+  "dependencies": {
+    "@google-cloud/functions-framework": "^3.4.0",
+    "@google-cloud/pubsub": "^4.9.0",
+    "@google-cloud/storage": "^7.14.0",
+    "pg": "^8.13.0",
+    "redis": "^4.7.0"
+  }
+}

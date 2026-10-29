@@ -275,11 +275,26 @@ func TestAddNodeLambdaStarter(t *testing.T) {
 	if got := attrExpr(t, fn, "role"); got != "aws_iam_role.function_role.arn" {
 		t.Errorf("role = %s", got)
 	}
-	if got := attrExpr(t, fn, "filename"); got != "data.archive_file.function_code.output_path" {
+	if got := attrExpr(t, fn, "filename"); got != "data.archive_file.function.output_path" {
 		t.Errorf("filename = %s", got)
 	}
-	if got := attrExpr(t, fn, "source_code_hash"); got != "data.archive_file.function_code.output_base64sha256" {
+	if got := attrExpr(t, fn, "source_code_hash"); got != "data.archive_file.function.output_base64sha256" {
 		t.Errorf("source_code_hash = %s", got)
+	}
+	// The handler is a workflow file the archive zips, never inline code.
+	code := nodeByAddr(t, wf, "data.archive_file.function")
+	if got := attrExpr(t, code, "source_dir"); got != `"${path.module}/services/function/src"` {
+		t.Errorf("source_dir = %s", got)
+	}
+	if getBlock(&code.Body, "source") != nil {
+		t.Error("archive_file has an inline source block")
+	}
+	files := c.StarterFiles(code)
+	if len(files) != 1 || !strings.Contains(string(files["services/function/src/index.mjs"]), "export const handler") {
+		t.Errorf("starter files = %v", files)
+	}
+	if c.StarterFiles(fn) != nil {
+		t.Error("the function itself has starter files")
 	}
 	role := nodeByAddr(t, wf, "aws_iam_role.function_role")
 	if !strings.Contains(attrExpr(t, role, "assume_role_policy"), "lambda.amazonaws.com") {
@@ -673,6 +688,52 @@ func TestTemplatesHaveFiles(t *testing.T) {
 	}
 	if _, ok := c.TemplateFiles("../curated"); ok {
 		t.Error("path traversal accepted")
+	}
+}
+
+// Templates package their function code from asset files: every
+// archive_file source_dir names a folder the template ships.
+func TestTemplateAssets(t *testing.T) {
+	c := mustLoad(t)
+	withAssets := 0
+	for _, tpl := range c.Templates() {
+		files, _ := c.TemplateFiles(tpl.ID)
+		wf, _, err := hclcodec.Import(tpl.ID, files)
+		if err != nil {
+			t.Fatalf("%s: %v", tpl.ID, err)
+		}
+		for i := range wf.Nodes {
+			n := &wf.Nodes[i]
+			if n.Kind != model.KindData || n.Type != "archive_file" {
+				continue
+			}
+			a := getAttr(&n.Body, "source_dir")
+			if a == nil {
+				continue
+			}
+			dir, ok := strings.CutPrefix(strings.Trim(valueSource(a.Value), `"`), "${path.module}/")
+			if !ok {
+				t.Errorf("%s: %s source_dir %s is not under path.module", tpl.ID, address(n), valueSource(a.Value))
+				continue
+			}
+			found := false
+			for p := range files {
+				found = found || strings.HasPrefix(p, dir+"/")
+			}
+			if !found {
+				t.Errorf("%s: %s zips %s, which the template doesn't ship", tpl.ID, address(n), dir)
+			}
+			withAssets++
+		}
+	}
+	if withAssets != 6 {
+		t.Errorf("%d archive_file source folders, want 6 (aws-serverless-api, aws-queue-worker, aws-scheduled-job, aws-step-functions, aws-api-gateway x2)", withAssets)
+	}
+	files, _ := c.TemplateFiles("aws-api-gateway")
+	for _, p := range []string{"services/service/src/index.mjs", "services/authorizer/src/index.mjs", "compute.tf"} {
+		if files[p] == nil {
+			t.Errorf("aws-api-gateway: %s missing", p)
+		}
 	}
 }
 

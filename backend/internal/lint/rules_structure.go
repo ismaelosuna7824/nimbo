@@ -6,8 +6,10 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/hashicorp/hcl/v2/hclsyntax"
 	"github.com/ismaelosuna7824/nimbo/backend/internal/hclcodec"
 	"github.com/ismaelosuna7824/nimbo/backend/internal/model"
+	"github.com/zclconf/go-cty/cty"
 )
 
 const (
@@ -256,4 +258,107 @@ func hasInlineRules(b *model.Body) bool {
 		}
 	}
 	return false
+}
+
+// inlineCodeSites are the nested blocks that embed function code: the
+// source blocks of archive_file (the zip every cloud's functions deploy:
+// Lambda, Azure zip deploy, Cloud Functions sources) and the file blocks of
+// azurerm_function_app_function.
+var inlineCodeSites = []struct {
+	kind        model.NodeKind
+	typ, block  string
+	fileAttr    string
+	packageHint string
+}{
+	{model.KindData, "archive_file", "source", "filename",
+		"remove the source blocks and set source_dir = \"${path.module}/services/%[1]s/src\""},
+	{model.KindResource, "azurerm_function_app_function", "file", "name",
+		"remove the file blocks, zip the folder with a data \"archive_file\" (source_dir = \"${path.module}/services/%[1]s/src\") and deploy it with zip_deploy_file on the function app"},
+}
+
+// checkInlineFunctionCode flags function code embedded in Terraform (root
+// or local module): archive_file source blocks and Azure function file
+// blocks whose content is program code. Application code belongs in source
+// files of the workflow (services/<svc>/src/...) that an archive_file zips
+// with source_dir. Short or configuration-like content (a JSON line, a YAML
+// file) and content Nimbo can't read (file(), references) are fine.
+func checkInlineFunctionCode(p *pass) {
+	const why = "Code inside a Terraform string can't be linted, tested, formatted or built with its language's tools, every change to it shows up as an infrastructure diff, and it can't grow into a real service (modules, dependencies, tests). Terraform should only package and deploy it."
+	scope := func(wf *model.Workflow, report func(n *model.Node, attr string, f finding)) {
+		for i := range wf.Nodes {
+			n := &wf.Nodes[i]
+			for _, site := range inlineCodeSites {
+				if n.Kind != site.kind || n.Type != site.typ {
+					continue
+				}
+				for j, b := range blocks(&n.Body, site.block) {
+					a := getAttr(&b.Body, "content")
+					if a == nil {
+						continue
+					}
+					if text, ok := inlineText(a.Value); ok && looksLikeCode(text) {
+						file, _ := attrString(&b.Body, site.fileAttr)
+						report(n, fmt.Sprintf("%s[%d].content", site.block, j), finding{
+							message: fmt.Sprintf("%s embeds program code%s", addr(n), orEmpty(file, " (%s)")),
+							why:     why,
+							fix:     fmt.Sprintf("Move the code to services/%[1]s/src/ in the workflow files (e.g. services/%[1]s/src/index.mjs) and "+site.packageHint+". Code that needs a build (TypeScript, Go, Java, .NET) gets a services/%[1]s/Dockerfile whose last stage is `FROM scratch AS package`, and source_dir points at services/%[1]s/dist.", n.Name),
+						})
+						break
+					}
+				}
+			}
+		}
+	}
+	scope(p.wf, func(n *model.Node, attr string, f finding) {
+		f.node, f.attribute = n, attr
+		p.report(f)
+	})
+	for _, c := range p.localModules() {
+		scope(c.mod, func(_ *model.Node, _ string, f finding) {
+			f.node, f.message = c.root, moduleName(c)+": "+f.message
+			p.report(f)
+		})
+	}
+}
+
+func orEmpty(s, format string) string {
+	if s == "" {
+		return ""
+	}
+	return fmt.Sprintf(format, s)
+}
+
+// inlineText returns the text of v: a constant string, or the literal parts
+// of a template (interpolations left out). ok is false for any other
+// expression (file(), templatefile(), references): its text is unknown here.
+func inlineText(v model.Value) (string, bool) {
+	if s, ok := literal(v).(string); ok {
+		return s, true
+	}
+	tmpl, ok := parse(v).(*hclsyntax.TemplateExpr)
+	if !ok {
+		return "", false
+	}
+	var sb strings.Builder
+	for _, part := range tmpl.Parts {
+		if lit, ok := part.(*hclsyntax.LiteralValueExpr); ok && lit.Val.Type() == cty.String && lit.Val.IsKnown() && !lit.Val.IsNull() {
+			sb.WriteString(lit.Val.AsString())
+		}
+	}
+	return sb.String(), true
+}
+
+// codeLine matches a line only program code has: imports and exports,
+// function, class and variable definitions, a shebang.
+var codeLine = regexp.MustCompile(`(?m)^\s*(?:import\s|export\s|from\s+[\w.]+\s+import\s|(?:async\s+)?def\s+\w+\s*\(|func\s+[\w(]|package\s+[\w.]+\s*;?\s*$|(?:public\s+|internal\s+)?(?:static\s+)?class\s+\w+|(?:async\s+)?function\b|(?:const|let|var)\s+\w+\s*=|module\.exports\b|exports\.\w+\s*=|using\s+[\w.]+\s*;|#!/)`)
+
+// looksLikeCode: two or more non-blank lines, one of them a code line.
+func looksLikeCode(text string) bool {
+	lines := 0
+	for line := range strings.SplitSeq(text, "\n") {
+		if strings.TrimSpace(line) != "" {
+			lines++
+		}
+	}
+	return lines >= 2 && codeLine.MatchString(text)
 }

@@ -1,0 +1,10 @@
+{
+  "name": "smoke",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "@fnproject/fdk": "^0.0.113",
+    "pg": "^8.13.0",
+    "redis": "^4.7.0"
+  }
+}

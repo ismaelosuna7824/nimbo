@@ -75,6 +75,7 @@ type kubeView struct {
 	Name         string           `json:"name"`
 	Description  string           `json:"description,omitempty"`
 	Kind         string           `json:"kind"`
+	Mode         string           `json:"mode"` // architecture | full
 	Cluster      string           `json:"cluster"`
 	Environment  string           `json:"environment,omitempty"`
 	Environments []string         `json:"environments,omitempty"`
@@ -100,7 +101,7 @@ func orNone(s string) string {
 }
 
 func viewKube(wf *model.Workflow) kubeView {
-	v := kubeView{ID: wf.ID, Name: wf.Name, Description: wf.Description, Kind: wf.Kind, Cluster: model.KubeClusterName(wf.ID), Sources: []kubeSourceView{}, Objects: []kubeObjectView{}}
+	v := kubeView{ID: wf.ID, Name: wf.Name, Description: wf.Description, Kind: wf.Kind, Mode: wf.EffectiveMode(), Cluster: model.KubeClusterName(wf.ID), Sources: []kubeSourceView{}, Objects: []kubeObjectView{}}
 	for _, e := range wf.Environments {
 		v.Environments = append(v.Environments, e.Name)
 	}

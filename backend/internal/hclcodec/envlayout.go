@@ -1209,8 +1209,8 @@ func (l *envLayout) sortedVars() []layoutVar {
 // envScaffold renders the project files of the environments layout: the
 // README (tree, usage, environments), .gitignore, Makefile, the service
 // module README and backend.hcl.example per root when the backend is the
-// cloud default.
-func envScaffold(wf *model.Workflow, resourceFile func(string) string) (map[string][]byte, error) {
+// cloud default. builds: see Scaffold.
+func envScaffold(wf *model.Workflow, resourceFile func(string) string, builds Builds) (map[string][]byte, error) {
 	l, err := newEnvLayout(wf)
 	if err != nil {
 		return nil, err
@@ -1222,9 +1222,9 @@ func envScaffold(wf *model.Workflow, resourceFile func(string) string) (map[stri
 	source := "../../" + ModulesDir + "/" + l.svc
 	svc.Name = l.svc
 	out := map[string][]byte{
-		ReadmeFile:    l.readme(),
-		GitignoreFile: []byte(envGitignore),
-		MakefileFile:  l.makefile(),
+		ReadmeFile:    l.readme(builds),
+		GitignoreFile: []byte(envGitignore + buildGitignore(builds)),
+		MakefileFile:  l.makefile(builds.Dists),
 		ModulesDir + "/" + l.svc + "/" + ReadmeFile: Readme(svc, ReadmeOptions{ResourceFile: resourceFile, ModuleSource: source}),
 	}
 	if l.backend != nil && len(l.backend.example) > 0 {
@@ -1273,7 +1273,7 @@ terraform.rc
 # Commit .terraform.lock.hcl.
 `
 
-func (l *envLayout) makefile() []byte {
+func (l *envLayout) makefile(builds []string) []byte {
 	names := make([]string, len(l.envs))
 	for i, e := range l.envs {
 		names[i] = e.Name
@@ -1287,16 +1287,27 @@ func (l *envLayout) makefile() []byte {
 	b.WriteString("DIR := " + EnvironmentsDir + "/$(ENV)\n")
 	b.WriteString("BACKEND_CONFIG := $(if $(wildcard $(DIR)/backend.hcl),-backend-config=backend.hcl)\n\n")
 	b.WriteString("ifeq ($(filter $(ENV),$(ENVS)),)\n$(error unknown ENV \"$(ENV)\": use one of $(ENVS))\nendif\n\n")
-	b.WriteString(".PHONY: init plan apply fmt validate\n\n")
+	phony, deps := ".PHONY: init plan apply fmt validate", ""
+	if len(builds) > 0 {
+		phony, deps = phony+" build", " build"
+	}
+	b.WriteString(phony + "\n\n")
 	b.WriteString("init:\n\t$(TERRAFORM) -chdir=$(DIR) init $(BACKEND_CONFIG)\n\n")
-	b.WriteString("plan:\n\t$(TERRAFORM) -chdir=$(DIR) plan -out=terraform.tfplan\n\n")
-	b.WriteString("apply:\n\t$(TERRAFORM) -chdir=$(DIR) apply terraform.tfplan\n\n")
+	if len(builds) > 0 {
+		b.WriteString("# Exports each service's package stage into its dist/ (README: Build the services).\nbuild:\n")
+		for _, cmd := range strings.Split(ServiceBuildScript(builds), "\n") {
+			b.WriteString("\t" + cmd + "\n")
+		}
+		b.WriteString("\n")
+	}
+	b.WriteString("plan:" + deps + "\n\t$(TERRAFORM) -chdir=$(DIR) plan -out=terraform.tfplan\n\n")
+	b.WriteString("apply:" + deps + "\n\t$(TERRAFORM) -chdir=$(DIR) apply terraform.tfplan\n\n")
 	b.WriteString("fmt:\n\t$(TERRAFORM) fmt -recursive\n\n")
 	b.WriteString("validate:\n\t$(TERRAFORM) -chdir=$(DIR) init -backend=false -input=false\n\t$(TERRAFORM) -chdir=$(DIR) validate\n")
 	return []byte(b.String())
 }
 
-func (l *envLayout) readme() []byte {
+func (l *envLayout) readme(builds Builds) []byte {
 	var b strings.Builder
 	line := func(s ...string) {
 		for _, x := range s {
@@ -1332,6 +1343,7 @@ func (l *envLayout) readme() []byte {
 	line("Each environment is its own root module with its own state: `"+EnvironmentsDir+"/<env>/main.tf` calls `modules/"+l.svc+
 		"` with that environment's values (`terraform.tfvars`), and `backend.tf` keeps its state apart, so a plan of one environment never touches another.", "")
 
+	buildSection(l.wf, builds, true, line)
 	first := l.makefileDefault()
 	line("## Usage", "", "```sh")
 	if l.backend != nil && len(l.backend.example) > 0 {
@@ -1345,6 +1357,9 @@ func (l *envLayout) readme() []byte {
 	line("```", "")
 	line("The Makefile runs the same commands for `ENV` (default `"+l.makefileDefault()+"`):", "")
 	line("| Target | Runs |", "|--------|------|")
+	if len(builds.Dists) > 0 {
+		line("| `make build` | the service builds of \"Build the services\" |")
+	}
 	line("| `make init ENV=<env>` | `terraform init` (with `backend.hcl` when present) |")
 	line("| `make plan ENV=<env>` | `terraform plan -out=terraform.tfplan` |")
 	line("| `make apply ENV=<env>` | `terraform apply terraform.tfplan` |")

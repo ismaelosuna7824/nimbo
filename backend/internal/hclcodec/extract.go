@@ -72,6 +72,9 @@ type Extraction struct {
 	Contents map[string][]byte
 	// NodeID is the ID of the new module call node.
 	NodeID string
+	// AssetMoves are the workflow files the moved blocks read that move
+	// into the module folder (services/<svc> -> modules/<name>/services/<svc>).
+	AssetMoves []AssetMove
 }
 
 // ExtractOptions are the catalog facts ExtractModule uses.
@@ -97,7 +100,11 @@ type ExtractOptions struct {
 //   - every moved resource and module call gets a root `moved` block (the
 //     whole resource, so count/for_each instances move too), so applying the
 //     result plans no destroy/recreate;
-//   - path.module in moved blocks becomes path.root (files stay in the root).
+//   - files the moved blocks read through "${path.module}/<path>" (or
+//     path.root) move with them into the module folder (AssetMoves; a
+//     service folder services/<svc> as a whole) and the blocks keep
+//     ${path.module}, so the paths hold in both export layouts; files the
+//     root still reads stay, read through path.root.
 //
 // The module files follow the recommended layout (Export of the module with
 // opts.ResourceFile, plus README.md). The call node is placed at the
@@ -118,6 +125,7 @@ func ExtractModule(wf *model.Workflow, refs []string, name string, opts ExtractO
 		inputs: map[string]*ioEntry{}, outputs: map[string]*ioEntry{},
 		inputNames: map[string]bool{}, outputNames: map[string]bool{},
 		configs: map[string]bool{}, callDeps: map[string]bool{}, dependents: map[string]bool{},
+		assetUnits: map[string]bool{},
 	}
 	for i := range work.Nodes {
 		x.byAddr[Address(&work.Nodes[i])] = &work.Nodes[i]
@@ -135,6 +143,7 @@ func ExtractModule(wf *model.Workflow, refs []string, name string, opts ExtractO
 	if len(x.moved) == 0 {
 		return nil, errors.New("select at least one node to move into the module")
 	}
+	x.rootUnits = rootPathUnits(work, func(n *model.Node) bool { return x.moved[Address(n)] })
 
 	for i := range work.Nodes {
 		if n := &work.Nodes[i]; x.moved[Address(n)] {
@@ -174,6 +183,14 @@ type extractor struct {
 	nestedInherit bool            // a moved module call inherits default providers
 	callDeps      map[string]bool // root addresses moved blocks depend on
 	dependents    map[string]bool // root node addresses with depends_on on a moved block
+
+	rootUnits  []string        // asset units the root keeps reading
+	assetUnits map[string]bool // asset units moving into the module
+}
+
+// movable reports whether the module can take the asset unit with it.
+func (x *extractor) movable(unit string) bool {
+	return unit != "" && !overlapsAny(unit, x.rootUnits)
 }
 
 // reference is one reference found in an expression.
@@ -385,10 +402,23 @@ func (x *extractor) inboundValue(n *model.Node, a *model.Attr, top bool) error {
 	refs := references(e, x.known)
 	whole := strings.TrimSpace(a.Value.Expr)
 	var spans []span
+	units := map[int]string{}
+	for _, p := range pathRefs(e) {
+		if !x.movable(p.unit) {
+			continue
+		}
+		units[p.start] = p.unit
+		x.assetUnits[p.unit] = true
+		if p.root == "root" {
+			spans = append(spans, span{p.start, p.end, "path.module"})
+		}
+	}
 	for _, r := range refs {
 		switch {
 		case r.addr == "path.module":
-			spans = append(spans, span{r.start, r.end, "path.root"})
+			if _, ok := units[r.start]; !ok {
+				spans = append(spans, span{r.start, r.end, "path.root"})
+			}
 			continue
 		case x.moved[r.addr]:
 			continue
@@ -821,7 +851,7 @@ func (x *extractor) assemble(wf *model.Workflow) (*Extraction, error) {
 		Name: x.name, Source: source,
 		Inputs: []model.ModuleIO{}, Outputs: []model.ModuleIO{}, Moved: []model.MovedAddress{},
 		Providers: []string{}, DependsOn: sortedKeys(x.callDeps), Files: []string{},
-	}}
+	}, AssetMoves: assetMoves(x.assetUnits, "", ModulesDir+"/"+x.name)}
 
 	mod := &model.Workflow{
 		Name:        x.name,

@@ -28,6 +28,7 @@ flowchart LR
 | `backend/internal/lint` | lint | Best-practice checks (`bp_*` info/warning diagnostics with why + fix), run on every save after schema validation; see "Best-practice checks" below |
 | `backend/internal/compliance` | compliance | Security benchmarks (CIS Foundations per cloud, CIS Docker, CIS Kubernetes) mapped onto the best-practice rules, grading of a design, attestations of manual controls, Markdown report; see "Compliance" below |
 | `backend/internal/wellarch` | wellarch | Curated Well-Architected guidance per platform (AWS, Azure, GCP, OCI, Docker, Kubernetes) by pillar, cross-referenced to rule codes; see "Well-Architected" below |
+| `backend/internal/codeguide` | codeguide | Application-code guidance per mode, language, style, platform and target (MCP `code_guidelines`): principles, `services/<svc>/` layout, buildable starter files (smoke handlers, hexagonal skeletons), packaging with Terraform snippets, compute options with local support, OpenSpec guide; see [CODE_GUIDELINES.md](CODE_GUIDELINES.md) |
 | `backend/internal/netcheck` | netcheck | Network model of a workflow (deployed state or statically evaluated design), `net_*` configuration checks, reachability analyzer and live probes; see "netcheck" below |
 | `backend/internal/sandbox` | sandbox | Per-workflow Docker sandbox, Terraform runs in containers, deployed state |
 | `backend/internal/loadtest` | loadtest | Load engine, presets, target suggestions, results persistence |
@@ -52,6 +53,10 @@ Go module: `github.com/ismaelosuna7824/nimbo/backend` (Go 1.26).
    expressions (`aws_sqs_queue.q.arn` inside a node body ⇒ edge), never stored
    independently. Connecting two nodes in the UI = setting an attribute
    expression (or adding helper nodes through a curated recipe).
+   `Workflow.Mode` is the build mode: `""`/`architecture` (infrastructure plus
+   smoke handlers) or `full` (real application code); unlike `Kind` it may
+   change. Application code and specs are workflow files (`services/<svc>/…`,
+   `openspec/…`), never inline in Terraform.
 2. **Values carry both forms**: `expr` (canonical HCL source) and `literal`
    (JSON when constant). Beginners edit literals through typed forms; power
    users edit raw expressions. The backend fills the missing side on save.
@@ -231,9 +236,38 @@ func MergeEnvironmentsTree(prev, next *model.Workflow, fromTree []model.Environm
 // folder import of an export skips them. The API generates them only where
 // the workflow has no file of that name (a README that came with an import
 // wins). Readme also documents local modules (ReadmeOptions.ModuleSource).
-func Scaffold(wf *model.Workflow, resourceFile func(string) string) map[string][]byte
+// builds (DetectBuilds of the exported files, computed by api.exportBuilds)
+// add a "Build the services" README section (ServiceBuildScript for dists;
+// build, push and `export TF_VAR_<svc>_image=…` per image, flagging image
+// variables the workflow doesn't declare), a `**/services/*/dist/`
+// .gitignore entry for dists and, in the environments layout, a Makefile
+// `build` target that `plan` and `apply` depend on.
+func Scaffold(wf *model.Workflow, resourceFile func(string) string, builds Builds) map[string][]byte
 func Readme(wf *model.Workflow, opts ReadmeOptions) []byte
 func IsScaffold(name string, content []byte) bool
+
+// ServiceBuilds returns the <...>/services/<svc> folders (sorted) whose
+// Dockerfile has a `package` stage and whose dist any string of the .tf
+// files refers to (archive_file source_dir for Lambda / Azure Functions /
+// Cloud Functions / OCI zips, fileset uploads, paths inside dist): files
+// maps slash paths relative to the root module to .tf files and service
+// Dockerfiles. Used by the sandbox before each run and by the export.
+func ServiceBuilds(files map[string][]byte) []string
+func ServiceBuildCommand(dir string) string    // docker build --target package --output type=local,dest=<dir>/dist <dir>
+func ServiceBuildScript(dirs []string) string  // rm -rf <dir>/dist + ServiceBuildCommand per folder
+func HasPackageStage(dockerfile []byte) bool
+
+// ServiceImages (C5): every `nimbo.local/<svc>` in a string of the .tf/.tfvars
+// files is an image built from the shallowest services/<svc>/Dockerfile
+// (the root's first), target `runtime` when that stage exists, else the
+// last stage; problems: no such folder, or a last stage `package` without
+// `runtime`. ImageVariable(svc) = svc with '-'/'.' as '_' + "_image".
+func ServiceImages(files map[string][]byte) (images []ServiceImage, problems []string)
+type ServiceImage struct{ Name, Dir, Target string } // Ref() = nimbo.local/<Name>:latest
+func ImageVariable(name string) string
+func ImageBuildCommand(s ServiceImage, ref string) string
+type Builds struct{ Dists []string; Images []ServiceImage }
+func DetectBuilds(files map[string][]byte) Builds // problems dropped
 
 // Import parses Terraform files (path -> content; only root-level *.tf and
 // *.tfvars plus environments/*.tfvars and environments/*.env.example are
@@ -326,8 +360,13 @@ Module refactoring (`extract.go`, `inline.go`):
 // configuration) and declared as configuration_aliases. One root `moved`
 // block per moved resource/module call (the whole resource, so
 // count/for_each instances move too); an existing moved block in the
-// opposite direction is dropped. path.module in moved blocks becomes
-// path.root. Import `to` addresses are prefixed. The module renders with
+// opposite direction is dropped. A file or folder moved blocks read through
+// "${path.module}/<path>" (or path.root; the literal up to the last complete
+// segment, a whole services/<svc> folder for anything under it) moves into
+// modules/<name>/ with them (AssetMoves; the API moves what exists in the
+// assets) and keeps ${path.module}, so the paths hold in both export
+// layouts and in the sandbox; files the root still reads (or paths that
+// can't be told) stay and are read through path.root. Import `to` addresses are prefixed. The module renders with
 // Export (recommended layout, File unset) plus Readme. The call node sits
 // at the centroid of the moved nodes. Errors (wf unchanged): invalid or
 // taken name, unknown node, lifecycle.replace_triggered_by crossing the
@@ -340,21 +379,26 @@ type ExtractOptions struct {
 }
 type Extraction struct {
     model.ModuleExtraction           // preview: inputs, outputs, moved, providers, dependsOn, files
-    Contents map[string][]byte       // "modules/<name>/main.tf" -> bytes
-    NodeID   string                  // the module call node
+    Contents   map[string][]byte     // "modules/<name>/main.tf" -> bytes
+    NodeID     string                // the module call node
+    AssetMoves []AssetMove           // {From, To}: "services/worker" -> "modules/<name>/services/worker"
 }
 // InlineModule is the reverse for a local module called once without
 // count/for_each: var.* become the call's arguments (or defaults;
 // parenthesized when needed), module.<name>.<out> the output expressions,
 // depends_on = [module.<name>] lists the inlined blocks, the call's
 // depends_on goes to each inlined block, the providers map is applied,
-// path.module becomes "${path.module}/<dir>", nested local sources are
+// path.module templates whose file moves back become the root's
+// ("${path.module}/services/worker/src" stays; AssetMoves
+// modules/<name>/<path> -> <path>, unless rootHas reports the path taken or
+// the root reads it: then "${path.module}/<dir>/<path>"), other path.module
+// uses become "${path.module}/<dir>", nested local sources are
 // re-rooted, module locals join the root's, missing required_providers are
 // added, and moved blocks go module.<name>.<addr> -> <addr>. Rejects
 // provider blocks or moved/import/removed blocks inside the module,
 // optional() variable types, address/local clashes and whole-module
 // references. files: the module directory's files.
-func InlineModule(wf *model.Workflow, nodeRef string, files map[string][]byte) (*Inlining, error)
+func InlineModule(wf *model.Workflow, nodeRef string, files map[string][]byte, rootHas func(rel string) bool) (*Inlining, error)
 func ValidModuleName(name string) error                 // snake_case
 func LocalModuleDir(n *model.Node) (string, bool)       // "modules/x" for a constant local source inside the workflow
 func TypeConstraint(raw json.RawMessage) string         // provider schema cty type JSON -> "list(string)"
@@ -369,7 +413,7 @@ func ParseProvider(s string) (string, error) // "" / "none" -> "", "github", "gi
 // the workflow's files exported as they are. The result replaces files
 // with the same path.
 func Files(wf *model.Workflow, generated map[string][]byte, own map[string]bool, opts Options) (map[string][]byte, error)
-type Options struct{ Provider string; Smoke bool }
+type Options struct{ Provider string; Smoke bool; Builds hclcodec.Builds }
 ```
 
 `api.exportPipeline` calls it after `exportFiles` for the folder export, the
@@ -408,7 +452,22 @@ secret/variable the jobs read (required or optional).
   contents) is written to `backend.hcl`; the single layout copies
   `backend.tf.example` to `backend.tf` when none is committed. Without it a
   partial backend fails init with what to set, and a single-layout apply
-  fails instead of applying into a throwaway local state. The plan text is
+  fails instead of applying into a throwaway local state. With
+  `Options.Builds` (service folders from `api.exportBuilds`) every
+  Terraform job builds them first: a "Build services" step with
+  `hclcodec.ServiceBuildScript` (environments layout: `make build` in
+  validate, `make plan`/`apply` build through the Makefile). GitHub uses the
+  runner's Docker and Buildx; GitLab Terraform jobs get a `docker:29-dind`
+  service (`DOCKER_HOST=tcp://docker:2376`, TLS certs) and `apk add
+  docker-cli docker-cli-buildx` (privileged runners). With
+  `Options.Builds.Images` an `images` job (pushes to the default branch,
+  before every apply) builds each image and pushes
+  `$IMAGE_REGISTRY/<svc>:<commit>` (`docker login` to the registry host
+  when `REGISTRY_USERNAME`/`REGISTRY_PASSWORD` are set; a warning and no
+  push while `IMAGE_REGISTRY` is unset), and every plan exports
+  `TF_VAR_<svc>_image` with that reference when the registry is set. It is
+  plain `docker build`/`docker push` on both providers, like the compose
+  pipeline's image job. The plan text is
   an artifact (GitHub: also the run summary; GitLab: `expose_as` on the
   merge request). Terraform is pinned from `hclcodec.RequiredVersion`
   (raised to what the state backend needs): an exact pin, the newest patch
@@ -475,12 +534,18 @@ func (c *Catalog) ResourceFile(typ string) string
 // has a required_providers entry and a provider block for the node's cloud.
 // Returns the ID of the primary node.
 func (c *Catalog) AddNode(wf *model.Workflow, kind model.NodeKind, typ, name string, pos model.Position) (string, error)
+// StarterFiles returns the workflow files a node's curated starter reads
+// (slash path -> content; nil when none): the Lambda starter's archive_file
+// zips services/<name>/src (source_dir) and ships
+// services/<name>/src/index.mjs. POST /workflows/{id}/nodes writes them into
+// the workflow's assets for every node it added, keeping existing files.
+func (c *Catalog) StarterFiles(n *model.Node) map[string][]byte
 func (c *Catalog) Connections(wf *model.Workflow, sourceID, targetID string) []model.ConnectionRecipe
 func (c *Catalog) Connect(wf *model.Workflow, sourceID, targetID, recipeID string) error
 func (c *Catalog) Validate(wf *model.Workflow) []model.Diagnostic
 func (c *Catalog) SetLiveServices(cloud model.Cloud, services map[string]string)
 func (c *Catalog) Templates() []model.Template
-func (c *Catalog) TemplateFiles(id string) (map[string][]byte, bool) // Terraform files for hclcodec.Import (the API then UnpinFiles: templates get the recommended layout)
+func (c *Catalog) TemplateFiles(id string) (map[string][]byte, bool) // root *.tf files for hclcodec.Import (the API then UnpinFiles: templates get the recommended layout) plus asset files in subfolders (function sources), which template creation and challenge starters store as workflow assets
 // Code editor data: every resource/data type (utility providers included,
 // Local = live Floci support), Schema extended to provider configuration
 // blocks (kind KindProvider = "provider", name "aws"), the built-in
@@ -504,7 +569,18 @@ Catalog notes:
   -out internal/catalog/data -pin` regenerates at the versions of the
   existing index. Curated labels, icons (lucide
   kebab-case), categories, Floci service map, starter bodies and needs live
-  in `catalog/curated/*.json`; templates in `catalog/templates/<id>/*.tf`.
+  in `catalog/curated/*.json` (a starter's `files`: workflow files it
+  reads, see StarterFiles); templates in `catalog/templates/<id>/`: root
+  `*.tf` files plus asset files. Templates never inline application code:
+  each Lambda's handler is `services/<svc>/src/index.mjs` zipped by a
+  `data "archive_file"` with `source_dir = "${path.module}/services/<svc>/src"`
+  (aws-serverless-api, aws-queue-worker, aws-scheduled-job,
+  aws-step-functions; aws-api-gateway's service functions share
+  `services/service/src` and get their name and records from
+  `SERVICE_NAME`/`SERVICE_RECORDS`, its authorizer is
+  `services/authorizer/src`). In the environments layout the assets move
+  into the service module with the archive_file (hclcodec.AssetPlacement),
+  so the `path.module` paths stay valid.
 - `Query.Limit` 0 means 200. Utility providers are not listed by
   `Providers`/`Search` but have schemas and validate.
 - AddNode starters never contain Floci endpoints. Provider blocks: aws
@@ -650,6 +726,7 @@ through:
 | `bp_module_nesting_depth` | info | A local module call deeper than 2 levels below the root as exported (one level less in the environments layout, whose service module is the first level); one finding per root call |
 | `bp_module_output_missing` | info | A local module resource that exports more than `id` (ARN, URL, name) and that no output reaches: neither referenced by an output (directly or through locals) nor connected by references to a resource that is (attachments, policies and associations count through their parent; data sources only connect when they read a managed resource) |
 | `bp_inline_sg_rules` | info (warning when both styles target the same group) | `aws_security_group` with inline `ingress`/`egress` where the same root or local module also uses standalone rules (`aws_security_group_rule`, `aws_vpc_security_group_ingress_rule`/`_egress_rule`). Inline-only code is not flagged: it is consistent, used by the `aws-vpc-basics` template and `add_test_instance`, and the "always" variant only adds noise |
+| `bp_inline_function_code` | info (pillars operations + reliability; on by default; not in the corpus noise counts below) | Function code embedded in Terraform, in the root or a local module (one finding per block): a static `source` block of `data "archive_file"` (the zip every cloud's functions deploy) or a `file` block of `azurerm_function_app_function` whose `content` is program code — two or more non-blank lines, one of them an import/export, a function/class/variable definition, `module.exports`, `using …;` or a shebang (a constant string, or the literal text of a template, `${…}` left out). Configuration content (a JSON line, YAML), `dynamic` blocks and content Nimbo can't read (`file()`, `templatefile()`, references) are not flagged. Fix: move the code to `services/<svc>/src/` workflow files and zip them with `source_dir = "${path.module}/services/<svc>/src"` (Azure: deploy that zip with `zip_deploy_file`); code that needs a build gets a `services/<svc>/Dockerfile` ending in a `FROM scratch AS package` stage and `source_dir` points at `services/<svc>/dist`. VM bootstrap scripts (`user_data`, `custom_data`, `startup-script`) are not function code and are not flagged |
 | `bp_no_remote_backend` | info | ≥ 2 environments exported in the single layout (`hclcodec.ResolveLayout`: `layout: "single"`, or auto falling back because the workflow can't be split, the reason then in the fix) and no `backend`/`cloud` block: every environment would share one local state. The environments layout writes a `backend.tf` per environment, so a workflow in it needs no backend block and is not flagged |
 | `bp_state_too_large` | info ≥ 50, warning ≥ 100 | Managed resource instances in one state: the root plus local modules, constant `count`/`for_each` expanded, conditionals with an empty branch (`var.create ? 1 : 0`) counted as absent, other unknown sizes once; registry modules not counted |
 | `bp_workspace_branching` | info | `terraform.workspace` in any expression of the root or a local module (one finding listing the places) |
@@ -1130,6 +1207,53 @@ Sandbox behavior notes:
   `terraform init`, `settleWorkdir` runs `alpine:3` (`--network none`, the
   workdir mounted) until every one of them shows its new size (≤ 10 s; on
   timeout the run logs a warning and continues).
+- Service artifact builds (`build.go`): application code lives in asset
+  folders `services/<svc>/`. Before `terraform plan`/`apply`/`destroy` (not
+  `validate`), after the workdir sync, `buildServices` builds the folders
+  `hclcodec.ServiceBuilds` finds in the workdir's `.tf` files and service
+  Dockerfiles: a stage named `package` (`FROM … AS package`,
+  case-insensitive) and a `dist` some Terraform string refers to — any
+  provider: `archive_file` `source_dir` for Lambda, Azure Functions zip
+  deploy, Cloud Functions bucket objects or OCI, `fileset()` uploads,
+  paths inside `dist`. `path.module` resolves to the file's folder (root
+  and `modules/…`), `path.root`/`path.cwd` to the root, other
+  interpolations match one path segment (`services/${each.key}/dist`) and a
+  leading unknown part matches by suffix. The build is `docker build
+  --progress plain --target package --output type=local,dest=… services/<svc>`
+  with `DOCKER_BUILDKIT=1`, output streamed into the run log as
+  `[build services/<svc>] …`; a canceled run interrupts it (SIGINT, killed
+  15 s later). Cache: `.nimbo/builds.json` records per folder the SHA-256 of
+  its files (path, executable bit, content; `dist/` excluded) and of the
+  `dist` it produced; the build is skipped only when both match, so a source
+  change or a `dist` changed by anything else (e.g. a `dist` kept in the
+  assets and copied over it) rebuilds. A rebuild first deletes `dist` and
+  its record (the old output never reaches the build context, and a failed
+  or canceled build leaves nothing for Terraform to zip), exports into
+  `.nimbo/build-out/` and renames that to `dist`; the rebuilt files then go
+  through the settle step. A failed build fails the run with BuildKit's
+  `ERROR:` line; a package stage with no files is an error too. Builds only
+  touch the workdir copy: the assets never hold `dist`, and the export
+  leaves out `services/<svc>/dist/` assets of a service with a `Dockerfile`.
+- Container images (C5, `buildImages` after the dist builds): every
+  `nimbo.local/<svc>` reference (`hclcodec.ServiceImages` of the workdir's
+  `.tf`/`.tfvars`; a problem fails the run) is built with `docker build
+  [--target runtime] -t nimbo.local/<svc>:latest -t
+  nimbo.local/<svc>:<key> --label io.nimbo.workflow=<wf>`, logged as
+  `[image services/<svc>] …`. key = SHA-256 of the workflow, target and the
+  folder's files (`dist/` excluded): when that tag exists only `latest` is
+  moved onto it; a rebuild drops the workflow's older keys, and `Remove`
+  deletes the workflow's `nimbo.local` images (best effort: an image in
+  use stays). `latest` is shared by workflows with the same service name;
+  the last run's build wins. Floci runs these local tags (verified
+  2026-10-29, `alpine` + Go HTTP image with `/health`):
+
+  | Service | Terraform | Runs locally |
+  |---|---|---|
+  | GCP Cloud Run v2 | `google_cloud_run_v2_service` | yes: container `nimbo.local/web:latest`, served through `<svc>-<id>.<region>.run.localhost.floci.io:4588` |
+  | AWS Lambda (container image) | `aws_lambda_function` `package_type = "Image"` | yes: "already present locally, skipping pull"; invoke 200 |
+  | AWS ECS Fargate | `aws_ecs_task_definition` + `aws_ecs_service` | yes, after ~60 s: Floci pulls first (3 DNS timeouts for `nimbo.local`), then uses the local image |
+  | Azure Container Apps | `azurerm_container_app` | apply succeeds, no container runs (control plane only) |
+  | OCI Container Instances | `oci_container_instances_container_instance` | no: not emulated (401 from real OCI) |
 - `HostURL` resolves API Gateway host-form URLs (`<id>.execute-api.<region>.amazonaws.com`,
   as reported in state, or `<id>.execute-api.localhost.floci.io:4566`) to the
   path form with AWS stage semantics, reading the API's stages from the
@@ -3676,14 +3800,14 @@ Docker; the desktop onboarding wizard (`GET /setup`) and `nimbo doctor`
 | `GET /catalog/schemas?types=` | `types` = comma-separated `resource/<type>`, `data/<type>`, `provider/<name>` (≤ 200) → `{key: ResourceSchema}` (unknown keys left out; provider schemas have `kind: "provider"` and the provider's Registry docs URL); 400 for other kinds |
 | `GET /catalog/functions` | → `FunctionSignature[]` `{name, description?, returnType, parameters: {name, type, description?, nullable?}[], variadicParameter?}`: Terraform's built-in functions |
 | `GET /workflows` | → `WorkflowSummary[]` (archived ones included with `archived: true`; the UI hides them from recents) |
-| `POST /workflows` | `{name, description?, templateId?, kind?}` → `Workflow` (`kind: "docker"` or a docker template creates a docker-compose workflow) (gets a random `icon` whose glyph differs from the most recently updated workflows; the template's own `icon` only decorates its card) |
+| `POST /workflows` | `{name, description?, templateId?, kind?, mode?}` → `Workflow` (`kind: "docker"` or a docker template creates a docker-compose workflow; `mode` is `""`/`architecture` (default) or `full`, else 400; a Terraform template's asset files, e.g. `services/<svc>/src/index.mjs`, are stored as workflow files) (gets a random `icon` whose glyph differs from the most recently updated workflows; the template's own `icon` only decorates its card) |
 | `GET /workflows/{id}` | → `Workflow` |
-| `PUT /workflows/{id}` | `Workflow` → `Workflow` (normalized + validated; `archived` in the body is ignored; `icon` is `{glyph, color}` with IDs matching `^[a-z0-9-]{1,32}$`, else 400; glyph `nimbo` is the explicit Nimbo mascot; a body without `icon` keeps the current one; `layout` is `""` (auto), `single` or `environments`, else 400, and `service` a module name (`^[A-Za-z][A-Za-z0-9_-]*$`), else 400; a body without them keeps the current ones) |
+| `PUT /workflows/{id}` | `Workflow` → `Workflow` (normalized + validated; `archived` in the body is ignored; `icon` is `{glyph, color}` with IDs matching `^[a-z0-9-]{1,32}$`, else 400; glyph `nimbo` is the explicit Nimbo mascot; a body without `icon` keeps the current one; `layout` is `""` (auto), `single` or `environments`, else 400, and `service` a module name (`^[A-Za-z][A-Za-z0-9_-]*$`), else 400; `mode` is `""`/`architecture` or `full`, else 400 (any kind; unlike `kind` it may change); a body without them keeps the current ones) |
 | `DELETE /workflows/{id}` | → 204. Removes the sandbox first (containers, Floci-spawned containers/volumes/networks, network, data; docker workflows: `ComposeRemove` — compose down -v, the images built for it, the compose work dir); if that fails while Docker is up → 500 and the workflow is kept |
 | `POST /workflows/{id}/duplicate` | `{name}` → `Workflow` (with a new random icon so the copy stands out) |
 | `POST /workflows/{id}/archive` | → `Workflow` with `archived: true`. Stops the sandbox keeping all state (docker workflows: compose down, named volumes kept) (409 while a run is active; proceeds without Docker); runs (except a docker `down`), load tests and `sandbox/start` then answer 409 `workflow is archived` |
 | `POST /workflows/{id}/unarchive` | → `Workflow` (restored; the sandbox starts again on the next deploy) |
-| `POST /workflows/{id}/nodes` | `{kind, type, name?, position}` → `{workflow, nodeId}` (new nodes whose 248×84 card, plus 24px gap, overlaps another card move to the nearest free grid slot) |
+| `POST /workflows/{id}/nodes` | `{kind, type, name?, position}` → `{workflow, nodeId}` (new nodes whose 248×84 card, plus 24px gap, overlaps another card move to the nearest free grid slot; files the new nodes' starters read, e.g. a Lambda's `services/<name>/src/index.mjs`, are written as workflow files unless they exist) |
 | `PATCH /workflows/{id}/nodes/{nodeId}` | `{name?, label?, position?, positioned?, parent?, body?, file?}` → `Workflow` (`file`: root `.tf` file to write the node to, `""` = recommended layout; invalid names → 400; renaming a deployed resource/module call adds a `moved` block, see AddMoved) |
 | `DELETE /workflows/{id}/nodes/{nodeId}` | → `Workflow` (references to it become diagnostics) |
 | `GET /workflows/{id}/connections?source=&target=` | → `ConnectionRecipe[]` |
@@ -3715,8 +3839,8 @@ Docker; the desktop onboarding wizard (`GET /setup`) and `nimbo doctor`
 | `GET /workflows/{id}/well-architected` | → `{workflowId, platforms, pillars: [{pillar, findings: (Diagnostic + title)[], counts: {error?, warning, info}, status}], guidance: [{platform, name, framework, sources}], note}`: every rule's findings grouped by pillar in `model.Pillars` order; status `ok`, `advice` or `risk`. See "Well-Architected" |
 | `GET /well-architected/{platform}` | → `wellarch.Guide` (`aws`, `azure`, `gcp`, `oci`, `docker`, `kubernetes`; 404 otherwise) |
 | `POST /workflows/{id}/modules/extract/preview` | `{nodeIds, name}` → `ModuleExtraction{name, source, inputs: ModuleIO[], outputs: ModuleIO[], moved: {from,to}[], providers, dependsOn, files}`; nothing is saved. 400 with the reason when the selection cannot be extracted, 409 when `modules/<name>` exists |
-| `POST /workflows/{id}/modules/extract` | `{nodeIds, name}` → `Workflow` (`hclcodec.ExtractModule`; the module files are written to the workflow's assets at `modules/<name>/`; same errors as the preview) |
-| `POST /workflows/{id}/modules/{nodeId}/inline` | → `Workflow` (`hclcodec.InlineModule`; then the module's `*.tf` and `README.md` are deleted, other files stay). 400 for non-local modules, count/for_each, clashes, whole-module references; 409 when another local module also calls the directory |
+| `POST /workflows/{id}/modules/extract` | `{nodeIds, name}` → `Workflow` (`hclcodec.ExtractModule`; the module files are written to the workflow's assets at `modules/<name>/` and the files the moved blocks read (`AssetMoves`, e.g. `services/worker` → `modules/<name>/services/worker`) move there; undone on failure; same errors as the preview) |
+| `POST /workflows/{id}/modules/{nodeId}/inline` | → `Workflow` (`hclcodec.InlineModule`; the module files the inlined blocks read move back to the root unless that path is taken (`AssetMoves`), then the module's `*.tf` and `README.md` are deleted, other files stay). 400 for non-local modules, count/for_each, clashes, whole-module references; 409 when another local module also calls the directory |
 | `POST /workflows/{id}/modules/scaffold` | `{name}` (snake_case) → `ModuleScaffold{name, dir, files: {path: content}, call: {path, block}}`: a new local module `modules/<name>/` (versions.tf with the workflow's `required_version` and required providers — plus the catalog provider of every cloud the root does not require yet — as `>=` minimums; variables.tf, outputs.tf, main.tf, README.md) and the module block calling it from `main.tf` (environments layout: from `modules/<service>/main.tf` with `source = "../<name>"`); nothing is saved (the Code tab adds them as pending changes). 400 invalid name, 409 when `modules/<name>` exists |
 | `POST /terraform/format` | `{content, path?}` → `{content, changed}`: HCL formatted like `terraform fmt` (`hclcodec.Format`); 400 + diagnostics located in `path` (default `main.tf`) on syntax errors |
 | `GET /catalog/docker/images` | → `DockerImage[]` (curated palette: id, image, tag, label, description, category, icon, ports, env, volumes, healthcheck, connect templates, command, entrypoint) |

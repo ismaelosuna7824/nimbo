@@ -221,6 +221,10 @@ type Workflow struct {
 	// Kind is "" (Terraform), WorkflowDocker or WorkflowKubernetes; it
 	// never changes.
 	Kind string `json:"kind,omitempty"`
+	// Mode is the build mode: "" or ModeArchitecture (infrastructure plus
+	// smoke handlers that prove the wiring) or ModeFull (real application
+	// code in services/<svc>/ asset folders). Unlike Kind it may change.
+	Mode string `json:"mode,omitempty"`
 	// Challenge is the challenge template a challenge workflow was created
 	// from ("" otherwise); it never changes.
 	Challenge string    `json:"challenge,omitempty"`
@@ -282,6 +286,29 @@ type Workflow struct {
 	Compose *ComposeModel `json:"compose,omitempty"`
 	// Kubernetes is the deployment of a Kubernetes workflow (nil otherwise).
 	Kubernetes *KubernetesModel `json:"kubernetes,omitempty"`
+}
+
+// Build modes (Workflow.Mode); "" is ModeArchitecture.
+const (
+	ModeArchitecture = "architecture"
+	ModeFull         = "full"
+)
+
+// ValidMode reports an unknown Workflow.Mode.
+func ValidMode(mode string) error {
+	switch mode {
+	case "", ModeArchitecture, ModeFull:
+		return nil
+	}
+	return fmt.Errorf("invalid mode %q: use %q (default) or %q", mode, ModeArchitecture, ModeFull)
+}
+
+// EffectiveMode resolves "" to ModeArchitecture.
+func (w *Workflow) EffectiveMode() string {
+	if w.Mode == "" {
+		return ModeArchitecture
+	}
+	return w.Mode
 }
 
 // Export layouts (Workflow.Layout).

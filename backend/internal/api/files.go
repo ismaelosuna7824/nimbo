@@ -138,6 +138,9 @@ func (s *Server) exportFiles(wf *model.Workflow, environments bool) (generated m
 		if d.Type().IsRegular() {
 			rel, _ := filepath.Rel(root, p)
 			rel = filepath.ToSlash(rel)
+			if isBuildOutput(root, rel) {
+				return nil
+			}
 			for _, dst := range place(rel) {
 				own[dst] = true
 				if _, clash := generated[dst]; !clash {
@@ -153,12 +156,60 @@ func (s *Server) exportFiles(wf *model.Workflow, environments bool) (generated m
 	if !wf.IsTerraform() {
 		return generated, assets, nil
 	}
-	for name, data := range hclcodec.Scaffold(wf, s.cfg.Catalog.ResourceFile) {
+	builds, err := s.exportBuilds(wf, generated, assets)
+	if err != nil {
+		return nil, nil, err
+	}
+	for name, data := range hclcodec.Scaffold(wf, s.cfg.Catalog.ResourceFile, builds) {
 		if _, taken := generated[name]; !taken && !own[name] {
 			generated[name] = data
 		}
 	}
 	return generated, assets, nil
+}
+
+// isBuildOutput reports an asset under <...>/services/<svc>/dist/ of a
+// service with a Dockerfile (in the root or, after extract_module, in a
+// module folder): that folder is the build's output (the sandbox builds it
+// before Terraform runs), not part of the workflow's sources.
+func isBuildOutput(root, rel string) bool {
+	parts := strings.Split(rel, "/")
+	for i := 0; i+3 < len(parts); i++ {
+		if parts[i] != "services" || parts[i+2] != "dist" {
+			continue
+		}
+		if _, err := os.Stat(filepath.Join(root, filepath.FromSlash(strings.Join(parts[:i+2], "/")), "Dockerfile")); err == nil {
+			return true
+		}
+	}
+	return false
+}
+
+// exportBuilds is what an export of a Terraform workflow must build before
+// Terraform runs (hclcodec.DetectBuilds of the exported .tf/.tfvars files
+// and service Dockerfiles, at their export paths).
+func (s *Server) exportBuilds(wf *model.Workflow, generated map[string][]byte, assets map[string]string) (hclcodec.Builds, error) {
+	if !wf.IsTerraform() {
+		return hclcodec.Builds{}, nil
+	}
+	config := func(p string) bool { return strings.HasSuffix(p, ".tf") || strings.HasSuffix(p, ".tfvars") }
+	files := map[string][]byte{}
+	for p, data := range generated {
+		if config(p) {
+			files[p] = data
+		}
+	}
+	root := s.cfg.Store.AssetsDir(wf.ID)
+	for dst, src := range assets {
+		if config(dst) || path.Base(dst) == "Dockerfile" {
+			data, err := os.ReadFile(filepath.Join(root, filepath.FromSlash(src)))
+			if err != nil {
+				return hclcodec.Builds{}, err
+			}
+			files[dst] = data
+		}
+	}
+	return hclcodec.DetectBuilds(files), nil
 }
 
 // exportPipeline adds the CI/CD pipeline ci (provider name; "" or "none":
@@ -169,11 +220,18 @@ func (s *Server) exportPipeline(wf *model.Workflow, generated map[string][]byte,
 	if err != nil {
 		return errorf(http.StatusBadRequest, "%s", err.Error())
 	}
+	if provider == "" {
+		return nil
+	}
+	builds, err := s.exportBuilds(wf, generated, assets)
+	if err != nil {
+		return err
+	}
 	own := make(map[string]bool, len(assets))
 	for p := range assets {
 		own[p] = true
 	}
-	files, err := cicd.Files(wf, generated, own, cicd.Options{Provider: provider, Smoke: smoke})
+	files, err := cicd.Files(wf, generated, own, cicd.Options{Provider: provider, Smoke: smoke, Builds: builds})
 	if err != nil {
 		return errorf(http.StatusBadRequest, "CI/CD pipeline: %s", err.Error())
 	}

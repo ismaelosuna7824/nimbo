@@ -313,6 +313,11 @@ export interface Workflow {
    * Absent/"" = Terraform.
    */
   kind?: WorkflowKind
+  /**
+   * Build mode: "architecture" (absent/"" too) builds the infrastructure plus smoke handlers that prove the wiring;
+   * "full" builds real application code in services/<svc>/ files. Unlike `kind` it may change.
+   */
+  mode?: WorkflowMode
   /** Docker workspaces only. */
   compose?: ComposeModel
   /** Kubernetes workspaces only. */
@@ -329,6 +334,8 @@ export interface Workflow {
 }
 
 export type WorkflowLayout = "single" | "environments"
+
+export type WorkflowMode = "" | "architecture" | "full"
 
 /** CI/CD pipeline an export can include (`.github/workflows/<name>.yml` or `.gitlab-ci.yml`). */
 export type CIProvider = "none" | "github" | "gitlab"

@@ -18,6 +18,7 @@ import (
 	"slices"
 	"strings"
 
+	"github.com/ismaelosuna7824/nimbo/backend/internal/hclcodec"
 	"github.com/ismaelosuna7824/nimbo/backend/internal/model"
 )
 
@@ -34,6 +35,11 @@ type Options struct {
 	// Smoke adds a job after every deploy that checks the environment's
 	// SMOKE_URL with HTTP requests.
 	Smoke bool
+	// Builds are what a Terraform export builds before Terraform runs
+	// (hclcodec.DetectBuilds of the exported files): every Terraform job
+	// builds the dists first; a build job pushes the images to
+	// IMAGE_REGISTRY and the plans point the image variables at them.
+	Builds hclcodec.Builds
 }
 
 // ParseProvider validates a provider choice: "" and "none" mean no pipeline.

@@ -252,6 +252,24 @@ func (c *Catalog) AddNode(wf *model.Workflow, kind model.NodeKind, typ, name str
 	return n.ID, nil
 }
 
+// StarterFiles returns the workflow files n's curated starter reads (slash
+// path -> content), e.g. services/<name>/src/index.mjs for an archive_file
+// whose source_dir points there; nil when it has none. AddNode only edits
+// the workflow model: callers write these into the workflow's assets after
+// adding a node (keeping files that already exist).
+func (c *Catalog) StarterFiles(n *model.Node) map[string][]byte {
+	cr := c.cur.lookup(n.Kind, n.Type)
+	if cr == nil || cr.Files.len() == 0 {
+		return nil
+	}
+	ph := placeholders{name: n.Name, self: address(n)}
+	out := make(map[string][]byte, cr.Files.len())
+	cr.Files.each(func(p, content string) {
+		out[ph.render(p)] = []byte(ph.render(content))
+	})
+	return out
+}
+
 // moduleHint derives a name from a module source: "terraform-aws-modules/vpc/aws" -> "vpc".
 func moduleHint(source string) string {
 	s := strings.TrimSuffix(strings.Split(source, "?")[0], "/")

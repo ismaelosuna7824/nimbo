@@ -55,7 +55,11 @@ func writeTemplate(t *testing.T, c *Catalog, id string, extra map[string]string)
 	}
 	t.Cleanup(func() { os.RemoveAll(dir) })
 	for name, b := range files {
-		if err := os.WriteFile(filepath.Join(dir, name), b, 0o644); err != nil {
+		dst := filepath.Join(dir, filepath.FromSlash(name))
+		if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(dst, b, 0o644); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -197,13 +201,23 @@ func TestPopularAWSStartersApplyOnFloci(t *testing.T) {
 	for name, b := range files {
 		extra[name] = string(b)
 	}
+	// The Lambda's handler is a workflow file (services/<name>/src).
+	for i := range wf.Nodes {
+		for name, b := range c.StarterFiles(&wf.Nodes[i]) {
+			extra[name] = string(b)
+		}
+	}
 	dir, err := os.MkdirTemp("", "nimbo-starters-")
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { os.RemoveAll(dir) })
 	for name, s := range extra {
-		if err := os.WriteFile(filepath.Join(dir, name), []byte(s), 0o644); err != nil {
+		dst := filepath.Join(dir, filepath.FromSlash(name))
+		if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(dst, []byte(s), 0o644); err != nil {
 			t.Fatal(err)
 		}
 	}

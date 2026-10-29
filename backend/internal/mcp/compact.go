@@ -59,6 +59,7 @@ type workflowView struct {
 	ID           string            `json:"id"`
 	Name         string            `json:"name"`
 	Description  string            `json:"description,omitempty"`
+	Mode         string            `json:"mode"` // architecture | full
 	Clouds       []model.Cloud     `json:"clouds,omitempty"`
 	Nodes        []nodeView        `json:"nodes"`
 	Edges        []string          `json:"edges,omitempty"`
@@ -277,7 +278,7 @@ func viewEdges(wf *model.Workflow) []string {
 
 func viewWorkflow(wf *model.Workflow) workflowView {
 	v := workflowView{
-		ID: wf.ID, Name: wf.Name, Description: wf.Description, Clouds: wf.Clouds,
+		ID: wf.ID, Name: wf.Name, Description: wf.Description, Mode: wf.EffectiveMode(), Clouds: wf.Clouds,
 		Nodes: []nodeView{}, Edges: viewEdges(wf),
 		Variables: namedViews(wf.Variables), Outputs: namedViews(wf.Outputs),
 		Locals: attrsView(wf.Locals), Providers: namedViews(wf.Providers),
