@@ -88,8 +88,9 @@ claude mcp add --scope user nimbo -- /path/to/nimbo mcp
 
 Then ask: *"Build this diagram in Nimbo, deploy it locally and load-test the API."* The agent sees the workflow you
 have open, designs with secure and reliable defaults, reviews it against the Well-Architected pillars and deploys it
-to your sandbox. Tools, prompts and examples: [docs/MCP.md](docs/MCP.md) ·
-[docs/WELL_ARCHITECTED.md](docs/WELL_ARCHITECTED.md).
+to your sandbox. Describe a requirement instead and it picks the simplest fitting architecture (event-driven, queue
+workers, CQRS, sagas… only when needed) and explains the trade-offs. Tools, prompts and examples:
+[docs/MCP.md](docs/MCP.md) · [docs/WELL_ARCHITECTED.md](docs/WELL_ARCHITECTED.md).
 
 ## 🧭 More features
 

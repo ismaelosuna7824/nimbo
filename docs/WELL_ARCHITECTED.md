@@ -81,20 +81,64 @@ sources) matching what Nimbo exports:
 | `docker` | Base `compose.yaml` + `compose.<env>.yaml` and/or `.env.<env>`; `secrets:`; no code bind mounts in prod |
 | `kubernetes` | Kustomize `base/` + `overlays/<env>/` (prod: HPA with bounds, PDB, NetworkPolicy, Pod Security labels) or Helm `values-<env>.yaml` |
 
+## Architecture patterns
+
+Before the pillars come the shape of the system. `GET /api/v1/patterns`
+(MCP `architecture_patterns`) is a catalog of architecture styles
+(`n-tier`, `web-queue-worker`, `microservices`, `event-driven`,
+`serverless`, `modular-monolith`, `big-data-streaming`) and cloud design
+patterns (API gateway, BFF, gateway offloading, cache-aside, CQRS, event
+sourcing, saga, transactional outbox, pub/sub, fan-out, competing
+consumers, queue-based load leveling, async request-reply, claim check,
+circuit breaker, retry, bulkhead, rate limiting, strangler fig,
+anti-corruption layer, sidecar, database per service, sharding, valet key,
+deployment stamps…). Each pattern has the problem it solves, `useWhen`
+(requirement signals), `avoidWhen` (the over-engineering guard: a CRUD API
+stays simple), trade-offs, concrete practices (idempotency keys, outbox,
+DLQs, retries with backoff and jitter, timeouts, versioned events) and one
+block per platform: the Terraform resource types on AWS, Azure, GCP and
+OCI, the compose services or the Kubernetes kinds, with whether it runs
+locally, is export only, or has a local equivalent. Related patterns and
+the Nimbo templates that start it are linked.
+
+- `GET /api/v1/patterns?requirement=&platform=&limit=` ranks patterns for a
+  free-text requirement (English or Spanish), styles first (default 6, at
+  most 20); without `requirement` it lists the catalog (id, name, kind,
+  problem, platforms), optionally only those with a block for `platform`.
+- `GET /api/v1/patterns/{id}` returns one pattern in full (404 if unknown).
+
+Agents settle the non-functional requirements first (exposure, traffic and
+peaks, latency, consistency, data sensitivity/compliance, availability,
+team maturity, budget), pick the simplest style and the fewest patterns
+that meet them, and tell the user the trade-offs and what they deliberately
+left out. Prompt `design_from_requirements` ends with an architecture
+decision record (context, decision, alternatives, consequences).
+
+Sources: [Azure Architecture Center cloud design patterns](https://learn.microsoft.com/en-us/azure/architecture/patterns/)
+and [architecture styles](https://learn.microsoft.com/en-us/azure/architecture/guide/architecture-styles/),
+[AWS Prescriptive Guidance cloud design patterns](https://docs.aws.amazon.com/prescriptive-guidance/latest/cloud-design-patterns/introduction.html),
+[Google Cloud Architecture Center](https://docs.cloud.google.com/architecture/)
+and [microservices.io patterns](https://microservices.io/patterns/).
+
 ## How agents use it
 
-1. `well_architected_guidance {platform}` before designing (practices and
+1. Settle the requirements, then `architecture_patterns {requirement,
+   platform}` to choose the style and patterns (with why and what is left
+   out).
+2. `well_architected_guidance {platform}` before designing (practices and
    layout); clarify public vs internal and dev vs production.
-2. Build with secure, reliable and scalable defaults.
-3. `recommend_improvements {workflow}` after the first draft: propose each
+3. Build with secure, reliable and scalable defaults.
+4. `recommend_improvements {workflow}` after the first draft: propose each
    item with its why, apply what the user accepts, call again.
-4. `review_well_architected {workflow}` and `compliance_report` before
+5. `review_well_architected {workflow}` and `compliance_report` before
    finishing: fix warnings first, then the advice that fits the goal;
    explain what stays.
-5. Validate and deploy locally, then load-test and run failure scenarios
+6. Validate and deploy locally, then load-test and run failure scenarios
    (docker/Kubernetes) and `production_readiness`.
 
-Prompt `design_well_architected {goal, platform?}` walks this loop; see
+Prompt `design_well_architected {goal, platform?}` walks this loop;
+`design_from_requirements {requirement, platform?, environment?}` adds the
+requirements and architecture decision around it; see
 [MCP.md](MCP.md#well-architected-pillar-guidance-and-review).
 
 ## Sources

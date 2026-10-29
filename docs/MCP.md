@@ -93,6 +93,7 @@ commands (e.g. `/mcp__nimbo__extend_workflow` in Claude Code).
 | `create_docker_stack` | `request` | Template or `create_workflow kind "docker"` → data services from the palette → app services (starters or your Dockerfiles) → `connect_services` (service_healthy) → the Docker practices below → `review_docker` → `deploy` → endpoints + smoke load test + `get_docker_metrics` → `production_readiness` (for production) → summary |
 | `create_kubernetes_app` | `request` | Template, `convert_to_kubernetes` or `create_workflow kind "kubernetes"` → palette objects (images, charts, starters) → `connect_kubernetes` → the Kubernetes practices → `review_kubernetes` per environment → `deploy` → endpoints + smoke load test → `production_readiness` → summary |
 | `design_well_architected` | `goal`, `platform?` | `well_architected_guidance` → plan → build with secure, reliable and scalable defaults per pillar → `review_well_architected` (fix warnings, explain what stays) → `validate`/`deploy` locally → load test, failure scenarios and `production_readiness` where available → per-pillar summary |
+| `design_from_requirements` | `requirement`, `platform?`, `environment?` | Restate the requirement and settle the non-functional requirements (ask only what can't be assumed, state assumptions) → `architecture_patterns`: style + patterns with a one-line why each and what was deliberately left out → `well_architected_guidance` (layout too) → `plan_structure` → build → `recommend_improvements`, `review_well_architected`, `compliance_report` → deploy locally, load test and failure scenarios → architecture decision record (context, decision, alternatives, consequences) |
 
 ## Recommended loop
 
@@ -716,10 +717,12 @@ tell the user which manual controls they need to check and attest.
 Agents design along the pillars AWS Well-Architected, Azure Well-Architected,
 the Google Cloud Architecture Framework and OCI Well-Architected share:
 security, reliability, performance (including scaling), cost and operations.
-Call `well_architected_guidance` at the start of a design (its `layout`
-gives the folder and environment layout), `recommend_improvements` after
-the first draft and `review_well_architected` + `compliance_report` before
-finishing; prompt `design_well_architected` walks the loop. See
+Settle the requirements and call `architecture_patterns` first (style and
+patterns, simplest that fits), then `well_architected_guidance` at the start
+of the design (its `layout` gives the folder and environment layout),
+`recommend_improvements` after the first draft and `review_well_architected`
++ `compliance_report` before finishing; prompts `design_well_architected`
+and `design_from_requirements` walk the loop. See
 [WELL_ARCHITECTED.md](WELL_ARCHITECTED.md).
 
 Loop: guidance → draft → `recommend_improvements` (propose each item with
@@ -728,6 +731,7 @@ its why; apply what the user accepts) → again until nothing applies →
 
 | Tool | Inputs | What it does |
 |---|---|---|
+| `architecture_patterns` | `requirement?`, `platform?` (aliases accepted), `pattern?` | Architecture styles and cloud design patterns (`GET /patterns`, `GET /patterns/{id}`). `requirement` (English or Spanish): ranked matches, styles first, each with id, name, kind, problem, `useWhen`, `avoidWhen` and the block for `platform` (Terraform types / compose services / Kubernetes kinds, local support); `pattern`: one pattern in full (trade-offs, practices, blocks, related, templates, sources); neither: the catalog. Pick the simplest that fits and tell the user the trade-offs and what was left out |
 | `well_architected_guidance` | `platform` (`aws`, `azure`, `gcp`, `oci`, `docker`, `kubernetes`; `azurerm`, `google`, `k8s`… accepted), `pillar?` | The platform's framework, sources, `layout` (summary, tree, what each environment adds, sources) and, per pillar, a summary and practices (title, why, how with resource types/attributes or compose/Kubernetes fields, the Nimbo rule codes that check it) |
 | `recommend_improvements` | `workflow` | Companions the design lacks, highest value first (`GET /workflows/{id}/recommendations`): id, title, why, pillars, triggering nodes, what to add, a snippet with the design's addresses, scope (`recommended` / `production`), local support (runs locally / export only / local equivalent), when to skip it, checking rules, docs. Applied items disappear; an empty list means nothing is left |
 | `review_well_architected` | `workflow` | Runs every rule (opt-in ones and rules turned off in Settings included; Terraform also the `net_*` network checks) and groups findings by their rule's main pillar: status `ok` / `advice` (info only) / `risk` (warnings or errors), counts, findings (severity, code, rule title, node, file:line, why, fix, docs), the frameworks that apply, open recommendations (id, title, why, scope, local), a summary and next steps |
@@ -851,6 +855,7 @@ Conventions).
 | `start_challenge` | `challenge`, `name?` | New workflow from a challenge's starter, linked to it |
 | `check_challenge` | `workflow`, `wait?` | Grade a challenge workflow for real (static checks, deploy, http, load, scenarios, readiness); per-check measurements, passed, score |
 | `compliance_report` | `workflow`, `framework?`, `markdown?` | Read-only pre-audit of the design against its platforms' CIS benchmarks: summary, counts, open controls with findings and guidance; `markdown` returns the exportable report |
+| `architecture_patterns` | `requirement?`, `platform?`, `pattern?` | Architecture styles and design patterns ranked for a requirement, or one in full, mapped to the platform's services; call at the start of a design, prefer the simplest |
 | `well_architected_guidance` | `platform`, `pillar?` | Well-Architected practices of a platform per pillar (why, how, rule codes); call before designing |
 | `review_well_architected` | `workflow` | Every rule's findings grouped by pillar with status ok/advice/risk plus open recommendations; call before finishing, fix warnings first |
 | `recommend_improvements` | `workflow` | Companions the design lacks (WAF/rate limits on public entry points, reverse proxy, DLQs…) with why, snippet, scope and local support; call after the first draft and before finishing |

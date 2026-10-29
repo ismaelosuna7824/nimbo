@@ -298,6 +298,8 @@ func (s *Server) routes() {
 	h("GET "+p+"/settings/defaults", s.settingsDefaults)
 	h("GET "+p+"/best-practices/rules", s.bestPracticeRules)
 	h("GET "+p+"/well-architected/{platform}", s.wellArchitectedGuide)
+	h("GET "+p+"/patterns", s.listPatterns)
+	h("GET "+p+"/patterns/{id}", s.getPattern)
 	h("GET "+p+"/agents", s.listAgents)
 	h("POST "+p+"/agents/{id}/install", s.installAgent)
 	h("DELETE "+p+"/agents/{id}", s.uninstallAgent)

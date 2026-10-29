@@ -18,6 +18,11 @@ const groupWellArchitected = "Well-Architected"
 
 func registerWellArchitectedTools(r *registry, t *tools) {
 	r.group = groupWellArchitected
+	addTool(r, "architecture_patterns", "Architecture patterns",
+		"Call at the start of a design, after understanding the requirement (exposure, traffic and peaks, latency, consistency, data sensitivity, availability, team maturity), to choose an architecture style (n-tier, web-queue-worker, microservices, event-driven, serverless, modular monolith, streaming) and cloud design patterns (API gateway, BFF, cache-aside, CQRS, event sourcing, saga, outbox, pub/sub, queue-based load leveling, async request-reply, circuit breaker, strangler fig…), each mapped to the platform's services (AWS, Azure, GCP, OCI Terraform types, Docker Compose, Kubernetes) with what runs locally. "+
+			"requirement (English or Spanish) returns ranked matches, styles first: id, name, kind, problem, useWhen, avoidWhen and the block for platform; pattern returns one pattern in full (trade-offs, practices, blocks, related, templates, sources). Without either it lists the catalog. "+
+			"Prefer the simplest style and fewest patterns that meet the requirement (a CRUD API stays a simple n-tier/serverless design; avoidWhen is the over-engineering guard); explain the choice, its trade-offs and what you deliberately left out to the user.",
+		t.architecturePatterns)
 	addTool(r, "well_architected_guidance", "Well-Architected guidance",
 		"Call BEFORE designing (or redesigning) a workflow to apply its provider's Well-Architected practices: AWS Well-Architected, Azure Well-Architected, Google Cloud Architecture Framework, OCI Well-Architected, or Nimbo's Docker Compose / Kubernetes guides. "+
 			"Returns the framework, its sources and, per pillar (security, reliability, performance, cost, operations), a summary and practices: title, why, how (concrete Terraform resource types/attributes or compose/Kubernetes fields) and the Nimbo rule codes that check it. "+

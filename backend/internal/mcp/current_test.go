@@ -165,7 +165,7 @@ func TestPrompts(t *testing.T) {
 		t.Fatal(err)
 	}
 	cat := PromptCatalog()
-	if len(res.Prompts) != len(cat) || len(cat) != 9 {
+	if len(res.Prompts) != len(cat) || len(cat) != 10 {
 		t.Fatalf("server lists %d prompts, catalog %d", len(res.Prompts), len(cat))
 	}
 	for i, p := range res.Prompts {
@@ -213,6 +213,19 @@ func TestPrompts(t *testing.T) {
 	}
 	if got := text("design_well_architected", map[string]string{"goal": "a shop"}); !strings.Contains(got, "default to aws") {
 		t.Fatalf("design_well_architected default platform: %s", got)
+	}
+	if got := text("design_from_requirements", map[string]string{"requirement": "an orders API with spiky traffic", "platform": "kubernetes", "environment": "production"}); !strings.Contains(got, "an orders API with spiky traffic") || !strings.Contains(got, "Platform: kubernetes") ||
+		!strings.Contains(got, "Environment intent: production") || !strings.Contains(got, "architecture_patterns") || !strings.Contains(got, "did NOT add") || !strings.Contains(got, "well_architected_guidance") ||
+		!strings.Contains(got, "compliance_report") || !strings.Contains(got, "architecture decision record") {
+		t.Fatalf("design_from_requirements: %s", got)
+	}
+	if got := text("design_from_requirements", map[string]string{"requirement": "a shop"}); !strings.Contains(got, "default to aws") || !strings.Contains(got, "assume dev") {
+		t.Fatalf("design_from_requirements defaults: %s", got)
+	}
+	for name, arg := range map[string]string{"create_infrastructure": "request", "create_docker_stack": "request", "create_kubernetes_app": "request", "design_well_architected": "goal"} {
+		if got := text(name, map[string]string{arg: "an API"}); !strings.Contains(got, "architecture_patterns") {
+			t.Errorf("%s does not mention architecture_patterns", name)
+		}
 	}
 	if _, err := cs.GetPrompt(ctx, &sdk.GetPromptParams{Name: "import_terraform_folder"}); err == nil || !strings.Contains(err.Error(), `"dir"`) {
 		t.Fatalf("missing required argument: %v", err)
