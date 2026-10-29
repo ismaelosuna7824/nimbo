@@ -21,6 +21,7 @@ import {
   PlayIcon,
   PlugIcon,
   PlusIcon,
+  RouteIcon,
   ShieldCheckIcon,
   SquareIcon,
   Trash2Icon,
@@ -64,6 +65,7 @@ import { hasMonitoring, openMonitoringDialog } from "../monitoring/monitoring-st
 import { K8sIcon } from "@/components/k8s-icons/k8s-icon"
 import { TechIcon } from "@/components/tech-icons/tech-icon"
 import { switchView, useArchUi, useCanvasView, VIEW_SHORTCUT } from "../architecture/store"
+import { startWalkthrough } from "../walkthrough/store"
 import { MOD_KEY, openWorkflow, runAction, sandboxAction } from "../toolbar/actions"
 import { useUiStore } from "../toolbar/ui-store"
 import { archiveWorkflow, closeWorkflow, workflowListQuery } from "../toolbar/workflow-actions"
@@ -323,6 +325,10 @@ export function PaletteBody() {
                   Export Build canvas as PNG…
                 </CommandItem>
               )}
+              <CommandItem value="follow a request walkthrough path trace flow tour how requests travel" onSelect={() => run(startWalkthrough)}>
+                <RouteIcon />
+                Follow a request
+              </CommandItem>
             </CommandGroup>
             <CommandSeparator />
             <CommandGroup heading="Panels">

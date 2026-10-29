@@ -3663,6 +3663,55 @@ are drawn as requests (api → db, the reverse of the graph's "source is
 used by target"), one arrow per pair. The subtitle is `Docker Compose ·
 <project>`; the legend adds internal/external networks when present.
 
+### Follow a request (`apps/desktop/src/features/walkthrough`)
+
+A guided walkthrough of the path a request takes, for beginners: *Follow a
+request* on the canvas toolbar (Build and Architecture, every workflow kind)
+or ⌘K. It reuses the Architecture model — `use-model.ts` derives it for the
+Build canvas too (no layout), so both views walk the same data-flow arrows.
+`paths.ts` (pure, `paths.test.ts`): entries are the data arrows from *Users*
+(the *Internet* when no Users reach the design), one per front door, picked
+by the user when there are several; without any, the panel says "This design
+has no entry point yet" with a hint per kind and offers the flow starts
+(items sending data that nothing feeds). The walk follows solid arrows in
+their direction, never back onto its own path, never into supporting pieces;
+at a fork it waits for a way (chips) or plays every way in turn ("Show
+all"; an item an earlier way reached ends that way). Queues, topics and
+event buses are asynchronous: the request returns there and the walk goes
+on to their consumers — arrows out of them, or services whose arrow points
+at them (a worker pulling from its queue). `describe.ts` (`describe.test.ts`,
+with the Azure Container Apps + PostgreSQL + Service Bus example) gives each
+item a name, a friendly type (catalog label; image technology for Docker;
+object kind for Kubernetes), a role, ports and routes from the card, where it
+runs (`flociSupported`/deployed; Docker and the local cluster always local)
+and "also involved" chips: dashed neighbours (IAM roles, Key Vault, managed
+identities, telemetry), supporting pieces it reaches (private DNS zones,
+launch templates), referenced platform cards (a Container Apps environment)
+with their own dashed neighbours, security group rules and folded helpers;
+compose volumes/secrets/configs; Kubernetes Services, ConfigMaps, Secrets,
+service accounts and scalers. How a hop connects comes from the references
+(an environment variable first, else the attribute, else the helper both
+ends use: "the API Integration"). `captions.ts` writes the step text;
+`travel.ts` the dot's route (the Architecture edge's route; on Build a curve
+between the cards, through the helper card in between) and the camera
+(`setCenter` on both ends of the hop, above the caption panel). The layer
+(`layer.tsx`, lazy) plays it — Play/Pause, ←/→, space, Esc, speed 0.5–2×,
+Restart, a summary with Replay and, when the entry is deployed, *Send a real
+request* (Endpoints, Try it) — and writes marks to a small store
+(`store.ts`) that the canvases read through `useWalkthroughNodes` /
+`useWalkthroughEdges`: the current item ringed in the accent, its hop's edges
+in their hover look (without their hover labels, `useWalkthroughShowing`: the
+caption says how they connect), the rest of the path at 60 %, everything
+else at 25 %; frames keep their look. Workflow data is never touched. Its
+keys are handled in the capture phase and stopped there, only for keys
+typed in the canvas area: the arrows never also nudge a selected card (↑/↓
+on the canvas are swallowed), space never pans. The caption owns the bottom
+of the canvas while it is open: the minimap is hidden, and with the live
+traffic panel the newer one shows — a load test started during a
+walkthrough closes it; a walkthrough opened during a run tucks the run's
+panel away until it closes (cards and edges keep their live numbers). With
+`prefers-reduced-motion` the dot does not travel and the camera jumps.
+
 ## Learn (`internal/learn`, `api/learn.go`, `apps/desktop/src/features/learn`)
 
 Learn shows a roadmap (beginner → intermediate → advanced → expert) and

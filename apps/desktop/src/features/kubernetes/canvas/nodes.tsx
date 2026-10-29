@@ -12,6 +12,7 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip
 import { Badges, chip, STATE_TONE } from "@/features/docker/canvas/nodes"
 import { ServiceCardUsage } from "@/features/docker/perf/components"
 import { EdgeFlow, NodeLiveBadges } from "@/features/live/live-chips"
+import { useWalkthroughShowing } from "@/features/walkthrough/highlight"
 import { openEndpoints } from "@/features/panels/endpoints/use-endpoints"
 import { revealFiles } from "@/features/panels/terraform/reveal-files"
 import type { KubeNode } from "@/lib/api/types"
@@ -415,7 +416,9 @@ export const KubeEdge = memo(function KubeEdge({ id, sourceX, sourceY, targetX, 
     ? getSmoothStepPath({ sourceX, sourceY, targetX, targetY, sourcePosition, targetPosition, borderRadius: 0 })
     : getBezierPath({ sourceX, sourceY, targetX, targetY, sourcePosition, targetPosition })
   const emphasis = selected || data?.hovered
-  const text = data && (emphasis ? [data.kind, data.label].filter(Boolean).join(" · ") : ALWAYS_LABELED[data.kind] ? data.label : undefined)
+  // During a walkthrough the hop's edges keep the hover look without the full label; the caption says how they connect.
+  const walking = useWalkthroughShowing()
+  const text = data && (emphasis && !walking ? [data.kind, data.label].filter(Boolean).join(" · ") : ALWAYS_LABELED[data.kind] ? data.label : undefined)
   return (
     <>
       <BaseEdge

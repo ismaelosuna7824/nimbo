@@ -55,10 +55,17 @@ import { ComposeConnectDialog, type PendingComposeConnection } from "./connect-d
 import { layoutCanvas } from "./layout"
 import { buildCanvas, looseItems, placeNew, relativePosition, SERVICE_H, SERVICE_W, type CanvasItem } from "./model"
 import { DockerEdge, FrameNode, ServiceNode, SmallNode, type DockerFlowEdge, type DockerFlowNode } from "./nodes"
+import { useWalkthroughEdges, useWalkthroughNodes } from "@/features/walkthrough/highlight"
+import { FollowRequestButton, WalkthroughOverlay } from "@/features/walkthrough/overlay"
+import { useWalkthroughOpen } from "@/features/walkthrough/store"
 
 const nodeTypes = { service: ServiceNode, small: SmallNode, frame: FrameNode }
 /** Frames that are only layout; a frame drawn for a compose object (a network) can be marked. */
 const isFrame = (n: DockerFlowNode) => n.type === "frame" && !n.data.node
+/** The walkthrough fades cards off the path but leaves the network frames around them as they are. */
+const isAnyFrame = (n: DockerFlowNode) => n.type === "frame"
+/** A hop's edges during the walkthrough: the hover look, label included. */
+const emphasizeEdge = (e: DockerFlowEdge): DockerFlowEdge => ({ ...e, data: { ...e.data!, hovered: true } })
 const edgeTypes = { docker: DockerEdge }
 const EMPTY_GRAPH: ComposeGraph = { nodes: [], edges: [] }
 const EDGE_MARKER = { type: MarkerType.ArrowClosed, width: 16, height: 16 }
@@ -190,8 +197,8 @@ function CanvasInner() {
       }
     })
   }, [canvas, byId, selectedNodeId, endpoints, diagnostics])
-  // The Compliance tab's "Show on canvas" rings the services of a control and dims the rest.
-  const nodes = useComplianceMarked(useStableItems(derivedNodes, sameFlowNode), isFrame)
+  // The Compliance tab's "Show on canvas" rings the services of a control and dims the rest; "Follow a request" rings the current hop.
+  const nodes = useWalkthroughNodes(useComplianceMarked(useStableItems(derivedNodes, sameFlowNode), isFrame), isAnyFrame)
 
   const derivedEdges = useMemo(
     () =>
@@ -212,7 +219,7 @@ function CanvasInner() {
       }),
     [canvas, byId, hovered],
   )
-  const edges = useStableItems(derivedEdges, sameFlowEdge)
+  const edges = useWalkthroughEdges(useStableItems(derivedEdges, sameFlowEdge), emphasizeEdge)
 
   const onNodeDragStop = useCallback(
     (_: unknown, __: DockerFlowNode, dragged: DockerFlowNode[]) => {
@@ -351,18 +358,21 @@ function CanvasInner() {
   const serviceCount = graph.nodes.filter((n) => n.kind === "service").length
   // Memoized parts of the canvas: it re-renders on every edit (the cards' data), these only when what they show does.
   const hasItems = canvas.items.length > 0
+  // The walkthrough's caption takes the bottom of the canvas: the minimap steps aside meanwhile.
+  const walking = useWalkthroughOpen()
   const overlays = useMemo(
     () => (
       <>
         <Background variant={BackgroundVariant.Dots} gap={16} size={1.2} />
         <Controls showInteractive={false} position="bottom-left" />
-        <MiniMap pannable zoomable nodeColor={minimapColor} nodeStrokeWidth={0} position="bottom-right" style={MINIMAP_STYLE} />
+        {!walking && <MiniMap pannable zoomable nodeColor={minimapColor} nodeStrokeWidth={0} position="bottom-right" style={MINIMAP_STYLE} />}
         {/* Right of the Build/Architecture switch the canvas area draws at the top left. */}
         <Panel position="top-left" style={ENV_PANEL_STYLE}>
           <EnvironmentSwitch className="bg-card/80 shadow-md backdrop-blur-md dark:bg-card/80" />
         </Panel>
         {hasItems && (
-          <Panel position="top-right">
+          <Panel position="top-right" className="flex items-center gap-2">
+            <FollowRequestButton />
             <Button variant="outline" size="sm" className="bg-card/80 shadow-md backdrop-blur-md dark:bg-card/80" onClick={() => void tidy()}>
               <WandSparklesIcon />
               Tidy up
@@ -370,9 +380,10 @@ function CanvasInner() {
           </Panel>
         )}
         <LiveTrafficOverlay kind="docker" edges={canvas.edges} />
+        <WalkthroughOverlay surface="build" />
       </>
     ),
-    [hasItems, tidy, canvas.edges],
+    [hasItems, tidy, canvas.edges, walking],
   )
   const menuContent = useMemo(
     () => (

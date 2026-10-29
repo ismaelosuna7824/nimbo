@@ -22,6 +22,7 @@ import type { ComposeNode, ComposeServiceStatus } from "@/lib/api/types"
 import { cn } from "@/lib/utils"
 import { openEndpoints } from "@/features/panels/endpoints/use-endpoints"
 import { EdgeFlow, NodeLiveBadges } from "@/features/live/live-chips"
+import { useWalkthroughShowing } from "@/features/walkthrough/highlight"
 import { ServiceCardUsage, ServiceProblemBadge } from "../perf/components"
 import { FRAME_HEADER, type CanvasEdge, type CardKind } from "./model"
 
@@ -309,7 +310,9 @@ export const DockerEdge = memo(function DockerEdge({
     : getBezierPath({ sourceX, sourceY, targetX, targetY, sourcePosition, targetPosition })
   const emphasis = selected || data?.hovered
   // The condition of a dependency and the env key of an inferred connection show without hovering.
-  const showLabel = !!data?.label && (emphasis || data.kind === "depends_on" || data.kind === "inferred")
+  // During a walkthrough the hop's edges keep the hover look without the label; the caption says how they connect.
+  const walking = useWalkthroughShowing()
+  const showLabel = !!data?.label && ((emphasis && !walking) || data.kind === "depends_on" || data.kind === "inferred")
   return (
     <>
       <BaseEdge

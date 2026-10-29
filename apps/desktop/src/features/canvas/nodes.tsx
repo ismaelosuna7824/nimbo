@@ -24,6 +24,7 @@ import { NodeLiveBadges } from "../live/live-chips"
 import { openEndpoints } from "../panels/endpoints/use-endpoints"
 import { PlanMarker } from "../plan/plan-marker"
 import { GROUP_HEADER, NODE_HEIGHT, NODE_WIDTH } from "./layout"
+import { useWalkthroughShowing } from "../walkthrough/highlight"
 
 export interface ResourceNodeData extends Record<string, unknown> {
   node: WorkflowNode
@@ -241,6 +242,8 @@ export const RefEdge = memo(function RefEdge({
     : getBezierPath({ sourceX, sourceY, targetX, targetY, sourcePosition, targetPosition })
   const dependsOn = data?.kind === "depends_on"
   const live = data?.live && !dependsOn
+  // During a walkthrough the hop's edges keep the hover look without the raw attribute path; the caption says how they connect.
+  const walking = useWalkthroughShowing()
   return (
     <>
       <BaseEdge
@@ -258,7 +261,7 @@ export const RefEdge = memo(function RefEdge({
         </>
       )}
       {live && !arcade && <RunningFlow path={path} />}
-      {(data?.hovered || selected) && (
+      {(data?.hovered || selected) && !walking && (
         <EdgeLabelRenderer>
           <div
             className="nodrag nopan pointer-events-none absolute rounded-md border bg-popover px-1.5 py-0.5 font-mono text-[11px] text-popover-foreground shadow-sm"

@@ -139,6 +139,12 @@ instead of one-off colors, shadows or radii.
   focus always shows `ring-ring/50`.
 - **Motion.** 150 ms on color, shadow and border; nothing moves layout. Edges between running ends drift slowly
   (`edge-flow`). With `prefers-reduced-motion`, transitions are instant and the flow stands still.
+- **Spotlight on the canvas** (Follow a request, reachability, Compliance "Show on canvas"): the items that matter
+  are ringed, the rest fade (`opacity-35`/`-25`); nothing in the workflow changes. The
+  walkthrough rings the current item in the accent (focus, not status), keeps the rest of its path at 60 % and
+  explains each step in one floating panel at the bottom center (frosted, `shadow-lg`) with Play/Pause, ←/→, space
+  and Esc; the camera eases to the hop and jumps instead with reduced motion. Floating panels never stack: the caption
+  and the live traffic panel share the canvas bottom and the newer one shows (the minimap steps aside meanwhile).
 
 ## Review checklist
 

@@ -59,11 +59,18 @@ import { expandedCharts, setChartExpanded, useExpandedCharts } from "./charts"
 import { KubeConnectDialog, type PendingKubeConnection, type PendingKubeEnd } from "./connect-dialog"
 import { buildKubeCanvas, layoutChart, layoutKubeCanvas, withChartSpots, WORKLOAD_H, WORKLOAD_W, type ChartSummary, type KubeCanvasItem } from "./model"
 import { ChartNode, FrameNode, KubeEdge, SmallNode, WorkloadNode, type KubeFlowEdge, type KubeFlowNode } from "./nodes"
+import { useWalkthroughEdges, useWalkthroughNodes } from "@/features/walkthrough/highlight"
+import { FollowRequestButton, WalkthroughOverlay } from "@/features/walkthrough/overlay"
+import { useWalkthroughOpen } from "@/features/walkthrough/store"
 
 const nodeTypes = { workload: WorkloadNode, small: SmallNode, frame: FrameNode, chart: ChartNode }
 const edgeTypes = { kube: KubeEdge }
 /** Frames that are only layout (implicit namespaces, expanded charts); a Namespace object's frame can be marked. */
 const isFrame = (n: KubeFlowNode) => n.type === "frame" && !n.data.node
+/** The walkthrough fades cards off the path but leaves the namespace and chart frames around them as they are. */
+const isAnyFrame = (n: KubeFlowNode) => n.type === "frame"
+/** A hop's edges during the walkthrough: the hover look, label included. */
+const emphasizeEdge = (e: KubeFlowEdge): KubeFlowEdge => ({ ...e, data: { ...e.data!, hovered: true } })
 const EMPTY_GRAPH: KubeGraph = { nodes: [], edges: [] }
 const EDGE_MARKER = { type: MarkerType.ArrowClosed, width: 16, height: 16 }
 const FIT_VIEW_OPTIONS = { padding: 0.2, maxZoom: 1.1 }
@@ -267,9 +274,9 @@ function CanvasInner() {
     )
   }, [canvas, byId, selectedNodeId, endpoints, diagnostics, graph])
   // The Compliance tab's "Show on canvas" rings the objects of a control (a collapsed chart's card stands for its
-  // objects) and dims the rest.
+  // objects) and dims the rest; "Follow a request" rings the current hop.
   const chartOf = useMemo(() => new Map(graph.nodes.flatMap((n) => (n.chart ? [[n.id, n.chart] as const] : []))), [graph])
-  const nodes = useComplianceMarked(useStableItems(derivedNodes, sameFlowNode), isFrame, chartOf)
+  const nodes = useWalkthroughNodes(useComplianceMarked(useStableItems(derivedNodes, sameFlowNode), isFrame, chartOf), isAnyFrame)
 
   const derivedEdges = useMemo(
     () =>
@@ -285,7 +292,7 @@ function CanvasInner() {
       ),
     [canvas, hovered],
   )
-  const edges = useStableItems(derivedEdges, sameFlowEdge)
+  const edges = useWalkthroughEdges(useStableItems(derivedEdges, sameFlowEdge), emphasizeEdge)
   useEffect(() => {
     const id = focusing.current
     if (!id || !nodes.some((n) => n.id === id)) return
@@ -480,18 +487,21 @@ function CanvasInner() {
   // Memoized parts of the canvas: it re-renders on every edit (the cards' data), these only when what they show does.
   const hasItems = canvas.items.length > 0
   const clusterRunning = status?.cluster.state === "running"
+  // The walkthrough's caption takes the bottom of the canvas: the minimap steps aside meanwhile.
+  const walking = useWalkthroughOpen()
   const overlays = useMemo(
     () => (
       <>
         <Background variant={BackgroundVariant.Dots} gap={16} size={1.2} />
         <Controls showInteractive={false} position="bottom-left" />
-        <MiniMap pannable zoomable nodeColor={minimapColor} nodeStrokeWidth={0} position="bottom-right" style={MINIMAP_STYLE} />
+        {!walking && <MiniMap pannable zoomable nodeColor={minimapColor} nodeStrokeWidth={0} position="bottom-right" style={MINIMAP_STYLE} />}
         {/* Right of the Build/Architecture switch the canvas area draws at the top left. */}
         <Panel position="top-left" style={ENV_PANEL_STYLE}>
           <EnvironmentSwitch className="bg-card/80 shadow-md backdrop-blur-md dark:bg-card/80" />
         </Panel>
         {hasItems && (
-          <Panel position="top-right">
+          <Panel position="top-right" className="flex items-center gap-2">
+            <FollowRequestButton />
             <Button variant="outline" size="sm" className="bg-card/80 shadow-md backdrop-blur-md dark:bg-card/80" onClick={() => void tidy()}>
               <WandSparklesIcon />
               Tidy up
@@ -499,9 +509,10 @@ function CanvasInner() {
           </Panel>
         )}
         <LiveTrafficOverlay kind="kubernetes" edges={canvas.edges} />
+        <WalkthroughOverlay surface="build" />
       </>
     ),
-    [hasItems, tidy, canvas.edges],
+    [hasItems, tidy, canvas.edges, walking],
   )
   const menuContent = useMemo(
     () => (

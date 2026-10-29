@@ -59,6 +59,9 @@ import { openModuleView } from "./module-view-store"
 import { ModuleRefactorDialogs } from "./module-refactor"
 import { openExtractModule, openInlineModule } from "./module-refactor-store"
 import { GroupNode, RefEdge, ResourceNode, type RefFlowEdge, type ResourceFlowNode } from "./nodes"
+import { useWalkthroughEdges, useWalkthroughNodes } from "../walkthrough/highlight"
+import { FollowRequestButton, WalkthroughOverlay } from "../walkthrough/overlay"
+import { useWalkthroughOpen } from "../walkthrough/store"
 
 const nodeTypes = { resource: ResourceNode, container: GroupNode }
 const edgeTypes = { ref: RefEdge }
@@ -138,6 +141,10 @@ const HOP_RING: Record<HopVerdict, string> = {
 
 /** Terraform groups (a VPC around its subnets) are resources too: the compliance highlight marks or dims them all. */
 const noFrames = () => false
+/** The walkthrough fades cards off the path but leaves the VPC and subnet frames around them as they are. */
+const isContainer = (n: ResourceFlowNode) => n.type === "container"
+/** A hop's edges during the walkthrough: the hover look, label included. */
+const emphasizeEdge = (e: RefFlowEdge): RefFlowEdge => ({ ...e, data: { ...e.data!, hovered: true } })
 
 function minimapColor(n: ResourceFlowNode) {
   if (n.type === "container") return MINIMAP_FRAME
@@ -229,7 +236,7 @@ function CanvasInner() {
   // Compliance tab's "Show on canvas" does the same for the resources of a control.
   const reachHighlight = useReachability((s) => s.highlight)
   const complianceNodes = useComplianceMarked(stableNodes, noFrames)
-  const derivedNodes = useMemo(() => {
+  const markedNodes = useMemo(() => {
     const base = reachHighlight ? stableNodes : complianceNodes
     const selectedNodes = selectedIds.length ? base.map((n) => (selectedIds.includes(n.id) ? { ...n, selected: true } : n)) : base
     if (!reachHighlight) return selectedNodes
@@ -238,6 +245,8 @@ function CanvasInner() {
       return { ...n, className: verdict ? HOP_RING[verdict] : "opacity-35" }
     })
   }, [stableNodes, complianceNodes, selectedIds, reachHighlight])
+  // "Follow a request" rings the current hop and fades the rest.
+  const derivedNodes = useWalkthroughNodes(markedNodes, isContainer)
   const onSelectionChange = useCallback(
     ({ nodes: picked }: OnSelectionChangeParams) => {
       const ids = picked.map((n) => n.id)
@@ -271,13 +280,14 @@ function CanvasInner() {
       )
   }, [wfNodes, wfEdges, deployedIds])
   const stableEdges = useStableItems(builtEdges, sameFlowEdge)
-  const derivedEdges = useMemo(
+  const hoverEdges = useMemo(
     () =>
       hoveredEdge
         ? stableEdges.map((e) => (e.id === hoveredEdge ? { ...e, data: { ...e.data!, hovered: true } } : e))
         : stableEdges,
     [stableEdges, hoveredEdge],
   )
+  const derivedEdges = useWalkthroughEdges(hoverEdges, emphasizeEdge)
 
   /** What the context menu acts on: the right-clicked node (or the selection containing it); null = the pane. */
   const [menu, setMenu] = useState<{ ids: string[]; node?: WorkflowNode } | null>(null)
@@ -611,19 +621,24 @@ function CanvasInner() {
   // Memoized parts of the canvas: it re-renders on every edit (the cards' data), these only when what they show does.
   const empty = wfNodes.length === 0
   const multi = selectedIds.length > 1 ? selectedIds : null
+  // The walkthrough's caption takes the bottom of the canvas: the minimap steps aside meanwhile.
+  const walking = useWalkthroughOpen()
   const overlays = useMemo(
     () => (
       <>
         <Background variant={BackgroundVariant.Dots} gap={16} size={1.2} />
         <Controls showInteractive={false} position="bottom-left" />
-        <MiniMap pannable zoomable nodeColor={minimapColor} nodeStrokeWidth={0} position="bottom-right" style={MINIMAP_STYLE} />
+        {!walking && <MiniMap pannable zoomable nodeColor={minimapColor} nodeStrokeWidth={0} position="bottom-right" style={MINIMAP_STYLE} />}
         <Panel position="top-right" className="flex items-center gap-2">
           <PlanChip />
           {!empty && (
-            <Button variant="outline" size="sm" className="bg-card/80 shadow-md backdrop-blur-md dark:bg-card/80" onClick={() => void tidy()}>
-              <WandSparklesIcon />
-              Tidy up
-            </Button>
+            <>
+              <FollowRequestButton />
+              <Button variant="outline" size="sm" className="bg-card/80 shadow-md backdrop-blur-md dark:bg-card/80" onClick={() => void tidy()}>
+                <WandSparklesIcon />
+                Tidy up
+              </Button>
+            </>
           )}
         </Panel>
         {multi && (
@@ -641,9 +656,10 @@ function CanvasInner() {
         )}
         {/* Terraform: the load test's target only (nothing measures requests between cloud resources). */}
         <LiveTrafficOverlay kind="" edges={NO_FLOW_EDGES} />
+        <WalkthroughOverlay surface="build" />
       </>
     ),
-    [empty, multi, tidy],
+    [empty, multi, tidy, walking],
   )
   const menuContent = useMemo(
     () => (

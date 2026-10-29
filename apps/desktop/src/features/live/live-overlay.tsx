@@ -13,6 +13,7 @@ import { StatusBadge } from "@/features/panels/components/status-badge"
 import { useNow } from "@/features/panels/lib/use-now"
 import { revealLoadTest } from "@/features/panels/loadtest/reveal"
 import { SCENARIO_LABEL } from "@/features/panels/loadtest/scenario-result"
+import { closeWalkthrough, useWalkthrough, useWalkthroughOpen } from "@/features/walkthrough/store"
 import { EMPTY_LIVE, stopRun, useLiveStore } from "./live-store"
 import { useRunClock } from "./run-clock"
 import {
@@ -101,7 +102,18 @@ export const LiveTrafficOverlay = memo(function LiveTrafficOverlay({ kind, edges
   }, [shown, live, fault])
   useEffect(() => () => useLiveStore.setState(EMPTY_LIVE), [])
 
-  if (!run || !shown) return null
+  // The run's panel and the request walkthrough's caption share the bottom of the canvas: the newer one shows. A run
+  // started during a walkthrough closes it; a walkthrough opened during a run tucks this panel away until it closes
+  // (the cards and edges keep their live numbers).
+  const runStarted = run ? Date.parse(run.startedAt) : 0
+  const walking = useWalkthroughOpen()
+  const walkStarted = useWalkthrough((s) => s.startedAt)
+  const runIsNewer = running && runStarted > walkStarted
+  useEffect(() => {
+    if (walking && runIsNewer) closeWalkthrough()
+  }, [walking, runIsNewer])
+
+  if (!run || !shown || (walking && !runIsNewer)) return null
   return <LivePanel kind={kind} run={run} samples={samples} traffic={traffic} fault={fault} onDismiss={() => setDismissed(run.id)} />
 })
 
