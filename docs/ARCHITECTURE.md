@@ -1217,6 +1217,25 @@ Sandbox behavior notes:
   plan can't be read, only a summary with 0 to destroy lets the apply go on.
   Destroy runs and sandbox reset keep their own confirmations and are not
   guarded.
+- EKS cluster restarts (`eks_restart.go`, verified 2026-10-29 with floci
+  2.3.0 and hashicorp/aws 6.69.1 and 6.71.0 alike): Floci runs an EKS
+  cluster as one k3s container sized like a node; when the first node group
+  picks an instance type other than the node's (`m5.large` before any group),
+  Floci replaces the container ("Replaced EKS cluster … to apply current node
+  capacity limits") and the cluster is `CREATING` again for a few seconds.
+  EKS calls made meanwhile for that cluster (`aws_eks_addon` create and its
+  `DescribeAddon` waiter, `aws_eks_pod_identity_association`, …) fail with
+  `InvalidRequestException: Cluster must be ACTIVE`, which no provider
+  retries; an add-on created before its waiter failed is left tainted. When
+  every error diagnostic of a failed apply is that one, the run polls Floci's
+  `GET /clusters` and `GET /clusters/{name}` (EKS isn't regional on Floci;
+  ≤ 3 min) until each cluster is `ACTIVE`, plans to
+  `.nimbo/eks-retry.tfplan` and applies it, at most twice per run. That plan
+  may only replace instances the failed apply named and Terraform tainted
+  (`replace_because_tainted`); anything else it deletes or replaces ends the
+  run failed ("Not applying again: …", deploy again to review it). A
+  succeeded run keeps the reviewed plan's `Run.Plan` counts. floci 2.1.0
+  had no node replacement but no add-on API either (`CreateAddon` → 404).
 - Post-deploy check (perpetual diffs): after a succeeded apply whose summary
   changed something, the run plans once more (`-detailed-exitcode`, refresh
   on, ≤ 5 min, output kept out of the log, saved to `.nimbo/check.tfplan` and

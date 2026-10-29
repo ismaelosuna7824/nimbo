@@ -188,20 +188,48 @@ func (m *Manager) applySteps(ctx context.Context, rs *runState, req RunRequest, 
 }
 
 // applyPlan applies a saved plan, removes it and runs the post-deploy check.
+// An apply that failed only because Floci was restarting an EKS cluster is
+// planned and applied again once the cluster is back (eks_restart.go).
 func (m *Manager) applyPlan(ctx context.Context, rs *runState, req RunRequest, work string, env, userEnv []string, file string) error {
-	defer os.Remove(filepath.Join(work, filepath.FromSlash(file)))
-	args := []string{"apply", "-input=false", "-no-color", file}
-	m.logLine(rs, "system", "$ terraform "+strings.Join(args, " "))
-	code, err := m.terraform(ctx, rs, "apply", env, userEnv, args...)
-	if err != nil {
-		return err
-	}
-	m.setExit(rs, code)
-	if code != 0 {
-		return fmt.Errorf("terraform apply exited with code %d", code)
+	var reviewed *model.PlanSummary // the summary before the first retry
+	for attempt := 0; ; attempt++ {
+		step := "apply"
+		if attempt > 0 {
+			step += "-eks-retry-" + strconv.Itoa(attempt)
+		}
+		code, stderr, err := m.applyFile(ctx, rs, work, env, userEnv, step, file)
+		if err != nil {
+			return err
+		}
+		m.setExit(rs, code)
+		if code == 0 {
+			break
+		}
+		failed := fmt.Errorf("terraform apply exited with code %d", code)
+		addrs, restart := eksRestartFailures(stderr)
+		if !restart || attempt == eksRetries {
+			return failed
+		}
+		if attempt == 0 {
+			m.mu.Lock()
+			reviewed = rs.run.Plan
+			m.mu.Unlock()
+		}
+		if file, err = m.replanAfterEKSRestart(ctx, rs, req, work, env, userEnv, addrs, attempt+1); err != nil {
+			if ctx.Err() != nil {
+				return ctx.Err()
+			}
+			m.logLine(rs, "system", "Not applying again: "+err.Error())
+			return failed
+		}
 	}
 	m.mu.Lock()
 	rs.applied = true
+	if reviewed != nil {
+		// The retries' plans and applies only finish what the reviewed plan
+		// started: the run reports that plan's changes.
+		rs.run.Plan = reviewed
+	}
 	p := rs.run.Plan
 	m.mu.Unlock()
 	if p == nil || p.Add+p.Change+p.Destroy == 0 {
@@ -209,6 +237,22 @@ func (m *Manager) applyPlan(ctx context.Context, rs *runState, req RunRequest, w
 	}
 	m.checkDrift(ctx, rs, req.Workflow, work, env, userEnv)
 	return nil
+}
+
+// applyFile applies a saved plan file (removed afterwards) and returns the
+// exit code and the error output.
+func (m *Manager) applyFile(ctx context.Context, rs *runState, work string, env, userEnv []string, step, file string) (int, []string, error) {
+	defer os.Remove(filepath.Join(work, filepath.FromSlash(file)))
+	args := []string{"apply", "-input=false", "-no-color", file}
+	m.logLine(rs, "system", "$ terraform "+strings.Join(args, " "))
+	var stderr []string // appended by the stderr reader only, read after the run
+	code, err := m.terraformTo(ctx, rs, step, env, userEnv, func(stream, line string) {
+		m.logLine(rs, stream, line)
+		if stream == "stderr" {
+			stderr = append(stderr, line)
+		}
+	}, args...)
+	return code, stderr, err
 }
 
 // checkDrift plans again right after a successful apply and records what
