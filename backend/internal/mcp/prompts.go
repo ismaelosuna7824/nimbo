@@ -11,6 +11,41 @@ import (
 // the user (slash commands in most MCP clients).
 func registerPrompts(r *registry) {
 	r.addPrompt(&sdk.Prompt{
+		Name:        "build_from_design",
+		Title:       "Build from a design",
+		Description: "Build a design the user provides (diagram, image, list of services or an existing workflow) faithfully, then propose improvements separately without changing it on your own.",
+		Arguments: []*sdk.PromptArgument{
+			{Name: "design", Description: "the design: an attached diagram or image, a description of its components and connections, or a workflow ID", Required: true},
+			{Name: "platform", Description: "aws, azure, gcp, oci, docker or kubernetes (default: the provider the design shows, else ask)"},
+		},
+	}, func(a map[string]string) (string, error) {
+		design, err := required(a, "design")
+		if err != nil {
+			return "", err
+		}
+		platform := strings.TrimSpace(a["platform"])
+		if platform == "" {
+			platform = "the provider the design shows (service icons and names); ask if it is not clear"
+		}
+		return fmt.Sprintf(`Build this design faithfully with the Nimbo tools: %s
+Platform: %s.
+
+The design is the spec. Do not drop, merge or swap components, and do not change the architecture on your own: improvements are proposals the user approves.
+
+Steps:
+1. Inventory: list every component (service, resource, container, Kubernetes object), every connection and its direction, and every container/boundary (account, region, VPC, subnets, namespaces) the design shows. Mark actors that are not resources (users, operators, email recipients, external systems) and say how each is represented (an attribute such as an SNS email subscription, an output, or a note).
+2. Mapping: for each component, the concrete type it becomes (Terraform resource type, compose service and image, Kubernetes kind) and each connection as an edge or attribute. Where the design is ambiguous (a generic icon, an unclear arrow, a missing protocol), ask the user or state the assumption; never pick a different service than the one drawn.
+3. Plumbing: list separately the supporting pieces the design needs to work but doesn't draw (IAM roles and policies, the network a service needs, log groups, permissions, task execution roles). Keep it minimal and tell the user what you added and why. Settings inside each component use secure defaults (encryption, logging, retention, least privilege).
+4. Build it: get_open_workflow first (edit the open workflow if it is this design), well_architected_guidance for its layout, then the create_infrastructure, create_docker_stack or create_kubernetes_app steps. Fix every error diagnostic and best_practices finding the edits return when the fix stays inside a component; anything that adds or changes components goes to step 6.
+5. Fidelity check: get_workflow and compare with the inventory: every component and connection present, nothing drawn missing, nothing undrawn except the plumbing from step 3. The Architecture view in the app should read like the original diagram (helpers such as IAM roles and security groups fold into the cards using them).
+6. Proposals, not changes: recommend_improvements, architecture_patterns with what the design does, review_well_architected and compliance_report. Present them grouped (security, reliability, scaling, cost, operations, architecture patterns), each with a one-line why, scope (recommended or production) and whether it runs locally. Apply only the ones the user accepts.
+7. Prove it locally when the user wants: validate and deploy, get_endpoints and try_endpoint, a smoke load test. Say what is export-only (not emulated locally).
+8. Summarize: the inventory mapped to what was built, the plumbing added, assumptions, the proposals and which were applied, and findings left open.
+
+Nothing touches a real cloud: everything runs locally.`, design, platform), nil
+	})
+
+	r.addPrompt(&sdk.Prompt{
 		Name:        "create_docker_stack",
 		Title:       "Create Docker stack",
 		Description: "Build a docker-compose stack (services, Dockerfiles, databases) that follows Docker best practices, run it and prove it works.",

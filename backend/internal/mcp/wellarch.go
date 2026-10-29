@@ -35,7 +35,7 @@ func registerWellArchitectedTools(r *registry, t *tools) {
 	addTool(r, "recommend_improvements", "Recommend improvements",
 		"Call after the first draft of a design and again before finishing: the companions a senior engineer would add to THIS design (e.g. a public API → WAF with a rate-based rule and stage throttling; a published local service → a rate-limiting reverse proxy; a queue consumer → a DLQ), highest value first. "+
 			"Each item: id, title, why, pillars, nodes that triggered it, add (resource types/keys to add and their purpose), snippet (minimal HCL/YAML using the design's real addresses), scope (recommended | production), local (runs locally, export only, or the local equivalent), skip (when not to add it), rules that check it and docs. "+
-			"Propose each item to the user with its one-line why; apply only what they accept or what clearly fits the request; production-scope items are proposals in a local sandbox and export-only ones are not emulated locally (say so). Applied items disappear on the next call; an empty list means nothing is left.",
+			"Propose each item to the user with its one-line why; apply only what they accept or what clearly fits the request. When the user gave you the design (diagram, image, existing workflow), never apply an item that adds, removes or replaces components without their OK. Production-scope items are proposals in a local sandbox and export-only ones are not emulated locally (say so). Applied items disappear on the next call; an empty list means nothing is left.",
 		t.recommendImprovements)
 }
 
