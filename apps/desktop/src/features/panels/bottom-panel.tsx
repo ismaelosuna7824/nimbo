@@ -25,7 +25,6 @@ import { cn } from "@/lib/utils"
 import { useWorkflowStore, type BottomTab } from "@/state/workflow-store"
 import { usePlanToast } from "@/features/plan/plan-toast"
 import { DeployTab } from "./deploy/deploy-tab"
-import { useDeployToast } from "./endpoints/deploy-toast"
 import { ProblemsTab } from "./problems/problems-tab"
 import { FilesTab } from "./terraform/files-tab"
 import { VariablesTab } from "./variables/variables-tab"
@@ -101,7 +100,6 @@ export function BottomPanel() {
     (t) => challenge || t.id !== "challenge",
   )
 
-  useDeployToast()
   usePlanToast()
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {

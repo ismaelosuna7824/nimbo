@@ -27,7 +27,7 @@ import { cn } from "@/lib/utils"
 import { useWorkflowStore } from "@/state/workflow-store"
 import { latestPlan } from "@/features/plan/plan"
 import { showPlanOnCanvas } from "@/features/plan/plan-store"
-import { watchApply } from "@/features/toolbar/actions"
+import { watchRun } from "@/features/toolbar/actions"
 import { useUiStore } from "@/features/toolbar/ui-store"
 import { StatusBadge } from "../components/status-badge"
 import { editWorkflow } from "../lib/edit"
@@ -36,6 +36,7 @@ import { useNow } from "../lib/use-now"
 import { missingRequired } from "../lib/values"
 import { DeployedOutputs, DeployedResources } from "./deployed-view"
 import { RunLog } from "./run-log"
+import { useRequestedRun } from "./use-requested-run"
 import { SandboxCard } from "./sandbox-card"
 
 const NO_ENV = "__none__"
@@ -78,6 +79,10 @@ export function DeployTab() {
   const [starting, setStarting] = useState<RunAction | null>(null)
   const [confirmDestroy, setConfirmDestroy] = useState(false)
   const health = useQuery({ queryKey: ["health"], queryFn: api.health, staleTime: 30_000 })
+  useRequestedRun((id) => {
+    setSelectedRunId(id)
+    setView("logs")
+  })
 
   if (!workflow) return null
 
@@ -96,7 +101,7 @@ export function DeployTab() {
       const run = await api.startRun(workflow.id, action, workflow.activeEnvironment)
       const s = useWorkflowStore.getState()
       if (!s.runs.some((r) => r.id === run.id)) useWorkflowStore.setState({ runs: [run, ...s.runs] })
-      if (action === "apply") watchApply(run.id)
+      watchRun(run.id)
       setSelectedRunId(run.id)
       setView("logs")
     } catch (err) {

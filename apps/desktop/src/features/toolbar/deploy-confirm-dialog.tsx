@@ -1,4 +1,3 @@
-import { useEffect } from "react"
 import {
   AlertDialog,
   AlertDialogAction,
@@ -11,7 +10,7 @@ import {
 } from "@/components/ui/alert-dialog"
 import type { DestructiveChange } from "@/lib/api/types"
 import { useWorkflowStore } from "@/state/workflow-store"
-import { checkWatchedApply, runAction } from "./actions"
+import { runAction } from "./actions"
 import { causeLabel, confirmLabel, groupDestructive } from "./deploy-confirm"
 import { useUiStore } from "./ui-store"
 
@@ -28,14 +27,6 @@ export function DeployConfirmDialog() {
   const name = useWorkflowStore((s) => s.workflow?.name)
   const nodes = useWorkflowStore((s) => s.workflow?.nodes)
   const changes = useWorkflowStore((s) => s.runs.find((r) => r.id === runId)?.destructive ?? EMPTY)
-  // Watches the apply this window started (see watchApply) as its status arrives.
-  useEffect(
-    () =>
-      useWorkflowStore.subscribe((state, prev) => {
-        if (state.runs !== prev.runs) checkWatchedApply()
-      }),
-    [],
-  )
 
   const groups = groupDestructive(changes)
   const n = changes.length

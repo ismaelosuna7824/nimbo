@@ -29,6 +29,7 @@ import { useWorkflowStore } from "@/state/workflow-store"
 import { runAction, type RunOptions } from "@/features/toolbar/actions"
 import { StatusBadge } from "@/features/panels/components/status-badge"
 import { RunLog } from "@/features/panels/deploy/run-log"
+import { useRequestedRun } from "@/features/panels/deploy/use-requested-run"
 import { durationBetween, formatDuration, formatRelative } from "@/features/panels/lib/format"
 import { useNow } from "@/features/panels/lib/use-now"
 import { EnvironmentSwitch } from "@/features/environments/environment-switch"
@@ -78,6 +79,10 @@ export function ComposeDeployTab() {
   const [confirmDown, setConfirmDown] = useState(false)
   const [removeVolumes, setRemoveVolumes] = useState(false)
   const health = useQuery({ queryKey: ["health"], queryFn: api.health, staleTime: 30_000 })
+  useRequestedRun((id) => {
+    setSelectedRunId(id)
+    setView("run")
+  })
 
   if (!workflow) return null
 

@@ -59,6 +59,8 @@ interface WorkflowStoreState {
   bottomOpen: boolean
   /** Docker and Kubernetes: environment the Readiness tab shows first when it opens (set by "Readiness" links, then cleared). */
   readinessEnvironment: string | null
+  /** Run the Deploy tab selects when it opens (set by the toolbar's deploy status and run toasts, then cleared). */
+  deployRun: string | null
   dialog: AppDialog
   mode: UserMode
 
@@ -106,6 +108,8 @@ interface WorkflowStoreState {
   setBottomOpen: (open: boolean) => void
   /** Opens the Readiness tab on one environment ("" = base). */
   showReadiness: (environment: string) => void
+  /** Opens the Deploy tab on one run's log. */
+  showRun: (runId: string) => void
   openDialog: (d: AppDialog) => void
   setMode: (m: UserMode) => void
   /** Uses the app-wide default (Settings) until the user picks a mode on this machine. */
@@ -193,6 +197,7 @@ export const useWorkflowStore = create<WorkflowStoreState>((set, get) => ({
   // of the screen of read-only code. Pro keeps it open.
   bottomOpen: initialMode === "pro",
   readinessEnvironment: null,
+  deployRun: null,
   dialog: null,
   mode: initialMode,
   sandbox: null,
@@ -344,6 +349,7 @@ export const useWorkflowStore = create<WorkflowStoreState>((set, get) => ({
   showBottom: (tab) => set({ bottomTab: tab, bottomOpen: true }),
   setBottomOpen: (open) => set({ bottomOpen: open }),
   showReadiness: (environment) => set({ readinessEnvironment: environment, bottomTab: "readiness", bottomOpen: true }),
+  showRun: (runId) => set({ deployRun: runId, bottomTab: "deploy", bottomOpen: true }),
   openDialog: (d) => set({ dialog: d }),
   setMode(m) {
     localStorage.setItem("nimbo.mode", m)

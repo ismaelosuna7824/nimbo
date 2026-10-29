@@ -166,11 +166,12 @@ export function Configure({
   if (pro) {
     return (
       <div className="flex h-full min-h-0 flex-col">
-        {/* Three columns from 64rem of panel up; narrower, the steps stack and scroll as one page. */}
+        {/* Three columns from 64rem of panel up, each scrolling on its own; narrower, the steps stack at full height and
+            scroll as one page (min-h-0 on a stacked row would let the grid squeeze it and clip its content). */}
         <div className="grid min-h-0 flex-1 grid-cols-1 divide-y overflow-auto @5xl:grid-cols-3 @5xl:divide-x @5xl:divide-y-0">
-          <div className="min-h-0 overflow-auto p-2.5">{targetStep}</div>
-          <div className="min-h-0 overflow-auto p-2.5">{trafficStep}</div>
-          <div className="min-h-0 overflow-auto p-2.5">{thresholdStep}</div>
+          <div className="min-w-0 p-2.5 @5xl:min-h-0 @5xl:overflow-auto">{targetStep}</div>
+          <div className="min-w-0 p-2.5 @5xl:min-h-0 @5xl:overflow-auto">{trafficStep}</div>
+          <div className="min-w-0 p-2.5 @5xl:min-h-0 @5xl:overflow-auto">{thresholdStep}</div>
         </div>
         <div className="flex shrink-0 items-center justify-end gap-2 border-t px-2.5 py-1.5">
           <Summary target={target} profile={profile} external={external} />

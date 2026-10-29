@@ -20,6 +20,7 @@ import { ALL_CLOUDS, type Cloud, type ResourceSummary } from "@/lib/api/types"
 import { cn } from "@/lib/utils"
 import { useWorkflowStore } from "@/state/workflow-store"
 import { addResource, RESOURCE_DRAG_TYPE } from "../canvas/actions"
+import { paletteCloud, paletteCloudKey } from "./palette-cloud"
 
 const CLOUD_TAB_LABEL: Record<Cloud, string> = { aws: "AWS", azure: "Azure", gcp: "GCP", oci: "OCI" }
 
@@ -38,8 +39,16 @@ function useResources(q: CatalogQuery, enabled = true) {
 /** The left panel's catalog of a Terraform workflow: cloud resources by provider. */
 export function ResourcePalette() {
   const mode = useWorkflowStore((s) => s.mode)
+  const workflowId = useWorkflowStore((s) => s.workflow?.id)
   const workflowClouds = useWorkflowStore((s) => s.workflow?.clouds)
-  const [cloud, setCloud] = useState<Cloud>(workflowClouds?.[0] ?? "aws")
+  // Picks of this session per workflow; remembered across restarts in localStorage.
+  const [picked, setPicked] = useState<Record<string, Cloud>>({})
+  const cloud = paletteCloud(workflowId && (picked[workflowId] ?? localStorage.getItem(paletteCloudKey(workflowId))), workflowClouds)
+  const setCloud = (c: Cloud) => {
+    if (!workflowId) return
+    localStorage.setItem(paletteCloudKey(workflowId), c)
+    setPicked((p) => ({ ...p, [workflowId]: c }))
+  }
   const [supportedOnly, setSupportedOnly] = useSyncedState(mode === "guided")
   const [q, setQ] = useState("")
   const [scroller, setScroller] = useState<HTMLDivElement | null>(null)

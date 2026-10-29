@@ -28,6 +28,7 @@ import { useWorkflowStore } from "@/state/workflow-store"
 import { runAction, type RunOptions } from "@/features/toolbar/actions"
 import { useUiStore } from "@/features/toolbar/ui-store"
 import { RunLog } from "@/features/panels/deploy/run-log"
+import { useRequestedRun } from "@/features/panels/deploy/use-requested-run"
 import { ComposeRunRow } from "@/features/docker/deploy/compose-deploy-tab"
 import { ComposeResources, type ResourceRow } from "@/features/docker/perf/compose-resources"
 import { cpuLimitLabel, formatBytes, TONE_CLASS } from "@/features/docker/perf/model"
@@ -90,6 +91,10 @@ export function KubeDeployTab() {
       }
     })
   }, [workloads])
+  useRequestedRun((id) => {
+    setSelectedRunId(id)
+    setView("run")
+  })
 
   if (!workflow) return null
 

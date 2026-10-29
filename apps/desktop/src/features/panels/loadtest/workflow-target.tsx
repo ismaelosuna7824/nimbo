@@ -1,4 +1,4 @@
-import { useMemo } from "react"
+import { useEffect, useMemo } from "react"
 import { useShallow } from "zustand/react/shallow"
 import { CircleAlert, Globe, Play, Plug, Rocket, Route, ScrollText, Zap } from "lucide-react"
 import { Badge } from "@/components/ui/badge"
@@ -55,6 +55,13 @@ export function WorkflowTargetStep({
     ),
   )
   const networkResources = useWorkflowStore((s) => hasNetworkResources(s.workflow!.nodes))
+  // AWS operations (SQS, S3, DynamoDB…) only exist for workflows that use AWS.
+  const usesAws = useWorkflowStore((s) => s.workflow!.clouds?.includes("aws") ?? false)
+  const awsOperations = pro && usesAws && !docker && !kube
+  // A draft kept from Pro mode or from another workflow can't stay on a hidden source.
+  useEffect(() => {
+    if (draft.source === "aws" && !awsOperations) setDraft((d) => ({ ...d, source: "suggested" }))
+  }, [draft.source, awsOperations, setDraft])
   // Docker workspaces: running services stand for deployed resources, published ports for the emulator address;
   // Kubernetes workspaces: running workloads, and the first port-forward / ingress address.
   const deployedCount = useWorkflowStore((s) =>
@@ -95,13 +102,14 @@ export function WorkflowTargetStep({
         hint="Pick a deployed endpoint or resource to send traffic to, or a saved connection to a service deployed elsewhere."
       />
       {draft.source !== "connection" && <DeployGate />}
+      {/* Wraps in a narrow bottom panel instead of pushing the step wider than the panel. */}
       <ToggleGroup
         type="single"
         size="sm"
         variant="outline"
         value={draft.source}
         onValueChange={(v) => v && setDraft((d) => ({ ...d, source: v as LoadDraft["source"] }))}
-        className="mb-2"
+        className="mb-2 h-auto max-w-full flex-wrap"
       >
         <ToggleGroupItem value="suggested" className="text-xs">
           <Zap /> Suggested
@@ -109,7 +117,7 @@ export function WorkflowTargetStep({
         <ToggleGroupItem value="http" className="text-xs">
           <Globe /> Custom HTTP
         </ToggleGroupItem>
-        {pro && (
+        {awsOperations && (
           <ToggleGroupItem value="aws" className="text-xs">
             AWS operation
           </ToggleGroupItem>
