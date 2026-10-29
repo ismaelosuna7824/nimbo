@@ -195,13 +195,14 @@ func (b *builder) checkHTTP(e *entry, req *model.TryRequest) error {
 	return nil
 }
 
-// sandboxURL reports whether u is served by one of the sandbox emulators or
-// a published app port of one of the workflow's EC2 instances.
+// sandboxURL reports whether u is served by one of the sandbox emulators
+// (on 127.0.0.1 or one of Floci's *.localhost.floci.io names) or a
+// published app port of one of the workflow's EC2 instances.
 func (b *builder) sandboxURL(u *url.URL) bool {
 	if u.Scheme != "http" && u.Scheme != "https" {
 		return false
 	}
-	if !loopback(u.Hostname()) || u.Port() == "" {
+	if !localHost(u.Hostname()) || u.Port() == "" {
 		return false
 	}
 	for _, base := range b.sb.Bases {
@@ -210,7 +211,7 @@ func (b *builder) sandboxURL(u *url.URL) bool {
 			return true
 		}
 	}
-	return b.instancePort(u.Port())
+	return loopback(u.Hostname()) && b.instancePort(u.Port())
 }
 
 func loopback(host string) bool {
@@ -221,6 +222,16 @@ func loopback(host string) bool {
 	return ip != nil && ip.IsLoopback()
 }
 
+// flociHost reports whether host is one of Floci's names for 127.0.0.1
+// (localhost.floci.io and its subdomains, e.g. Cloud Run service hosts).
+func flociHost(host string) bool {
+	host = strings.ToLower(strings.TrimSuffix(host, "."))
+	return host == "localhost.floci.io" || strings.HasSuffix(host, ".localhost.floci.io")
+}
+
+// localHost reports whether host names this machine.
+func localHost(host string) bool { return loopback(host) || flociHost(host) }
+
 // tryClient never follows redirects away from this machine. Each request
 // opens its own connection, like curl: a reused keep-alive connection would
 // pin every Try to the pod or replica a connection-level load balancer (a
@@ -229,16 +240,34 @@ var tryClient = &http.Client{
 	Timeout:   tryTimeout,
 	Transport: freshTransport(),
 	CheckRedirect: func(req *http.Request, via []*http.Request) error {
-		if len(via) >= maxRedirect || !loopback(req.URL.Hostname()) {
+		if len(via) >= maxRedirect || !localHost(req.URL.Hostname()) {
 			return http.ErrUseLastResponse
 		}
 		return nil
 	},
 }
 
+// freshTransport opens a connection per request and dials Floci's
+// *.localhost.floci.io names at 127.0.0.1 directly, never through a proxy
+// or DNS (they resolve there through public DNS, which isn't there
+// offline); the request keeps the name as its Host, which is what Floci
+// routes on.
 func freshTransport() *http.Transport {
 	tr := http.DefaultTransport.(*http.Transport).Clone()
 	tr.DisableKeepAlives = true
+	proxy, dial := tr.Proxy, tr.DialContext
+	tr.Proxy = func(req *http.Request) (*url.URL, error) {
+		if flociHost(req.URL.Hostname()) || proxy == nil {
+			return nil, nil
+		}
+		return proxy(req)
+	}
+	tr.DialContext = func(ctx context.Context, network, addr string) (net.Conn, error) {
+		if host, port, err := net.SplitHostPort(addr); err == nil && flociHost(host) {
+			addr = net.JoinHostPort("127.0.0.1", port)
+		}
+		return dial(ctx, network, addr)
+	}
 	return tr
 }
 

@@ -13,6 +13,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/ismaelosuna7824/nimbo/backend/internal/hclcodec"
 	"github.com/ismaelosuna7824/nimbo/backend/internal/model"
 )
 
@@ -470,26 +471,133 @@ func (b *builder) cloudRunServices() {
 		if path == "" {
 			continue
 		}
-		base := b.gcp + "/run/v2/" + path
+		// floci-gcp serves each container on its own host name (the state's
+		// uri, as *.run.app on Google Cloud) and through a path proxy on the
+		// emulator; both reach the container, the host name keeps its paths
+		// as they are. Without a uri the service isn't ready: the proxy URL
+		// stands in.
+		proxy := b.gcp + "/run/v2/" + path
+		base := strings.TrimSuffix(b.sandboxHostURL(str(s, "uri")), "/")
+		if base == "" {
+			base = proxy
+		}
 		e := b.add(s, KindWebService, "A Cloud Run service: your container answers HTTP requests on its own address. Call it from your browser, curl, Postman or your app.",
 			target{cloud: model.CloudGCP, name: str(s, "name"), url: path, httpBase: base})
-		e.field("URL", base+"/", "Any path after it reaches your container. After the sandbox restarts it answers 503 until the service is deployed again (the emulator doesn't restart Cloud Run containers).")
-		if u := b.sandboxHostURL(str(s, "uri")); u != "" {
-			e.field("Service URL", u, "The same service on its own host name (as on Google Cloud); *.localhost.floci.io resolves to 127.0.0.1 through public DNS.")
+		const restart = " After the sandbox restarts it answers 503 until the service is deployed again (the emulator doesn't restart Cloud Run containers)."
+		if base != proxy {
+			e.field("URL", base, "The service's own address, like its *.run.app URL on Google Cloud: add any path your container serves. *.localhost.floci.io resolves to 127.0.0.1 through public DNS."+restart)
+			e.field("URL without DNS", proxy+"/", "The same container through the emulator on 127.0.0.1, for when *.localhost.floci.io doesn't resolve (offline, or a router blocking DNS answers of 127.0.0.1). Add the path after it.")
+		} else {
+			e.field("URL", proxy+"/", "Add any path your container serves after it."+restart)
 		}
+		var images []string
 		for _, t := range list(s, "template") {
 			for _, c := range anyList(t["containers"]) {
 				e.field("Image", mstr(c, "image"), "")
+				images = append(images, mstr(c, "image"))
 			}
 		}
 		e.field("Region", str(s, "location"), "")
+		access, hint := b.cloudRunAccess(s)
+		e.field("Access on Google Cloud", access, hint)
 		if str(s, "uri") == "" {
 			e.Warning = "The service has no URL yet (it is not ready). Check that its container image starts and listens on $PORT (8080)."
 		}
-		e.Endpoints = []model.HTTPEndpoint{{Method: "ANY", Path: "/", URL: base + "/", Description: "Any method and path work."}}
+		if routes := codeRoutes(b.serviceSources(images)); len(routes) > 0 {
+			for _, rk := range routes {
+				e.Endpoints = append(e.Endpoints, b.routeEndpoint(base, rk, "", false))
+			}
+		} else {
+			e.Endpoints = []model.HTTPEndpoint{{Method: "ANY", Path: "/", URL: base + "/", Description: "Any method and path reach your container; change the path to one your code serves."}}
+		}
 		e.addHTTPSnippets()
 		e.action(requestAction)
 	}
+}
+
+// cloudRunAccess says who may call s on Google Cloud (its ingress, and
+// whether callers need invoker IAM) and, in the hint, that the sandbox
+// enforces neither.
+func (b *builder) cloudRunAccess(s *resource) (access, hint string) {
+	switch str(s, "ingress") {
+	case "INGRESS_TRAFFIC_INTERNAL_ONLY":
+		access = "Internal only"
+		hint = "Google Cloud accepts calls only from its VPC networks and Google services (Pub/Sub push, Scheduler, …), never from the internet or your computer."
+	case "INGRESS_TRAFFIC_INTERNAL_LOAD_BALANCER":
+		access = "Internal and load balancer"
+		hint = "Google Cloud accepts calls only through a load balancer or from its VPC networks, not on the service URL from the internet."
+	default:
+		access = "Public ingress"
+		hint = "Google Cloud accepts calls from the internet."
+	}
+	if b.cloudRunPublic(s) {
+		access += ", anyone may invoke"
+	} else {
+		access += ", invokers need IAM"
+		hint += " Callers need roles/run.invoker and a Google ID token (Authorization: Bearer $(gcloud auth print-identity-token))."
+	}
+	return access, hint + " The sandbox enforces neither ingress nor IAM: here the service answers your computer without a token."
+}
+
+// cloudRunPublic reports whether anyone may invoke s: invoker IAM checks
+// disabled, or roles/run.invoker granted to allUsers/allAuthenticatedUsers.
+func (b *builder) cloudRunPublic(s *resource) bool {
+	if v, _ := s.Values["invoker_iam_disabled"].(bool); v {
+		return true
+	}
+	name := str(s, "name")
+	ofService := func(r *resource) bool {
+		n := str(r, "name")
+		return n == name || strings.HasSuffix(n, "/services/"+name)
+	}
+	public := func(member string) bool { return member == "allUsers" || member == "allAuthenticatedUsers" }
+	for _, r := range b.byType["google_cloud_run_v2_service_iam_member"] {
+		if ofService(r) && str(r, "role") == "roles/run.invoker" && public(str(r, "member")) {
+			return true
+		}
+	}
+	for _, r := range b.byType["google_cloud_run_v2_service_iam_binding"] {
+		if ofService(r) && str(r, "role") == "roles/run.invoker" {
+			members, _ := r.Values["members"].([]any)
+			for _, m := range members {
+				if s, _ := m.(string); public(s) {
+					return true
+				}
+			}
+		}
+	}
+	for _, r := range b.byType["google_cloud_run_v2_service_iam_policy"] {
+		var doc struct {
+			Bindings []struct {
+				Role    string   `json:"role"`
+				Members []string `json:"members"`
+			} `json:"bindings"`
+		}
+		if ofService(r) && json.Unmarshal([]byte(str(r, "policy_data")), &doc) == nil {
+			for _, bd := range doc.Bindings {
+				if bd.Role == "roles/run.invoker" && slices.ContainsFunc(bd.Members, public) {
+					return true
+				}
+			}
+		}
+	}
+	return false
+}
+
+// serviceSources are the code texts of the Nimbo-built images among images
+// (nimbo.local/<svc>[:tag|@digest] is built from services/<svc>/).
+func (b *builder) serviceSources(images []string) []string {
+	var out []string
+	for _, img := range images {
+		rest, ok := strings.CutPrefix(img, hclcodec.LocalImageRegistry+"/")
+		if !ok {
+			continue
+		}
+		svc, _, _ := strings.Cut(rest, "@")
+		svc, _, _ = strings.Cut(svc, ":")
+		out = append(out, b.sb.ServiceSources[svc]...)
+	}
+	return out
 }
 
 // sandboxHostURL rewrites a floci-gcp generated URL ("http://x.run.localhost.
@@ -1219,7 +1327,8 @@ func kubeList(ctx context.Context, server, caB64 string) model.TryResult {
 // Postman
 
 // gcpPostman adds a "Google Cloud services (sandbox)" folder of REST calls
-// and a folder per Cloud Run service; URLs use the gcpBaseUrl variable.
+// and a folder per Cloud Run service (a request per route, on the
+// service's own host name); emulator URLs use the gcpBaseUrl variable.
 func (b *builder) gcpPostman(col *PostmanCollection) {
 	if b.gcp == "" {
 		return
@@ -1242,9 +1351,13 @@ func (b *builder) gcpPostman(col *PostmanCollection) {
 		case e.Kind == KindWebService:
 			folder := PostmanItem{Name: e.Label, Description: e.Summary}
 			for _, ep := range e.Endpoints {
-				for _, m := range []string{http.MethodGet, http.MethodPost} {
+				methods := []string{ep.Method}
+				if ep.Method == "ANY" {
+					methods = []string{http.MethodGet, http.MethodPost}
+				}
+				for _, m := range methods {
 					req := &PostmanRequest{Method: m, Header: []PostmanHeader{}, URL: b.gcpPostmanURL(ep.URL), Description: ep.Description}
-					if m == http.MethodPost {
+					if m != http.MethodGet && m != http.MethodDelete && m != http.MethodHead {
 						req.Header = append(req.Header, PostmanHeader{"Content-Type", "application/json"})
 						req.Body = rawJSON(sampleJSONBody)
 					}
@@ -1299,9 +1412,13 @@ func (b *builder) gcpPostman(col *PostmanCollection) {
 }
 
 // gcpPostmanURL expresses a sandbox Google Cloud URL with the gcpBaseUrl
-// variable.
+// variable; other URLs (Cloud Run host names) stay literal.
 func (b *builder) gcpPostmanURL(full string) PostmanURL {
-	rest := strings.TrimPrefix(full, b.gcp)
+	rest, ok := strings.CutPrefix(full, b.gcp)
+	if pu, err := url.Parse(full); !ok && err == nil {
+		return PostmanURL{Raw: full, Protocol: pu.Scheme, Host: strings.Split(pu.Hostname(), "."), Port: pu.Port(),
+			Path: strings.Split(strings.TrimPrefix(pu.Path, "/"), "/")}
+	}
 	path, query, _ := strings.Cut(rest, "?")
 	u := PostmanURL{Raw: "{{gcpBaseUrl}}" + rest, Host: []string{"{{gcpBaseUrl}}"}}
 	for _, seg := range strings.Split(strings.TrimPrefix(path, "/"), "/") {

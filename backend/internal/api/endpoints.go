@@ -25,11 +25,13 @@ import (
 // connection error in the result. When st has EC2 instances, their
 // containers are listed (one docker ps) for their published host ports.
 func (s *Server) endpointsSandbox(ctx context.Context, wf *model.Workflow, st *model.DeployedState, live bool) endpoints.Sandbox {
+	sources, services := s.codeSources(wf.ID)
 	sb := endpoints.Sandbox{
-		Bases:   map[model.Cloud]string{},
-		Running: map[model.Cloud]bool{},
-		Region:  s.cfg.Settings.Get().DefaultAWSRegion,
-		Sources: s.codeSources(wf.ID),
+		Bases:          map[model.Cloud]string{},
+		Running:        map[model.Cloud]bool{},
+		Region:         s.cfg.Settings.Get().DefaultAWSRegion,
+		Sources:        sources,
+		ServiceSources: services,
 	}
 	if live {
 		if st, err := s.cfg.Sandbox.Status(ctx, wf.ID); err == nil && st.State == model.SandboxRunning {
@@ -94,9 +96,10 @@ const (
 	maxSourceTotal = 2 << 20
 )
 
-// codeSources reads the workflow's code assets (Lambda sources).
-func (s *Server) codeSources(wfID string) []string {
-	var out []string
+// codeSources reads the workflow's code assets: every file (Lambda
+// sources), and per service folder services/<svc>/ without test files.
+func (s *Server) codeSources(wfID string) (all []string, services map[string][]string) {
+	services = map[string][]string{}
 	total := 0
 	root := s.cfg.Store.AssetsDir(wfID)
 	_ = filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
@@ -117,13 +120,26 @@ func (s *Server) codeSources(wfID string) []string {
 			return nil
 		}
 		data, err := os.ReadFile(path)
-		if err == nil {
-			total += len(data)
-			out = append(out, string(data))
+		if err != nil {
+			return nil
+		}
+		total += len(data)
+		all = append(all, string(data))
+		if rel, err := filepath.Rel(root, path); err == nil {
+			parts := strings.Split(filepath.ToSlash(rel), "/")
+			if len(parts) > 2 && parts[0] == "services" && !testFile(parts[len(parts)-1]) {
+				services[parts[1]] = append(services[parts[1]], string(data))
+			}
 		}
 		return nil
 	})
-	return out
+	return all, services
+}
+
+// testFile reports whether name is a test source (Go, JS/TS, Python).
+func testFile(name string) bool {
+	base := strings.ToLower(strings.TrimSuffix(name, filepath.Ext(name)))
+	return strings.HasSuffix(base, "_test") || strings.HasSuffix(base, ".test") || strings.HasSuffix(base, ".spec") || strings.HasPrefix(base, "test_")
 }
 
 func (s *Server) endpointsInput(r *http.Request, wf *model.Workflow, live bool) (*model.DeployedState, endpoints.Sandbox, error) {

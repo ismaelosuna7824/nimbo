@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"testing"
 
@@ -46,8 +47,16 @@ func gcpFixture(base string) (*model.Workflow, *model.DeployedState, Sandbox) {
 		res("google_project_iam_member.app_pubsub", map[string]any{"id": "floci-local/roles/pubsub.publisher/serviceAccount:x", "role": "roles/pubsub.publisher"}),
 		res("google_compute_network.vpc", map[string]any{"name": "app-vpc", "id": p + "/global/networks/app-vpc", "self_link": "https://www.googleapis.com/compute/v1/projects/floci-local/global/networks/app-vpc"}),
 		res("google_compute_firewall.web", map[string]any{"name": "allow-web", "id": p + "/global/firewalls/allow-web"}),
+		res("google_cloud_run_v2_service_iam_member.web_public", map[string]any{"name": "web", "location": "us-central1", "role": "roles/run.invoker", "member": "allUsers"}),
+		res("google_cloud_run_v2_service.orders", map[string]any{"name": "orders-api", "location": "us-central1", "id": p + "/locations/us-central1/services/orders-api",
+			"uri": "http://orders-api-1efb2c36c23f.us-central1.run.localhost.floci.io:4588", "ingress": "INGRESS_TRAFFIC_INTERNAL_ONLY",
+			"template": []any{map[string]any{"containers": []any{map[string]any{"image": "nimbo.local/orders-api:3f2a9c"}}}}}),
+		res("google_cloud_run_v2_service_iam_member.orders_push", map[string]any{"name": p + "/locations/us-central1/services/orders-api", "role": "roles/run.invoker", "member": "serviceAccount:push@floci-local.iam.gserviceaccount.com"}),
 	}}
-	sb := Sandbox{Bases: map[model.Cloud]string{model.CloudGCP: base}, Running: map[model.Cloud]bool{model.CloudGCP: true}}
+	sb := Sandbox{Bases: map[model.Cloud]string{model.CloudGCP: base}, Running: map[model.Cloud]bool{model.CloudGCP: true},
+		ServiceSources: map[string][]string{"orders-api": {`mux.HandleFunc("POST /orders", h.create)
+	mux.HandleFunc("GET /orders/{id}", h.get)
+	mux.HandleFunc("GET /health", health)`}}}
 	return &model.Workflow{ID: "gwf", Name: "GCP"}, st, sb
 }
 
@@ -110,16 +119,41 @@ func TestBuildGCP(t *testing.T) {
 		t.Errorf("kms gcloud snippet:\n%s", g)
 	}
 
+	// Cloud Run: the service's own host name on the sandbox port, not the
+	// Admin API path (which only proxies, and reads like the control plane).
 	run := byAddr(t, info, "google_cloud_run_v2_service.web")
-	wantURL := gcpBase + "/run/v2/projects/floci-local/locations/us-central1/services/web/"
-	if run.Kind != KindWebService || field(run, "URL") != wantURL || len(run.Endpoints) != 1 || run.Endpoints[0].URL != wantURL || hasAction(run, ActRequest) == nil {
+	host := "http://web-1efb2c36c23f.us-central1.run.localhost.floci.io:48602"
+	if run.Kind != KindWebService || field(run, "URL") != host || len(run.Endpoints) != 1 || run.Endpoints[0].URL != host+"/" || hasAction(run, ActRequest) == nil {
 		t.Fatalf("cloud run %+v", run)
 	}
-	if got := field(run, "Service URL"); got != "http://web-1efb2c36c23f.us-central1.run.localhost.floci.io:48602" {
-		t.Errorf("service URL %q", got)
+	if got := field(run, "URL without DNS"); got != gcpBase+"/run/v2/projects/floci-local/locations/us-central1/services/web/" {
+		t.Errorf("URL without DNS %q", got)
 	}
 	if field(run, "Image") != "mendhak/http-https-echo:latest" {
 		t.Errorf("image %q", field(run, "Image"))
+	}
+	if got := field(run, "Access on Google Cloud"); got != "Public ingress, anyone may invoke" {
+		t.Errorf("web access %q", got)
+	}
+	if c := snippet(t, run, "curl"); !strings.Contains(c, "curl -i "+host+"/") || strings.Contains(c, "/run/v2/") {
+		t.Errorf("cloud run curl:\n%s", c)
+	}
+
+	// A Nimbo-built image lists the routes its service folder registers,
+	// parameter-free GETs first so the default request reads something.
+	orders := byAddr(t, info, "google_cloud_run_v2_service.orders")
+	oh := "http://orders-api-1efb2c36c23f.us-central1.run.localhost.floci.io:48602"
+	var eps []string
+	for _, ep := range orders.Endpoints {
+		eps = append(eps, ep.Method+" "+ep.Path+" "+ep.URL)
+	}
+	if want := []string{"GET /health " + oh + "/health", "POST /orders " + oh + "/orders", "GET /orders/{id} " + oh + "/orders/1"}; strings.Join(eps, "\n") != strings.Join(want, "\n") {
+		t.Errorf("orders endpoints:\n%s", strings.Join(eps, "\n"))
+	}
+	access := orders.Fields[slices.IndexFunc(orders.Fields, func(f model.AccessField) bool { return f.Label == "Access on Google Cloud" })]
+	if access.Value != "Internal only, invokers need IAM" || !strings.Contains(access.Hint, "never from the internet or your computer") ||
+		!strings.Contains(access.Hint, "The sandbox enforces neither ingress nor IAM") {
+		t.Errorf("orders access %+v", access)
 	}
 
 	fn := byAddr(t, info, "google_cloudfunctions2_function.fn")
@@ -203,7 +237,13 @@ func fakeGCP(t *testing.T) *httptest.Server {
 		case "POST /v1/projects/floci-local/locations/us-central1/jobs/tick:run":
 			io.WriteString(w, `{"name":"projects/floci-local/locations/us-central1/jobs/tick","state":"ENABLED"}`)
 		case "GET /run/v2/projects/floci-local/locations/us-central1/services/web/items":
-			io.WriteString(w, `{"path":"/items"}`)
+			io.WriteString(w, `{"path":"/items","via":"proxy"}`)
+		case "GET /items":
+			// floci-gcp routes a Cloud Run host name to its container.
+			if !strings.HasPrefix(r.Host, "web-1efb2c36c23f.us-central1.run.localhost.floci.io:") {
+				w.WriteHeader(http.StatusNotFound)
+			}
+			io.WriteString(w, `{"path":"/items","host":"`+r.Host+`"}`)
 		default:
 			w.WriteHeader(http.StatusNotFound)
 			io.WriteString(w, `{"error":"`+r.Method+" "+r.URL.Path+`"}`)
@@ -244,9 +284,21 @@ func TestTryGCP(t *testing.T) {
 	}
 	try("google_bigquery_table.events", ActPut, `{"name":"x","count":2}`)
 	try("google_cloud_scheduler_job.tick", ActStart, "")
+	// Relative paths go to the service's host name, dialed at 127.0.0.1
+	// without DNS; the emulator's proxy URL still works when typed.
 	res, err := Try(context.Background(), wf, st, sb, model.TryRequest{NodeID: "google_cloud_run_v2_service.web", Action: ActRequest, Method: "GET", Path: "/items"})
-	if err != nil || !res.OK || !strings.Contains(res.Body, `"/items"`) {
+	if err != nil || !res.OK || !strings.Contains(res.Body, `"host": "web-1efb2c36c23f.us-central1.run.localhost.floci.io:`) {
 		t.Fatalf("cloud run request: %+v %v", res, err)
+	}
+	res, err = Try(context.Background(), wf, st, sb, model.TryRequest{NodeID: "google_cloud_run_v2_service.web", Action: ActRequest, Method: "GET",
+		Path: srv.URL + "/run/v2/projects/floci-local/locations/us-central1/services/web/items"})
+	if err != nil || !res.OK || !strings.Contains(res.Body, `"via": "proxy"`) {
+		t.Fatalf("cloud run request through the proxy: %+v %v", res, err)
+	}
+	for _, bad := range []string{"http://web-1efb2c36c23f.us-central1.run.localhost.floci.io:1/items", "http://localhost.floci.io.evil.com" + srv.URL[strings.LastIndex(srv.URL, ":"):] + "/items"} {
+		if _, err := Try(context.Background(), wf, st, sb, model.TryRequest{NodeID: "google_cloud_run_v2_service.web", Action: ActRequest, Method: "GET", Path: bad}); err == nil {
+			t.Errorf("%s: want an error (not this sandbox)", bad)
+		}
 	}
 	if res, _ := Try(context.Background(), wf, st, sb, model.TryRequest{NodeID: "google_kms_crypto_key.key", Action: ActDecrypt}); res.OK || res.Error == "" {
 		t.Errorf("decrypt without ciphertext: %+v", res)
@@ -266,8 +318,20 @@ func TestPostmanGCP(t *testing.T) {
 	for _, it := range col.Item {
 		names[it.Name] = it
 	}
-	if run, ok := names["web"]; !ok || len(run.Item) != 2 || run.Item[0].Request.URL.Raw != "{{gcpBaseUrl}}/run/v2/projects/floci-local/locations/us-central1/services/web/" {
+	run, ok := names["web"]
+	if !ok || len(run.Item) != 2 {
 		t.Fatalf("cloud run folder %+v", run)
+	}
+	if u := run.Item[0].Request.URL; u.Raw != "http://web-1efb2c36c23f.us-central1.run.localhost.floci.io:48602/" || u.Port != "48602" || u.Host[0] != "web-1efb2c36c23f" {
+		t.Errorf("cloud run URL %+v", u)
+	}
+	var orders []string
+	for _, it := range names["orders-api"].Item {
+		orders = append(orders, it.Name+" "+it.Request.URL.Raw)
+	}
+	oh := "http://orders-api-1efb2c36c23f.us-central1.run.localhost.floci.io:48602"
+	if want := []string{"GET /health " + oh + "/health", "POST /orders " + oh + "/orders", "GET /orders/{id} " + oh + "/orders/1"}; strings.Join(orders, "\n") != strings.Join(want, "\n") {
+		t.Errorf("orders folder:\n%s", strings.Join(orders, "\n"))
 	}
 	svc, ok := names["Google Cloud services (sandbox)"]
 	if !ok {

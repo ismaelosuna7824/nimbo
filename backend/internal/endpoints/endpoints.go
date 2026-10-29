@@ -76,6 +76,10 @@ type Sandbox struct {
 	// Sources are texts of the workflow's code assets (Lambda sources),
 	// scanned to pick a sample path for catch-all API routes.
 	Sources []string
+	// ServiceSources are the code texts of each service folder
+	// (services/<svc>/, test files left out) by <svc>: the build context of
+	// the nimbo.local/<svc> image, scanned for the routes it serves.
+	ServiceSources map[string][]string
 	// Instances are the sandbox's EC2 instance containers by instance ID
 	// (empty while the sandbox is stopped or nothing runs there).
 	Instances map[string]sandbox.InstanceAccess
