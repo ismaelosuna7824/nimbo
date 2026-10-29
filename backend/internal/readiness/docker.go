@@ -60,14 +60,14 @@ var dockerReliability = []Check{
 }
 
 var dockerSecurity = []Check{
-	{ID: "secrets", Title: "Secrets", Codes: []string{"dk_secret_env", "dk_secret_build"},
-		Pass: "Credentials come from .env files or secrets, not from the compose files or build arguments."},
+	{ID: "secrets", Title: "Secrets", Codes: []string{"dk_secret_env", "dk_secret_build", "dk_secret_file"},
+		Pass: "Credentials come from .env files or secrets, not from the compose files, build arguments or files copied into images."},
 	{ID: "privileges", Title: "Container privileges", Codes: []string{"dk_root_user", "dk_docker_sock", "dk_privileged", "dk_hardening",
 		"dk_cap_add", "dk_net_raw", "dk_read_only", "dk_no_new_privileges", "dk_apparmor_unconfined", "dk_selinux_disabled", "dk_seccomp_unconfined", "dk_pids_limit",
 		"dk_host_dirs", "dk_host_ipc", "dk_host_uts", "dk_host_userns", "dk_devices", "dk_mount_propagation"},
 		Pass: "Containers run unprivileged, as non-root, with Docker's security profiles and a process limit, without the Docker socket or host access."},
-	{ID: "exposure", Title: "Published ports", Codes: []string{"dk_db_published", "dk_port_interface", "dk_privileged_port", "dk_default_bridge"},
-		Pass: "Ports are published on a specific interface and unprivileged host ports, databases stay inside the project network and services use the project's networks."},
+	{ID: "exposure", Title: "Published ports", Codes: []string{"dk_db_published", "dk_port_interface", "dk_privileged_port", "dk_default_bridge", "dk_network_internal"},
+		Pass: "Ports are published on a specific interface and unprivileged host ports, databases stay inside the project network (an internal one when others publish ports) and services use the project's networks."},
 }
 
 var dockerHygiene = []Check{

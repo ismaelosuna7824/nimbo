@@ -3,6 +3,7 @@ package compose
 import (
 	"fmt"
 	"io/fs"
+	"maps"
 	"os"
 	"path"
 	"path/filepath"
@@ -90,6 +91,11 @@ func (p *Project) servicePractices(name string, s types.ServiceConfig, dependent
 				fmt.Sprintf("Bind it to this machine only: \"127.0.0.1:%s:%d\" (or drop ports: other services reach it as %s:%d).", port.Published, port.Target, name, port.Target))
 			break
 		}
+	}
+
+	// Data services next to the services that publish ports.
+	if data != nil {
+		p.checkNetworkInternal(name, s, data)
 	}
 
 	// Data in anonymous volumes.
@@ -913,7 +919,18 @@ func (p *Project) dockerfilePractices(name string, s types.ServiceConfig, rel st
 		}
 	}
 
-	// Per-instruction checks of the stages the target builds.
+	// Per-instruction checks of the stages the target builds. inImage are
+	// the stages whose files end up in the image: the target and the
+	// stages it builds FROM.
+	inImage := map[int]bool{}
+	for i := target; !inImage[i]; i = byRef[stages[i].FromStage] {
+		inImage[i] = true
+		if stages[i].FromStage == "" {
+			break
+		}
+	}
+	var ignore []string
+	ignoreFile, ignoreRead := "", false
 	cacheHinted := false
 	for _, i := range reached {
 		st := stages[i]
@@ -934,6 +951,13 @@ func (p *Project) dockerfilePractices(name string, s types.ServiceConfig, rel st
 				}
 				if in.Cmd == "ADD" {
 					p.checkAdd(in, rel, add)
+				}
+				if inImage[i] && ctx != "" && !strings.HasPrefix(ctx, "..") && p.isDir(ctx) {
+					if !ignoreRead {
+						ignore, ignoreFile = p.dockerignore(s, ctx)
+						ignoreRead = true
+					}
+					p.checkSecretFiles(in, rel, ctx, ignore, ignoreFile, add)
 				}
 			case "RUN":
 				text := runText(in)
@@ -1226,21 +1250,24 @@ var (
 // minHeavy is the size from which a heavy folder is worth a warning.
 const minHeavy = 5 << 20
 
-func (p *Project) checkDockerignore(name string, s types.ServiceConfig, ctx string) {
-	ignore := ""
-	ignoreFile := ""
+// dockerignore is the exclusion patterns of the .dockerignore a service's
+// build reads (<Dockerfile>.dockerignore first, else the context's) and
+// its path ("" when there is none).
+func (p *Project) dockerignore(s types.ServiceConfig, ctx string) (patterns []string, file string) {
 	if df := p.dockerfilePath(s); df != "" {
 		if data, err := p.read(df + ".dockerignore"); err == nil {
-			ignore, ignoreFile = string(data), df+".dockerignore"
+			return dockerignorePatterns(string(data)), df + ".dockerignore"
 		}
 	}
-	if ignoreFile == "" {
-		f := path.Join(ctx, ".dockerignore")
-		if data, err := p.read(f); err == nil {
-			ignore, ignoreFile = string(data), f
-		}
+	f := path.Join(ctx, ".dockerignore")
+	if data, err := p.read(f); err == nil {
+		return dockerignorePatterns(string(data)), f
 	}
-	patterns := dockerignorePatterns(ignore)
+	return nil, ""
+}
+
+func (p *Project) checkDockerignore(name string, s types.ServiceConfig, ctx string) {
+	patterns, ignoreFile := p.dockerignore(s, ctx)
 	type found struct {
 		rel  string
 		size int64
@@ -1410,4 +1437,175 @@ func humanBytes(n int64) string {
 		return fmt.Sprintf("%d KB", n>>10)
 	}
 	return fmt.Sprintf("%d B", n)
+}
+
+// ---------------------------------------------------------------------------
+// Credential files in images, data services' networks
+
+// credentialNames are files and folders that only exist to hold
+// credentials: netrc, git and Docker registry logins, SSH keys, cloud CLI
+// credentials.
+var credentialNames = []string{".netrc", ".git-credentials", ".dockercfg", ".ssh", ".aws", "id_rsa", "id_dsa", "id_ecdsa", "id_ed25519"}
+
+// registryConfigs are package manager configurations that hold a registry
+// token only sometimes (many just set options such as ignore-scripts).
+var registryConfigs = []string{".npmrc", ".yarnrc.yml", ".pypirc"}
+
+// registryTokenRe matches a literal registry credential in a package
+// manager configuration (a ${VAR} reference is not one).
+var registryTokenRe = regexp.MustCompile(`(?im)^[^#;\n]*(?:_authtoken|_auth|_password|npmauthtoken|npmauthident|password)\s*[=:]\s*["']?[^"'\s$]`)
+
+// exampleEnvs are env file names that document variables instead of
+// holding values (.env.example, sample.env).
+var exampleEnvs = []string{"example", "sample", "template", "tpl", "dist", "default", "defaults"}
+
+// envFile reports whether a file name is an env file holding values.
+func envFile(n string) bool {
+	if n == ".env" {
+		return true
+	}
+	if env, ok := strings.CutPrefix(n, ".env."); ok {
+		return !slices.Contains(exampleEnvs, env)
+	}
+	if env, ok := strings.CutSuffix(n, ".env"); ok && env != "" {
+		return !slices.Contains(exampleEnvs, env)
+	}
+	return false
+}
+
+// holdsCredentials reports whether the context file or folder rel holds
+// credentials: a credential-only name, a package manager configuration
+// with a literal token, or an env file with a password, token or key.
+func (p *Project) holdsCredentials(rel string) bool {
+	n := strings.ToLower(path.Base(rel))
+	if slices.Contains(credentialNames, n) {
+		return true
+	}
+	if !slices.Contains(registryConfigs, n) && !envFile(n) {
+		return false
+	}
+	data, err := p.read(rel)
+	if err != nil {
+		return false
+	}
+	if !envFile(n) {
+		return registryTokenRe.Match(data)
+	}
+	values, err := parseDotenv(data, nil)
+	if err != nil {
+		return false
+	}
+	for k, v := range values {
+		if IsSecretKey(k) && strings.TrimSpace(v) != "" {
+			return true
+		}
+	}
+	return false
+}
+
+// checkSecretFiles reports a COPY or ADD that puts credential files into
+// the image: named as a source, or carried by COPY . from the build
+// context when the .dockerignore (ignore, read from ignoreFile) doesn't
+// exclude them.
+func (p *Project) checkSecretFiles(in *Instruction, rel, ctx string, ignore []string, ignoreFile string, add func(model.Severity, string, int, string, string)) {
+	var named, carried []string
+	for _, src := range copySources(in) {
+		if strings.Contains(src, "://") || strings.Contains(src, "$") {
+			continue
+		}
+		if wholeContext(src) {
+			for _, n := range p.list(ctx) {
+				if !ignored(ignore, n) && !slices.Contains(carried, n) && p.holdsCredentials(path.Join(ctx, n)) {
+					carried = append(carried, n)
+				}
+			}
+			continue
+		}
+		if clean := path.Clean(strings.TrimSuffix(src, "/")); !strings.HasPrefix(clean, "..") && p.holdsCredentials(path.Join(ctx, clean)) {
+			named = append(named, clean)
+		}
+	}
+	runtimeFix := "pass runtime settings with env_file:, environment: or secrets:, and mount build credentials only for the RUN that needs them: RUN --mount=type=secret,id=npmrc,target=/root/.npmrc npm ci (compose build: {secrets: [npmrc]} with a top-level secrets: {npmrc: {file: ./.npmrc}}); for SSH keys use RUN --mount=type=ssh."
+	if len(named) > 0 {
+		add(model.SeverityWarning, "dk_secret_file", in.StartLine,
+			fmt.Sprintf("%s:%d copies %s into the image: anyone who pulls the image can read it", rel, in.StartLine, strings.Join(named, ", ")),
+			"Remove it from the "+in.Cmd+"; "+runtimeFix)
+	}
+	if len(carried) == 0 {
+		return
+	}
+	why, target := "there is no .dockerignore", path.Join(ctx, ".dockerignore")
+	if ignoreFile != "" {
+		why, target = ignoreFile+" doesn't exclude it", ignoreFile
+	}
+	var lines []string
+	for _, n := range carried {
+		if strings.HasPrefix(n, ".env") {
+			n = ".env*"
+		}
+		if !slices.Contains(lines, n) {
+			lines = append(lines, n)
+		}
+	}
+	add(model.SeverityWarning, "dk_secret_file", in.StartLine,
+		fmt.Sprintf("%s:%d: %s %s copies %s from the build context into the image (%s)", rel, in.StartLine, in.Cmd, in.Args, strings.Join(carried, ", "), why),
+		fmt.Sprintf("Add to %s:\n%s\nthen %s", target, strings.Join(lines, "\n"), runtimeFix))
+}
+
+// serviceNetworks are the networks a service joins ("default" when it
+// names none); nil when network_mode replaces them.
+func serviceNetworks(s types.ServiceConfig) []string {
+	if s.NetworkMode != "" {
+		return nil
+	}
+	if len(s.Networks) == 0 {
+		return []string{"default"}
+	}
+	return slices.Sorted(maps.Keys(s.Networks))
+}
+
+// checkNetworkInternal reports a database, cache or broker that publishes
+// no ports but shares a regular (not internal) network with a service that
+// publishes ports. A published one is dk_db_published: an internal network
+// would cut its port off.
+func (p *Project) checkNetworkInternal(name string, s types.ServiceConfig, data *dataService) {
+	nets := serviceNetworks(s)
+	if len(s.Ports) > 0 || len(nets) == 0 {
+		return
+	}
+	for _, n := range nets {
+		if cfg, ok := p.Model.Networks[n]; ok && (cfg.Internal || bool(cfg.External)) {
+			return // already internal, or managed outside the project
+		}
+	}
+	shares := func(o types.ServiceConfig) bool {
+		return slices.ContainsFunc(serviceNetworks(o), func(n string) bool { return slices.Contains(nets, n) })
+	}
+	var front, clients []string
+	for _, other := range p.SortedServiceNames() {
+		o := p.Model.Services[other]
+		if other == name || !shares(o) {
+			continue
+		}
+		if len(o.Ports) > 0 {
+			front = append(front, other)
+		}
+		if dataServiceOf(o.Image) == nil {
+			clients = append(clients, other)
+		}
+	}
+	if len(front) == 0 {
+		return
+	}
+	internal := "backend"
+	if _, taken := p.Model.Networks[internal]; taken {
+		internal = "data-internal"
+	}
+	fix := fmt.Sprintf("Attach the data services and their clients to an internal network (services that publish ports keep their current networks too):\nnetworks:\n  %s:\n    internal: true\nservices:\n  %s:\n    networks: [%s]", internal, name, internal)
+	for _, c := range clients {
+		fix += fmt.Sprintf("\n  %s:\n    networks: [%s]", c, strings.Join(append(serviceNetworks(p.Model.Services[c]), internal), ", "))
+	}
+	file, line := p.fieldLine(name, "networks")
+	p.diag(model.SeverityInfo, "dk_network_internal", file, line, ServiceID(name),
+		fmt.Sprintf("%s (%s) shares network %s with %s, which publish ports, and the network is not internal", name, data.label, strings.Join(nets, ", "), strings.Join(front, ", ")), fix)
 }

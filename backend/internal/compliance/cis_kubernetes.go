@@ -105,7 +105,7 @@ func init() {
 
 			// 5.2 Pod Security Standards
 			{ID: "5.2.1", Title: "Ensure that the cluster has at least one active policy control mechanism in place", Section: k8sPSS, Manual: true,
-				Guidance: "Label every namespace with workloads for Pod Security Admission (pod-security.kubernetes.io/enforce: restricted, or baseline) or run a policy engine (Kyverno, Gatekeeper), then attest. The checks below grade what this design asks for; only admission control stops what others deploy."},
+				Guidance: "Label every namespace with workloads for Pod Security Admission (pod-security.kubernetes.io/enforce: restricted, or baseline) or run a policy engine (Kyverno, Gatekeeper), then attest. The opt-in Pod Security admission rule (k8s_pss_namespace_label) lists the Namespaces of this design without an enforce label. The checks below grade what this design asks for; only admission control stops what others deploy."},
 			{ID: "5.2.2", Title: "Minimize the admission of privileged containers", Section: k8sPSS,
 				Rules: []string{"k8s_privileged"}, Counts: onAttribute("privileged"), AppliesTo: k8sWorkloads,
 				Guidance: "Nimbo flags containers with privileged: true (the Privileged containers rule's privileged findings; its privilege escalation findings count for 5.2.6, its added capabilities for none: 5.2.9 has a rule of its own)."},

@@ -148,6 +148,7 @@ func TestRulesOnBadApp(t *testing.T) {
 		"info:k8s_net_raw@app.yaml:26",
 		"info:k8s_seccomp@app.yaml:14",
 		"info:k8s_automount_token@app.yaml:14",
+		"info:k8s_ingress_tls@app.yaml:57", // opt-in: Ingress without spec.tls
 	}
 	if len(got) != len(want) {
 		t.Errorf("got %d findings, want %d", len(got), len(want))

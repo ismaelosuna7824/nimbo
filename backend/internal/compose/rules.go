@@ -181,6 +181,12 @@ var rules = []Rule{
 	optIn(rule("dk_hardening", "Hardened containers", catSecurity, model.SeverityInfo,
 		"Services should run with read_only: true, cap_drop: [ALL] and security_opt: [no-new-privileges:true].", "https://cheatsheetseries.owasp.org/cheatsheets/Docker_Security_Cheat_Sheet.html",
 		"A read-only root filesystem, no Linux capabilities and no privilege escalation (setuid) limit what an attacker can do after compromising the app.")),
+	rule("dk_secret_file", "Credential files copied into images", catSecurity, model.SeverityWarning,
+		"Dockerfiles should not COPY credential files (.env, .npmrc, .pypirc, .netrc, SSH keys, ~/.aws) into the image, explicitly or through COPY . without a .dockerignore entry.", "https://docs.docker.com/build/building/secrets/",
+		"Every COPY is an image layer: anyone who pulls the image reads the file (docker save, docker history), even when a later RUN deletes it. A build secret (RUN --mount=type=secret) exists only while that RUN runs and is never stored in the image."),
+	optIn(rule("dk_network_internal", "Data services on an internal network", catSecurity, model.SeverityInfo,
+		"Databases, caches and brokers that publish no ports should sit on an internal: true network shared only with their clients, not on the network of the services that publish ports.", "https://docs.docker.com/reference/compose-file/networks/#internal",
+		"A regular network gives the database a route to the internet and puts it next to every client-facing service: a compromised front service or package can reach it directly and the database can send data out. An internal network has no outside route: only the services attached to it can connect.")),
 }
 
 var ruleByCode = func() map[string]Rule {

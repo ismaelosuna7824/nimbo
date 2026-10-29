@@ -2,6 +2,7 @@ package kuberules
 
 import (
 	"fmt"
+	"slices"
 	"strings"
 
 	"github.com/ismaelosuna7824/nimbo/backend/internal/compose"
@@ -189,6 +190,14 @@ func (c *checker) containerRules(w *workload, ct container, reqDefaults, limitDe
 			c.diag(model.SeverityWarning, "k8s_probe_port", o, field(ct.path, probe, kind, "port"),
 				fmt.Sprintf("%s: the %s of %s uses port %q, which the container does not declare", w.label(), probe, ct.label(), pn.Value),
 				"Use a containerPort number, or name the port in ports: [{name: "+pn.Value+", containerPort: …}].")
+		}
+	}
+	if lp := get(ct.n, "livenessProbe"); lp != nil && get(ct.n, "startupProbe") == nil {
+		if delay, ok := intAt(lp, "initialDelaySeconds"); ok && delay >= slowStart {
+			threshold := (delay + 9) / 10
+			c.diag(model.SeverityInfo, "k8s_startup_probe", o, field(ct.path, "livenessProbe", "initialDelaySeconds"),
+				fmt.Sprintf("%s: the livenessProbe of %s waits %ds (initialDelaySeconds) instead of a startupProbe", w.label(), ct.label(), delay),
+				fmt.Sprintf("Add a startupProbe with the livenessProbe's check, periodSeconds: 10 and failureThreshold: %d (up to %ds to start), and drop livenessProbe.initialDelaySeconds.", threshold, threshold*10))
 		}
 	}
 
@@ -623,6 +632,71 @@ func (c *checker) checkIngress(o *object) {
 			ingressBackend(field("spec", "rules"+idx(i), "http", "paths"+idx(j), "backend"), get(p, "backend"))
 		}
 	}
+	c.ingressTLS(o)
+}
+
+// slowStart is the liveness initialDelaySeconds from which a startupProbe
+// fits better (k8s_startup_probe).
+const slowStart = 30
+
+// localHost reports a host name that only resolves on this machine (the
+// local k3s cluster's *.localhost hosts): plain HTTP stays on it.
+func localHost(h string) bool {
+	h = strings.ToLower(strings.TrimSuffix(h, "."))
+	return h == "localhost" || strings.HasSuffix(h, ".localhost") || h == "127.0.0.1" || h == "::1"
+}
+
+// ingressTLS reports an Ingress that routes traffic without spec.tls
+// (unless every host it routes is local).
+func (c *checker) ingressTLS(o *object) {
+	if len(items(o.node, "spec", "tls")) > 0 || len(items(o.node, "spec", "rules")) == 0 && get(o.node, "spec", "defaultBackend") == nil {
+		return
+	}
+	var hosts []string
+	anyHost := get(o.node, "spec", "defaultBackend") != nil
+	for _, r := range items(o.node, "spec", "rules") {
+		h := str(r, "host")
+		if h == "" {
+			anyHost = true
+		} else if !localHost(h) && !slices.Contains(hosts, h) {
+			hosts = append(hosts, h)
+		}
+	}
+	if len(hosts) == 0 && !anyHost {
+		return
+	}
+	what, tlsHosts := "every host", "<host>"
+	if len(hosts) > 0 {
+		what, tlsHosts = strings.Join(hosts, ", "), strings.Join(hosts, ", ")
+	}
+	c.diag(model.SeverityInfo, "k8s_ingress_tls", o, "spec",
+		fmt.Sprintf("Ingress %s serves %s over plain HTTP (no spec.tls)", o.name, what),
+		fmt.Sprintf("Add spec.tls: [{hosts: [%s], secretName: %s-tls}] with a kubernetes.io/tls Secret (issued by cert-manager or your cloud's certificate manager).", tlsHosts, o.name))
+}
+
+// checkGateway reports a Gateway API Gateway with plain HTTP listeners
+// for non-local hostnames and no HTTPS or TLS listener.
+func (c *checker) checkGateway(o *object) {
+	if o.group() != "gateway.networking.k8s.io" {
+		return
+	}
+	plain := false
+	for _, l := range items(o.node, "spec", "listeners") {
+		switch str(l, "protocol") {
+		case "HTTPS", "TLS":
+			return
+		case "HTTP":
+			if h := str(l, "hostname"); h == "" || !localHost(h) {
+				plain = true
+			}
+		}
+	}
+	if !plain {
+		return
+	}
+	c.diag(model.SeverityInfo, "k8s_ingress_tls", o, "spec.listeners",
+		fmt.Sprintf("Gateway %s only has plain HTTP listeners", o.name),
+		fmt.Sprintf("Add a listener {name: https, protocol: HTTPS, port: 443, tls: {mode: Terminate, certificateRefs: [{name: %s-tls}]}} backed by a kubernetes.io/tls Secret, and redirect HTTP to it (an HTTPRoute with a RequestRedirect filter).", o.name))
 }
 
 func (c *checker) checkHTTPRoute(o *object) {

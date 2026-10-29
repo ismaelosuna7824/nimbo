@@ -117,6 +117,9 @@ var rules = []Rule{
 	optIn(rule("k8s_no_hpa", "Autoscaling for stateless Deployments", catReliability, model.SeverityInfo,
 		"In production-like environments, stateless Deployments running 2+ replicas with cpu requests should be scaled by a HorizontalPodAutoscaler.", "https://kubernetes.io/docs/tasks/run-application/horizontal-pod-autoscale/",
 		"A fixed replica count is sized either for the peak (paying for idle pods most of the day) or for the average (overloaded, slow pods at the peak); an HPA follows the load between minReplicas and maxReplicas.")),
+	optIn(rule("k8s_startup_probe", "Startup probes for slow starts", catReliability, model.SeverityInfo,
+		"Containers whose livenessProbe waits 30s or more (initialDelaySeconds) should use a startupProbe instead.", docsProbes+"#define-startup-probes",
+		"initialDelaySeconds is a fixed wait sized for the slowest start: every start waits it out before a deadlock can be detected, and a start slower than it is killed and restarted in a loop. A startupProbe holds the liveness check only until the app answers (up to failureThreshold × periodSeconds).")),
 	rule("k8s_topology_spread", "Replicas spread over nodes", catReliability, model.SeverityWarning,
 		"In production-like environments, Deployments and StatefulSets with 2+ replicas should spread them over nodes or zones (topologySpreadConstraints or podAntiAffinity on kubernetes.io/hostname or topology.kubernetes.io/zone).", docsConcepts+"scheduling-eviction/topology-spread-constraints/",
 		"The scheduler may put every replica on the same node: one node failure, drain or upgrade then takes the whole service down even though it runs several replicas."),
@@ -158,6 +161,9 @@ var rules = []Rule{
 	optIn(rule("k8s_network_policy", "NetworkPolicies", catNetworking, model.SeverityInfo,
 		"Every workload's pods should be selected by a NetworkPolicy.", docsConcepts+"services-networking/network-policies/",
 		"Pods accept traffic from every pod of the cluster by default: one compromised pod reaches every database. A NetworkPolicy limits who can connect.")),
+	optIn(rule("k8s_ingress_tls", "TLS on Ingresses and Gateways", catNetworking, model.SeverityInfo,
+		"Ingresses should terminate TLS (spec.tls with a certificate Secret) and Gateways should have an HTTPS or TLS listener; hosts under localhost are skipped.", docsConcepts+"services-networking/ingress/#tls",
+		"Without TLS the requests, cookies, tokens and passwords cross the network in plain text and anyone on the path can read or change them. Locally (k3s on localhost) plain HTTP is usually fine; production entry points need a certificate (cert-manager, your cloud's certificate manager).")),
 
 	// Security
 	rule("k8s_secret_env", "Secrets written in env", catSecurity, model.SeverityWarning,
@@ -181,6 +187,9 @@ var rules = []Rule{
 	optIn(rule("k8s_hardening", "Restricted pod security", catSecurity, model.SeverityInfo,
 		"Containers should set allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, capabilities.drop [ALL] and seccompProfile RuntimeDefault; pods that don't call the API should set automountServiceAccountToken: false.", docsPSS+"#restricted",
 		"These are the restricted Pod Security Standard: they limit what an attacker can do after compromising the app (no setuid, no writes outside volumes, no capabilities, no API token).")),
+	optIn(rule("k8s_pss_namespace_label", "Pod Security admission on namespaces", catSecurity, model.SeverityInfo,
+		"Namespaces of the workflow should set a Pod Security Admission level (label pod-security.kubernetes.io/enforce: baseline or restricted).", "https://kubernetes.io/docs/concepts/security/pod-security-admission/",
+		"The rules here check what this design asks for; the label makes the API server refuse pods that break the level, whoever deploys them (kubectl, Helm, a compromised CI token). Without it every namespace admits privileged pods.")),
 }
 
 var ruleByCode = func() map[string]Rule {

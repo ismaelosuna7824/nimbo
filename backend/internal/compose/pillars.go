@@ -69,6 +69,8 @@ var rulePillars = map[string][]model.Pillar{
 	"dk_docker_sock":         {sec},
 	"dk_privileged":          {sec},
 	"dk_hardening":           {sec},
+	"dk_secret_file":         {sec},
+	"dk_network_internal":    {sec},
 	"dk_cap_add":             {sec},
 	"dk_net_raw":             {sec},
 	"dk_read_only":           {sec},

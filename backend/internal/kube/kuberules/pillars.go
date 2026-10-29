@@ -43,6 +43,7 @@ var rulePillars = map[string][]model.Pillar{
 	"k8s_topology_spread":    {rel},
 	"k8s_pdb":                {rel, ops},
 	"k8s_rollout_strategy":   {rel, ops},
+	"k8s_startup_probe":      {rel, perf},
 
 	// Hygiene.
 	"k8s_recommended_labels": {ops, cost},
@@ -57,6 +58,7 @@ var rulePillars = map[string][]model.Pillar{
 	"k8s_namespace_missing": {ops},
 	"k8s_default_namespace": {ops, sec},
 	"k8s_network_policy":    {sec},
+	"k8s_ingress_tls":       {sec},
 
 	// Security.
 	"k8s_secret_env":           {sec},
@@ -66,6 +68,7 @@ var rulePillars = map[string][]model.Pillar{
 	"k8s_host_path":            {sec, rel},
 	"k8s_run_as_root":          {sec},
 	"k8s_hardening":            {sec},
+	"k8s_pss_namespace_label":  {sec},
 	"k8s_host_port":            {sec, rel},
 	"k8s_windows_host_process": {sec},
 	"k8s_net_raw":              {sec},

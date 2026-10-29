@@ -96,6 +96,8 @@ func run(in input) []model.Diagnostic {
 			c.checkIngress(o)
 		case "HTTPRoute":
 			c.checkHTTPRoute(o)
+		case "Gateway":
+			c.checkGateway(o)
 		case "HorizontalPodAutoscaler":
 			c.checkHPA(o)
 		case "PodDisruptionBudget":
@@ -315,6 +317,7 @@ func (c *checker) checkNamespaces() {
 	for _, o := range c.in.objects {
 		if o.kind == "Namespace" && o.group() == "" {
 			declared[o.name] = true
+			c.podSecurityLabel(o)
 		}
 	}
 	reported := map[string]bool{}
@@ -336,6 +339,17 @@ func (c *checker) checkNamespaces() {
 			fmt.Sprintf("namespace %s (used by %s %s) is not created by the workflow", ns, o.kind, o.name),
 			fmt.Sprintf("Add a Namespace object:\napiVersion: v1\nkind: Namespace\nmetadata:\n  name: %s\n(or set it as the source's namespace).", ns))
 	}
+}
+
+// podSecurityLabel reports a Namespace of the workflow without a Pod
+// Security Admission level (system namespaces are the cluster's).
+func (c *checker) podSecurityLabel(o *object) {
+	if systemNamespaces[o.name] || strMap(o.node, "metadata", "labels")["pod-security.kubernetes.io/enforce"] != "" {
+		return
+	}
+	c.diag(model.SeverityInfo, "k8s_pss_namespace_label", o, "metadata",
+		fmt.Sprintf("Namespace %s sets no Pod Security level (label pod-security.kubernetes.io/enforce)", o.name),
+		"Add metadata.labels: {pod-security.kubernetes.io/enforce: baseline, pod-security.kubernetes.io/warn: restricted, pod-security.kubernetes.io/audit: restricted}; switch enforce to restricted once its pods set the restricted securityContext (privileged only for node agents that need host access).")
 }
 
 // ---------------------------------------------------------------------------
