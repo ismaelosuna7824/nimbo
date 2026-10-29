@@ -1,18 +1,15 @@
-// The walkthrough drawn inside a canvas' React Flow (Build or Architecture). "Follow a request" derives the
-// request paths (paths.ts) from the Architecture model, plays them step by step with a dot travelling each
-// hop, keeps the camera on the current hop, marks the canvas (store highlight) and shows the caption panel;
-// "Tour the infrastructure" (tour-layer.tsx, Build only) walks the canvas graph from its roots.
-// Loaded the first time someone starts one (see overlay.tsx).
+// The walkthrough drawn inside the Build canvas' React Flow. "Follow a request" derives the request paths (paths.ts)
+// from the Architecture model, plays them step by step with a dot travelling each hop, keeps the camera on the
+// current hop, marks the canvas (store highlight) and shows the caption panel; "Tour the infrastructure"
+// (tour-layer.tsx) walks the canvas graph from its roots. Loaded the first time someone starts one (see overlay.tsx).
 import { ViewportPortal, useStoreApi } from "@xyflow/react"
 import { ClockIcon, RotateCcwIcon, RouteIcon, SendIcon } from "lucide-react"
 import { useCallback, useEffect, useMemo, useRef, type ReactNode } from "react"
 import { Button } from "@/components/ui/button"
-import { measurePath, pointAt, roundedRoute } from "@/features/architecture/animate"
+import { measurePath, pointAt } from "@/features/architecture/animate"
 import type { Point, Rect } from "@/features/architecture/geometry"
 import type { ArchModel } from "@/features/architecture/model"
-import { switchView } from "@/features/architecture/store"
 import { useDockerModel, useKubernetesModel, useTerraformModel } from "@/features/architecture/use-model"
-import type { Scene } from "@/features/architecture/use-scene"
 import { schemaKey, useNodeSchemas } from "@/features/canvas/catalog"
 import { isUsable, openEndpoints, useEndpoints } from "@/features/panels/endpoints/use-endpoints"
 import { isDocker, isKubernetes, type ComposeGraph, type KubeGraph } from "@/lib/api/types"
@@ -21,13 +18,11 @@ import { useWorkflowStore } from "@/state/workflow-store"
 import { captionOf, NO_ENTRY_HINT, summaryText, type Caption } from "./captions"
 import { describeDocker, describeKubernetes, describeTerraform, type Describer } from "./describe"
 import { buildWalk, flowStarts, SHOW_ALL, walkEntries, walkSummary, type Entry, type HopTraits, type Step, type Walk } from "./paths"
-import { useFocusCamera, useHighlight, usePlayerKeys, useReducedMotion } from "./player-hooks"
-import { AlsoChip, PlayerPanel, WhereDot } from "./player-ui"
+import { useFocusCamera, useHighlight, usePlayerKeys, useReducedMotion, type CameraFocus } from "./player-hooks"
+import { OneLine, PlayerPanel, WhereDot } from "./player-ui"
 import { replayWalkthrough, useWalkthrough, type EdgeMark, type Highlight, type NodeMark } from "./store"
 import TourLayer from "./tour-layer"
 import { arrivalRoute, bridgeRoute, hopLinks, unionRect } from "./travel"
-
-export type LayerProps = { surface: "build" } | { surface: "architecture"; scene: Scene }
 
 type Kind = "terraform" | "docker" | "kubernetes"
 
@@ -40,12 +35,10 @@ const NO_TRAITS: HopTraits = { async: false, supporting: false }
 const EMPTY_COMPOSE: ComposeGraph = { nodes: [], edges: [] }
 const EMPTY_KUBE: KubeGraph = { nodes: [], edges: [] }
 
-export default function WalkthroughLayer(props: LayerProps) {
+export default function WalkthroughLayer() {
   const kind: Kind = useWorkflowStore((s) => (isDocker(s.workflow) ? "docker" : isKubernetes(s.workflow) ? "kubernetes" : "terraform"))
   const mode = useWalkthrough((s) => s.mode)
-  // The tour follows the Build canvas as drawn; the Architecture view has no tour.
-  if (mode === "tour") return props.surface === "build" ? <TourLayer kind={kind} /> : null
-  if (props.surface === "architecture") return kind === "terraform" ? <TerraformArchitectureLayer scene={props.scene} /> : <ArchitectureLayer scene={props.scene} kind={kind} />
+  if (mode === "tour") return <TourLayer kind={kind} />
   return kind === "docker" ? <DockerBuildLayer /> : kind === "kubernetes" ? <KubeBuildLayer /> : <TerraformBuildLayer />
 }
 
@@ -103,47 +96,6 @@ interface Surface {
   hop: (step: Step) => { route: Point[] | null; edges: string[]; via: string[] }
 }
 
-function useArchitectureSurface(scene: Scene): Surface {
-  return useMemo((): Surface => {
-    const { byId, edges } = scene.diagram
-    const routes = new Map(edges.map((e) => [e.id, e.route]))
-    return {
-      idsOf: (item) => (byId.has(item) ? [item] : []),
-      rectOf: (id) => {
-        const it = byId.get(id)
-        return it && { x: it.ax, y: it.ay, width: it.width, height: it.height }
-      },
-      hop: (step) => {
-        const route = step.edge && routes.get(step.edge.id)
-        return {
-          route: route ? roundedRoute(step.reversed ? [...route].reverse() : route) : null,
-          edges: step.edge ? [step.edge.id] : [],
-          via: [],
-        }
-      },
-    }
-  }, [scene])
-}
-
-function ArchitectureLayer({ scene, kind }: { scene: Scene; kind: Kind }) {
-  const describer = useDescriber(scene.model, kind)
-  return <Player model={scene.model} describer={describer} surface={useArchitectureSurface(scene)} kind={kind} />
-}
-
-/** The Architecture view draws the active environment; when its front door is not created there, say so. */
-function TerraformArchitectureLayer({ scene }: { scene: Scene }) {
-  const describer = useDescriber(scene.model, "terraform")
-  const { model: design } = useTerraformModel({ everyEnvironment: true })
-  const env = useWorkflowStore((s) => s.workflow?.activeEnvironment)
-  const elsewhere = useMemo(() => {
-    if (!design || !env || walkEntries(scene.model).length) return undefined
-    const entry = walkEntries(design)[0]
-    const card = entry && design.cards.find((c) => c.id === entry.target)
-    return card ? { name: card.label || card.name, env } : undefined
-  }, [design, env, scene.model])
-  return <Player model={scene.model} describer={describer} surface={useArchitectureSurface(scene)} kind="terraform" elsewhere={elsewhere} />
-}
-
 function BuildLayer({ model, kind, absent }: { model: ArchModel; kind: Kind; absent?: { ids: Set<string>; env: string } }) {
   const describer = useDescriber(model, kind, absent)
   const store = useStoreApi()
@@ -184,20 +136,7 @@ function travelMs(route: Point[] | null, speed: number) {
   return Math.min(TRAVEL_MS.max, Math.max(TRAVEL_MS.min, ms)) / speed
 }
 
-function Player({
-  model,
-  describer,
-  surface,
-  kind,
-  elsewhere,
-}: {
-  model: ArchModel
-  describer: Describer
-  surface: Surface
-  kind: Kind
-  /** The design's front door when the drawn environment does not create it. */
-  elsewhere?: { name: string; env: string }
-}) {
+function Player({ model, describer, surface, kind }: { model: ArchModel; describer: Describer; surface: Surface; kind: Kind }) {
   const chosenEntry = useWalkthrough((s) => s.entry)
   const choices = useWalkthrough((s) => s.choices)
   const stepIndex = useWalkthrough((s) => s.step)
@@ -254,20 +193,27 @@ function Player({
   }, [walk, step, atSummary, surface])
   useHighlight(highlight)
 
-  // The camera follows the hop (both ends in view, above the caption panel); the summary shows the whole path.
-  const focus = () => {
+  // The camera follows the hop (both ends in view, above the caption panel), the current item when they are too far
+  // apart to read; the summary shows the whole path (from the entry when it is too large).
+  const focus = (): CameraFocus | undefined => {
     if (!walk) return undefined
     const rectsOf = (item: string) => surface.idsOf(item).flatMap((id) => surface.rectOf(id) ?? [])
-    if (atSummary) return unionRect(walk.steps.flatMap((s) => rectsOf(s.at)))
+    if (atSummary) {
+      const rect = unionRect(walk.steps.flatMap((s) => rectsOf(s.at)))
+      const first = unionRect(walk.steps.slice(0, 2).flatMap((s) => rectsOf(s.at)))
+      return rect && { rect, ...(first ? { anchor: first } : {}) }
+    }
     if (!step) return undefined
     const own = rectsOf(step.at)
     const from = step.from ? rectsOf(step.from) : []
     const via = surface.hop(step).via.flatMap((id) => surface.rectOf(id) ?? [])
     // An item off the canvas (Users on Build): look at where the request goes next.
     const ahead = !own.length && walk.steps[index + 1] ? rectsOf(walk.steps[index + 1].at) : []
+    const anchor = unionRect([...own, ...ahead])
     const rect = unionRect([...own, ...from, ...via, ...ahead])
     const route = surface.hop(step).route
-    return rect && route?.length ? unionRect([rect, { x: route[0].x, y: route[0].y, width: 1, height: 1 }]) : rect
+    const all = rect && route?.length ? unionRect([rect, { x: route[0].x, y: route[0].y, width: 1, height: 1 }]) : rect
+    return all && { rect: all, ...(anchor ? { anchor } : {}) }
   }
   const walkKey = walk ? walk.steps.map((s) => s.at).join(">") : ""
   useFocusCamera(focus, `${walkKey}|${index}|${atSummary}`, panel, reduced, atSummary ? 1 : 1.1)
@@ -290,18 +236,6 @@ function Player({
   if (!walk) {
     body = entries.length ? (
       <EntryPicker title="Where does the request come in?" options={entries} nameOf={nameOf} />
-    ) : elsewhere ? (
-      <div data-testid="walkthrough-no-entry" className="flex flex-col gap-1.5">
-        <p className="font-medium">The front door is not created in environment "{elsewhere.env}"</p>
-        <p className="text-xs text-muted-foreground">
-          Requests come in through {elsewhere.name}, which this environment skips (count = 0). The Build canvas shows the whole design: follow the request there.
-        </p>
-        <div>
-          <Button size="sm" variant="outline" onClick={() => switchView("build")}>
-            Follow it on the Build canvas
-          </Button>
-        </div>
-      </div>
     ) : (
       <div data-testid="walkthrough-no-entry" className="flex flex-col gap-1.5">
         <p className="font-medium">This design has no entry point yet</p>
@@ -360,51 +294,35 @@ function EntryPicker({ title, options, nameOf }: { title: string; options: Entry
   )
 }
 
+/** One step, compact: a header, what happens (two lines at most), and one line each for the connection, the asynchronous hand-off, what else is involved and the ways out. */
 function StepCaption({ caption: c, step, index, choice, nameOf }: { caption: Caption; step: Step; index: number; choice: string | undefined; nameOf: (id: string) => string }) {
-  const select = useWorkflowStore((s) => s.select)
   // Taking a way goes on along it at once.
   const choose = (way: string) => useWalkthrough.setState((s) => ({ choices: { ...s.choices, [step.at]: way }, step: index + 1 }))
+  const via = [c.via ? `Connected by ${c.via}` : "", c.facts.join(" · ")].filter(Boolean).join(" · ")
   return (
-    <div className="flex flex-col gap-1.5" data-testid="walkthrough-step">
+    <div className="flex min-w-0 flex-col gap-1" data-testid="walkthrough-step">
       <div className="flex min-w-0 items-center gap-2">
-        <span data-testid="walkthrough-name" className="truncate font-semibold">
+        <span data-testid="walkthrough-name" className="truncate font-semibold" title={c.about}>
           {c.name}
         </span>
-        <span className="truncate text-xs text-muted-foreground">{c.type}</span>
+        <span className="truncate text-xs text-muted-foreground" title={c.about}>
+          {c.type}
+        </span>
         {c.where && <WhereDot where={c.where} className="ml-auto" />}
       </div>
-      <p data-testid="walkthrough-caption" className="leading-snug">
+      <p data-testid="walkthrough-caption" className="line-clamp-2 leading-snug" title={c.text}>
         {c.text}
       </p>
-      {c.about && <p className="text-xs text-muted-foreground">{c.about}</p>}
-      {(c.via || c.facts.length > 0) && (
-        <p className="text-xs text-muted-foreground" data-testid="walkthrough-via">
-          {c.via && (
-            <>
-              Connected by <span className="font-mono text-foreground">{c.via}</span>
-            </>
-          )}
-          {c.via && c.facts.length > 0 && " · "}
-          {c.facts.length > 0 && <span className="font-mono">{c.facts.join(" · ")}</span>}
-        </p>
-      )}
+      {via && <OneLine testId="walkthrough-via" text={via} />}
       {c.async && (
-        <p data-testid="walkthrough-async" className="flex items-start gap-1.5 rounded-lg border border-primary/25 bg-primary/5 px-2 py-1.5 text-xs">
-          <ClockIcon className="mt-px size-3.5 shrink-0 text-primary" />
-          <span>
-            <span className="font-medium">Asynchronous:</span> the request returns here; the message continues later.
-          </span>
-        </p>
+        <OneLine
+          testId="walkthrough-async"
+          icon={<ClockIcon className="size-3.5 shrink-0 text-primary" />}
+          text="Asynchronous: the request returns here; the message continues later."
+          className="text-foreground"
+        />
       )}
-      {c.also.length > 0 && (
-        <div className="flex flex-wrap items-center gap-1" data-testid="walkthrough-also">
-          <span className="mr-0.5 text-xs text-muted-foreground">Also involved:</span>
-          {c.also.slice(0, 6).map((chip) => (
-            <AlsoChip key={chip.label} chip={chip} onSelect={select} />
-          ))}
-          {c.also.length > 6 && <span className="text-xs text-muted-foreground">+{c.also.length - 6} more</span>}
-        </div>
-      )}
+      {c.also.length > 0 && <OneLine testId="walkthrough-also" text={`Also involved: ${c.also.map((x) => x.label).join(", ")}`} />}
       {step.branches && !step.joins && (
         <div className="flex flex-wrap items-center gap-1.5" data-testid="walkthrough-choices">
           <span className="text-xs text-muted-foreground">Which way?</span>

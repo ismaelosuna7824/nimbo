@@ -1,12 +1,13 @@
 // What the request walkthrough and the infrastructure tour share on screen: the caption panel and its controls,
-// where a component runs and the "also involved" chips (their hooks are in player-hooks.ts).
+// where a component runs and one-line caption rows (their hooks are in player-hooks.ts).
 import { Panel } from "@xyflow/react"
 import { ChevronLeftIcon, ChevronRightIcon, PauseIcon, PlayIcon, RotateCcwIcon, XIcon } from "lucide-react"
 import { useCallback, type ReactNode, type RefObject } from "react"
 import { StatusDot, type StatusTone } from "@/components/canvas-card"
 import { Button } from "@/components/ui/button"
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip"
-import type { Chip, Where } from "./describe"
+import { cn } from "@/lib/utils"
+import type { Where } from "./describe"
 import { closeWalkthrough, replayWalkthrough, SPEEDS, useWalkthrough } from "./store"
 
 export function IconButton({ label, onClick, disabled, children }: { label: string; onClick: () => void; disabled?: boolean; children: ReactNode }) {
@@ -54,24 +55,17 @@ export function WhereDot({ where, className }: { where: Where; className?: strin
   )
 }
 
-/** A supporting piece; selects its card when it has one. */
-export function AlsoChip({ chip, onSelect }: { chip: Chip; onSelect: (id: string) => void }) {
-  const body = (
-    <span className="inline-flex h-5 max-w-48 items-center truncate rounded-full border bg-muted/60 px-2 text-[11px] text-foreground">{chip.label}</span>
-  )
-  const tip = chip.detail ?? (chip.nodeId ? `Show ${chip.label}` : undefined)
-  const trigger = chip.nodeId ? (
-    <button type="button" className="rounded-full focus-visible:ring-2 focus-visible:ring-ring/50 focus-visible:outline-none" onClick={() => onSelect(chip.nodeId!)}>
-      {body}
-    </button>
-  ) : (
-    body
-  )
-  if (!tip) return trigger
+/** One line of a caption (a connection, what else is involved, what is built on it next): cut short, whole in a tooltip. */
+export function OneLine({ text, testId, icon, className }: { text: string; testId?: string; icon?: ReactNode; className?: string }) {
   return (
     <Tooltip>
-      <TooltipTrigger asChild>{trigger}</TooltipTrigger>
-      <TooltipContent>{tip}</TooltipContent>
+      <TooltipTrigger asChild>
+        <p data-testid={testId} className={cn("flex min-w-0 items-center gap-1.5 text-xs text-muted-foreground", className)}>
+          {icon}
+          <span className="truncate">{text}</span>
+        </p>
+      </TooltipTrigger>
+      <TooltipContent className="max-w-md">{text}</TooltipContent>
     </Tooltip>
   )
 }
@@ -86,8 +80,8 @@ export interface PlayerControls {
 }
 
 /**
- * The caption panel at the bottom of the canvas: title, step counter, speed and close; the step's `children`; and
- * Restart / Previous / Play-Pause / Next when `controls` are given.
+ * The caption panel at the bottom of the canvas, compact: one row with the title, step counter, Restart / Previous /
+ * Play-Pause / Next (when `controls` are given), speed and close; then the step's `children`.
  */
 export function PlayerPanel({
   title,
@@ -107,17 +101,33 @@ export function PlayerPanel({
   const playing = useWalkthrough((s) => s.playing)
   const toggle = useCallback(() => useWalkthrough.setState((s) => ({ playing: !s.playing })), [])
   return (
-    <Panel position="bottom-center" className="!mb-4 w-[34rem] max-w-[calc(100%-2rem)]">
-      <div ref={panelRef} role="region" aria-label={title} data-testid="walkthrough-panel" className="flex flex-col gap-2 rounded-xl border bg-background/95 p-3 text-sm shadow-lg backdrop-blur">
-        <div className="flex items-center gap-2">
+    <Panel position="bottom-center" className="!mb-3 w-[30rem] max-w-[calc(100%-2rem)]">
+      <div ref={panelRef} role="region" aria-label={title} data-testid="walkthrough-panel" className="flex flex-col gap-1.5 rounded-xl border bg-background/95 px-3 py-2 text-sm shadow-lg backdrop-blur">
+        <div className="flex min-w-0 items-center gap-1.5">
           {icon}
-          <span className="font-medium">{title}</span>
+          <span className="truncate text-xs font-medium text-muted-foreground">{title}</span>
           {counter && (
-            <span data-testid="walkthrough-step-counter" className="text-xs text-muted-foreground tabular-nums">
+            <span data-testid="walkthrough-step-counter" className="shrink-0 text-xs text-muted-foreground tabular-nums">
               {counter}
             </span>
           )}
-          <div className="ml-auto flex items-center gap-0.5">
+          <div className="ml-auto flex shrink-0 items-center gap-0.5">
+            {controls && (
+              <>
+                <IconButton label="Restart" onClick={replayWalkthrough}>
+                  <RotateCcwIcon />
+                </IconButton>
+                <IconButton label="Previous step (←)" onClick={() => controls.go(controls.index - 1)} disabled={controls.index === 0}>
+                  <ChevronLeftIcon />
+                </IconButton>
+                <IconButton label={playing ? "Pause (space)" : "Play (space)"} onClick={toggle}>
+                  {playing ? <PauseIcon /> : <PlayIcon />}
+                </IconButton>
+                <IconButton label="Next step (→)" onClick={() => controls.go(controls.index + 1)} disabled={controls.nextDisabled}>
+                  <ChevronRightIcon />
+                </IconButton>
+              </>
+            )}
             <SpeedButton />
             <IconButton label="Close (Esc)" onClick={closeWalkthrough}>
               <XIcon />
@@ -125,24 +135,7 @@ export function PlayerPanel({
           </div>
         </div>
         {children}
-        {controls && (
-          <div className="flex items-center gap-1 border-t pt-2">
-            <IconButton label="Restart" onClick={replayWalkthrough}>
-              <RotateCcwIcon />
-            </IconButton>
-            <IconButton label="Previous step (←)" onClick={() => controls.go(controls.index - 1)} disabled={controls.index === 0}>
-              <ChevronLeftIcon />
-            </IconButton>
-            <Button size="sm" variant="outline" className="w-20" onClick={toggle} aria-label={playing ? "Pause (space)" : "Play (space)"}>
-              {playing ? <PauseIcon /> : <PlayIcon />}
-              {playing ? "Pause" : "Play"}
-            </Button>
-            <IconButton label="Next step (→)" onClick={() => controls.go(controls.index + 1)} disabled={controls.nextDisabled}>
-              <ChevronRightIcon />
-            </IconButton>
-            {controls.hint && <span className="ml-auto text-xs text-muted-foreground">{controls.hint}</span>}
-          </div>
-        )}
+        {controls?.hint && <p className="text-xs text-muted-foreground">{controls.hint}</p>}
       </div>
     </Panel>
   )

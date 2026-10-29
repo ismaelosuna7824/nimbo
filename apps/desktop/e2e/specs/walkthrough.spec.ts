@@ -2,6 +2,13 @@ import { expect, test } from "../support/fixtures"
 
 test("follows a request through the Build canvas step by step", async ({ app, api, page }) => {
   await app.openNew(api, "Walk", "aws-serverless-api")
+  // What the walkthrough tucks away to give the canvas the room: the dock, the inspector and the palette.
+  const sidebar = page.locator('[data-slot="sidebar"][data-state]')
+  await app.bottomTab("Code").click()
+  await expect(app.bottomPanel("Code")).toBeVisible()
+  await expect(app.inspector).toBeVisible()
+  await expect(sidebar).toHaveAttribute("data-state", "expanded")
+
   // On the Build canvas, "Follow a request" is in the Guided tour menu.
   await page.getByRole("button", { name: "More guided tours" }).click()
   await page.getByRole("menuitem", { name: "Follow a request" }).click()
@@ -12,6 +19,9 @@ test("follows a request through the Build canvas step by step", async ({ app, ap
   await panel.getByRole("button", { name: "Pause (space)" }).click()
   await expect(counter).toHaveText("1/4")
   await expect(caption).toContainText("the request starts here")
+  await expect(app.bottomPanel("Code")).toBeHidden()
+  await expect(app.inspector).toHaveCount(0)
+  await expect(sidebar).toHaveAttribute("data-state", "collapsed")
 
   const card = (id: string) => page.locator(`.react-flow__node[data-id="${id}"]`)
   // The caption takes the bottom of the canvas: the minimap steps aside meanwhile.
@@ -60,20 +70,27 @@ test("follows a request through the Build canvas step by step", async ({ app, ap
   await page.keyboard.press("ArrowRight")
   await expect(panel.getByTestId("walkthrough-summary")).toContainText("The request passed through 3 components.")
 
-  // Esc closes it and the canvas is as it was.
+  // Esc closes it: the canvas is as it was and the dock, inspector and palette come back.
   await page.keyboard.press("Escape")
   await expect(panel).toHaveCount(0)
   await expect(card("aws_iam_role.lambda")).not.toHaveClass(/opacity-25/)
   await expect(page.locator(".react-flow__minimap")).toHaveCount(1)
+  await expect(app.bottomPanel("Code")).toBeVisible()
+  await expect(app.inspector).toBeVisible()
+  await expect(sidebar).toHaveAttribute("data-state", "expanded")
 })
 
-test("in the Architecture view: picks an entry, marks the asynchronous hop and continues to the consumer", async ({ app, api, page }) => {
+test("picks an entry, marks the asynchronous hop and continues to the consumer; the Architecture view has no walkthrough", async ({ app, api, page }) => {
   await app.openNew(api, "Queue walk", "docker-rabbitmq-worker")
-  await page.getByRole("radiogroup", { name: "Canvas view" }).getByRole("radio", { name: "Architecture" }).click()
+  const views = page.getByRole("radiogroup", { name: "Canvas view" })
+  await views.getByRole("radio", { name: "Architecture" }).click()
   const diagram = page.getByTestId("architecture-view")
   await expect(diagram.locator('[data-testid="arch-card"][aria-label="producer"]')).toBeVisible()
+  await expect(diagram.getByRole("button", { name: "Follow a request" })).toHaveCount(0)
+  await views.getByRole("radio", { name: "Build" }).click()
 
-  await diagram.getByRole("button", { name: "Follow a request" }).click()
+  await page.getByRole("button", { name: "More guided tours" }).click()
+  await page.getByRole("menuitem", { name: "Follow a request" }).click()
   const panel = page.getByTestId("walkthrough-panel")
   // Users reach two services: choose where the request comes in.
   await panel.getByTestId("walkthrough-entries").getByRole("button", { name: "producer" }).click()
@@ -136,21 +153,22 @@ test("tours the infrastructure from the resource group to what is built on it", 
   await expect(card("azurerm_linux_web_app.service")).toHaveClass(/opacity-25/)
   await expect(page.locator(".react-flow__minimap")).toHaveCount(0)
 
-  // The next layer: what is built on the resource group glows together; the resource group keeps a faint ring.
+  // The next step: one card built on the resource group glows; the resource group keeps a faint ring.
   await page.keyboard.press("ArrowRight")
   await expect(counter).toHaveText(/^2\/\d+$/)
-  await expect(panel.getByTestId("walkthrough-name")).toHaveText("Built on Resource Group main")
-  await expect(card("azurerm_service_plan.main")).toHaveClass(/tour-glow/)
+  await expect(page.locator(".tour-glow")).toHaveCount(1)
   await expect(card("azurerm_resource_group.main")).not.toHaveClass(/tour-glow/)
   await expect(card("azurerm_resource_group.main")).toHaveClass(/ring-primary\/40/)
 
   // To the end, then the summary.
-  const total = Number((await counter.textContent())!.split("/")[1])
-  for (let i = 2; i < total; i++) await page.keyboard.press("ArrowRight")
-  await expect(counter).toHaveText(`${total}/${total}`)
+  const summary = panel.getByTestId("walkthrough-summary")
+  await expect(async () => {
+    await page.keyboard.press("ArrowRight")
+    await expect(summary).toBeVisible({ timeout: 250 })
+  }).toPass({ timeout: 30_000 })
+  await expect(summary).toContainText("You toured")
+  await page.keyboard.press("ArrowLeft")
   await expect(panel.getByTestId("tour-next")).toContainText("The end of the tour")
-  await page.keyboard.press("ArrowRight")
-  await expect(panel.getByTestId("walkthrough-summary")).toContainText("You toured")
   await page.keyboard.press("Escape")
   await expect(panel).toHaveCount(0)
   await expect(card("azurerm_resource_group.main")).not.toHaveClass(/tour-glow|ring-primary/)

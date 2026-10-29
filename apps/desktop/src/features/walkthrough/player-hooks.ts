@@ -55,11 +55,17 @@ export function useHighlight(next: Highlight | null) {
   useEffect(() => () => useWalkthrough.setState({ highlight: null }), [])
 }
 
+/** What the camera shows: `rect`, or around `anchor` when `rect` is too large to read at a legible zoom. */
+export interface CameraFocus {
+  rect: Rect
+  anchor?: Rect
+}
+
 /**
  * Eases the camera to `focus` (flow coordinates) above the caption panel, whenever `key` changes (a new step) or
  * the viewport is resized; with reduced motion it jumps.
  */
-export function useFocusCamera(focus: () => Rect | undefined, key: string, panel: RefObject<HTMLDivElement | null>, reduced: boolean, maxZoom = 1.1) {
+export function useFocusCamera(focus: () => CameraFocus | undefined, key: string, panel: RefObject<HTMLDivElement | null>, reduced: boolean, maxZoom = 1.1) {
   const flow = useReactFlow()
   const width = useStore((s) => s.width)
   const height = useStore((s) => s.height)
@@ -69,10 +75,10 @@ export function useFocusCamera(focus: () => Rect | undefined, key: string, panel
     read.current = focus
   })
   useEffect(() => {
-    const rect = read.current()
-    if (!rect || !width || !height) return
-    const covered = (panel.current?.offsetHeight ?? 220) + 32
-    const cam = cameraFor(rect, { width, height }, covered, { maxZoom })
+    const f = read.current()
+    if (!f || !width || !height) return
+    const covered = (panel.current?.offsetHeight ?? 160) + 32
+    const cam = cameraFor(f.rect, { width, height }, covered, { maxZoom, ...(f.anchor ? { anchor: f.anchor } : {}) })
     void flow.setCenter(cam.x, cam.y, { zoom: cam.zoom, duration: reduced ? 0 : CAMERA_MS })
   }, [key, width, height, reduced, maxZoom, flow, panel])
 }

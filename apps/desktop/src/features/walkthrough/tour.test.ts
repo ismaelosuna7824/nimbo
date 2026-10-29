@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test"
 import type { ComposeGraph, ComposeNode, KubeGraph, KubeNode, ResourceSchema, WorkflowNode } from "@/lib/api/types"
-import { buildTour, listOf, MAX_FOCUS, tourCaption, type TourGraph, type TourNode } from "./tour"
+import { buildTour, listOf, MAX_FOCUS, tourCaption, tourStops, type TourGraph, type TourNode } from "./tour"
 import { dockerTourGraph, kubeTourGraph, notCreated, terraformTourGraph, terraformTourKind, type CanvasCard, type CanvasLink } from "./tour-graph"
 
 const node = (id: string): WorkflowNode => {
@@ -101,6 +101,7 @@ describe("tour: the Azure Orders API", () => {
     absent: { ids: new Set(["azurerm_container_app.api", "azurerm_container_app.notifier"]), env: "local" },
   })
   const steps = buildTour(g)
+  const stops = tourStops(steps)
 
   test("starts at the resource group, then the column built on it, and ends with the Container Apps", () => {
     expect(steps[0].nodes).toEqual([RG])
@@ -118,7 +119,7 @@ describe("tour: the Azure Orders API", () => {
       "azurerm_user_assigned_identity.apps",
     ])
     expect(steps[1].parents).toEqual([RG])
-    expect(steps[1].edges).toContain(`${RG}>azurerm_virtual_network.main`)
+    expect(steps[1].edgesInto["azurerm_virtual_network.main"]).toEqual([`${RG}>azurerm_virtual_network.main`])
     // The subnets are siblings (built on the VNet), the queue has its own step; associations and links go along.
     const subnets = steps.find((s) => s.nodes.includes("azurerm_subnet.db"))!
     expect(subnets.nodes).toEqual(["azurerm_subnet.db", "azurerm_subnet.apps"])
@@ -129,26 +130,49 @@ describe("tour: the Azure Orders API", () => {
     expect(steps.flatMap((s) => [...s.nodes, ...s.also]).sort()).toEqual(AZURE.map(([id]) => id).sort())
   })
 
+  test("stops: small groups card by card, a large group as an overview then its cards one by one", () => {
+    expect(stops.slice(0, 4).map((s) => [s.label, s.nodes.length])).toEqual([
+      ["1", 1],
+      ["2", 8],
+      ["2a", 1],
+      ["2b", 1],
+    ])
+    expect(stops[3]).toMatchObject({ nodes: ["azurerm_virtual_network.main"], group: steps[1].nodes, parents: [RG], edges: [`${RG}>azurerm_virtual_network.main`] })
+    // The subnets (2 siblings) are two steps of their own; their associations go with the subnet they guard.
+    const db = stops.find((s) => s.nodes[0] === "azurerm_subnet.db")!
+    const apps = stops.find((s) => s.nodes[0] === "azurerm_subnet.apps")!
+    expect(apps.step).toBe(db.step + 1)
+    expect(db.also).toEqual(["azurerm_subnet_network_security_group_association.db"])
+    expect(apps.also).toEqual(["azurerm_subnet_network_security_group_association.apps"])
+    // The random suffix and the client config go with the resource group, the first card.
+    expect(stops[0].also).toEqual(steps[0].also)
+    expect(stops.at(-1)!.nodes).toEqual(["azurerm_container_app.api"])
+  })
+
   test("captions say what each resource is for in this design and what is built on it next", () => {
-    const rg = tourCaption(g, steps, 0)
+    const rg = tourCaption(g, stops, 0)
     expect(rg).toMatchObject({ title: "Resource Group main", where: { tone: "deployed" } })
+    expect(rg.context).toBeUndefined()
     expect(rg.lines[0].why).toBe("Holds every resource of this design (16).")
     expect(rg.next).toStartWith("→ used by ")
     expect(rg.also.map((c) => c.label)).toEqual(["Random string suffix", "Random password postgres", "Client config current"])
 
-    const column = tourCaption(g, steps, 1)
+    const column = tourCaption(g, stops, 1)
     expect(column.title).toBe("Built on Resource Group main")
-    expect(column.more).toBe(4)
+    expect(column.lines).toHaveLength(8)
     expect(column.lines.find((l) => l.label === "Virtual Network main")!.why).toBe("The private network Subnet db and Subnet apps live in.")
     expect(column.lines.find((l) => l.label === "Private DNS Zone postgres")!.why).toBe("Lets PostgreSQL Flexible Server main be found by name inside the network.")
     // Nothing real builds on an NSG directly: its association names the subnet it guards.
     expect(column.lines.find((l) => l.label === "Network Security Group apps")!.why).toBe("Firewall rules: decides which traffic may reach Subnet apps.")
 
-    const subnets = tourCaption(g, steps, steps.findIndex((s) => s.nodes.includes("azurerm_subnet.db")))
-    expect(subnets.title).toBe("Built on Virtual Network main")
-    expect(subnets.next).toBe("→ used by PostgreSQL Flexible Server main and Container App Environment main")
+    const vnet = tourCaption(g, stops, 3)
+    expect(vnet).toMatchObject({ title: "Virtual Network main", context: "2 of 8 built on Resource Group main", next: "→ used by Subnet db and Subnet apps" })
 
-    const last = tourCaption(g, steps, steps.length - 1)
+    const subnet = tourCaption(g, stops, stops.findIndex((s) => s.nodes[0] === "azurerm_subnet.db"))
+    expect(subnet).toMatchObject({ title: "Subnet db", next: "→ used by PostgreSQL Flexible Server main" })
+    expect(subnet.context).toBeUndefined()
+
+    const last = tourCaption(g, stops, stops.length - 1)
     expect(last.lines[0].why).toStartWith("Runs your code, using Container App Environment main, ")
     expect(last).toMatchObject({ title: "Container App api", next: "The end of the tour: nothing else is built on it.", where: { tone: "absent", text: 'Not created in environment "local"' } })
   })
@@ -197,8 +221,15 @@ describe("tour: AWS serverless API", () => {
     expect(steps.findIndex((s) => s.nodes.includes("aws_lambda_function.api"))).toBeGreaterThan(0)
     expect(steps.at(-1)!.nodes).toEqual(["aws_apigatewayv2_route.proxy"])
     expect(steps.flatMap((s) => s.also)).toEqual(expect.arrayContaining(["aws_iam_role_policy.items_access", "aws_lambda_permission.api"]))
-    expect(tourCaption(g, steps, 0).title).toBe("3 starting points")
-    expect(tourCaption(g, steps, 0).lines.find((l) => l.id === "aws_iam_role.lambda")!.why).toBe("The identity Lambda function api uses to reach other services without passwords.")
+    // Three starting points: a step each.
+    const stops = tourStops(steps)
+    expect(stops.slice(0, 3).map((s) => [s.label, s.nodes])).toEqual([
+      ["1", ["aws_dynamodb_table.items"]],
+      ["2", ["aws_iam_role.lambda"]],
+      ["3", ["aws_apigatewayv2_api.http"]],
+    ])
+    expect(stops[0].also).toContain("data.archive_file.api")
+    expect(tourCaption(g, stops, 1).lines[0].why).toBe("The identity Lambda function api uses to reach other services without passwords.")
   })
 })
 
@@ -233,12 +264,12 @@ describe("tour: Docker", () => {
     const g = dockerTourGraph({ graph, links: canvasLinks, cards })
     const steps = buildTour(g)
     expect(steps.map((s) => s.nodes)).toEqual([["network:default", "volume:pgdata"], ["service:db", "service:cache"], ["service:api"], ["service:proxy"]])
-    expect(tourCaption(g, steps, 0).lines.map((l) => l.why)).toEqual([
-      "The private network PostgreSQL container db, Redis container cache, Node.js container api and 1 more live in.",
-      "A disk that keeps the data of PostgreSQL container db when containers are replaced.",
-    ])
-    expect(tourCaption(g, steps, 3)).toMatchObject({ title: "NGINX container proxy", where: { tone: "local", text: "Runs locally in Docker" } })
-    expect(tourCaption(g, steps, 3).lines[0].why).toBe("The way in from outside: it sends requests on to Node.js container api.")
+    const stops = tourStops(steps)
+    expect(stops.map((s) => s.label)).toEqual(["1", "2", "3", "4", "5", "6"])
+    expect(tourCaption(g, stops, 0).lines[0].why).toBe("The private network PostgreSQL container db, Redis container cache, Node.js container api and 1 more live in.")
+    expect(tourCaption(g, stops, 1).lines[0].why).toBe("A disk that keeps the data of PostgreSQL container db when containers are replaced.")
+    expect(tourCaption(g, stops, 5)).toMatchObject({ title: "NGINX container proxy", where: { tone: "local", text: "Runs locally in Docker" } })
+    expect(tourCaption(g, stops, 5).lines[0].why).toBe("The way in from outside: it sends requests on to Node.js container api.")
   })
 })
 
@@ -283,9 +314,10 @@ describe("tour: Kubernetes", () => {
       ["Service/notes/web"],
       ["Ingress/notes/web"],
     ])
-    expect(steps[4].edges).toEqual(["sel"])
-    expect(tourCaption(g, steps, 4).lines[0].why).toBe("A stable address in front of Deployment web.")
-    expect(tourCaption(g, steps, 2).title).toBe("StatefulSet (PostgreSQL) postgres")
+    expect(steps[4].edgesInto["Service/notes/web"]).toEqual(["sel"])
+    const stops = tourStops(steps)
+    expect(tourCaption(g, stops, 5).lines[0].why).toBe("A stable address in front of Deployment web.")
+    expect(tourCaption(g, stops, 3).title).toBe("StatefulSet (PostgreSQL) postgres")
   })
 })
 
@@ -312,7 +344,7 @@ describe("buildTour", () => {
 
   test("a design of plumbing only is toured all the same", () => {
     const g: TourGraph = { nodes: [n("random", 0, { plumbing: true })], deps: [] }
-    expect(buildTour(g)).toEqual([{ nodes: ["random"], layer: 0, parents: [], also: [], edges: [] }])
+    expect(buildTour(g)).toEqual([{ nodes: ["random"], layer: 0, parents: [], also: [], hostOf: {}, edgesInto: { random: [] } }])
   })
 
   test("listOf", () => {

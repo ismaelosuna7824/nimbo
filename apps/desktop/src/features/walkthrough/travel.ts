@@ -80,16 +80,26 @@ export function unionRect(rects: Rect[]): Rect | undefined {
   return { x, y, width: Math.max(...rects.map((r) => r.x + r.width)) - x, height: Math.max(...rects.map((r) => r.y + r.height)) - y }
 }
 
+/** Below this zoom card text is no longer readable: the camera pans instead of zooming out further. */
+const LEGIBLE_ZOOM = 0.65
+
 /**
- * The viewport center and zoom that show `focus` in the part of a `view`-sized viewport above the
- * caption panel (`covered` pixels at the bottom), with `padding` pixels around it, never closer than
- * `maxZoom` nor farther than `minZoom`.
+ * The viewport center and zoom that show `focus` in the part of a `view`-sized viewport above the caption panel
+ * (`covered` pixels at the bottom), with `padding` pixels around it, never closer than `maxZoom` nor farther than
+ * `minZoom`. When `focus` does not fit at `minZoom`, the camera centers on `anchor` (where the eye should go first)
+ * instead of the whole focus.
  */
-export function cameraFor(focus: Rect, view: { width: number; height: number }, covered: number, opts: { padding?: number; minZoom?: number; maxZoom?: number } = {}) {
-  const { padding = 80, minZoom = 0.35, maxZoom = 1 } = opts
+export function cameraFor(
+  focus: Rect,
+  view: { width: number; height: number },
+  covered: number,
+  opts: { padding?: number; minZoom?: number; maxZoom?: number; anchor?: Rect } = {},
+) {
+  const { padding = 60, minZoom = LEGIBLE_ZOOM, maxZoom = 1 } = opts
   const visibleH = Math.max(120, view.height - covered)
-  const zoom = Math.min(maxZoom, Math.max(minZoom, Math.min((view.width - 2 * padding) / Math.max(1, focus.width), (visibleH - 2 * padding) / Math.max(1, focus.height))))
-  const c = center(focus)
+  const fit = Math.min((view.width - 2 * padding) / Math.max(1, focus.width), (visibleH - 2 * padding) / Math.max(1, focus.height))
+  const zoom = Math.min(maxZoom, Math.max(minZoom, fit))
+  const c = center(fit < minZoom && opts.anchor ? opts.anchor : focus)
   // The visible part's center sits `covered / 2` pixels above the viewport's: move the camera down by as much.
   return { x: c.x, y: c.y + covered / 2 / zoom, zoom }
 }

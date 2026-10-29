@@ -3665,18 +3665,17 @@ used by target"), one arrow per pair. The subtitle is `Docker Compose ·
 
 ### Guided tour and Follow a request (`apps/desktop/src/features/walkthrough`)
 
-A guided walkthrough of the path a request takes, for beginners: *Follow a
-request* in the Architecture toolbar, in the Build toolbar's *Guided tour ▾*
-menu (disabled, with the reason, when nothing reaches the design;
-`entry-check.ts` derives it when the menu opens) and in ⌘K. It reuses the
-Architecture model — `use-model.ts` derives it for the Build canvas too (no
-layout), so both views walk the same data-flow arrows. The Build canvas draws
+A guided walkthrough of the path a request takes, for beginners, on the Build
+canvas: *Follow a request* in the Build toolbar's *Guided tour ▾* menu
+(disabled, with the reason, when nothing reaches the design; `entry-check.ts`
+derives it when the menu opens) and in ⌘K, which switches to Build first;
+switching to Architecture closes a walkthrough. It reuses the Architecture
+model — `use-model.ts` derives it for the Build canvas (no layout), so the
+walk follows the arrows the Architecture view draws. The Build canvas draws
 every resource of the design, so its walk follows the whole design
 (`deriveArchitecture(…, { everyEnvironment: true })`: what the variables'
 defaults or any environment create); a hop the active environment does not
-create (`count = 0`) says so ("Not created in environment "local""). The
-Architecture view draws the active environment only: when its front door is
-not created there, the panel says so and offers the Build canvas. Connection
+create (`count = 0`) says so ("Not created in environment "local""). Connection
 strings kept as secrets (Key Vault, Secrets Manager, Secret Manager, SSM
 values naming a database) are data arrows from the services reading them
 (derive step 3c), the hop "connected by the Key Vault Secret database-url".
@@ -3703,25 +3702,30 @@ compose volumes/secrets/configs; Kubernetes Services, ConfigMaps, Secrets,
 service accounts and scalers. How a hop connects comes from the references
 (an environment variable first, else the attribute, else the helper both
 ends use: "the API Integration"). `captions.ts` writes the step text;
-`travel.ts` the dot's route (the Architecture edge's route; on Build a curve
-between the cards, through the helper card in between) and the camera
-(`setCenter` on both ends of the hop, above the caption panel). The layer
-(`layer.tsx`, lazy) plays it — Play/Pause, ←/→, space, Esc, speed 0.5–2×,
-Restart, a summary with Replay and, when the entry is deployed, *Send a real
-request* (Endpoints, Try it) — and writes marks to a small store
-(`store.ts`) that the canvases read through `useWalkthroughNodes` /
-`useWalkthroughEdges`: the current item ringed in the accent, its hop's edges
-in their hover look (without their hover labels, `useWalkthroughShowing`: the
-caption says how they connect), the rest of the path at 60 %, everything
-else at 25 %; frames keep their look. Workflow data is never touched. Its
-keys are handled in the capture phase and stopped there, only for keys
-typed in the canvas area: the arrows never also nudge a selected card (↑/↓
-on the canvas are swallowed), space never pans. The caption owns the bottom
-of the canvas while it is open: the minimap is hidden, and with the live
-traffic panel the newer one shows — a load test started during a
-walkthrough closes it; a walkthrough opened during a run tucks the run's
-panel away until it closes (cards and edges keep their live numbers). With
-`prefers-reduced-motion` the dot does not travel and the camera jumps.
+`travel.ts` the dot's route (a curve between the cards, through the helper card
+in between) and the camera (`setCenter` on both ends of the hop above the
+caption panel, never below a legible zoom of 0.65: when the hop is too large,
+it centers on the current card). The layer (`layer.tsx`, lazy) plays it —
+Play/Pause, ←/→, space, Esc, speed 0.5–2×, Restart, a summary with Replay and,
+when the entry is deployed, *Send a real request* (Endpoints, Try it) — and
+writes marks to a small store (`store.ts`) that the canvases read through
+`useWalkthroughNodes` / `useWalkthroughEdges`: the current item ringed in the
+accent, its hop's edges in their hover look (without their hover labels,
+`useWalkthroughShowing`: the caption says how they connect), the rest of the
+path at 60 %, everything else at 25 %; frames keep their look. Workflow data is
+never touched. While a walkthrough runs the canvas gets the room: the store
+collapses the bottom dock, the palette sidebar (`useUiStore.paletteOpen`, the
+editor's controlled `SidebarProvider`) and the inspector, and gives back exactly
+what was open when it closes. The caption panel is compact: one row with the
+title, counter and controls, then a header and at most a few one-line rows
+(cut short, whole in a tooltip). Its keys are handled in the capture phase and
+stopped there, only for keys typed in the canvas area: the arrows never also
+nudge a selected card (↑/↓ on the canvas are swallowed), space never pans. The
+caption owns the bottom of the canvas while it is open: the minimap is hidden,
+and with the live traffic panel the newer one shows — a load test started
+during a walkthrough closes it; a walkthrough opened during a run tucks the
+run's panel away until it closes (cards and edges keep their live numbers).
+With `prefers-reduced-motion` the dot does not travel and the camera jumps.
 
 *Tour the infrastructure* (the Build toolbar's *Guided tour*, ⌘K; Build canvas
 only, `tour.ts` + `tour-graph.ts`, pure, `tour.test.ts`) walks the canvas as
@@ -3731,21 +3735,27 @@ dependencies: Terraform edges point from the referenced resource, Docker and
 Kubernetes edges from the user to what it uses, and a frame (VPC, network,
 namespace) comes before what it holds. `buildTour` layers them by their
 longest dependency chain (the layout's columns); in a layer, siblings built on
-the same resource are one step glowing together (at most 8), read column by
-column, top to bottom. Plumbing — random names and passwords, client config
-lookups, associations, links, access policies, authorization rules, role
-policies and permissions — is no step: it shows as "also created here" on the
-step of the nearest real resource it serves. `tourCaption` says what each
+the same resource form a group (at most 12), read column by column, top to
+bottom. `tourStops` turns the groups into what is shown: groups of up to three
+cards card by card, each a step of its own; larger groups as a step with an
+overview (the whole group glowing, a compact list of four names with "+N more")
+followed by sub-steps 2a, 2b… for its cards, so the camera shows readable cards
+instead of fitting many tiny ones. Plumbing — random names and passwords,
+client config lookups, associations, links, access policies, authorization
+rules, role policies and permissions — is no step: it shows as "also created
+here" with the nearest real resource it serves. `tourCaption` says what each
 resource is for in this design from its kind and neighbours ("Holds every
 resource of this design", "The private network Subnet db and Subnet apps live
 in", "Firewall rules: decides which traffic may reach Subnet apps" through the
-NSG's association), what is built on it next ("→ used by …") and where it runs.
-The focus glows (`tour-glow`, a slow accent box-shadow, still with reduced
-motion), the step before keeps a faint ring, earlier steps stay at 60 %, the
-rest fades; the edges into the step light up; the camera eases to the step
-and what it is built on. The player (panel, keys, camera, marks:
-`player-ui.tsx`, `player-hooks.ts`) is shared with Follow a request; the store's
-`mode` says which runs. The summary counts the resources toured.
+NSG's association), its place in its group ("2 of 8 built on Resource Group
+main"), what is built on it next ("→ used by …") and where it runs. The focus
+glows (`tour-glow`, a slow accent box-shadow, still with reduced motion), its
+group and the stop before keep a faint ring, earlier stops stay at 60 %, the
+rest fades; the edges into the focus light up; the camera eases to the focus
+and what it is built on (never below the legible zoom: it centers on the
+first card instead). The player (panel, keys, camera, marks: `player-ui.tsx`,
+`player-hooks.ts`) is shared with Follow a request; the store's `mode` says
+which runs. The summary counts the resources toured.
 
 ## Learn (`internal/learn`, `api/learn.go`, `apps/desktop/src/features/learn`)
 

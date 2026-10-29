@@ -1,6 +1,7 @@
 import { create } from "zustand"
 import { MOD_KEY } from "@/features/toolbar/actions"
 import { useWorkflowStore } from "@/state/workflow-store"
+import { closeWalkthrough } from "@/features/walkthrough/store"
 import type { Scene } from "./use-scene"
 
 /** Shortcut that switches between Build and Architecture. */
@@ -48,11 +49,13 @@ export function useCanvasView(): CanvasView {
   return stored ?? (localStorage.getItem(viewKey(id)) === "architecture" ? "architecture" : "build")
 }
 
-/** Switches the open workflow between Build and Architecture (or to `view`). */
+/** Switches the open workflow between Build and Architecture (or to `view`). Walkthroughs run on Build: leaving it closes one. */
 export function switchView(view?: CanvasView) {
   const id = useWorkflowStore.getState().workflow?.id
   if (!id) return
   const ui = useArchUi.getState()
   const current = ui.views[id] ?? (localStorage.getItem(viewKey(id)) === "architecture" ? "architecture" : "build")
-  ui.setView(id, view ?? (current === "build" ? "architecture" : "build"))
+  const next = view ?? (current === "build" ? "architecture" : "build")
+  if (next === "architecture") closeWalkthrough()
+  ui.setView(id, next)
 }

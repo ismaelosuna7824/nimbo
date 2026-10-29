@@ -22,6 +22,9 @@ export function EditorShell() {
   const [bottomOpenAtMount] = useState(() => useWorkflowStore.getState().bottomOpen)
   const setBottomOpen = useWorkflowStore((s) => s.setBottomOpen)
   const inspectorOpen = useUiStore((s) => s.inspectorOpen)
+  // Controlled so a guided tour can give the canvas the room and give it back.
+  const paletteOpen = useUiStore((s) => s.paletteOpen)
+  const setPaletteOpen = useUiStore((s) => s.setPaletteOpen)
   const bottomRef = usePanelRef()
   // Size to reopen at. expand() would restore the most recent size, which a panel that started collapsed (Guided)
   // doesn't have: it would open at its minimum.
@@ -53,7 +56,12 @@ export function EditorShell() {
   }, [])
 
   return (
-    <SidebarProvider className="h-full min-h-0 overflow-hidden" style={{ "--sidebar-width": "19rem" } as React.CSSProperties}>
+    <SidebarProvider
+      open={paletteOpen}
+      onOpenChange={setPaletteOpen}
+      className="h-full min-h-0 overflow-hidden"
+      style={{ "--sidebar-width": "19rem" } as React.CSSProperties}
+    >
       <Sidebar>
         <SidebarHeader>
           <WorkflowSwitcher />

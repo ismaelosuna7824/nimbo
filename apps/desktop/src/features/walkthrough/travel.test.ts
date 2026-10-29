@@ -62,4 +62,14 @@ describe("camera", () => {
     const wide = cameraFor(box(0, 0, 4000, 100), view, 200, { padding: 100, minZoom: 0.1 })
     expect(wide.zoom).toBeCloseTo(0.2)
   })
+
+  test("never zooms out below a legible zoom: too large a focus centers on its anchor instead", () => {
+    const view = { width: 1000, height: 800 }
+    const anchor = box(3000, 0, 200, 100)
+    const cam = cameraFor(box(0, 0, 4000, 100), view, 200, { padding: 100, anchor })
+    expect(cam.zoom).toBe(0.65)
+    expect(cam.x).toBe(3100)
+    // Without an anchor it stays on the focus' center.
+    expect(cameraFor(box(0, 0, 4000, 100), view, 200, { padding: 100 }).x).toBe(2000)
+  })
 })

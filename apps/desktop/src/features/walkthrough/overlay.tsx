@@ -4,8 +4,7 @@ import { Button } from "@/components/ui/button"
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu"
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip"
 import { useWorkflowStore } from "@/state/workflow-store"
-import type { LayerProps } from "./layer"
-import { closeWalkthrough, startWalkthrough, useWalkthrough, useWalkthroughMode, useWalkthroughOpen } from "./store"
+import { closeWalkthrough, startWalkthrough, useWalkthrough, useWalkthroughMode } from "./store"
 
 // The paths, the tour, captions and player load the first time someone starts one.
 const WalkthroughLayer = lazy(() => import("./layer"))
@@ -13,36 +12,19 @@ const WalkthroughLayer = lazy(() => import("./layer"))
 /** Frosted canvas chrome (view switch, Tidy up). */
 const CHROME = "bg-card/80 shadow-md backdrop-blur-md dark:bg-card/80"
 
-/** The walkthrough inside a canvas' React Flow while it is open on the open workflow. */
-export function WalkthroughOverlay(props: LayerProps) {
-  const open = useWalkthroughOpen()
+/** The walkthrough inside the Build canvas' React Flow while it is open on the open workflow. */
+export function WalkthroughOverlay() {
   const workflowId = useWorkflowStore((s) => s.workflow?.id)
   const openOn = useWalkthrough((s) => s.workflowId)
   // Another workflow opened: the walkthrough belonged to the previous one.
   useEffect(() => {
     if (openOn && openOn !== workflowId) closeWalkthrough()
   }, [openOn, workflowId])
-  if (!open) return null
+  if (!openOn || openOn !== workflowId) return null
   return (
     <Suspense fallback={null}>
-      <WalkthroughLayer {...props} />
+      <WalkthroughLayer />
     </Suspense>
-  )
-}
-
-/** Architecture toolbar button: starts (or restarts) "Follow a request". */
-export function FollowRequestButton() {
-  const mode = useWalkthroughMode()
-  return (
-    <Tooltip>
-      <TooltipTrigger asChild>
-        <Button variant="outline" size="sm" className={CHROME} aria-pressed={mode === "request"} onClick={() => startWalkthrough("request")}>
-          <RouteIcon />
-          Follow a request
-        </Button>
-      </TooltipTrigger>
-      <TooltipContent>See step by step which way a request takes through the design</TooltipContent>
-    </Tooltip>
   )
 }
 

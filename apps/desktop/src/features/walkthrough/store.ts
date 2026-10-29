@@ -1,20 +1,28 @@
 import { create } from "zustand"
+import { useUiStore } from "@/features/toolbar/ui-store"
 import { useWorkflowStore } from "@/state/workflow-store"
 
 export type Speed = 0.5 | 1 | 2
 export const SPEEDS: Speed[] = [0.5, 1, 2]
 
-/** "request": follow a request along the data flow; "tour": tour the infrastructure on the Build canvas. */
+/** "request": follow a request along the data flow; "tour": tour the infrastructure. Both run on the Build canvas. */
 export type WalkthroughMode = "request" | "tour"
 
 /** How an item shows on the canvas during a walkthrough: in focus (glowing on the tour), just shown, on the path. */
 export type NodeMark = "current" | "glow" | "near" | "path"
 export type EdgeMark = "current" | "path"
 
-/** Marks keyed by the IDs of the canvas the walkthrough runs on (Build cards or Architecture items). */
+/** Marks keyed by Build canvas IDs. */
 export interface Highlight {
   nodes: Record<string, NodeMark>
   edges: Record<string, EdgeMark>
+}
+
+/** The editor around the canvas: collapsed while a walkthrough runs, given back as it was when it closes. */
+interface Layout {
+  bottomOpen: boolean
+  inspectorOpen: boolean
+  paletteOpen: boolean
 }
 
 interface WalkthroughState {
@@ -33,21 +41,38 @@ interface WalkthroughState {
   speed: Speed
   /** What the canvas shows (written by the walkthrough layer, read by the canvases). */
   highlight: Highlight | null
+  /** What was open around the canvas before the walkthrough took the room. */
+  layout: Layout | null
 }
 
-const CLOSED = { workflowId: null, mode: "request", startedAt: 0, entry: null, choices: {}, step: 0, playing: false, highlight: null } satisfies Partial<WalkthroughState>
+const CLOSED = { workflowId: null, mode: "request", startedAt: 0, entry: null, choices: {}, step: 0, playing: false, highlight: null, layout: null } satisfies Partial<WalkthroughState>
 
 export const useWalkthrough = create<WalkthroughState>(() => ({ ...CLOSED, speed: 1 }))
 
-/** Opens the walkthrough (`mode`) on the open workflow, from its first step, playing. */
+/**
+ * Opens the walkthrough (`mode`) on the open workflow, from its first step, playing. The canvas gets the room: the
+ * dock, the palette and the inspector collapse (a walkthrough already open keeps what it saved).
+ */
 export function startWalkthrough(mode: WalkthroughMode = "request") {
   const workflowId = useWorkflowStore.getState().workflow?.id
   if (!workflowId) return
-  useWalkthrough.setState({ ...CLOSED, workflowId, mode, startedAt: Date.now(), playing: true })
+  const ui = useUiStore.getState()
+  const layout = useWalkthrough.getState().layout ?? { bottomOpen: useWorkflowStore.getState().bottomOpen, inspectorOpen: ui.inspectorOpen, paletteOpen: ui.paletteOpen }
+  useWorkflowStore.getState().setBottomOpen(false)
+  ui.setInspectorOpen(false)
+  ui.setPaletteOpen(false)
+  useWalkthrough.setState({ ...CLOSED, workflowId, mode, startedAt: Date.now(), playing: true, layout })
 }
 
+/** Closes the walkthrough and gives back the dock, palette and inspector as they were. */
 export function closeWalkthrough() {
+  const { layout } = useWalkthrough.getState()
   useWalkthrough.setState(CLOSED)
+  if (!layout) return
+  useWorkflowStore.getState().setBottomOpen(layout.bottomOpen)
+  const ui = useUiStore.getState()
+  ui.setInspectorOpen(layout.inspectorOpen)
+  ui.setPaletteOpen(layout.paletteOpen)
 }
 
 /** Back to the first step (same entry and ways), playing. */

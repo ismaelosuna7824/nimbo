@@ -656,7 +656,7 @@ function CanvasInner() {
         )}
         {/* Terraform: the load test's target only (nothing measures requests between cloud resources). */}
         <LiveTrafficOverlay kind="" edges={NO_FLOW_EDGES} />
-        <WalkthroughOverlay surface="build" />
+        <WalkthroughOverlay />
       </>
     ),
     [empty, multi, tidy, walking],

@@ -59,20 +59,24 @@ export interface TourGraph {
 }
 
 export interface TourStep {
-  /** Nodes in focus (they glow). */
+  /** Siblings: nodes built on the same resource, read top to bottom. */
   nodes: string[]
   /** Dependency layer: 0 for the roots. */
   layer: number
   /** What they are built on (shown in the previous steps), for the caption. */
   parents: string[]
-  /** Plumbing created with this step ("also created here"). */
+  /** Plumbing created with them ("also created here"). */
   also: string[]
-  /** Canvas edges from what they are built on (they light up). */
-  edges: string[]
+  /** The node of `nodes` each plumbing item serves. */
+  hostOf: Record<string, string>
+  /** Canvas edges into each node and plumbing item, from what it is built on (they light up). */
+  edgesInto: Record<string, string[]>
 }
 
-/** A step never focuses more cards than this at once; larger groups are split top to bottom. */
-export const MAX_FOCUS = 8
+/** A sibling group never holds more cards than this; larger ones are split top to bottom. */
+export const MAX_FOCUS = 12
+/** Groups this small are toured card by card, each a step of its own; larger ones get an overview, then sub-steps. */
+export const SMALL_GROUP = 3
 /** Cards whose left edges are closer than this read as one column. */
 const COLUMN = 160
 
@@ -83,10 +87,10 @@ function readingOrder(byId: Map<string, TourNode>) {
 }
 
 /**
- * The tour's steps. Layers are the longest dependency chains from the roots (as the automatic layout places
+ * The tour's sibling groups. Layers are the longest dependency chains from the roots (as the automatic layout places
  * them, left to right). In a layer, siblings — nodes built on the same real resource, their deepest dependency —
- * are one step (at most MAX_FOCUS cards), steps read top to bottom. Plumbing is no step of its own: it shows
- * with the step of the nearest real resource it serves. Cycles are cut where they close.
+ * form a group (at most MAX_FOCUS cards), groups read top to bottom. Plumbing is no step of its own: it goes with
+ * the nearest real resource it serves. Cycles are cut where they close. See tourStops for the steps shown.
  */
 export function buildTour(g: TourGraph): TourStep[] {
   const byId = new Map(g.nodes.map((n) => [n.id, n]))
@@ -138,22 +142,64 @@ export function buildTour(g: TourGraph): TourStep[] {
       for (let i = 0; i < ids.length; i += MAX_FOCUS) {
         const chunk = ids.slice(i, i + MAX_FOCUS)
         for (const id of chunk) stepOf.set(id, steps.length)
-        steps.push({ nodes: chunk, layer, parents: parent ? [parent] : [], also: [], edges: chunk.flatMap((id) => (depsOf.get(id) ?? []).flatMap((d) => d.edges)) })
+        steps.push({ nodes: chunk, layer, parents: parent ? [parent] : [], also: [], hostOf: {}, edgesInto: Object.fromEntries(chunk.map((id) => [id, (depsOf.get(id) ?? []).flatMap((d) => d.edges)])) })
       }
     }
   }
-  // Plumbing joins the step of the nearest real resource it is built on (roots: the first step).
+  // Plumbing joins the nearest real resource it is built on (roots: the first card).
   if (real.length) {
     for (const n of [...g.nodes].filter((x) => x.plumbing).sort((a, b) => level.get(a.id)! - level.get(b.id)! || topDown(a.id, b.id))) {
       let p = primaryOf(n.id)
-      while (p && !stepOf.has(p)) p = primaryOf(p)
+      while (p && (!stepOf.has(p) || byId.get(p)!.plumbing)) p = primaryOf(p)
       const index = p !== undefined ? stepOf.get(p)! : 0
-      stepOf.set(n.id, index)
-      steps[index].also.push(n.id)
-      steps[index].edges.push(...(depsOf.get(n.id) ?? []).flatMap((d) => d.edges))
+      const s = steps[index]
+      s.also.push(n.id)
+      s.hostOf[n.id] = p ?? s.nodes[0]
+      s.edgesInto[n.id] = (depsOf.get(n.id) ?? []).flatMap((d) => d.edges)
     }
   }
   return steps
+}
+
+/** What the tour shows at once: one card, or a sibling group's overview before its cards one by one. */
+export interface TourStop {
+  /** "2", or "2b" for the second card of step 2's group. */
+  label: string
+  /** Step number (1-based); the step count is the tour's length. */
+  step: number
+  /** Cards in focus (they glow). */
+  nodes: string[]
+  /** The sibling group they belong to (the focus itself outside groups). */
+  group: string[]
+  parents: string[]
+  also: string[]
+  edges: string[]
+}
+
+/**
+ * The stops of a tour: groups of up to SMALL_GROUP cards card by card, each a step; larger groups as a step with an
+ * overview of the whole group, then sub-steps (2a, 2b…) for its cards, so the camera can show readable cards.
+ */
+export function tourStops(steps: TourStep[]): TourStop[] {
+  const out: TourStop[] = []
+  let n = 0
+  const card = (s: TourStep, id: string, label: string, group: string[]): TourStop => {
+    const also = s.also.filter((p) => s.hostOf[p] === id)
+    return { label, step: n, nodes: [id], group, parents: s.parents, also, edges: [id, ...also].flatMap((x) => s.edgesInto[x] ?? []) }
+  }
+  for (const s of steps) {
+    if (s.nodes.length <= SMALL_GROUP) {
+      for (const id of s.nodes) {
+        n++
+        out.push(card(s, id, `${n}`, [id]))
+      }
+      continue
+    }
+    n++
+    out.push({ label: `${n}`, step: n, nodes: s.nodes, group: s.nodes, parents: s.parents, also: s.also, edges: Object.values(s.edgesInto).flat() })
+    s.nodes.forEach((id, i) => out.push(card(s, id, `${n}${String.fromCharCode(97 + i)}`, s.nodes)))
+  }
+  return out
 }
 
 /** "a, b and c", "a, b, c and 4 more". */
@@ -172,25 +218,22 @@ export interface TourLine {
 }
 
 export interface TourCaption {
-  /** "Resource Group main", or "Built on Virtual Network main" for several. */
+  /** "Resource Group main", or "Built on Virtual Network main" for a group's overview. */
   title: string
-  /** One line per resource in focus (the first few). */
+  /** A sub-step's place in its group: "2 of 8 built on Resource Group main". */
+  context?: string
+  /** One line per resource in focus (the panel shows a few, the rest on demand). */
   lines: TourLine[]
-  /** More resources in focus than lines. */
-  more: number
   /** The catalog description of a single resource. */
   about?: string
-  /** "→ used by Subnet apps and Subnet db"; "The end of the tour…" on the last step. */
+  /** "→ used by Subnet apps and Subnet db"; "The end of the tour…" on the last stop. */
   next: string
   where?: Where
   also: Chip[]
 }
 
-/** Lines a caption lists before "+N more". */
-const MAX_LINES = 4
-
-/** The caption of `steps[index]`. */
-export function tourCaption(g: TourGraph, steps: TourStep[], index: number): TourCaption {
+/** The caption of `stops[index]`. */
+export function tourCaption(g: TourGraph, stops: TourStop[], index: number): TourCaption {
   const byId = new Map(g.nodes.map((n) => [n.id, n]))
   const label = (id: string) => {
     const n = byId.get(id)!
@@ -217,7 +260,7 @@ export function tourCaption(g: TourGraph, steps: TourStep[], index: number): Tou
     return seen
   }
   const real = g.nodes.filter((n) => !n.plumbing)
-  const step = steps[index]
+  const step = stops[index]
 
   const whyOf = (id: string): string => {
     const n = byId.get(id)!
@@ -279,20 +322,23 @@ export function tourCaption(g: TourGraph, steps: TourStep[], index: number): Tou
   }
 
   const single = step.nodes.length === 1
-  const title = single ? label(step.nodes[0]) : step.parents.length ? `Built on ${listOf(step.parents.map(label), 2)}` : `${step.nodes.length} starting points`
-  const lines = step.nodes.slice(0, MAX_LINES).map((id) => ({ id, label: label(id), why: whyOf(id) }))
+  const parent = step.parents.length ? listOf(step.parents.map(label), 2) : ""
+  const title = single ? label(step.nodes[0]) : parent ? `Built on ${parent}` : `${step.nodes.length} starting points`
+  const lines = step.nodes.map((id) => ({ id, label: label(id), why: whyOf(id) }))
+  const position = single && step.group.length > 1 ? step.group.indexOf(step.nodes[0]) + 1 : 0
+  const context = position ? `${position} of ${step.group.length} ${parent ? `built on ${parent}` : "starting points"}` : undefined
   const after = [...new Set(step.nodes.flatMap(realUsers))].filter((u) => !step.nodes.includes(u))
   const next = after.length
     ? `→ used by ${listOf(after.map(label), 4)}`
-    : index === steps.length - 1
+    : index === stops.length - 1
       ? `The end of the tour: nothing else is built on ${single ? "it" : "these"}.`
       : `Nothing else is built on ${single ? "it" : "these"}.`
   const wheres = step.nodes.map((id) => byId.get(id)!.where).filter((w): w is Where => !!w)
   const sameWhere = wheres.length === step.nodes.length && wheres.every((w) => w.tone === wheres[0].tone) ? wheres[0] : undefined
   return {
     title,
+    ...(context ? { context } : {}),
     lines,
-    more: Math.max(0, step.nodes.length - MAX_LINES),
     ...(single && byId.get(step.nodes[0])!.about ? { about: byId.get(step.nodes[0])!.about } : {}),
     next,
     ...(sameWhere ? { where: single ? sameWhere : { ...sameWhere, text: `All ${step.nodes.length}: ${sameWhere.text.charAt(0).toLowerCase()}${sameWhere.text.slice(1)}` } } : {}),

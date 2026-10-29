@@ -509,7 +509,7 @@ function CanvasInner() {
           </Panel>
         )}
         <LiveTrafficOverlay kind="kubernetes" edges={canvas.edges} />
-        <WalkthroughOverlay surface="build" />
+        <WalkthroughOverlay />
       </>
     ),
     [hasItems, tidy, canvas.edges, walking],

@@ -32,8 +32,6 @@ import { registerArchScene, useArchUi } from "./store"
 import { legendHeight, type CardText, type LegendEntry } from "./styles"
 import { ActorShape, CardShape, DiagramDefs, EdgeShape, GroupShape, HeaderShape, LegendShape } from "./svg"
 import { useDockerScene, useKubernetesScene, useScene, type Scene } from "./use-scene"
-import { useWalkthroughEdges, useWalkthroughNodes } from "@/features/walkthrough/highlight"
-import { FollowRequestButton, WalkthroughOverlay } from "@/features/walkthrough/overlay"
 
 type ArchNodeData =
   | { kind: "group"; group: ArchGroup; icon?: string }
@@ -47,8 +45,6 @@ type ArchNode = Node<ArchNodeData & Record<string, unknown>>
 interface FlowData extends Record<string, unknown> {
   kind: FlowKind
   route: Point[]
-  /** The hop the request walkthrough is on. */
-  active?: boolean
 }
 type FlowEdge = Edge<FlowData, "archFlow">
 
@@ -58,9 +54,6 @@ const PRO_OPTIONS = { hideAttribution: true }
 const SURFACE_STYLE = { backgroundColor: "#ffffff" }
 /** Fit with room at the top for the Build / Architecture switch and Export button floating over the diagram. */
 const FIT_VIEW: FitViewOptions<ArchNode> = { padding: { top: "64px", x: 0.08, bottom: 0.08 }, maxZoom: 1.1 }
-/** The walkthrough fades cards and actors off the path; containers, the title and the legend keep their look. */
-const isFrame = (n: ArchNode) => n.data.kind !== "card" && n.data.kind !== "actor"
-const activate = (e: FlowEdge): FlowEdge => ({ ...e, data: { ...e.data!, active: true } })
 
 function Handles() {
   return (
@@ -137,7 +130,7 @@ const FlowEdgeView = memo(function FlowEdgeView({ data }: EdgeProps<FlowEdge>) {
   if (!data) return null
   return (
     <g data-testid="arch-edge" data-kind={data.kind}>
-      <EdgeShape path={polylinePath(data.route)} kind={data.kind} selected={data.active} />
+      <EdgeShape path={polylinePath(data.route)} kind={data.kind} />
     </g>
   )
 })
@@ -268,11 +261,8 @@ function ArchitectureInner({ scene, empty }: { scene: Scene | null; empty: strin
   }, [scene])
 
   const builtNodes = useMemo(() => (scene ? sceneNodes(scene) : []), [scene])
-  const builtEdges = useMemo(() => (scene ? sceneEdges(scene) : []), [scene])
+  const edges = useMemo(() => (scene ? sceneEdges(scene) : []), [scene])
   const [nodes, setNodes] = useSyncedState(builtNodes, carryNodeState)
-  // "Follow a request" rings the current hop and fades the rest.
-  const shownNodes = useWalkthroughNodes(nodes, isFrame)
-  const edges = useWalkthroughEdges(builtEdges, activate)
   // Only measurements and selection change here: the diagram is read-only.
   const onNodesChange = useCallback(
     (changes: NodeChange<ArchNode>[]) => setNodes((ns) => applyNodeChanges(changes.filter((c) => c.type === "dimensions" || c.type === "select"), ns)),
@@ -306,7 +296,7 @@ function ArchitectureInner({ scene, empty }: { scene: Scene | null; empty: strin
         <DiagramDefs />
       </svg>
       <ReactFlow<ArchNode, FlowEdge>
-        nodes={shownNodes}
+        nodes={nodes}
         edges={edges}
         nodeTypes={nodeTypes}
         edgeTypes={edgeTypes}
@@ -330,14 +320,12 @@ function ArchitectureInner({ scene, empty }: { scene: Scene | null; empty: strin
       >
         <Background variant={BackgroundVariant.Dots} gap={18} size={1.1} color="#d5dbe3" bgColor="#ffffff" />
         <Controls showInteractive={false} position="bottom-left" />
-        <Panel position="top-right" className="flex items-center gap-2">
-          {scene && scene.model.cards.length > 0 && <FollowRequestButton />}
+        <Panel position="top-right">
           <Button size="sm" onClick={() => openExport("architecture")}>
             <DownloadIcon />
             Export image…
           </Button>
         </Panel>
-        {scene && <WalkthroughOverlay surface="architecture" scene={scene} />}
       </ReactFlow>
       {!scene && (
         <div className="pointer-events-none absolute inset-0 flex items-center justify-center gap-2 text-sm text-slate-500">

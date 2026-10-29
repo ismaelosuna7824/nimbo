@@ -142,13 +142,19 @@ instead of one-off colors, shadows or radii.
 - **Spotlight on the canvas** (Follow a request, reachability, Compliance "Show on canvas"): the items that matter
   are ringed, the rest fade (`opacity-35`/`-25`); nothing in the workflow changes. The
   walkthrough rings the current item in the accent (focus, not status), keeps the rest of its path at 60 % and
-  explains each step in one floating panel at the bottom center (frosted, `shadow-lg`) with Play/Pause, ←/→, space
-  and Esc; the camera eases to the hop and jumps instead with reduced motion. Floating panels never stack: the caption
-  and the live traffic panel share the canvas bottom and the newer one shows (the minimap steps aside meanwhile).
+  explains each step in one compact floating panel at the bottom center (frosted, `shadow-lg`): one row with the
+  counter and Play/Pause, ←/→, speed and close, then a short header and a few one-line rows, cut short with the
+  whole text in a tooltip. The camera eases to the hop above the panel, never below a zoom where card text stays
+  legible (it pans instead), and jumps with reduced motion. Floating panels never stack: the caption and the live
+  traffic panel share the canvas bottom and the newer one shows (the minimap steps aside meanwhile).
+- **Give the canvas the room.** A walkthrough or tour runs on the Build canvas only and collapses the dock, the palette
+  and the inspector while it runs, then restores exactly what was open when it closes (Esc, ×, switching to
+  Architecture).
 - **Guided tour.** The Build toolbar has one *Guided tour* split button: the button tours the infrastructure, its menu
   also holds *Follow a request* (disabled with the reason when nothing reaches the design). The tour's focus is a soft
   accent glow breathing slowly around the card(s) (`tour-glow`, still with reduced motion), never a status color; what
-  was just shown keeps a faint accent ring; plumbing is named on the step ("Also created here"), not toured.
+  was just shown keeps a faint accent ring; plumbing is named on the step ("Also created here"), not toured. Small
+  sibling groups are toured card by card; a large one gets an overview, then sub-steps (2a, 2b…) at a readable zoom.
 
 ## Review checklist
 

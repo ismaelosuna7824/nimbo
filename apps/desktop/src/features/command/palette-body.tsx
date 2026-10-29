@@ -339,7 +339,15 @@ export function PaletteBody() {
                 <MapIcon />
                 Tour the infrastructure
               </CommandItem>
-              <CommandItem value="follow a request walkthrough path trace flow how requests travel" onSelect={() => run(() => startWalkthrough("request"))}>
+              <CommandItem
+                value="follow a request walkthrough path trace flow how requests travel"
+                onSelect={() =>
+                  run(() => {
+                    switchView("build")
+                    startWalkthrough("request")
+                  })
+                }
+              >
                 <RouteIcon />
                 Follow a request
               </CommandItem>
