@@ -363,22 +363,7 @@ func TestWiringGoogleLegacyEndpoints(t *testing.T) {
 	}
 }
 
-func TestLegacyGoogleWarning(t *testing.T) {
-	wf := &model.Workflow{Nodes: []model.Node{
-		{Kind: model.KindResource, Type: "google_sql_database_instance", Name: "db"},
-		{Kind: model.KindResource, Type: "google_sql_database", Name: "app"},
-	}}
-	if w := legacyGoogleWarning(wf, map[string]string{"google": "6.50.0"}); !strings.Contains(w, "hashicorp/google 6.50.0") || !strings.Contains(w, "google_sql_database.app") {
-		t.Errorf("warning %q", w)
-	}
-	for _, v := range []map[string]string{nil, {"google": "7.26.0"}, {"google": "8.9.0"}} {
-		if w := legacyGoogleWarning(wf, v); w != "" {
-			t.Errorf("%v: unexpected warning %q", v, w)
-		}
-	}
-	if w := legacyGoogleWarning(&model.Workflow{Nodes: wf.Nodes[:1]}, map[string]string{"google": "6.50.0"}); w != "" {
-		t.Errorf("warning without a google_sql_database: %q", w)
-	}
+func TestWiringVersionsChanged(t *testing.T) {
 	if !wiringVersionsChanged(nil, map[string]string{"google": "6.50.0"}) || wiringVersionsChanged(map[string]string{"aws": "6.0.0"}, nil) {
 		t.Error("wiringVersionsChanged")
 	}

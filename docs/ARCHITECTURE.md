@@ -587,6 +587,47 @@ Catalog notes:
   `region`, azurerm `features {}`, google `project = var.gcp_project`
   (default `floci-local`), oci `region`; OCI resources use
   `var.compartment_ocid` (default: local Floci tenancy).
+- Provider versions (`compat.go`, `curated/provider_compat.json`): one
+  entry per embedded provider (`Load` fails when one is missing, unknown or
+  listed twice) with `localMinimum` — the oldest release verified on the
+  Floci emulators for the services Nimbo emulates — and `issues` — known
+  broken ranges `{versions: constraint, services: resource types (trailing
+  `*` = prefix; none = every resource), message, fix}`. `ProviderCompat` /
+  `ProviderCompats` add `source` and `catalog` (the embedded schema's
+  release) from the index and `recommended` = `~> <catalog major>.<catalog
+  minor>`: the lower bound is the schema release, so every attribute and
+  block Nimbo validates and offers exists in whatever init installs, and the
+  upper bound stops before the next major (renames/removals, no embedded
+  schema); it is derived, so regenerating the schemas moves it. AddNode
+  writes it into `required_providers` and every template's `versions.tf`
+  uses it (test: the catalog release satisfies each template constraint,
+  which allows no release below `localMinimum` or inside any issue range).
+  `CheckConstraint(constraint, types)` (`OtherMajor`, `BelowMinimum`,
+  `Issues`, `Broken` = every allowed release is bad) decides with
+  hashicorp/go-version over probe releases around every version the
+  constraints mention; `CheckVersion` judges a locked release; `Status` →
+  `ok`, `outdated` (misses the catalog's major, allows or locks releases
+  below the minimum or in an affecting issue range) or `broken-locally`
+  (the locked release, or every allowed one, is inside an affecting issue
+  range). Issues whose range contains the catalog release (emulator gaps,
+  `AffectsCatalog`) are skipped by the lint rule (`WithoutGaps`: no
+  recommended constraint avoids them) but still set the status and the run
+  warnings, whose fix is the issue's own; the types they break are not
+  local (`ResourceSummary.flociSupported`, `TypeInfo.local` false, and
+  Validate's `floci_unsupported` carries the issue's message and fix).
+  Verified 2026-10-28 (floci 2.3.0,
+  floci-az 0.15.0, floci-gcp 0.11.0, floci-oci 0.5.0; apply, empty re-plan,
+  destroy through the sandbox): aws 5.100.0/6.0.0/6.69.1 ok → minimum
+  5.100.0; azurerm 3.117.1 fails (storage account static website
+  properties), 4.0.0 hangs creating a storage account, 4.9.0/4.81.0 ok →
+  minimum 4.9.0 + issue `< 4.9.0` for `azurerm_storage_account`; google
+  6.50.0/7.0.0/7.25.0 ok except `google_sql_database` (400 "uploadId is
+  required"), 7.26.0/7.46.1 ok → minimum 7.26.0 + issue `< 7.26.0`; oci
+  8.29.0 … 9.10.0 ok for buckets, queues, streams, KMS and vault, functions
+  ok up to 9.2.0 and 404 from 9.3.0 (Functions API 20260325) → minimum
+  8.29.0 + gap `>= 9.3.0` for `oci_functions_*`; archive 2.0.0/2.8.1 and
+  random 3.0.0/3.9.1 ok. How the table is verified and kept current:
+  PROVIDER_COMPAT.md.
 - Recipe IDs: curated (`sqs-lambda`, `apigwv2-lambda`, `sns-sqs`,
   `lambda-uses-dynamodb_table`, `lambda-log-group`, `s3-require-tls`,
   `cloudfront-s3-oac`, `azure-resource-group`, …), grant recipes
@@ -696,7 +737,16 @@ The desktop Problems tab groups Errors / Warnings / Best
 practices / Network (`net_*`, see netcheck); node badges and tab counts
 ignore `info`.
 
-Rules (warnings: `bp_sensitive_not_marked`, `bp_provider_version`,
+Rules (warnings: `bp_sensitive_not_marked`, `bp_provider_version` (its fix
+names the recommended constraint for embedded providers),
+`bp_provider_local_compat` — a `required_providers` constraint of an embedded
+provider (matched by type and source) that can't select the catalog's major,
+or allows releases below `LocalMinimum` or inside a known issue range that
+breaks one of the workflow's resource types; the message says what breaks
+(another major: the schema Nimbo validates against differs, here and on the
+real cloud), the fix gives the exact recommended constraint plus
+`terraform init -upgrade`; no constraint is left to `bp_provider_version`,
+unparseable ones are ignored —,
 `bp_open_ingress` — SSH, Telnet, RDP, SMB (445) and database ports; findings
 carry `facet` = the exposed ports ("22,3389", or "all"), read by
 `lint.ExposesPort` so compliance controls about one port count only theirs —,
@@ -1197,7 +1247,24 @@ Sandbox behavior notes:
   stay. Wiring files: `zz_nimbo_floci_override.tf` (overrides existing
   provider blocks incl. aliases, `backend "local"`),
   `zz_nimbo_floci_providers.tf` (provider blocks for clouds without one),
-  `zz_nimbo.auto.tfvars` (environment values).
+  `zz_nimbo.auto.tfvars` (environment values),
+  `zz_nimbo_floci_azure_override.tf` (emulator workarounds, below; in the root
+  and every local module directory that needs one).
+- Provider versions (`providers.go`): the lock file stays in the workdir
+  between runs (assets never bring one; the export copies the imported
+  one). Before init, when it pins a release the root's `required_providers`
+  constraints no longer allow (`staleLocks`), the run logs it and runs
+  `terraform init -upgrade` (it is the sandbox's own copy); when a plain init
+  still fails with "does not match configured version constraint" (a
+  module's constraint), it retries once with `-upgrade`. After init
+  (`providerWarnings`, needs `Config.Catalog`), every embedded provider the
+  lock selected below its `LocalMinimum` or inside a known issue range that
+  breaks one of the workflow's resource types (catalog "Provider versions")
+  becomes a `Warning:` log line and an entry of `Run.Warnings` (MCP run
+  results show them with a hint) naming the failing resources and the
+  recommended constraint. The google < 7.26 endpoint roots stay in
+  `gcpLegacyEndpoints` (wiring); its remaining `google_sql_database`
+  failure is the table's issue.
 - Settle step: VM-backed Docker file sharing (OrbStack, Docker Desktop on
   macOS) can show containers a file rewritten in place with its old size
   for a moment, so Terraform read `compute.tf` cut short ("Unclosed
@@ -1273,6 +1340,20 @@ Sandbox behavior notes:
   on data-plane polling. Resources that need the storage data plane
   (`azurerm_storage_container` by account name, blobs, queues) are not
   supported in the sandbox.
+- floci-az doesn't keep some storage account settings (verified with floci-az
+  0.15.0, azurerm 4.9, 4.81 and 5.11): `queue_encryption_key_type` and
+  `table_encryption_key_type` read back `"Account"` (default `"Service"`; both
+  force a new account), `https_traffic_only_enabled` and `min_tls_version`
+  read back `false` and `TLS1_0`, and in 5.x `public_network_access` reads back
+  empty. Every plan after an apply replaced each storage account and the
+  post-deploy check reported it as drift. `azure_override.go` adds these
+  arguments (names by azurerm major: `enable_https_traffic_only` in 3.x) to
+  the `lifecycle { ignore_changes }` of each `azurerm_storage_account` in the
+  root and local modules (remote modules can't be overridden); the file is
+  rewritten after init like the wiring when the azurerm release changes.
+  Terraform replaces `ignore_changes` instead of merging it, so the user's
+  entries are copied in; `ignore_changes = all` is left alone. Exported code is
+  unchanged.
 
 #### Docker workflows (compose runtime: `compose.go`, `compose_ports.go`, `compose_logs.go`)
 
@@ -1378,12 +1459,28 @@ the chip's × turns it off; opening another workflow resets it.
   again", and "Not on the canvas" (changes without a card, e.g. the delete of
   a removed node).
 
-### Deploy confirmation and drift (`apps/desktop/src/features/toolbar`, Deploy tab)
+### Deploy status, run notices, confirmation and drift (`apps/desktop/src/features/toolbar`, Deploy tab)
 
+- The toolbar's Deploy button follows the run in progress (`RUNNING_LABEL`:
+  "Deploying…", "Planning…", "Destroying…") and says "Deployed" for 2.5 s once
+  a deploy succeeds (`justDeployed`); then a ghost chip before it keeps the
+  last Deploy/Destroy (`lastDeployRun`, `deployStatus` in `deploy-status.ts`:
+  "✓ Deployed 2m ago" green, "Deploy failed" red, destroys and cancels muted;
+  `needs_confirmation` runs are skipped, nothing before the first deploy). A
+  click opens the Deploy tab on that run (`showRun` in the workflow store; each
+  Deploy tab selects it through `useRequestedRun`).
+- Runs this window starts (`runAction`, the Deploy tab) are watched
+  (`watchRun` in `actions.ts`, `watchedRuns` in the UI store) until they end;
+  `useRunNotices` (`run-notices.tsx`, mounted by the top bar) then toasts: a
+  deploy that worked says "Deployed: N resources" (managed resources in the
+  state; docker/Kubernetes name their own) with the first HTTP address,
+  "Open endpoints" and "Load test"; a failed run gives its first error line
+  (`firstErrorLine`: the first "Error:" line of the stored log) and "View
+  logs". Canceled runs end quietly; plans have their own toast.
 - A Terraform apply that ends `needs_confirmation` (sandbox "Deploy guard")
   opens `DeployConfirmDialog` (`deploy-confirm-dialog.tsx`, the
-  `destroy-dialog.tsx` pattern) when this window started it (`watchApply` in
-  `actions.ts`); the Deploy tab shows an amber notice with "Review…" for any
+  `destroy-dialog.tsx` pattern) when this window started it (`useRunNotices`);
+  the Deploy tab shows an amber notice with "Review…" for any
   such run (MCP-started ones too). The dialog lists `run.destructive` grouped
   by `groupDestructive` (`deploy-confirm.ts`) into "Replace (destroy and
   re-create)" with the forcing attributes and "Delete" with a readable cause
@@ -1495,6 +1592,7 @@ type Sandbox struct {
     Running map[model.Cloud]bool   // emulators up and answering
     Region  string                 // settings' default AWS region
     Sources []string               // workflow code assets, scanned for route hints
+    ServiceSources map[string][]string // code of services/<svc>/ (no test files) by <svc>: routes of nimbo.local/<svc> images
     Instances map[string]sandbox.InstanceAccess // EC2 containers by instance ID (sandbox.Instances)
 }
 func Build(wf *model.Workflow, st *model.DeployedState, sb Sandbox) model.EndpointsInfo
@@ -1561,9 +1659,21 @@ publish; warns without subscriptions), `queue` for `google_pubsub_subscription`
 (pull + acknowledge: the emulator never redelivers pulled messages, so there
 is no peek), `secret` (versions folded in; access latest / add version), `key`
 for symmetric `google_kms_crypto_key` (encrypt/decrypt), `web-service` for
-`google_cloud_run_v2_service` (URL = `<gcp>/run/v2/<service name>/`, the proxy
-path that keeps sub-paths; the generated `*.run.localhost.floci.io` URL is
-shown with the sandbox port), `function` for `google_cloudfunctions2_function`
+`google_cloud_run_v2_service`: URL = the state's `uri`
+(`<svc>-<hash>.<region>.run.localhost.floci.io`) on the sandbox port, which
+floci-gcp routes by Host to the container (any path); `URL without DNS` =
+`<gcp>/run/v2/<service name>/`, the emulator's path proxy to the same
+container (no uri yet: the proxy is the URL). Endpoints are the routes the
+service's code registers when an image is `nimbo.local/<svc>` (`codeRoutes`
+over `ServiceSources[<svc>]`: Go `HandleFunc("GET /x")`, chi/gin/echo
+`.Get/.GET("/x")`, Express `.get('/x/:id')`, FastAPI `@app.get`, Flask
+`.route(…, methods=[…])`; parameter-free GETs first, max 20), else `ANY /`.
+`Access on Google Cloud` states ingress (`INTERNAL_ONLY`, internal + load
+balancer, public) and whether invoking needs IAM (no `roles/run.invoker`
+for allUsers/allAuthenticatedUsers in `_iam_member`/`_binding`/`_policy`,
+and `invoker_iam_disabled` unset); floci-gcp enforces neither (verified
+0.11.0: an `INTERNAL_ONLY` service without invokers answers 200 from the
+host on both URLs), which the hint says. `function` for `google_cloudfunctions2_function`
 (control plane only: settings + warning), `database` for
 `google_sql_database_instance` (databases/users folded in; host is the Docker
 network IP, so a `docker exec … psql` snippet into
@@ -1583,8 +1693,9 @@ client libraries (Storage/BigQuery `apiEndpoint`, Pub/Sub `apiEndpoint` +
 `emulatorMode`, others gRPC `{apiEndpoint, port, sslCreds: createInsecure()}`)
 and Python (Storage/BigQuery `client_options` + `AnonymousCredentials`,
 Pub/Sub `PUBSUB_EMULATOR_HOST`, others `transport="rest"`). Postman: a
-"Google Cloud services (sandbox)" folder plus a folder per Cloud Run service on
-`{{gcpBaseUrl}}`.
+"Google Cloud services (sandbox)" folder on `{{gcpBaseUrl}}` plus a folder
+per Cloud Run service with a request per endpoint (ANY = GET + POST) on its
+literal service URL.
 
 Azure (`azure.go`/`azure_try.go`, verified against floci-az 0.15.0): one
 emulator port serves HTTP and HTTPS (self-signed CA at `/_floci/tls-cert`,
@@ -1678,8 +1789,10 @@ code, `client.endpoint`) and Python (`oci` config with `key_content`,
 while oracle/oci 9.10.0, OCI CLI 3.95 and current SDKs call `/20260325`
 (404): function snippets sign the invoke with the SDK signer (`oci
 raw-request`, `DefaultRequestSigner`, `oci.signer.Signer`) instead of the
-Functions clients, and Terraform needs an older provider for functions
-(9.0.0 works). Stream pools are not implemented (`oci_streaming_stream_pool`
+Functions clients, and Terraform needs oracle/oci 9.2.0 or older for
+functions (9.3.0 is the first release calling `/20260325`: the catalog's
+`oci_functions_*` gap, so those types are export-only with the targeted
+release). Stream pools are not implemented (`oci_streaming_stream_pool`
 → 404).
 
 `Supporting` marks plumbing so the UI can list it apart (a collapsed
@@ -1707,10 +1820,12 @@ URLs containing `$default` are single-quoted in shell snippets.
 
 Try: AWS actions use `loadtest.SandboxAWSConfig` (shared with load tests:
 static test credentials, no retries); HTTP uses `net/http`. 15 s timeout;
-HTTP targets must be loopback URLs on one of the sandbox's emulator ports or
-a published app port of the workflow's EC2 instances
-(relative paths resolve against the API's first stage or the function URL);
-redirects are followed only to loopback hosts (max 5). Bodies are read up to
+HTTP targets must be loopback URLs, or Floci `*.localhost.floci.io` host
+names, on one of the sandbox's emulator ports, or a published app port of
+the workflow's EC2 instances (relative paths resolve against the API's first
+stage, the function URL or the Cloud Run service URL); `*.localhost.floci.io`
+is dialed at 127.0.0.1 directly (no DNS, no proxy) keeping the name as Host.
+Redirects are followed only to those local hosts (max 5). Bodies are read up to
 256 KB (then truncated with a note) and pretty-printed when JSON. SQS
 `receive` peeks: up to 10 messages, then `ChangeMessageVisibility 0` so they
 stay visible (the Go SDK drops a zero `VisibilityTimeout` on receive).
@@ -3836,7 +3951,7 @@ Docker; the desktop onboarding wizard (`GET /setup`) and `nimbo doctor`
 | `POST /import/scan` | `{dir?, files?}` → `ImportScan{root, projects: ImportProject[], skipped}`. Walks the folder (skips `.terraform`, `.git`, `node_modules`, `vendor`, `.terragrunt-cache`, hidden dirs); every dir with `*.tf` is a project unless another scanned dir calls it as a local `module` (then it is listed in `skipped`) or it is a root of an environments-layout tree: `<base>/environments/<env>` (or `envs/<env>`) dirs that only call one `<base>/modules/<service>` (no resources/data, every Terraform dir of that folder alike, `<base>` without `*.tf`) are ONE project at `<base>` with `layout: "environments"` and `environments: [env…]`; other projects have `layout: "single"`. Per project: resource/data/module counts (the service module's for a tree), providers, clouds, tfvars files (root + `environments/`; for a tree each root's `terraform.tfvars`/`*.auto.tfvars`), backend presence, parse diagnostics. `files` (relative paths; a shared top-level folder becomes the root and names it) are materialized in a temp dir. Over 5000 files or 200 Terraform dirs → 400 |
 | `POST /import` | `{dir?, files?, projects?: string[], name?, names?: {path: name}}` → 201 `{workflows: Workflow[]}`, one per project, each with a random icon (`projects` omitted = the root `"."` only, a single root or an environments-layout tree; `name` applies when exactly one project is imported). Per project: root `*.tf`/`*.tfvars` and `environments/*.tfvars`/`*.env.example` are parsed (the workflow gets `layout: "single"`: an imported project keeps its layout); other files of the project dir (minus nested Terraform dirs, `.terraform*`, `*.tfstate*`, skipped dirs) are copied into assets; every local module it reaches (recursively) is copied flat to `modules/<name>` (dir base name, `-2`… on clashes) and its `source` rewritten (`./modules/<name>` in the workflow, `../<name>` between modules, via hclwrite so the rest of each module file stays byte-identical). An environments-layout tree is parsed with `hclcodec.ImportEnvironments` into one workflow (`layout: "environments"`, `service`, one environment per root); the service module's other files become the workflow's assets, the modules it calls are copied as above and the first root's `.terraform.lock.hcl` is kept. Registry/git sources are untouched. All-or-nothing; 400 + diagnostics on syntax errors |
 | `GET /workflows/{id}/modules` | → `ModuleTree{calls: {"module.a[.module.b]": ModuleCallSource{source, version?, local, dir?}}, modules: {dir: Workflow}}`: every module call, nested ones included, with the content of local modules (inside the workflow files) and of registry/remote modules found in the sandbox working directory's `.terraform/modules/modules.json`; each directory parsed once. Used by the Architecture view |
-| `GET /workflows/{id}/structure` | → `StructureSummary{layout, layoutSetting, layoutNote?, environments, service?, states, resourcesPerState, rootResources, modules: StructureModule{call, source, version?, kind: local\|registry\|remote, dir?, resources, depth}[], maxNesting, backend?, state}` (`lint.Structure` over the local modules the workflow calls): the layout export writes (`hclcodec.ResolveLayout`; `layoutNote` says why auto fell back to single or why an explicit environments layout can't be exported), the service module name, how many states the export has, managed resource instances per state (root + local modules, constant count/for_each expanded, feature-flagged blocks absent; registry/remote modules listed but not counted), module tree depth, backend type and where state lives. MCP `get_workflow`/`review_terraform` show it |
+| `GET /workflows/{id}/structure` | → `StructureSummary{layout, layoutSetting, layoutNote?, environments, service?, states, resourcesPerState, rootResources, modules: StructureModule{call, source, version?, kind: local\|registry\|remote, dir?, resources, depth}[], maxNesting, backend?, state, providers?: ProviderVersion{name, constraint?, locked?, recommended, status: ok\|outdated\|broken-locally}[]}` (`lint.Structure` over the local modules the workflow calls): the layout export writes (`hclcodec.ResolveLayout`; `layoutNote` says why auto fell back to single or why an explicit environments layout can't be exported), the service module name, how many states the export has, managed resource instances per state (root + local modules, constant count/for_each expanded, feature-flagged blocks absent; registry/remote modules listed but not counted), module tree depth, backend type and where state lives; `providers` are the required providers the catalog embeds (`Catalog.ProviderVersions`: `locked` from the sandbox's lock file, else the imported one; see catalog "Provider versions"). MCP `get_workflow`/`review_terraform` show it |
 | `GET /workflows/{id}/modules/{nodeId}?path=` | → `ModuleView{source, local, dir?, workflow?, message?}`. Local source inside the workflow files → the module parsed as a read-only `Workflow` (nodes unpositioned) and `dir`, its folder relative to the workflow files (`modules/network`; the UI's "Open files" filters the Code tab to it). Registry/remote → `message` ("Registry module terraform-aws-modules/vpc/aws 5.0.0 — contents are downloaded at deploy time"). `path=module.a.module.b` drills into nested calls |
 | `GET /workflows/{id}/compliance[?framework=]` | → `{frameworks: FrameworkInfo[], results: compliance.Result[], disclaimer}`: the frameworks for the workflow's platforms and its grade against each (or one: 404 unknown, 400 another platform's). See "Compliance" |
 | `PUT /workflows/{id}/compliance/attestations/{framework}/{control}` | `{note, by?}` → `Attestation{note, by?, at}`; manual controls only (400 for automatic ones or an empty note, 404 unknown control) |
@@ -3864,7 +3979,7 @@ Docker; the desktop onboarding wizard (`GET /setup`) and `nimbo doctor`
 | `POST /workflows/{id}/sandbox/start` / `stop` / `reset` | → `SandboxStatus` |
 | `POST /workflows/{id}/runs` | `{action, environment?, confirmDestroy?, confirmRunId?}` → `Run` (starts sandbox if needed; environment defaults to the active one, 404 if unknown; plan/apply → 400 + diagnostics while error diagnostics other than `net_*` exist; 409 while another run is active). Apply plans first and ends `needs_confirmation` (with `destructive`) when the plan deletes or replaces deployed resources; `confirmDestroy: true` applies the saved plan of the `needs_confirmation` run `confirmRunId` (default: the workflow's newest apply/destroy run when it waits), see sandbox "Deploy guard"; a `confirmRunId` that is not such a run → 400. Docker workflows: `{action: up\|down\|build\|pull\|restart, service?, removeVolumes?, remapPorts?, timeoutSec?}` → 201 `Run` (`service`, `removeVolumes` echoed); up with busy fixed host ports and no `remapPorts` → 409 `{code: "port_conflict", conflicts: PortConflict[]}`; invalid compose files or unknown service → 400; no compose plugin → 503 `compose_missing`; Terraform actions on docker workflows and compose actions on Terraform ones → 400 |
 | `GET /workflows/{id}/runs` | → `Run[]` |
-| `GET /runs/{runId}` | → `Run` (with log; plan and apply runs also `changes`, see sandbox "Planned changes"; `destructive`, `drift` and `planRunId` are in lists too, see "Deploy guard") |
+| `GET /runs/{runId}` | → `Run` (with log; plan and apply runs also `changes`, see sandbox "Planned changes"; `destructive`, `drift`, `planRunId` and `warnings` (provider releases that are too old or known to break resources locally, see sandbox "Provider versions") are in lists too, see "Deploy guard") |
 | `POST /runs/{runId}/cancel` | → 204 |
 | `GET /workflows/{id}/state` | → `DeployedState` |
 | `GET /workflows/{id}/compose/status` | docker workflows → `ComposeStatus{workflowId, project, state, services: {name, nodeId, state, health?, image?, containers: {id, name, state, health?, exitCode, restarts, image, imageId, startedAt?, ports: {container, protocol, hostIp, host, url?}[]}[]}[], remaps: PortRemap[], message?, updatedAt}`; the same body arrives as `compose.status` events on changes. 400 for Terraform workflows |

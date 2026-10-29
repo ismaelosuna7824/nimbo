@@ -22,6 +22,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/ismaelosuna7824/nimbo/backend/internal/catalog"
 	"github.com/ismaelosuna7824/nimbo/backend/internal/model"
 )
 
@@ -33,6 +34,10 @@ type Config struct {
 	TerraformImage string                 // default hashicorp/terraform:latest
 	AWSRegion      string                 // AWS_REGION of Terraform runs, default us-east-1
 	Events         model.Publisher
+	// Catalog supplies the provider version table: runs warn when init
+	// selects a release older than the oldest verified locally or known to
+	// break resources there (nil = no version checks).
+	Catalog *catalog.Catalog
 	// LegacyHomeMigrated is set when this start renamed the pre-Nimbo home
 	// directory; it widens the one-time legacy Docker cleanup.
 	LegacyHomeMigrated bool

@@ -103,3 +103,20 @@ func TestDeployConfirmDestroy(t *testing.T) {
 		t.Errorf("plan sent %v", bodies[2])
 	}
 }
+
+// Provider version warnings reach deploy/plan results with a hint to fix
+// the constraint; confirmation and drift hints come first.
+func TestRunViewWarnings(t *testing.T) {
+	w := "hashicorp/google 6.50.0 (selected by the lock file) is known to break google_sql_database.app on the local emulators"
+	v := viewRun(&model.Run{Status: model.RunFailed, Warnings: []string{w}})
+	if len(v.Warnings) != 1 || v.Warnings[0] != w || !strings.Contains(v.Hint, "version constraint") || !strings.Contains(v.Hint, "structure.providers") {
+		t.Errorf("view = %+v", v)
+	}
+	drift := viewRun(&model.Run{Status: model.RunSucceeded, Warnings: []string{w}, Drift: []model.DriftChange{{Address: "a.b"}}})
+	if len(drift.Warnings) != 1 || !strings.Contains(drift.Hint, "still change") {
+		t.Errorf("drift view = %+v", drift)
+	}
+	if v := viewRun(&model.Run{Status: model.RunSucceeded}); v.Warnings != nil || v.Hint != "" {
+		t.Errorf("clean run view = %+v", v)
+	}
+}

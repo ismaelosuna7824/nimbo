@@ -138,7 +138,7 @@ func TestEnvironmentsLayoutAWS(t *testing.T) {
 			t.Errorf("backend.hcl.example lacks the bucket")
 		}
 		v := text("environments/" + env + "/versions.tf")
-		if !strings.Contains(v, `required_version = ">= 1.10"`) || !strings.Contains(v, `version = "~> 6.0"`) {
+		if !strings.Contains(v, `required_version = ">= 1.10"`) || !strings.Contains(v, `version = "~> 6.69"`) {
 			t.Errorf("root versions.tf must pin ~> and require use_lockfile's Terraform:\n%s", v)
 		}
 		main := text("environments/" + env + "/main.tf")
@@ -201,7 +201,7 @@ func TestEnvironmentsLayoutAWS(t *testing.T) {
 		}
 	}
 	mv := text("modules/items_api/versions.tf")
-	if !strings.Contains(mv, `version = ">= 6.0"`) || strings.Contains(mv, "~>") || strings.Contains(mv, "backend") {
+	if !strings.Contains(mv, `version = ">= 6.69"`) || strings.Contains(mv, "~>") || strings.Contains(mv, "backend") {
 		t.Errorf("module versions.tf:\n%s", mv)
 	}
 	mvars := text("modules/items_api/variables.tf")

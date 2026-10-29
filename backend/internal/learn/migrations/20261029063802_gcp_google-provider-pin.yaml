@@ -1,0 +1,3286 @@
+description: Pins hashicorp/google to ~> 7.46 (the constraint Nimbo writes) instead of ~> 7.0 in the gcp challenges' solutions and starter code, since releases before 7.26 can't create Cloud SQL databases on the local emulator
+operations:
+- op: upsert
+  kind: challenge
+  id: gcp-storage-private-bucket
+  data:
+    provider: gcp
+    level: beginner
+    title: Lock down a public Cloud Storage bucket
+    summary: Replace a public-read grant with uniform bucket-level access, public access prevention and a group-scoped IAM role.
+    minutes: 20
+    tags:
+    - cloud-storage
+    - iam
+    - security
+    runtime: design
+    problem: |-
+      The finance team stores monthly reports in a Cloud Storage bucket. To share them with analysts quickly, someone granted **Storage Object Viewer** to `allUsers` — so anyone on the internet who guesses an object name can download a report.
+
+      You own the Terraform for this bucket. Make it private by design: access must be granted only through IAM at the bucket level, the bucket must refuse any public grant even if someone tries again later, and the analysts must keep read access through their Google group.
+    requirements:
+    - '`google_storage_bucket.reports` enables **uniform bucket-level access** (object ACLs are disabled; only IAM grants access).'
+    - The bucket sets **public access prevention** to `enforced`.
+    - No IAM grant on the bucket uses `allUsers` or `allAuthenticatedUsers` (Nimbo rule `bp_public_bucket` is clean).
+    - Analysts keep `roles/storage.objectViewer` through a `group:` principal passed in as a variable.
+    hints:
+    - 'Click the bucket and look for two fields in the inspector: `uniform_bucket_level_access` and `public_access_prevention`.'
+    - 'Public access prevention only accepts `enforced` or `inherited`; `inherited` defers to the organization policy. The public grant itself is the bucket IAM member node: open its Access section.'
+    - In the Variables panel add `analysts_group` (type string, with a description). Then in the IAM member's Who row change the member type from Anyone (public) to Google group and use Link to… to pick `var.analysts_group`.
+    solution: |
+      Google Cloud recommends **uniform bucket-level access** for most buckets: once enabled, ACLs stop working and access is controlled only by IAM at the bucket (or higher) level, which removes a whole class of accidental exposure through object ACLs. It is also a prerequisite for IAM Conditions on the bucket.
+
+      **Public access prevention** is the second safety net. With `public_access_prevention = "enforced"` Cloud Storage rejects any grant to `allUsers` or `allAuthenticatedUsers` on that bucket, even if a future change tries to add one. (`inherited` means the bucket follows the `storage.publicAccessPrevention` organization policy instead.)
+
+      Finally, replace the public grant with a least-privilege one: the analysts' Google group gets `roles/storage.objectViewer` on this bucket only. Granting to a group rather than individuals keeps the policy stable when people join or leave the team.
+
+      ```hcl
+      resource "google_storage_bucket" "reports" {
+        name     = "${var.project_id}-reports"
+        location = var.region
+
+        uniform_bucket_level_access = true
+        public_access_prevention    = "enforced"
+      }
+
+      resource "google_storage_bucket_iam_member" "analysts_read" {
+        bucket = google_storage_bucket.reports.name
+        role   = "roles/storage.objectViewer"
+        member = "group:${var.analysts_group}"
+      }
+      ```
+
+      **Without writing code in Nimbo**
+
+      1. Click the bucket `reports`: turn **uniform_bucket_level_access** on and pick `enforced` in **public_access_prevention**.
+      2. Open the **Variables** panel and add `analysts_group` of type string with the description "Email of the Google group whose members read the reports."
+      3. Click the IAM member `public_read`. In its **Access** section, under **Who**, change the type to **Google group** and use **Link to…** to pick `var.analysts_group`. Keep the `roles/storage.objectViewer` role.
+    solutionFiles:
+      versions.tf: |
+        terraform {
+          required_version = ">= 1.6"
+
+          required_providers {
+            google = {
+              source  = "hashicorp/google"
+              version = "~> 7.46"
+            }
+          }
+        }
+
+        provider "google" {
+          project        = var.project_id
+          region         = var.region
+          default_labels = local.common_labels
+        }
+      variables.tf: |
+        variable "project_id" {
+          description = "Google Cloud project ID that owns the resources."
+          type        = string
+        }
+
+        variable "region" {
+          description = "Region for regional resources."
+          type        = string
+          default     = "europe-west1"
+        }
+
+        variable "analysts_group" {
+          description = "Email of the Google group whose members read the reports."
+          type        = string
+        }
+      main.tf: |
+        locals {
+          common_labels = {
+            app         = "nimbo-learn"
+            environment = "dev"
+            owner       = "platform"
+          }
+        }
+
+        resource "google_storage_bucket" "reports" {
+          name     = "${var.project_id}-reports"
+          location = var.region
+
+          uniform_bucket_level_access = true
+          public_access_prevention    = "enforced"
+        }
+
+        resource "google_storage_bucket_iam_member" "analysts_read" {
+          bucket = google_storage_bucket.reports.name
+          role   = "roles/storage.objectViewer"
+          member = "group:${var.analysts_group}"
+        }
+    starter:
+      kind: terraform
+      cloud: gcp
+      files:
+        versions.tf: |
+          terraform {
+            required_version = ">= 1.6"
+
+            required_providers {
+              google = {
+                source  = "hashicorp/google"
+                version = "~> 7.46"
+              }
+            }
+          }
+
+          provider "google" {
+            project        = var.project_id
+            region         = var.region
+            default_labels = local.common_labels
+          }
+        variables.tf: |
+          variable "project_id" {
+            description = "Google Cloud project ID that owns the resources."
+            type        = string
+          }
+
+          variable "region" {
+            description = "Region for regional resources."
+            type        = string
+            default     = "europe-west1"
+          }
+        main.tf: |
+          locals {
+            common_labels = {
+              app         = "nimbo-learn"
+              environment = "dev"
+              owner       = "platform"
+            }
+          }
+
+          resource "google_storage_bucket" "reports" {
+            name     = "${var.project_id}-reports"
+            location = var.region
+          }
+
+          resource "google_storage_bucket_iam_member" "public_read" {
+            bucket = google_storage_bucket.reports.name
+            role   = "roles/storage.objectViewer"
+            member = "allUsers"
+          }
+    checks:
+    - id: validate
+      label: The configuration validates
+      type: validate
+    - id: uniform
+      label: Uniform bucket-level access is enabled
+      type: has
+      has:
+        terraform:
+          type: google_storage_bucket
+          where:
+            uniform_bucket_level_access: true
+    - id: pap
+      label: Public access prevention is enforced
+      type: has
+      has:
+        terraform:
+          type: google_storage_bucket
+          where:
+            public_access_prevention: enforced
+    - id: no-public
+      label: No public grants on the bucket (bp_public_bucket)
+      type: rules_clean
+      rules_clean:
+        codes:
+        - bp_public_bucket
+        minSeverity: info
+    - id: no-allusers
+      label: No IAM member grants allUsers or allAuthenticatedUsers
+      type: has
+      has:
+        terraform:
+          type: google_storage_bucket_iam_member
+          where:
+            member:
+              in:
+              - allUsers
+              - allAuthenticatedUsers
+          count:
+            max: 0
+    - id: group-reader
+      label: A Google group can read the reports
+      type: has
+      has:
+        terraform:
+          type: google_storage_bucket_iam_member
+          where:
+            role: roles/storage.objectViewer
+            member:
+              contains: 'group:'
+    sources:
+    - title: Uniform bucket-level access
+      url: https://docs.cloud.google.com/storage/docs/uniform-bucket-level-access
+    - title: Public access prevention
+      url: https://docs.cloud.google.com/storage/docs/public-access-prevention
+    - title: Best practices for using service accounts securely
+      url: https://docs.cloud.google.com/iam/docs/best-practices-service-accounts
+    - title: 'Terraform google provider: google_storage_bucket'
+      url: https://registry.terraform.io/providers/hashicorp/google/latest/docs/resources/storage_bucket
+    - title: 'Terraform google provider: google_storage_bucket_iam'
+      url: https://registry.terraform.io/providers/hashicorp/google/latest/docs/resources/storage_bucket_iam
+    solvableWithoutCode: true
+- op: upsert
+  kind: challenge
+  id: gcp-storage-retention-lifecycle
+  data:
+    provider: gcp
+    level: beginner
+    title: Retain audit archives and age them to colder storage
+    summary: Add a one-year retention policy and lifecycle rules that move objects to Nearline and Coldline.
+    minutes: 25
+    tags:
+    - cloud-storage
+    - retention
+    - lifecycle
+    - cost
+    prerequisites:
+    - gcp-storage-private-bucket
+    runtime: design
+    problem: |-
+      Your compliance team requires that exported audit archives can't be deleted or overwritten for **one year**. At the same time, finance noticed the archive bucket keeps everything in Standard storage although the files are almost never read after the first month.
+
+      The bucket is already private. Add a retention policy that protects every object for one year, and lifecycle rules that move objects to cheaper storage classes as they age.
+    requirements:
+    - The bucket has a **retention policy** of at least one year (31,557,600 seconds — Cloud Storage counts a year as 365.25 days).
+    - The retention policy stays **unlocked** while the period is still being agreed (locking is irreversible).
+    - A lifecycle rule moves objects to **NEARLINE** after 30 days.
+    - A lifecycle rule moves objects to **COLDLINE** after 90 days.
+    - Uniform bucket-level access and public access prevention stay on.
+    hints:
+    - 'Retention is a `retention_policy` block on the bucket: add it in the inspector. Its period is in seconds.'
+    - Type `31557600` (one year of 365.25 days) as the retention period and leave `is_locked` off. Each storage-class transition is its own `lifecycle_rule` block with an `action` and a `condition`.
+    - 'Add two `lifecycle_rule` blocks: action type `SetStorageClass` with class `NEARLINE` and condition age `30`, then `COLDLINE` at age `90`. Nearline has a 30-day minimum storage duration and Coldline 90 days, which is why those ages line up.'
+    solution: |
+      A **bucket retention policy** (part of Bucket Lock) makes every object in the bucket — existing and new — undeletable and unreplaceable until it reaches the retention period. Periods are set in seconds; Cloud Storage defines a year as 365.25 days, so one year is `31557600`. You can later **lock** the policy to meet regulations that require WORM storage, but locking is permanent: you can then only increase the period, and the bucket can't be deleted until all objects expire. Keep `is_locked = false` until the period is final.
+
+      **Object Lifecycle Management** applies actions when conditions match. `SetStorageClass` rules that move objects to Nearline at 30 days and Coldline at 90 days follow the access pattern of archives and the minimum storage durations of those classes, cutting cost without changing how the data is read.
+
+      ```hcl
+      retention_policy {
+        retention_period = 31557600
+        is_locked        = false
+      }
+
+      lifecycle_rule {
+        condition { age = 30 }
+        action {
+          type          = "SetStorageClass"
+          storage_class = "NEARLINE"
+        }
+      }
+
+      lifecycle_rule {
+        condition { age = 90 }
+        action {
+          type          = "SetStorageClass"
+          storage_class = "COLDLINE"
+        }
+      }
+      ```
+
+      **Without writing code in Nimbo**
+
+      1. Click the bucket `audit_logs` and keep **storage_class** `STANDARD`; leave uniform access and public access prevention as they are.
+      2. Add the **retention_policy** block: **retention_period** `31557600`, **is_locked** off.
+      3. Add a **lifecycle_rule** block: in **action** pick type `SetStorageClass` and class `NEARLINE`; in **condition** set **age** `30`.
+      4. Add a second **lifecycle_rule**: `SetStorageClass` to `COLDLINE`, age `90`.
+    solutionFiles:
+      versions.tf: |
+        terraform {
+          required_version = ">= 1.6"
+
+          required_providers {
+            google = {
+              source  = "hashicorp/google"
+              version = "~> 7.46"
+            }
+          }
+        }
+
+        provider "google" {
+          project        = var.project_id
+          region         = var.region
+          default_labels = local.common_labels
+        }
+      variables.tf: |
+        variable "project_id" {
+          description = "Google Cloud project ID that owns the resources."
+          type        = string
+        }
+
+        variable "region" {
+          description = "Region for regional resources."
+          type        = string
+          default     = "europe-west1"
+        }
+      main.tf: |
+        locals {
+          common_labels = {
+            app         = "nimbo-learn"
+            environment = "dev"
+            owner       = "platform"
+          }
+        }
+
+        resource "google_storage_bucket" "audit_logs" {
+          name          = "${var.project_id}-audit-archive"
+          location      = var.region
+          storage_class = "STANDARD"
+
+          uniform_bucket_level_access = true
+          public_access_prevention    = "enforced"
+
+          # Objects can't be deleted or replaced for 1 year (31,557,600 s).
+          # Leave is_locked = false until the period is agreed: locking is irreversible.
+          retention_policy {
+            retention_period = 31557600
+            is_locked        = false
+          }
+
+          lifecycle_rule {
+            condition {
+              age = 30
+            }
+            action {
+              type          = "SetStorageClass"
+              storage_class = "NEARLINE"
+            }
+          }
+
+          lifecycle_rule {
+            condition {
+              age = 90
+            }
+            action {
+              type          = "SetStorageClass"
+              storage_class = "COLDLINE"
+            }
+          }
+        }
+    starter:
+      kind: terraform
+      cloud: gcp
+      files:
+        versions.tf: |
+          terraform {
+            required_version = ">= 1.6"
+
+            required_providers {
+              google = {
+                source  = "hashicorp/google"
+                version = "~> 7.46"
+              }
+            }
+          }
+
+          provider "google" {
+            project        = var.project_id
+            region         = var.region
+            default_labels = local.common_labels
+          }
+        variables.tf: |
+          variable "project_id" {
+            description = "Google Cloud project ID that owns the resources."
+            type        = string
+          }
+
+          variable "region" {
+            description = "Region for regional resources."
+            type        = string
+            default     = "europe-west1"
+          }
+        main.tf: |
+          locals {
+            common_labels = {
+              app         = "nimbo-learn"
+              environment = "dev"
+              owner       = "platform"
+            }
+          }
+
+          resource "google_storage_bucket" "audit_logs" {
+            name     = "${var.project_id}-audit-archive"
+            location = var.region
+
+            uniform_bucket_level_access = true
+            public_access_prevention    = "enforced"
+          }
+    checks:
+    - id: validate
+      label: The configuration validates
+      type: validate
+    - id: retention
+      label: Objects are retained for at least one year
+      type: has
+      has:
+        terraform:
+          type: google_storage_bucket
+          where:
+            retention_policy.retention_period:
+              min: 31557600
+    - id: unlocked
+      label: The retention policy is not locked yet
+      type: has
+      has:
+        terraform:
+          type: google_storage_bucket
+          where:
+            retention_policy.is_locked:
+              notIn:
+              - true
+    - id: nearline
+      label: Objects move to Nearline after 30 days
+      type: has
+      has:
+        terraform:
+          type: google_storage_bucket
+          where:
+            lifecycle_rule.action.storage_class: NEARLINE
+    - id: coldline
+      label: Objects move to Coldline after 90 days
+      type: has
+      has:
+        terraform:
+          type: google_storage_bucket
+          where:
+            lifecycle_rule.action.storage_class: COLDLINE
+    - id: still-private
+      label: The bucket stays private
+      type: has
+      has:
+        terraform:
+          type: google_storage_bucket
+          where:
+            uniform_bucket_level_access: true
+            public_access_prevention: enforced
+    sources:
+    - title: Bucket Lock
+      url: https://docs.cloud.google.com/storage/docs/bucket-lock
+    - title: Object Lifecycle Management
+      url: https://docs.cloud.google.com/storage/docs/lifecycle
+    - title: Storage classes
+      url: https://docs.cloud.google.com/storage/docs/storage-classes
+    - title: 'Terraform google provider: google_storage_bucket'
+      url: https://registry.terraform.io/providers/hashicorp/google/latest/docs/resources/storage_bucket
+    solvableWithoutCode: true
+- op: upsert
+  kind: challenge
+  id: gcp-custom-vpc-firewall
+  data:
+    provider: gcp
+    level: beginner
+    title: Custom-mode VPC with SSH only through IAP
+    summary: Replace an auto-mode network and an SSH-from-anywhere rule with a custom subnet and an IAP-only firewall rule.
+    minutes: 25
+    tags:
+    - vpc
+    - firewall
+    - iap
+    - networking
+    runtime: design
+    problem: |-
+      A team created `app-network` with default settings and opened SSH (`tcp:22`) to `0.0.0.0/0` so developers could reach their VMs. Auto mode created a subnet in every region with predefined ranges they never planned, and port 22 is now exposed to the whole internet.
+
+      Rebuild the network the way production networks on Google Cloud are planned: one **custom-mode** VPC with an explicit subnet in your region, and SSH allowed only from **Identity-Aware Proxy (IAP) TCP forwarding**, so access is checked against IAM instead of being open to any IP.
+    requirements:
+    - '`google_compute_network.main` is **custom mode** (`auto_create_subnetworks = false`).'
+    - A `google_compute_subnetwork` in `var.region` with an explicit CIDR and **Private Google Access** enabled.
+    - No firewall rule allows ingress from `0.0.0.0/0` to sensitive ports (Nimbo rule `bp_open_ingress` is clean).
+    - SSH (`tcp:22`) is allowed only from IAP's range `35.235.240.0/20`, to instances with a network tag.
+    hints:
+    - With `auto_create_subnetworks` on, the network is auto mode and creates one subnet per region. Turn it off on the VPC.
+    - Add a subnetwork from the palette, Link to… the VPC id, give it an explicit CIDR and turn `private_ip_google_access` on so VMs without external IPs reach Google APIs.
+    - 'The IAP TCP forwarding documentation lists the source range to allow: `35.235.240.0/20`. On the SSH firewall rule replace `0.0.0.0/0` with it in `source_ranges`, and add a network tag in `target_tags` to scope the rule.'
+    solution: |
+      **Custom-mode VPCs** give you full control of subnets and IP ranges; the VPC documentation recommends them when you connect networks, because every auto-mode network uses the same predefined `10.128.0.0/9` space and can collide with on-premises or peered ranges. Subnets are regional, so create one per region you actually use, and enable **Private Google Access** so VMs with only internal IPs can still call Google APIs.
+
+      VPC firewall rules are stateful and apply to instances; a rule with `source_ranges = ["0.0.0.0/0"]` on port 22 lets anyone attempt SSH. **IAP TCP forwarding** tunnels SSH through Identity-Aware Proxy: the user must be authorized in IAM (`roles/iap.tunnelResourceAccessor`), and the VM only needs to accept traffic from IAP's range `35.235.240.0/20`.
+
+      ```hcl
+      resource "google_compute_network" "main" {
+        name                    = "app-network"
+        auto_create_subnetworks = false
+      }
+
+      resource "google_compute_subnetwork" "app" {
+        name                     = "app-${var.region}"
+        network                  = google_compute_network.main.id
+        region                   = var.region
+        ip_cidr_range            = "10.10.0.0/24"
+        private_ip_google_access = true
+      }
+
+      resource "google_compute_firewall" "ssh_from_iap" {
+        name          = "allow-ssh-from-iap"
+        network       = google_compute_network.main.id
+        direction     = "INGRESS"
+        source_ranges = ["35.235.240.0/20"]
+        target_tags   = ["ssh"]
+
+        allow {
+          protocol = "tcp"
+          ports    = ["22"]
+        }
+      }
+      ```
+
+      **Without writing code in Nimbo**
+
+      1. Click the VPC `main`: turn **auto_create_subnetworks** off and pick `REGIONAL` routing mode.
+      2. Add a **subnetwork** from the palette: name `app-us-central1`, **Link to…** `network` → the VPC id, CIDR `10.10.0.0/24`, **private_ip_google_access** on.
+      3. Click the firewall `ssh`: name `allow-ssh-from-iap`, direction `INGRESS`, replace the source range with `35.235.240.0/20` and add the tag `ssh` in **target_tags**.
+    solutionFiles:
+      versions.tf: |
+        terraform {
+          required_version = ">= 1.6"
+
+          required_providers {
+            google = {
+              source  = "hashicorp/google"
+              version = "~> 7.46"
+            }
+          }
+        }
+
+        provider "google" {
+          project        = var.project_id
+          region         = var.region
+          default_labels = local.common_labels
+        }
+      variables.tf: |
+        variable "project_id" {
+          description = "Google Cloud project ID that owns the resources."
+          type        = string
+        }
+
+        variable "region" {
+          description = "Region for regional resources."
+          type        = string
+          default     = "europe-west1"
+        }
+      main.tf: |
+        locals {
+          common_labels = {
+            app         = "nimbo-learn"
+            environment = "dev"
+            owner       = "platform"
+          }
+        }
+
+        resource "google_compute_network" "main" {
+          name                    = "app-network"
+          auto_create_subnetworks = false
+          routing_mode            = "REGIONAL"
+        }
+
+        resource "google_compute_subnetwork" "app" {
+          name                     = "app-${var.region}"
+          network                  = google_compute_network.main.id
+          region                   = var.region
+          ip_cidr_range            = "10.10.0.0/24"
+          private_ip_google_access = true
+        }
+
+        # SSH only through Identity-Aware Proxy TCP forwarding.
+        resource "google_compute_firewall" "ssh_from_iap" {
+          name      = "allow-ssh-from-iap"
+          network   = google_compute_network.main.id
+          direction = "INGRESS"
+
+          allow {
+            protocol = "tcp"
+            ports    = ["22"]
+          }
+
+          source_ranges = ["35.235.240.0/20"]
+          target_tags   = ["ssh"]
+        }
+    starter:
+      kind: terraform
+      cloud: gcp
+      files:
+        versions.tf: |
+          terraform {
+            required_version = ">= 1.6"
+
+            required_providers {
+              google = {
+                source  = "hashicorp/google"
+                version = "~> 7.46"
+              }
+            }
+          }
+
+          provider "google" {
+            project        = var.project_id
+            region         = var.region
+            default_labels = local.common_labels
+          }
+        variables.tf: |
+          variable "project_id" {
+            description = "Google Cloud project ID that owns the resources."
+            type        = string
+          }
+
+          variable "region" {
+            description = "Region for regional resources."
+            type        = string
+            default     = "europe-west1"
+          }
+        main.tf: |
+          locals {
+            common_labels = {
+              app         = "nimbo-learn"
+              environment = "dev"
+              owner       = "platform"
+            }
+          }
+
+          resource "google_compute_network" "main" {
+            name = "app-network"
+          }
+
+          resource "google_compute_firewall" "ssh" {
+            name    = "allow-ssh"
+            network = google_compute_network.main.id
+
+            allow {
+              protocol = "tcp"
+              ports    = ["22"]
+            }
+
+            source_ranges = ["0.0.0.0/0"]
+          }
+    checks:
+    - id: validate
+      label: The configuration validates
+      type: validate
+    - id: custom-mode
+      label: The VPC is custom mode
+      type: has
+      has:
+        terraform:
+          type: google_compute_network
+          where:
+            auto_create_subnetworks: false
+    - id: subnet
+      label: A regional subnet has Private Google Access
+      type: has
+      has:
+        terraform:
+          type: google_compute_subnetwork
+          where:
+            private_ip_google_access: true
+            ip_cidr_range:
+              exists: true
+    - id: subnet-in-vpc
+      label: The subnet belongs to the VPC
+      type: has
+      has:
+        connected:
+          from: google_compute_subnetwork
+          to: google_compute_network
+    - id: no-open-ingress
+      label: Nothing is open to the internet (bp_open_ingress)
+      type: rules_clean
+      rules_clean:
+        codes:
+        - bp_open_ingress
+        minSeverity: info
+    - id: iap-ssh
+      label: SSH is allowed only from IAP (35.235.240.0/20)
+      type: has
+      has:
+        terraform:
+          type: google_compute_firewall
+          where:
+            source_ranges:
+              contains: 35.235.240.0/20
+            target_tags:
+              exists: true
+    sources:
+    - title: VPC networks
+      url: https://docs.cloud.google.com/vpc/docs/vpc
+    - title: Private Google Access
+      url: https://docs.cloud.google.com/vpc/docs/private-google-access
+    - title: VPC firewall rules
+      url: https://docs.cloud.google.com/firewall/docs/firewalls
+    - title: Using IAP for TCP forwarding
+      url: https://docs.cloud.google.com/iap/docs/using-tcp-forwarding
+    - title: 'Terraform google provider: google_compute_network'
+      url: https://registry.terraform.io/providers/hashicorp/google/latest/docs/resources/compute_network
+    - title: 'Terraform google provider: google_compute_subnetwork'
+      url: https://registry.terraform.io/providers/hashicorp/google/latest/docs/resources/compute_subnetwork
+    - title: 'Terraform google provider: google_compute_firewall'
+      url: https://registry.terraform.io/providers/hashicorp/google/latest/docs/resources/compute_firewall
+    solvableWithoutCode: true
+- op: upsert
+  kind: challenge
+  id: gcp-private-vm-cloud-nat
+  data:
+    provider: gcp
+    level: intermediate
+    title: Private VMs with outbound internet through Cloud NAT
+    summary: Remove the VM's external IP and give the subnet outbound-only internet access with Cloud Router + Cloud NAT.
+    minutes: 35
+    tags:
+    - vpc
+    - cloud-nat
+    - compute-engine
+    - networking
+    prerequisites:
+    - gcp-custom-vpc-firewall
+    runtime: design
+    problem: |-
+      A batch worker VM needs to download OS updates and call a partner API on the internet. To make that work, it was given an ephemeral **external IP** — which also makes it reachable from the internet and runs it as the Compute Engine default service account.
+
+      Make the worker private: no external IP, its own minimal service account, and outbound internet access through a managed **Cloud NAT** gateway attached to the subnet. Unsolicited inbound connections must not be possible.
+    requirements:
+    - '`google_compute_instance.worker` has **no `access_config`** block (internal IP only).'
+    - The VM runs as a **dedicated service account** (`google_service_account`), not the default compute account.
+    - A `google_compute_router` in the VPC and a `google_compute_router_nat` that serves the app subnet.
+    - Cloud NAT **logging** is enabled (at least errors) so you can troubleshoot dropped connections.
+    hints:
+    - 'The VM''s `access_config` block inside `network_interface` is what assigns an ephemeral external IP: remove it with its Trash button.'
+    - 'Give the VM a service account from the palette (Link to… its email in the VM''s `service_account` block). Cloud NAT is configured on a Cloud Router: add both from the palette and link the NAT''s `router` to the router''s name.'
+    - On the NAT pick `LIST_OF_SUBNETWORKS` and add a `subnetwork` block that links to the app subnet with `ALL_IP_RANGES`. Add a `log_config` block, turn it on and pick `ERRORS_ONLY`.
+    solution: |
+      **Cloud NAT** gives VMs without external IP addresses outbound access to the internet. It's a distributed, software-defined service — not a proxy VM — and it only translates established response packets back in, so it does **not** allow unsolicited inbound connections. Its configuration lives on a **Cloud Router**, which provides the control plane.
+
+      Steps:
+      1. Remove `access_config` from the VM's `network_interface`: the VM keeps only an internal IP.
+      2. Attach a dedicated service account with only what the worker needs. Google recommends not using the Compute Engine default service account, which can be automatically granted the Editor role.
+      3. Add a regional `google_compute_router` in the VPC and a `google_compute_router_nat` with automatically allocated NAT IPs, scoped to the app subnet, with error logging.
+
+      ```hcl
+      resource "google_compute_router" "nat" {
+        name    = "app-router"
+        network = google_compute_network.main.id
+        region  = var.region
+      }
+
+      resource "google_compute_router_nat" "egress" {
+        name                               = "app-nat"
+        router                             = google_compute_router.nat.name
+        region                             = var.region
+        nat_ip_allocate_option             = "AUTO_ONLY"
+        source_subnetwork_ip_ranges_to_nat = "LIST_OF_SUBNETWORKS"
+
+        subnetwork {
+          name                    = google_compute_subnetwork.app.id
+          source_ip_ranges_to_nat = ["ALL_IP_RANGES"]
+        }
+
+        log_config {
+          enable = true
+          filter = "ERRORS_ONLY"
+        }
+      }
+      ```
+
+      Combine this with Private Google Access on the subnet (from the previous challenge) so calls to Google APIs don't need NAT at all.
+
+      **Without writing code in Nimbo**
+
+      1. Add a **service account** from the palette: account id `worker-vm`, display name `Worker VM`.
+      2. Click the VM `worker`: in **network_interface** remove the **access_config** block with its Trash button. In **service_account** **Link to…** `email` → the new account's email and add the scope `cloud-platform`. In **shielded_instance_config** turn **enable_secure_boot** on.
+      3. Add a **router** from the palette: name `app-router`, **Link to…** `network` → the VPC id.
+      4. Add a **router NAT**: name `app-nat`, **Link to…** `router` → the router's name, `AUTO_ONLY` IP allocation, `LIST_OF_SUBNETWORKS`. Add a **subnetwork** block (**Link to…** the `app` subnet's id, `ALL_IP_RANGES`) and a **log_config** block (enable on, filter `ERRORS_ONLY`).
+    solutionFiles:
+      versions.tf: |
+        terraform {
+          required_version = ">= 1.6"
+
+          required_providers {
+            google = {
+              source  = "hashicorp/google"
+              version = "~> 7.46"
+            }
+          }
+        }
+
+        provider "google" {
+          project        = var.project_id
+          region         = var.region
+          default_labels = local.common_labels
+        }
+      variables.tf: |
+        variable "project_id" {
+          description = "Google Cloud project ID that owns the resources."
+          type        = string
+        }
+
+        variable "region" {
+          description = "Region for regional resources."
+          type        = string
+          default     = "europe-west1"
+        }
+
+        variable "zone" {
+          description = "Zone for the worker VM."
+          type        = string
+          default     = "europe-west1-b"
+        }
+      main.tf: |
+        locals {
+          common_labels = {
+            app         = "nimbo-learn"
+            environment = "dev"
+            owner       = "platform"
+          }
+        }
+
+        resource "google_compute_network" "main" {
+          name                    = "app-network"
+          auto_create_subnetworks = false
+        }
+
+        resource "google_compute_subnetwork" "app" {
+          name                     = "app-${var.region}"
+          network                  = google_compute_network.main.id
+          region                   = var.region
+          ip_cidr_range            = "10.10.0.0/24"
+          private_ip_google_access = true
+        }
+
+        resource "google_service_account" "worker" {
+          account_id   = "worker-vm"
+          display_name = "Worker VM"
+        }
+
+        resource "google_compute_instance" "worker" {
+          name         = "worker"
+          machine_type = "e2-small"
+          zone         = var.zone
+
+          boot_disk {
+            initialize_params {
+              image = "debian-cloud/debian-12"
+            }
+          }
+
+          # No access_config: the VM has only an internal IP.
+          network_interface {
+            subnetwork = google_compute_subnetwork.app.id
+          }
+
+          service_account {
+            email  = google_service_account.worker.email
+            scopes = ["cloud-platform"]
+          }
+
+          shielded_instance_config {
+            enable_secure_boot = true
+          }
+        }
+
+        resource "google_compute_router" "nat" {
+          name    = "app-router"
+          network = google_compute_network.main.id
+          region  = var.region
+        }
+
+        resource "google_compute_router_nat" "egress" {
+          name                               = "app-nat"
+          router                             = google_compute_router.nat.name
+          region                             = var.region
+          nat_ip_allocate_option             = "AUTO_ONLY"
+          source_subnetwork_ip_ranges_to_nat = "LIST_OF_SUBNETWORKS"
+
+          subnetwork {
+            name                    = google_compute_subnetwork.app.id
+            source_ip_ranges_to_nat = ["ALL_IP_RANGES"]
+          }
+
+          log_config {
+            enable = true
+            filter = "ERRORS_ONLY"
+          }
+        }
+    starter:
+      kind: terraform
+      cloud: gcp
+      files:
+        versions.tf: |
+          terraform {
+            required_version = ">= 1.6"
+
+            required_providers {
+              google = {
+                source  = "hashicorp/google"
+                version = "~> 7.46"
+              }
+            }
+          }
+
+          provider "google" {
+            project        = var.project_id
+            region         = var.region
+            default_labels = local.common_labels
+          }
+        variables.tf: |
+          variable "project_id" {
+            description = "Google Cloud project ID that owns the resources."
+            type        = string
+          }
+
+          variable "region" {
+            description = "Region for regional resources."
+            type        = string
+            default     = "europe-west1"
+          }
+
+          variable "zone" {
+            description = "Zone for the worker VM."
+            type        = string
+            default     = "europe-west1-b"
+          }
+        main.tf: |
+          locals {
+            common_labels = {
+              app         = "nimbo-learn"
+              environment = "dev"
+              owner       = "platform"
+            }
+          }
+
+          resource "google_compute_network" "main" {
+            name                    = "app-network"
+            auto_create_subnetworks = false
+          }
+
+          resource "google_compute_subnetwork" "app" {
+            name                     = "app-${var.region}"
+            network                  = google_compute_network.main.id
+            region                   = var.region
+            ip_cidr_range            = "10.10.0.0/24"
+            private_ip_google_access = true
+          }
+
+          resource "google_compute_instance" "worker" {
+            name         = "worker"
+            machine_type = "e2-small"
+            zone         = var.zone
+
+            boot_disk {
+              initialize_params {
+                image = "debian-cloud/debian-12"
+              }
+            }
+
+            network_interface {
+              subnetwork = google_compute_subnetwork.app.id
+
+              # Ephemeral public IP so the VM can download updates.
+              access_config {}
+            }
+          }
+    checks:
+    - id: validate
+      label: The configuration validates
+      type: validate
+    - id: no-external-ip
+      label: The worker VM has no external IP
+      type: has
+      has:
+        terraform:
+          type: google_compute_instance
+          name: worker
+          where:
+            network_interface.access_config:
+              exists: false
+    - id: dedicated-sa
+      label: The VM runs as a dedicated service account
+      type: has
+      has:
+        terraform:
+          type: google_compute_instance
+          name: worker
+          where:
+            service_account.email:
+              ref: google_service_account
+    - id: router
+      label: A Cloud Router exists in the VPC
+      type: has
+      has:
+        terraform:
+          type: google_compute_router
+          where:
+            network:
+              ref: google_compute_network
+    - id: nat
+      label: Cloud NAT serves the subnet
+      type: has
+      has:
+        terraform:
+          type: google_compute_router_nat
+          where:
+            router:
+              ref: google_compute_router
+            subnetwork.name:
+              ref: google_compute_subnetwork
+    - id: nat-logs
+      label: Cloud NAT logging is enabled
+      type: has
+      has:
+        terraform:
+          type: google_compute_router_nat
+          where:
+            log_config.enable: true
+    sources:
+    - title: Cloud NAT overview
+      url: https://docs.cloud.google.com/nat/docs/overview
+    - title: VPC networks
+      url: https://docs.cloud.google.com/vpc/docs/vpc
+    - title: Private Google Access
+      url: https://docs.cloud.google.com/vpc/docs/private-google-access
+    - title: Best practices for using service accounts securely
+      url: https://docs.cloud.google.com/iam/docs/best-practices-service-accounts
+    - title: 'Terraform google provider: google_compute_instance'
+      url: https://registry.terraform.io/providers/hashicorp/google/latest/docs/resources/compute_instance
+    - title: 'Terraform google provider: google_compute_router_nat'
+      url: https://registry.terraform.io/providers/hashicorp/google/latest/docs/resources/compute_router_nat
+    solvableWithoutCode: true
+- op: upsert
+  kind: challenge
+  id: gcp-cloud-run-least-privilege
+  data:
+    provider: gcp
+    level: intermediate
+    title: Cloud Run with a least-privilege service identity
+    summary: Give a Cloud Run service its own service account, grant it one secret instead of Editor, and restrict ingress.
+    minutes: 35
+    tags:
+    - cloud-run
+    - iam
+    - secret-manager
+    - security
+    prerequisites:
+    - gcp-storage-private-bucket
+    runtime: design
+    problem: |-
+      The `orders-api` Cloud Run service needs exactly one thing from Google Cloud: the database password stored in Secret Manager. Because it had no service account configured, it ran as the **Compute Engine default service account**, and to "make it work" the team granted that account **`roles/editor`** on the whole project.
+
+      Now any code running in that service — or in any other workload using the default account — can modify almost every resource in the project. Fix the identity: a dedicated runtime service account, access to that single secret only, and no basic roles. The service should also only receive traffic through the load balancer, not straight from the internet.
+    requirements:
+    - A dedicated `google_service_account` for the service, set as `template.service_account` of `google_cloud_run_v2_service.orders`.
+    - No `google_project_iam_member` grants `roles/editor` or `roles/owner`.
+    - The service account gets `roles/secretmanager.secretAccessor` **on the secret** (`google_secret_manager_secret_iam_member`), not on the project.
+    - The container reads the password from Secret Manager (`env.value_source.secret_key_ref`), not from a plain-text value.
+    - Ingress is limited to internal traffic and Cloud Load Balancing (`INGRESS_TRAFFIC_INTERNAL_LOAD_BALANCER`).
+    hints:
+    - The service runs as whatever identity its revision template names, and that identity has Editor on the whole project. Look at the service's `template` block and at the project IAM member node (its Access section flags the basic role).
+    - 'Add a service account from the palette and Link to… its email in the service''s `template` → `service_account` field. Delete the project Editor grant node. Then drag the Cloud Run service onto the secret and pick Read: Nimbo grants `roles/secretmanager.secretAccessor` on that secret only.'
+    - 'In `template` → `containers` → `env`, name the variable `DB_PASSWORD` and fill its `value_source` → `secret_key_ref`: Link to… the secret''s id and version `latest`. Pick `INGRESS_TRAFFIC_INTERNAL_LOAD_BALANCER` (Internal and Cloud Load Balancing) in `ingress`.'
+    solution: |
+      Every Cloud Run revision runs as a **service identity**. If you don't set one, it uses the Compute Engine default service account, which Google Cloud may automatically grant the Editor basic role. Cloud Run's documentation recommends a **user-managed service account** per service, with only the permissions it needs; the IAM best practices add: don't use the default service accounts' automatic grants, and avoid basic roles.
+
+      1. Create `google_service_account.orders` and set it as `template.service_account`.
+      2. Delete the project-level `roles/editor` grant.
+      3. Grant `roles/secretmanager.secretAccessor` on the **secret** to that service account, and reference the secret from the container with `secret_key_ref` so the value never sits in the configuration.
+      4. Set `ingress = "INGRESS_TRAFFIC_INTERNAL_LOAD_BALANCER"`: requests from the internet must come through an external Application Load Balancer, and direct `run.app` requests from the internet are refused.
+
+      ```hcl
+      resource "google_service_account" "orders" {
+        account_id   = "orders-api"
+        display_name = "Orders API runtime"
+      }
+
+      resource "google_cloud_run_v2_service" "orders" {
+        name     = "orders-api"
+        location = var.region
+        ingress  = "INGRESS_TRAFFIC_INTERNAL_LOAD_BALANCER"
+
+        template {
+          service_account = google_service_account.orders.email
+          containers {
+            image = var.image
+            env {
+              name = "DB_PASSWORD"
+              value_source {
+                secret_key_ref {
+                  secret  = google_secret_manager_secret.db_password.secret_id
+                  version = "latest"
+                }
+              }
+            }
+          }
+        }
+      }
+
+      resource "google_secret_manager_secret_iam_member" "orders_reads_db_password" {
+        secret_id = google_secret_manager_secret.db_password.id
+        role      = "roles/secretmanager.secretAccessor"
+        member    = "serviceAccount:${google_service_account.orders.email}"
+      }
+      ```
+
+      **Without writing code in Nimbo**
+
+      1. Add a **service account** from the palette: account id `orders-api`, display name `Orders API runtime`.
+      2. Click the Cloud Run service `orders`: pick `INGRESS_TRAFFIC_INTERNAL_LOAD_BALANCER` in **ingress**, and in **template** use **Link to…** on **service_account** to pick the new account's email.
+      3. In **template** → **containers** → **env** set the name `DB_PASSWORD`; in **value_source** → **secret_key_ref** **Link to…** `secret` → the `db_password` secret's id and set version `latest`.
+      4. Delete the project IAM member `runtime_editor` (its Access section flags the basic Editor role).
+      5. Drag the Cloud Run service onto the secret `db_password` and pick **Read**.
+    solutionFiles:
+      versions.tf: |
+        terraform {
+          required_version = ">= 1.6"
+
+          required_providers {
+            google = {
+              source  = "hashicorp/google"
+              version = "~> 7.46"
+            }
+          }
+        }
+
+        provider "google" {
+          project        = var.project_id
+          region         = var.region
+          default_labels = local.common_labels
+        }
+      variables.tf: |
+        variable "project_id" {
+          description = "Google Cloud project ID that owns the resources."
+          type        = string
+        }
+
+        variable "region" {
+          description = "Region for regional resources."
+          type        = string
+          default     = "europe-west1"
+        }
+
+        variable "image" {
+          description = "Container image of the orders API (Artifact Registry path)."
+          type        = string
+          default     = "us-docker.pkg.dev/cloudrun/container/hello"
+        }
+      main.tf: |
+        locals {
+          common_labels = {
+            app         = "nimbo-learn"
+            environment = "dev"
+            owner       = "platform"
+          }
+        }
+
+        resource "google_service_account" "orders" {
+          account_id   = "orders-api"
+          display_name = "Orders API runtime"
+        }
+
+        resource "google_cloud_run_v2_service" "orders" {
+          name     = "orders-api"
+          location = var.region
+          ingress  = "INGRESS_TRAFFIC_INTERNAL_LOAD_BALANCER"
+
+          template {
+            service_account = google_service_account.orders.email
+
+            containers {
+              image = var.image
+
+              env {
+                name = "DB_PASSWORD"
+                value_source {
+                  secret_key_ref {
+                    secret  = google_secret_manager_secret.db_password.secret_id
+                    version = "latest"
+                  }
+                }
+              }
+            }
+          }
+        }
+
+        resource "google_secret_manager_secret" "db_password" {
+          secret_id = "orders-db-password"
+
+          replication {
+            auto {}
+          }
+        }
+
+        # Least privilege: read access to this one secret only.
+        resource "google_secret_manager_secret_iam_member" "orders_reads_db_password" {
+          secret_id = google_secret_manager_secret.db_password.id
+          role      = "roles/secretmanager.secretAccessor"
+          member    = "serviceAccount:${google_service_account.orders.email}"
+        }
+    starter:
+      kind: terraform
+      cloud: gcp
+      files:
+        versions.tf: |
+          terraform {
+            required_version = ">= 1.6"
+
+            required_providers {
+              google = {
+                source  = "hashicorp/google"
+                version = "~> 7.46"
+              }
+            }
+          }
+
+          provider "google" {
+            project        = var.project_id
+            region         = var.region
+            default_labels = local.common_labels
+          }
+        variables.tf: |
+          variable "project_id" {
+            description = "Google Cloud project ID that owns the resources."
+            type        = string
+          }
+
+          variable "region" {
+            description = "Region for regional resources."
+            type        = string
+            default     = "europe-west1"
+          }
+
+          variable "image" {
+            description = "Container image of the orders API (Artifact Registry path)."
+            type        = string
+            default     = "us-docker.pkg.dev/cloudrun/container/hello"
+          }
+        main.tf: |
+          locals {
+            common_labels = {
+              app         = "nimbo-learn"
+              environment = "dev"
+              owner       = "platform"
+            }
+          }
+
+          data "google_project" "current" {}
+
+          resource "google_cloud_run_v2_service" "orders" {
+            name     = "orders-api"
+            location = var.region
+
+            template {
+              containers {
+                image = var.image
+              }
+            }
+          }
+
+          # The API reads one secret, so the team gave the runtime identity Editor.
+          resource "google_project_iam_member" "runtime_editor" {
+            project = var.project_id
+            role    = "roles/editor"
+            member  = "serviceAccount:${data.google_project.current.number}-compute@developer.gserviceaccount.com"
+          }
+
+          resource "google_secret_manager_secret" "db_password" {
+            secret_id = "orders-db-password"
+
+            replication {
+              auto {}
+            }
+          }
+    checks:
+    - id: validate
+      label: The configuration validates
+      type: validate
+    - id: runtime-sa
+      label: The service runs as a dedicated service account
+      type: has
+      has:
+        terraform:
+          type: google_cloud_run_v2_service
+          where:
+            template.service_account:
+              ref: google_service_account
+    - id: no-basic-roles
+      label: No project-level Editor or Owner grants
+      type: has
+      has:
+        terraform:
+          type: google_project_iam_member
+          where:
+            role:
+              in:
+              - roles/editor
+              - roles/owner
+          count:
+            max: 0
+    - id: secret-scoped
+      label: The runtime account can read only the secret
+      type: has
+      has:
+        terraform:
+          type: google_secret_manager_secret_iam_member
+          where:
+            role: roles/secretmanager.secretAccessor
+            member:
+              ref: google_service_account
+    - id: secret-env
+      label: The password comes from Secret Manager
+      type: has
+      has:
+        terraform:
+          type: google_cloud_run_v2_service
+          where:
+            template.containers.env.value_source.secret_key_ref.secret:
+              exists: true
+    - id: ingress
+      label: Ingress is internal + Cloud Load Balancing
+      type: has
+      has:
+        terraform:
+          type: google_cloud_run_v2_service
+          where:
+            ingress: INGRESS_TRAFFIC_INTERNAL_LOAD_BALANCER
+    sources:
+    - title: Cloud Run service identity
+      url: https://docs.cloud.google.com/run/docs/securing/service-identity
+    - title: Best practices for using service accounts securely
+      url: https://docs.cloud.google.com/iam/docs/best-practices-service-accounts
+    - title: Restrict network ingress for Cloud Run
+      url: https://docs.cloud.google.com/run/docs/securing/ingress
+    - title: Secret Manager overview
+      url: https://docs.cloud.google.com/secret-manager/docs/overview
+    - title: 'Terraform google provider: google_cloud_run_v2_service'
+      url: https://registry.terraform.io/providers/hashicorp/google/latest/docs/resources/cloud_run_v2_service
+    - title: 'Terraform google provider: google_google_service_account'
+      url: https://registry.terraform.io/providers/hashicorp/google/latest/docs/resources/google_service_account
+    - title: 'Terraform google provider: google_secret_manager_secret_iam'
+      url: https://registry.terraform.io/providers/hashicorp/google/latest/docs/resources/secret_manager_secret_iam
+    - title: 'Terraform google provider: google_google_project_iam'
+      url: https://registry.terraform.io/providers/hashicorp/google/latest/docs/resources/google_project_iam
+    solvableWithoutCode: true
+- op: upsert
+  kind: challenge
+  id: gcp-pubsub-dead-letter
+  data:
+    provider: gcp
+    level: intermediate
+    title: Pub/Sub subscription with retries and a dead-letter topic
+    summary: 'Stop poison messages from being redelivered forever: exponential backoff, a dead-letter topic and the IAM it needs.'
+    minutes: 30
+    tags:
+    - pubsub
+    - messaging
+    - reliability
+    - iam
+    runtime: design
+    problem: |-
+      The billing service consumes `orders` events through the `orders-billing` subscription. Last week one malformed message made the consumer crash on every delivery: Pub/Sub redelivered it immediately, again and again, and the backlog of good orders grew behind it.
+
+      Configure the subscription so failing messages back off progressively and, after a bounded number of attempts, are moved to a **dead-letter topic** where the team can inspect and replay them.
+    requirements:
+    - A second topic for dead letters and a subscription on it so dead-lettered messages are retained for inspection.
+    - '`google_pubsub_subscription.billing` has a `dead_letter_policy` pointing to that topic with `max_delivery_attempts` between 5 and 100.'
+    - The subscription uses an **exponential backoff** `retry_policy` (minimum and maximum backoff).
+    - The Pub/Sub service agent (`service-PROJECT_NUMBER@gcp-sa-pubsub.iam.gserviceaccount.com`) has `roles/pubsub.publisher` on the dead-letter topic and `roles/pubsub.subscriber` on the source subscription.
+    hints:
+    - 'Messages that fail too many times need somewhere to go: a second topic, plus a subscription on it so you can read them later. Add both from the palette.'
+    - On the billing subscription add a `dead_letter_policy` block (Link to… the dead-letter topic id; max delivery attempts between 5 and 100) and a `retry_policy` block with a minimum and maximum backoff.
+    - 'The Pub/Sub service agent needs two grants. Add the project data source and a topic IAM member and a subscription IAM member from the palette. In each Access section: On what = Link to… the dead-letter topic / the billing subscription, Can do = `roles/pubsub.publisher` / `roles/pubsub.subscriber`, Who = Service account → Pub/Sub service agent of the project data source.'
+    solution: |
+      When a subscriber can't acknowledge a message, Pub/Sub redelivers it. A **retry policy with exponential backoff** spaces those redeliveries out (between the minimum and maximum backoff, up to 600 s) instead of retrying immediately. A **dead-letter topic** bounds the retries: after `max_delivery_attempts` (5–100), Pub/Sub forwards the message to the dead-letter topic and acknowledges it on the source subscription.
+
+      Pub/Sub does that forwarding with its **service agent**, so it needs `roles/pubsub.publisher` on the dead-letter topic and `roles/pubsub.subscriber` on the source subscription. A topic with no subscription drops messages, so attach one to the dead-letter topic to keep them.
+
+      ```hcl
+      resource "google_pubsub_subscription" "billing" {
+        name                 = "orders-billing"
+        topic                = google_pubsub_topic.orders.id
+        ack_deadline_seconds = 20
+
+        retry_policy {
+          minimum_backoff = "10s"
+          maximum_backoff = "600s"
+        }
+
+        dead_letter_policy {
+          dead_letter_topic     = google_pubsub_topic.orders_dead_letter.id
+          max_delivery_attempts = 5
+        }
+      }
+
+      resource "google_pubsub_topic_iam_member" "agent_publishes_dead_letters" {
+        topic  = google_pubsub_topic.orders_dead_letter.id
+        role   = "roles/pubsub.publisher"
+        member = local.pubsub_agent
+      }
+
+      resource "google_pubsub_subscription_iam_member" "agent_acks_source" {
+        subscription = google_pubsub_subscription.billing.id
+        role         = "roles/pubsub.subscriber"
+        member       = local.pubsub_agent
+      }
+      ```
+
+      **Without writing code in Nimbo**
+
+      1. From the palette add the **project** data source (name `current`).
+      2. Add a **Pub/Sub topic** named `orders-dead-letter`, and a **Pub/Sub subscription** named `orders-dead-letter-inspect` whose **topic** is **Link to…** that topic's id.
+      3. Click the subscription `billing`: add **dead_letter_policy** (**Link to…** the dead-letter topic's id, **max_delivery_attempts** `10`) and **retry_policy** (minimum backoff `10s`, maximum backoff `600s`).
+      4. Add a **Pub/Sub topic IAM member**. In its **Access** section: **On what** → **Link to…** the dead-letter topic; **Can do** → `roles/pubsub.publisher`; **Who** → **Service account** → "Pub/Sub service agent of data.google_project.current".
+      5. Add a **Pub/Sub subscription IAM member** the same way: on the `billing` subscription, role `roles/pubsub.subscriber`, same service agent.
+    solutionFiles:
+      versions.tf: |
+        terraform {
+          required_version = ">= 1.6"
+
+          required_providers {
+            google = {
+              source  = "hashicorp/google"
+              version = "~> 7.46"
+            }
+          }
+        }
+
+        provider "google" {
+          project        = var.project_id
+          region         = var.region
+          default_labels = local.common_labels
+        }
+      variables.tf: |
+        variable "project_id" {
+          description = "Google Cloud project ID that owns the resources."
+          type        = string
+        }
+
+        variable "region" {
+          description = "Region for regional resources."
+          type        = string
+          default     = "europe-west1"
+        }
+      main.tf: |
+        locals {
+          common_labels = {
+            app         = "nimbo-learn"
+            environment = "dev"
+            owner       = "platform"
+          }
+        }
+
+        data "google_project" "current" {}
+
+        locals {
+          pubsub_agent = "serviceAccount:service-${data.google_project.current.number}@gcp-sa-pubsub.iam.gserviceaccount.com"
+        }
+
+        resource "google_pubsub_topic" "orders" {
+          name = "orders"
+        }
+
+        resource "google_pubsub_topic" "orders_dead_letter" {
+          name = "orders-dead-letter"
+        }
+
+        resource "google_pubsub_subscription" "billing" {
+          name  = "orders-billing"
+          topic = google_pubsub_topic.orders.id
+
+          ack_deadline_seconds = 20
+
+          retry_policy {
+            minimum_backoff = "10s"
+            maximum_backoff = "600s"
+          }
+
+          dead_letter_policy {
+            dead_letter_topic     = google_pubsub_topic.orders_dead_letter.id
+            max_delivery_attempts = 5
+          }
+        }
+
+        # Keep dead-lettered messages so they can be inspected and replayed.
+        resource "google_pubsub_subscription" "orders_dead_letter" {
+          name                       = "orders-dead-letter-inspect"
+          topic                      = google_pubsub_topic.orders_dead_letter.id
+          message_retention_duration = "604800s"
+        }
+
+        # The Pub/Sub service agent forwards failed messages to the dead-letter topic
+        # and acknowledges them on the source subscription.
+        resource "google_pubsub_topic_iam_member" "agent_publishes_dead_letters" {
+          topic  = google_pubsub_topic.orders_dead_letter.id
+          role   = "roles/pubsub.publisher"
+          member = local.pubsub_agent
+        }
+
+        resource "google_pubsub_subscription_iam_member" "agent_acks_source" {
+          subscription = google_pubsub_subscription.billing.id
+          role         = "roles/pubsub.subscriber"
+          member       = local.pubsub_agent
+        }
+    starter:
+      kind: terraform
+      cloud: gcp
+      files:
+        versions.tf: |
+          terraform {
+            required_version = ">= 1.6"
+
+            required_providers {
+              google = {
+                source  = "hashicorp/google"
+                version = "~> 7.46"
+              }
+            }
+          }
+
+          provider "google" {
+            project        = var.project_id
+            region         = var.region
+            default_labels = local.common_labels
+          }
+        variables.tf: |
+          variable "project_id" {
+            description = "Google Cloud project ID that owns the resources."
+            type        = string
+          }
+
+          variable "region" {
+            description = "Region for regional resources."
+            type        = string
+            default     = "europe-west1"
+          }
+        main.tf: |
+          locals {
+            common_labels = {
+              app         = "nimbo-learn"
+              environment = "dev"
+              owner       = "platform"
+            }
+          }
+
+          resource "google_pubsub_topic" "orders" {
+            name = "orders"
+          }
+
+          resource "google_pubsub_subscription" "billing" {
+            name  = "orders-billing"
+            topic = google_pubsub_topic.orders.id
+
+            ack_deadline_seconds = 20
+          }
+    checks:
+    - id: validate
+      label: The configuration validates
+      type: validate
+    - id: dlq
+      label: Failed messages go to a dead-letter topic
+      type: has
+      has:
+        terraform:
+          type: google_pubsub_subscription
+          name: billing
+          where:
+            dead_letter_policy.dead_letter_topic:
+              ref: google_pubsub_topic
+    - id: attempts
+      label: Delivery attempts are bounded (5–100)
+      type: has
+      has:
+        terraform:
+          type: google_pubsub_subscription
+          name: billing
+          where:
+            dead_letter_policy.max_delivery_attempts:
+              min: 5
+              max: 100
+    - id: backoff
+      label: Retries use exponential backoff
+      type: has
+      has:
+        terraform:
+          type: google_pubsub_subscription
+          name: billing
+          where:
+            retry_policy.minimum_backoff:
+              exists: true
+            retry_policy.maximum_backoff:
+              exists: true
+    - id: dlq-retained
+      label: Dead-lettered messages are kept in a subscription
+      type: has
+      has:
+        terraform:
+          type: google_pubsub_subscription
+          where:
+            topic:
+              ref: google_pubsub_topic.orders_dead_letter
+    - id: agent-publisher
+      label: The Pub/Sub service agent can publish dead letters
+      type: has
+      has:
+        terraform:
+          type: google_pubsub_topic_iam_member
+          where:
+            role: roles/pubsub.publisher
+    - id: agent-subscriber
+      label: The Pub/Sub service agent can acknowledge on the source subscription
+      type: has
+      has:
+        terraform:
+          type: google_pubsub_subscription_iam_member
+          where:
+            role: roles/pubsub.subscriber
+    sources:
+    - title: Dead-letter topics
+      url: https://docs.cloud.google.com/pubsub/docs/dead-letter-topics
+    - title: Subscription retry policy
+      url: https://docs.cloud.google.com/pubsub/docs/subscription-retry-policy
+    - title: What is Pub/Sub?
+      url: https://docs.cloud.google.com/pubsub/docs/overview
+    - title: 'Terraform google provider: google_pubsub_subscription'
+      url: https://registry.terraform.io/providers/hashicorp/google/latest/docs/resources/pubsub_subscription
+    solvableWithoutCode: true
+- op: upsert
+  kind: challenge
+  id: gcp-cloud-sql-private-ip
+  data:
+    provider: gcp
+    level: advanced
+    title: Cloud SQL on private IP with HA and point-in-time recovery
+    summary: Move a public PostgreSQL instance to private services access, regional HA, automated backups and PITR.
+    minutes: 45
+    tags:
+    - cloud-sql
+    - postgres
+    - private-services-access
+    - backups
+    - high-availability
+    prerequisites:
+    - gcp-custom-vpc-firewall
+    runtime: design
+    problem: |-
+      `orders-db` is a Cloud SQL for PostgreSQL instance with a **public IP** and an authorized network of `0.0.0.0/0`, no backups, a single zone and no deletion protection. One bad migration, one zonal outage or one leaked password away from a very bad day.
+
+      Redesign it for production: reachable only from your VPC through **private services access**, highly available across zones, with automated backups and **point-in-time recovery**, and protected against accidental deletion.
+    requirements:
+    - 'A reserved range: `google_compute_global_address` with `purpose = "VPC_PEERING"` in your VPC.'
+    - A `google_service_networking_connection` to `servicenetworking.googleapis.com` using that range.
+    - The instance has **no public IPv4** (`ipv4_enabled = false`) and a `private_network` set to the VPC; SSL is required.
+    - '`availability_type = "REGIONAL"` (primary + standby in another zone).'
+    - Automated backups enabled with **point-in-time recovery**, and a retention you chose explicitly.
+    - '`deletion_protection = true`.'
+    hints:
+    - 'Private services access is two resources from the palette: an internal global address range (`VPC_PEERING`, `INTERNAL`, prefix length 16) and the service networking connection that uses it.'
+    - Link both to the VPC id. On the connection, type `servicenetworking.googleapis.com` as the service and use Link to… on `reserved_peering_ranges` to add the address's name.
+    - 'All instance settings live under the `settings` block: in `ip_configuration` remove the authorized network, turn IPv4 off, Link to… the VPC as private network and pick `ENCRYPTED_ONLY`; in `backup_configuration` turn on backups and point-in-time recovery and set retained backups. Pick `REGIONAL` availability and turn deletion protection on.'
+    solution: |
+      With **private services access**, Cloud SQL instances get an internal IP from a range you reserve in your VPC; the service producer network is connected to yours through VPC Network Peering (`google_service_networking_connection`). Clients in the VPC connect privately, and with `ipv4_enabled = false` there's no public endpoint to attack at all. `ssl_mode = "ENCRYPTED_ONLY"` additionally refuses unencrypted connections.
+
+      For reliability, a **regional (HA) instance** keeps a standby in a second zone with synchronous replication; if the primary or its zone fails, the standby takes over the same IP. **Automated backups** plus **point-in-time recovery** (write-ahead logs) let you restore to any moment within the retention window — e.g. right before a bad migration. Retention is configurable from 1 to 365 automated backups. `deletion_protection` prevents Terraform or a person from deleting the instance by mistake.
+
+      ```hcl
+      resource "google_compute_global_address" "private_services" {
+        name          = "google-managed-services"
+        purpose       = "VPC_PEERING"
+        address_type  = "INTERNAL"
+        prefix_length = 16
+        network       = google_compute_network.main.id
+      }
+
+      resource "google_service_networking_connection" "private_services" {
+        network                 = google_compute_network.main.id
+        service                 = "servicenetworking.googleapis.com"
+        reserved_peering_ranges = [google_compute_global_address.private_services.name]
+      }
+
+      resource "google_sql_database_instance" "orders" {
+        name                = "orders-db"
+        database_version    = "POSTGRES_16"
+        region              = var.region
+        deletion_protection = true
+
+        settings {
+          tier              = "db-custom-2-7680"
+          availability_type = "REGIONAL"
+
+          ip_configuration {
+            ipv4_enabled    = false
+            private_network = google_compute_network.main.id
+            ssl_mode        = "ENCRYPTED_ONLY"
+          }
+
+          backup_configuration {
+            enabled                        = true
+            start_time                     = "02:00"
+            point_in_time_recovery_enabled = true
+            backup_retention_settings {
+              retained_backups = 14
+            }
+          }
+        }
+
+        depends_on = [google_service_networking_connection.private_services]
+      }
+      ```
+
+      **Without writing code in Nimbo**
+
+      1. Add a **global address** from the palette: name `private-services`, purpose `VPC_PEERING`, type `INTERNAL`, prefix length `16`, **Link to…** `network` → the VPC id.
+      2. Add a **service networking connection**: **Link to…** `network` → the VPC id, service `servicenetworking.googleapis.com`, and **Link to…** on **reserved_peering_ranges** to add the address's name.
+      3. Click the instance `orders`: turn **deletion_protection** on. In **settings** pick `REGIONAL` availability.
+      4. In **settings** → **ip_configuration** remove the **authorized_networks** block with its Trash button, turn **ipv4_enabled** off, **Link to…** `private_network` → the VPC id and pick `ENCRYPTED_ONLY` SSL mode.
+      5. In **settings** → **backup_configuration** turn **enabled** and **point_in_time_recovery_enabled** on, and add **backup_retention_settings** with `7` retained backups.
+    solutionFiles:
+      versions.tf: |
+        terraform {
+          required_version = ">= 1.6"
+
+          required_providers {
+            google = {
+              source  = "hashicorp/google"
+              version = "~> 7.46"
+            }
+          }
+        }
+
+        provider "google" {
+          project        = var.project_id
+          region         = var.region
+          default_labels = local.common_labels
+        }
+      variables.tf: |
+        variable "project_id" {
+          description = "Google Cloud project ID that owns the resources."
+          type        = string
+        }
+
+        variable "region" {
+          description = "Region for regional resources."
+          type        = string
+          default     = "europe-west1"
+        }
+      main.tf: |
+        locals {
+          common_labels = {
+            app         = "nimbo-learn"
+            environment = "dev"
+            owner       = "platform"
+          }
+        }
+
+        resource "google_compute_network" "main" {
+          name                    = "app-network"
+          auto_create_subnetworks = false
+        }
+
+        # Private services access: a reserved range peered with Google's service producer network.
+        resource "google_compute_global_address" "private_services" {
+          name          = "google-managed-services"
+          purpose       = "VPC_PEERING"
+          address_type  = "INTERNAL"
+          prefix_length = 16
+          network       = google_compute_network.main.id
+        }
+
+        resource "google_service_networking_connection" "private_services" {
+          network                 = google_compute_network.main.id
+          service                 = "servicenetworking.googleapis.com"
+          reserved_peering_ranges = [google_compute_global_address.private_services.name]
+        }
+
+        resource "google_sql_database_instance" "orders" {
+          name             = "orders-db"
+          database_version = "POSTGRES_16"
+          region           = var.region
+
+          deletion_protection = true
+
+          settings {
+            tier              = "db-custom-2-7680"
+            availability_type = "REGIONAL"
+
+            ip_configuration {
+              ipv4_enabled                                  = false
+              private_network                               = google_compute_network.main.id
+              enable_private_path_for_google_cloud_services = true
+              ssl_mode                                      = "ENCRYPTED_ONLY"
+            }
+
+            backup_configuration {
+              enabled                        = true
+              start_time                     = "02:00"
+              point_in_time_recovery_enabled = true
+
+              backup_retention_settings {
+                retained_backups = 14
+                retention_unit   = "COUNT"
+              }
+            }
+
+            maintenance_window {
+              day  = 7
+              hour = 3
+            }
+          }
+
+          depends_on = [google_service_networking_connection.private_services]
+        }
+    starter:
+      kind: terraform
+      cloud: gcp
+      files:
+        versions.tf: |
+          terraform {
+            required_version = ">= 1.6"
+
+            required_providers {
+              google = {
+                source  = "hashicorp/google"
+                version = "~> 7.46"
+              }
+            }
+          }
+
+          provider "google" {
+            project        = var.project_id
+            region         = var.region
+            default_labels = local.common_labels
+          }
+        variables.tf: |
+          variable "project_id" {
+            description = "Google Cloud project ID that owns the resources."
+            type        = string
+          }
+
+          variable "region" {
+            description = "Region for regional resources."
+            type        = string
+            default     = "europe-west1"
+          }
+        main.tf: |
+          locals {
+            common_labels = {
+              app         = "nimbo-learn"
+              environment = "dev"
+              owner       = "platform"
+            }
+          }
+
+          resource "google_compute_network" "main" {
+            name                    = "app-network"
+            auto_create_subnetworks = false
+          }
+
+          resource "google_sql_database_instance" "orders" {
+            name             = "orders-db"
+            database_version = "POSTGRES_16"
+            region           = var.region
+
+            deletion_protection = false
+
+            settings {
+              tier = "db-custom-2-7680"
+
+              ip_configuration {
+                ipv4_enabled = true
+
+                authorized_networks {
+                  name  = "anywhere"
+                  value = "0.0.0.0/0"
+                }
+              }
+            }
+          }
+    checks:
+    - id: validate
+      label: The configuration validates
+      type: validate
+    - id: psa-range
+      label: A range is reserved for private services access
+      type: has
+      has:
+        terraform:
+          type: google_compute_global_address
+          where:
+            purpose: VPC_PEERING
+            address_type: INTERNAL
+    - id: psa-peering
+      label: The VPC is peered with Service Networking
+      type: has
+      has:
+        terraform:
+          type: google_service_networking_connection
+          where:
+            service: servicenetworking.googleapis.com
+            reserved_peering_ranges:
+              ref: google_compute_global_address
+    - id: private-only
+      label: The instance has a private IP and no public IP
+      type: has
+      has:
+        terraform:
+          type: google_sql_database_instance
+          where:
+            settings.ip_configuration.ipv4_enabled: false
+            settings.ip_configuration.private_network:
+              ref: google_compute_network
+    - id: ssl
+      label: Connections must be encrypted
+      type: has
+      has:
+        terraform:
+          type: google_sql_database_instance
+          where:
+            settings.ip_configuration.ssl_mode:
+              in:
+              - ENCRYPTED_ONLY
+              - TRUSTED_CLIENT_CERTIFICATE_REQUIRED
+    - id: ha
+      label: The instance is regional (HA)
+      type: has
+      has:
+        terraform:
+          type: google_sql_database_instance
+          where:
+            settings.availability_type: REGIONAL
+    - id: pitr
+      label: Automated backups with point-in-time recovery
+      type: has
+      has:
+        terraform:
+          type: google_sql_database_instance
+          where:
+            settings.backup_configuration.enabled: true
+            settings.backup_configuration.point_in_time_recovery_enabled: true
+            settings.backup_configuration.backup_retention_settings.retained_backups:
+              min: 1
+    - id: deletion-protection
+      label: Deletion protection is on
+      type: has
+      has:
+        terraform:
+          type: google_sql_database_instance
+          where:
+            deletion_protection: true
+    sources:
+    - title: Configure private services access (Cloud SQL for PostgreSQL)
+      url: https://docs.cloud.google.com/sql/docs/postgres/configure-private-services-access
+    - title: Private IP configuration options (Cloud SQL for PostgreSQL)
+      url: https://docs.cloud.google.com/sql/docs/postgres/private-ip
+    - title: About high availability (Cloud SQL for PostgreSQL)
+      url: https://docs.cloud.google.com/sql/docs/postgres/high-availability
+    - title: About Cloud SQL backups
+      url: https://docs.cloud.google.com/sql/docs/postgres/backup-recovery/backups
+    - title: 'Terraform google provider: google_sql_database_instance'
+      url: https://registry.terraform.io/providers/hashicorp/google/latest/docs/resources/sql_database_instance
+    - title: 'Terraform google provider: google_service_networking_connection'
+      url: https://registry.terraform.io/providers/hashicorp/google/latest/docs/resources/service_networking_connection
+    solvableWithoutCode: true
+- op: upsert
+  kind: challenge
+  id: gcp-https-lb-cloud-armor
+  data:
+    provider: gcp
+    level: advanced
+    title: Global HTTPS load balancer with Cloud Armor in front of Cloud Run
+    summary: Serve Cloud Run only through an external Application Load Balancer with a managed certificate, WAF rules and rate limiting.
+    minutes: 60
+    tags:
+    - load-balancing
+    - cloud-armor
+    - cloud-run
+    - tls
+    - waf
+    prerequisites:
+    - gcp-cloud-run-least-privilege
+    runtime: design
+    problem: |-
+      The public `web` frontend runs on Cloud Run behind a global external Application Load Balancer — but the load balancer only listens on **plain HTTP**, there's no edge security policy, and the Cloud Run service still accepts requests sent straight to its `run.app` URL, bypassing the load balancer entirely.
+
+      The security review asks for: TLS with a Google-managed certificate, HTTP redirected to HTTPS, **Cloud Armor** blocking common web attacks (SQL injection, cross-site scripting) and throttling abusive clients, and no way around the load balancer.
+    requirements:
+    - Cloud Run `web` accepts traffic only from internal sources and Cloud Load Balancing.
+    - A `google_compute_security_policy` with preconfigured WAF rules for **SQL injection** (`sqli-v33-stable`) and **XSS** (`xss-v33-stable`), and a `throttle` rate-limiting rule.
+    - The backend service (serverless NEG → Cloud Run) attaches that security policy and logs requests.
+    - 'HTTPS: a `google_compute_managed_ssl_certificate` for `var.domain`, a `google_compute_target_https_proxy` and a forwarding rule on port 443 with a reserved global IP.'
+    - Port 80 only redirects to HTTPS (a URL map with `default_url_redirect`).
+    hints:
+    - Cloud Armor is a security policy from the palette with one `rule` block per rule. WAF rules use expressions such as `evaluatePreconfiguredWaf('sqli-v33-stable')`, typed in the rule's `match` → `expr` → `expression` field.
+    - Rate limiting is a rule with action `throttle` and a `rate_limit_options` block (conform action, exceed action, key, threshold). A security policy also needs the default rule at priority `2147483647`. Attach the policy with Link to… on the backend service's `security_policy` and turn its `log_config` on.
+    - For HTTPS add a managed SSL certificate (Link to… `var.domain` in its domains), an HTTPS proxy (Link to… the URL map and the certificate) and a reserved global address. Use that one address in both forwarding rules (443 → HTTPS proxy, 80 → a redirect URL map with `https_redirect` on).
+    solution: |
+      The **global external Application Load Balancer** terminates TLS at Google's edge and routes to backends — here a **serverless NEG** pointing at the Cloud Run service. **Google-managed SSL certificates** are provisioned and renewed automatically for the domains you list once DNS points at the load balancer's IP.
+
+      **Cloud Armor** security policies attach to backend services of the external Application Load Balancer and are evaluated at the edge, before traffic reaches your service. Preconfigured WAF rules (`sqli-v33-stable`, `xss-v33-stable`, …) are based on the OWASP ModSecurity Core Rule Set. Each signature has a sensitivity level: lower levels are higher-confidence signatures with fewer false positives, so the docs suggest starting at sensitivity 1 (in preview mode while tuning). **Rate limiting** with `throttle` caps the request rate per client key (here per IP); requests above the threshold get the `exceed_action` — `429 Too Many Requests` is the recommended code.
+
+      To make the load balancer the only way in, set the Cloud Run service's ingress to **internal and Cloud Load Balancing**: direct requests to the `run.app` URL from the internet are then rejected, so Cloud Armor can't be bypassed. Finally, an HTTP forwarding rule whose URL map only performs an `https_redirect` keeps port 80 for redirects.
+
+      ```hcl
+      resource "google_compute_security_policy" "web" {
+        name = "web-edge-policy"
+        type = "CLOUD_ARMOR"
+
+        rule {
+          action   = "deny(403)"
+          priority = 1000
+          match {
+            expr {
+              expression = "evaluatePreconfiguredWaf('sqli-v33-stable', {'sensitivity': 1})"
+            }
+          }
+        }
+        # ... xss-v33-stable at 1001, throttle at 2000, default allow at 2147483647
+      }
+
+      resource "google_compute_backend_service" "web" {
+        name                  = "web-backend"
+        load_balancing_scheme = "EXTERNAL_MANAGED"
+        security_policy       = google_compute_security_policy.web.id
+
+        backend {
+          group = google_compute_region_network_endpoint_group.web.id
+        }
+
+        log_config {
+          enable      = true
+          sample_rate = 1
+        }
+      }
+
+      resource "google_compute_target_https_proxy" "web" {
+        name             = "web-https-proxy"
+        url_map          = google_compute_url_map.web.id
+        ssl_certificates = [google_compute_managed_ssl_certificate.web.id]
+      }
+      ```
+
+      **Without writing code in Nimbo**
+
+      1. Add a **security policy** from the palette named `web-armor` with four **rule** blocks:
+         - `deny(403)`, priority `1000`, expression `evaluatePreconfiguredWaf('sqli-v33-stable')`;
+         - `deny(403)`, priority `1001`, expression `evaluatePreconfiguredWaf('xss-v33-stable')`;
+         - `throttle`, priority `2000`, match `SRC_IPS_V1` on `*`, with **rate_limit_options**: conform `allow`, exceed `deny(429)`, key `IP`, threshold `100` per `60` seconds;
+         - `allow`, priority `2147483647`, match `SRC_IPS_V1` on `*` (the default rule).
+      2. Click the backend service `web`: **Link to…** `security_policy` → the policy's id, and add **log_config** with enable on and sample rate `1`.
+      3. Add a **managed SSL certificate** `web-cert` and use **Link to…** on **domains** to add `var.domain`.
+      4. Add a **target HTTPS proxy** `web-https-proxy`: **Link to…** the `web` URL map and, on **ssl_certificates**, the certificate's id.
+      5. Add a **global address** `web-ip` and a **global forwarding rule** `web-https`: scheme `EXTERNAL_MANAGED`, port `443`, **Link to…** the HTTPS proxy as target and the address.
+      6. Add a **URL map** `web-http-redirect` with **default_url_redirect** (https redirect on, strip query off). **Link to…** it from the existing HTTP proxy's **url_map**, and link the existing forwarding rule `web` to the same global address.
+    solutionFiles:
+      versions.tf: |
+        terraform {
+          required_version = ">= 1.6"
+
+          required_providers {
+            google = {
+              source  = "hashicorp/google"
+              version = "~> 7.46"
+            }
+          }
+        }
+
+        provider "google" {
+          project        = var.project_id
+          region         = var.region
+          default_labels = local.common_labels
+        }
+      variables.tf: |
+        variable "project_id" {
+          description = "Google Cloud project ID that owns the resources."
+          type        = string
+        }
+
+        variable "region" {
+          description = "Region for regional resources."
+          type        = string
+          default     = "europe-west1"
+        }
+
+        variable "image" {
+          description = "Container image of the orders API (Artifact Registry path)."
+          type        = string
+          default     = "us-docker.pkg.dev/cloudrun/container/hello"
+        }
+
+        variable "domain" {
+          description = "Public hostname served by the load balancer."
+          type        = string
+        }
+      main.tf: |
+        locals {
+          common_labels = {
+            app         = "nimbo-learn"
+            environment = "dev"
+            owner       = "platform"
+          }
+        }
+
+        resource "google_service_account" "web" {
+          account_id   = "web-frontend"
+          display_name = "Web frontend runtime"
+        }
+
+        resource "google_cloud_run_v2_service" "web" {
+          name     = "web"
+          location = var.region
+          ingress  = "INGRESS_TRAFFIC_INTERNAL_LOAD_BALANCER"
+
+          template {
+            service_account = google_service_account.web.email
+
+            containers {
+              image = var.image
+            }
+          }
+        }
+
+        resource "google_compute_region_network_endpoint_group" "web" {
+          name                  = "web-neg"
+          region                = var.region
+          network_endpoint_type = "SERVERLESS"
+
+          cloud_run {
+            service = google_cloud_run_v2_service.web.name
+          }
+        }
+
+        resource "google_compute_security_policy" "web" {
+          name = "web-edge-policy"
+          type = "CLOUD_ARMOR"
+
+          rule {
+            action      = "deny(403)"
+            priority    = 1000
+            description = "Block SQL injection (preconfigured WAF rule)"
+            match {
+              expr {
+                expression = "evaluatePreconfiguredWaf('sqli-v33-stable', {'sensitivity': 1})"
+              }
+            }
+          }
+
+          rule {
+            action      = "deny(403)"
+            priority    = 1001
+            description = "Block cross-site scripting (preconfigured WAF rule)"
+            match {
+              expr {
+                expression = "evaluatePreconfiguredWaf('xss-v33-stable', {'sensitivity': 1})"
+              }
+            }
+          }
+
+          rule {
+            action      = "throttle"
+            priority    = 2000
+            description = "Throttle clients above 100 requests per minute"
+            match {
+              versioned_expr = "SRC_IPS_V1"
+              config {
+                src_ip_ranges = ["*"]
+              }
+            }
+            rate_limit_options {
+              conform_action = "allow"
+              exceed_action  = "deny(429)"
+              enforce_on_key = "IP"
+              rate_limit_threshold {
+                count        = 100
+                interval_sec = 60
+              }
+            }
+          }
+
+          rule {
+            action      = "allow"
+            priority    = 2147483647
+            description = "Default rule"
+            match {
+              versioned_expr = "SRC_IPS_V1"
+              config {
+                src_ip_ranges = ["*"]
+              }
+            }
+          }
+        }
+
+        resource "google_compute_backend_service" "web" {
+          name                  = "web-backend"
+          load_balancing_scheme = "EXTERNAL_MANAGED"
+          security_policy       = google_compute_security_policy.web.id
+
+          backend {
+            group = google_compute_region_network_endpoint_group.web.id
+          }
+
+          log_config {
+            enable      = true
+            sample_rate = 1
+          }
+        }
+
+        resource "google_compute_url_map" "web" {
+          name            = "web-url-map"
+          default_service = google_compute_backend_service.web.id
+        }
+
+        resource "google_compute_managed_ssl_certificate" "web" {
+          name = "web-cert"
+
+          managed {
+            domains = [var.domain]
+          }
+        }
+
+        resource "google_compute_target_https_proxy" "web" {
+          name             = "web-https-proxy"
+          url_map          = google_compute_url_map.web.id
+          ssl_certificates = [google_compute_managed_ssl_certificate.web.id]
+        }
+
+        resource "google_compute_global_address" "web" {
+          name = "web-ip"
+        }
+
+        resource "google_compute_global_forwarding_rule" "web" {
+          name                  = "web-https"
+          load_balancing_scheme = "EXTERNAL_MANAGED"
+          target                = google_compute_target_https_proxy.web.id
+          ip_address            = google_compute_global_address.web.id
+          port_range            = "443"
+        }
+
+        # Plain HTTP only redirects to HTTPS.
+        resource "google_compute_url_map" "https_redirect" {
+          name = "web-https-redirect"
+
+          default_url_redirect {
+            https_redirect         = true
+            redirect_response_code = "MOVED_PERMANENTLY_DEFAULT"
+            strip_query            = false
+          }
+        }
+
+        resource "google_compute_target_http_proxy" "https_redirect" {
+          name    = "web-http-redirect"
+          url_map = google_compute_url_map.https_redirect.id
+        }
+
+        resource "google_compute_global_forwarding_rule" "http_redirect" {
+          name                  = "web-http-redirect"
+          load_balancing_scheme = "EXTERNAL_MANAGED"
+          target                = google_compute_target_http_proxy.https_redirect.id
+          ip_address            = google_compute_global_address.web.id
+          port_range            = "80"
+        }
+    starter:
+      kind: terraform
+      cloud: gcp
+      files:
+        versions.tf: |
+          terraform {
+            required_version = ">= 1.6"
+
+            required_providers {
+              google = {
+                source  = "hashicorp/google"
+                version = "~> 7.46"
+              }
+            }
+          }
+
+          provider "google" {
+            project        = var.project_id
+            region         = var.region
+            default_labels = local.common_labels
+          }
+        variables.tf: |
+          variable "project_id" {
+            description = "Google Cloud project ID that owns the resources."
+            type        = string
+          }
+
+          variable "region" {
+            description = "Region for regional resources."
+            type        = string
+            default     = "europe-west1"
+          }
+
+          variable "image" {
+            description = "Container image of the orders API (Artifact Registry path)."
+            type        = string
+            default     = "us-docker.pkg.dev/cloudrun/container/hello"
+          }
+
+          variable "domain" {
+            description = "Public hostname served by the load balancer."
+            type        = string
+          }
+        main.tf: |
+          locals {
+            common_labels = {
+              app         = "nimbo-learn"
+              environment = "dev"
+              owner       = "platform"
+            }
+          }
+
+          resource "google_service_account" "web" {
+            account_id   = "web-frontend"
+            display_name = "Web frontend runtime"
+          }
+
+          resource "google_cloud_run_v2_service" "web" {
+            name     = "web"
+            location = var.region
+            ingress  = "INGRESS_TRAFFIC_INTERNAL_LOAD_BALANCER"
+
+            template {
+              service_account = google_service_account.web.email
+
+              containers {
+                image = var.image
+              }
+            }
+          }
+
+          resource "google_compute_region_network_endpoint_group" "web" {
+            name                  = "web-neg"
+            region                = var.region
+            network_endpoint_type = "SERVERLESS"
+
+            cloud_run {
+              service = google_cloud_run_v2_service.web.name
+            }
+          }
+
+          resource "google_compute_backend_service" "web" {
+            name                  = "web-backend"
+            load_balancing_scheme = "EXTERNAL_MANAGED"
+
+            backend {
+              group = google_compute_region_network_endpoint_group.web.id
+            }
+          }
+
+          resource "google_compute_url_map" "web" {
+            name            = "web-url-map"
+            default_service = google_compute_backend_service.web.id
+          }
+
+          resource "google_compute_target_http_proxy" "web" {
+            name    = "web-http-proxy"
+            url_map = google_compute_url_map.web.id
+          }
+
+          resource "google_compute_global_forwarding_rule" "web" {
+            name                  = "web-http"
+            load_balancing_scheme = "EXTERNAL_MANAGED"
+            target                = google_compute_target_http_proxy.web.id
+            port_range            = "80"
+          }
+    checks:
+    - id: validate
+      label: The configuration validates
+      type: validate
+    - id: run-behind-lb
+      label: Cloud Run accepts only internal + load balancer traffic
+      type: has
+      has:
+        terraform:
+          type: google_cloud_run_v2_service
+          where:
+            ingress: INGRESS_TRAFFIC_INTERNAL_LOAD_BALANCER
+    - id: waf-sqli
+      label: Cloud Armor blocks SQL injection
+      type: has
+      has:
+        terraform:
+          type: google_compute_security_policy
+          where:
+            rule.match.expr.expression:
+              contains: sqli-v33-stable
+    - id: waf-xss
+      label: Cloud Armor blocks cross-site scripting
+      type: has
+      has:
+        terraform:
+          type: google_compute_security_policy
+          where:
+            rule.match.expr.expression:
+              contains: xss-v33-stable
+    - id: rate-limit
+      label: Abusive clients are throttled
+      type: has
+      has:
+        terraform:
+          type: google_compute_security_policy
+          where:
+            rule.action: throttle
+            rule.rate_limit_options.rate_limit_threshold.count:
+              exists: true
+    - id: policy-attached
+      label: The backend service enforces the policy and logs requests
+      type: has
+      has:
+        terraform:
+          type: google_compute_backend_service
+          where:
+            security_policy:
+              ref: google_compute_security_policy
+            log_config.enable: true
+    - id: https
+      label: HTTPS with a Google-managed certificate
+      type: has
+      has:
+        terraform:
+          type: google_compute_target_https_proxy
+          where:
+            ssl_certificates:
+              ref: google_compute_managed_ssl_certificate
+    - id: redirect
+      label: HTTP only redirects to HTTPS
+      type: has
+      has:
+        terraform:
+          type: google_compute_url_map
+          where:
+            default_url_redirect.https_redirect: true
+    sources:
+    - title: External Application Load Balancer overview
+      url: https://docs.cloud.google.com/load-balancing/docs/https
+    - title: Serverless network endpoint groups overview
+      url: https://docs.cloud.google.com/load-balancing/docs/negs/serverless-neg-concepts
+    - title: Use Google-managed SSL certificates
+      url: https://docs.cloud.google.com/load-balancing/docs/ssl-certificates/google-managed-certs
+    - title: Google Cloud Armor overview
+      url: https://docs.cloud.google.com/armor/docs/cloud-armor-overview
+    - title: Google Cloud Armor preconfigured WAF rules
+      url: https://docs.cloud.google.com/armor/docs/waf-rules
+    - title: Google Cloud Armor rate limiting overview
+      url: https://docs.cloud.google.com/armor/docs/rate-limiting-overview
+    - title: Restrict network ingress for Cloud Run
+      url: https://docs.cloud.google.com/run/docs/securing/ingress
+    - title: 'Terraform google provider: google_compute_security_policy'
+      url: https://registry.terraform.io/providers/hashicorp/google/latest/docs/resources/compute_security_policy
+    - title: 'Terraform google provider: google_compute_backend_service'
+      url: https://registry.terraform.io/providers/hashicorp/google/latest/docs/resources/compute_backend_service
+    - title: 'Terraform google provider: google_compute_target_https_proxy'
+      url: https://registry.terraform.io/providers/hashicorp/google/latest/docs/resources/compute_target_https_proxy
+    - title: 'Terraform google provider: google_compute_managed_ssl_certificate'
+      url: https://registry.terraform.io/providers/hashicorp/google/latest/docs/resources/compute_managed_ssl_certificate
+    - title: 'Terraform google provider: google_compute_region_network_endpoint_group'
+      url: https://registry.terraform.io/providers/hashicorp/google/latest/docs/resources/compute_region_network_endpoint_group
+    solvableWithoutCode: true
+- op: upsert
+  kind: challenge
+  id: gcp-gke-hardened-cluster
+  data:
+    provider: gcp
+    level: expert
+    title: Harden a GKE Standard cluster baseline
+    summary: Private nodes, authorized networks, Workload Identity, release channel, Shielded nodes and a least-privilege node pool.
+    minutes: 75
+    tags:
+    - gke
+    - kubernetes
+    - security
+    - workload-identity
+    prerequisites:
+    - gcp-private-vm-cloud-nat
+    - gcp-cloud-run-least-privilege
+    runtime: design
+    problem: |-
+      The platform team's first GKE Standard cluster was created with defaults: a default node pool whose nodes have **public IPs** and run as the **Compute Engine default service account**, a control plane reachable from any IP, no release channel, and pods that read node credentials from the metadata server.
+
+      Rewrite `apps` as a hardened baseline following GKE's security guidance. (If you don't need node-level control, GKE Autopilot applies most of these settings for you — this challenge teaches what they are.)
+    requirements:
+    - VPC-native networking with named secondary ranges for Pods and Services.
+    - '**Private nodes** (`enable_private_nodes = true`) and **authorized networks** limiting control-plane access to `var.admin_cidr`.'
+    - '**Workload Identity Federation for GKE** enabled on the cluster (`PROJECT_ID.svc.id.goog`) and the GKE metadata server on nodes (`GKE_METADATA`).'
+    - Enrolled in a **release channel** (REGULAR or STABLE), with auto-repair and auto-upgrade on the node pool.
+    - The default node pool removed; a separately managed `google_container_node_pool` with autoscaling that runs as a **dedicated, minimally privileged** service account.
+    - '**Shielded GKE Nodes** with Secure Boot.'
+    hints:
+    - '`remove_default_node_pool = true` with `initial_node_count = 1` is the documented pattern for managing node pools as separate resources.'
+    - '`private_cluster_config { enable_private_nodes = true, master_ipv4_cidr_block = "172.16.0.0/28" }` plus `master_authorized_networks_config { cidr_blocks { ... } }`.'
+    - Workload Identity is `workload_identity_config { workload_pool = "${var.project_id}.svc.id.goog" }` on the cluster and `workload_metadata_config { mode = "GKE_METADATA" }` in the node pool's `node_config`.
+    - The minimum role for a node service account is `roles/container.defaultNodeServiceAccount`. Private nodes need Cloud NAT for internet egress (see the Cloud NAT challenge).
+    solution: |
+      GKE's hardening guide and its network isolation and identity docs drive every setting here:
+
+      - **Private nodes** have only internal IPs, so nodes aren't reachable from the internet; egress uses Cloud NAT. **Authorized networks** restrict which IP ranges can reach the control plane's endpoint; without them it's reachable from any IP (still authenticated).
+      - **Workload Identity Federation for GKE** lets Pods authenticate to Google Cloud APIs as Kubernetes ServiceAccounts, and the **GKE metadata server** (`GKE_METADATA`) stops Pods from reading the node's own credentials.
+      - **Release channels** keep the control plane and nodes on supported, automatically upgraded versions; **auto-repair** and **auto-upgrade** keep node pools healthy and patched.
+      - A **custom, minimally privileged node service account** with `roles/container.defaultNodeServiceAccount` replaces the default compute account, which may hold Editor.
+      - **Shielded GKE Nodes** with Secure Boot provide verifiable node identity and integrity.
+
+      ```hcl
+      resource "google_container_cluster" "main" {
+        name                     = "apps"
+        location                 = var.region
+        network                  = google_compute_network.gke.id
+        subnetwork               = google_compute_subnetwork.gke.id
+        remove_default_node_pool = true
+        initial_node_count       = 1
+        deletion_protection      = true
+
+        release_channel { channel = "REGULAR" }
+
+        ip_allocation_policy {
+          cluster_secondary_range_name  = "pods"
+          services_secondary_range_name = "services"
+        }
+
+        private_cluster_config {
+          enable_private_nodes   = true
+          master_ipv4_cidr_block = "172.16.0.0/28"
+        }
+
+        master_authorized_networks_config {
+          cidr_blocks {
+            cidr_block   = var.admin_cidr
+            display_name = "corporate"
+          }
+        }
+
+        workload_identity_config {
+          workload_pool = "${var.project_id}.svc.id.goog"
+        }
+
+        enable_shielded_nodes = true
+      }
+
+      resource "google_container_node_pool" "general" {
+        name     = "general"
+        cluster  = google_container_cluster.main.id
+        location = var.region
+
+        autoscaling {
+          min_node_count = 1
+          max_node_count = 3
+        }
+
+        management {
+          auto_repair  = true
+          auto_upgrade = true
+        }
+
+        node_config {
+          machine_type    = "e2-standard-4"
+          service_account = google_service_account.gke_nodes.email
+          oauth_scopes    = ["https://www.googleapis.com/auth/cloud-platform"]
+
+          workload_metadata_config { mode = "GKE_METADATA" }
+
+          shielded_instance_config {
+            enable_secure_boot          = true
+            enable_integrity_monitoring = true
+          }
+        }
+      }
+      ```
+
+      **Without writing code in Nimbo**
+
+      Most of the baseline (private nodes, authorized networks, release channel, the separate node pool, its service account and Shielded Nodes) is switches, selects and nested blocks in the inspector plus nodes from the palette. The part that needs code is the Workload Identity pool: `workload_pool = "${var.project_id}.svc.id.goog"` is a string built from a variable, so write it in `main.tf`.
+    solutionFiles:
+      versions.tf: |
+        terraform {
+          required_version = ">= 1.6"
+
+          required_providers {
+            google = {
+              source  = "hashicorp/google"
+              version = "~> 7.46"
+            }
+          }
+        }
+
+        provider "google" {
+          project        = var.project_id
+          region         = var.region
+          default_labels = local.common_labels
+        }
+      variables.tf: |
+        variable "project_id" {
+          description = "Google Cloud project ID that owns the resources."
+          type        = string
+        }
+
+        variable "region" {
+          description = "Region for regional resources."
+          type        = string
+          default     = "europe-west1"
+        }
+
+        variable "admin_cidr" {
+          description = "CIDR of the corporate network allowed to reach the control plane."
+          type        = string
+          default     = "203.0.113.0/24"
+        }
+      main.tf: |
+        locals {
+          common_labels = {
+            app         = "nimbo-learn"
+            environment = "dev"
+            owner       = "platform"
+          }
+        }
+
+        resource "google_compute_network" "gke" {
+          name                    = "gke-network"
+          auto_create_subnetworks = false
+        }
+
+        resource "google_compute_subnetwork" "gke" {
+          name                     = "gke-${var.region}"
+          network                  = google_compute_network.gke.id
+          region                   = var.region
+          ip_cidr_range            = "10.20.0.0/20"
+          private_ip_google_access = true
+
+          secondary_ip_range {
+            range_name    = "pods"
+            ip_cidr_range = "10.24.0.0/14"
+          }
+
+          secondary_ip_range {
+            range_name    = "services"
+            ip_cidr_range = "10.28.0.0/20"
+          }
+        }
+
+        resource "google_service_account" "gke_nodes" {
+          account_id   = "gke-nodes"
+          display_name = "GKE node pools (minimal)"
+        }
+
+        # Minimal roles for nodes to write logs and metrics.
+        resource "google_project_iam_member" "gke_nodes" {
+          for_each = toset([
+            "roles/container.defaultNodeServiceAccount",
+          ])
+
+          project = var.project_id
+          role    = each.value
+          member  = "serviceAccount:${google_service_account.gke_nodes.email}"
+        }
+
+        resource "google_container_cluster" "main" {
+          name       = "apps"
+          location   = var.region
+          network    = google_compute_network.gke.id
+          subnetwork = google_compute_subnetwork.gke.id
+
+          # Node pools are managed separately.
+          remove_default_node_pool = true
+          initial_node_count       = 1
+          deletion_protection      = true
+
+          release_channel {
+            channel = "REGULAR"
+          }
+
+          ip_allocation_policy {
+            cluster_secondary_range_name  = "pods"
+            services_secondary_range_name = "services"
+          }
+
+          private_cluster_config {
+            enable_private_nodes    = true
+            enable_private_endpoint = false
+            master_ipv4_cidr_block  = "172.16.0.0/28"
+          }
+
+          master_authorized_networks_config {
+            cidr_blocks {
+              cidr_block   = var.admin_cidr
+              display_name = "corporate"
+            }
+          }
+
+          workload_identity_config {
+            workload_pool = "${var.project_id}.svc.id.goog"
+          }
+
+          enable_shielded_nodes = true
+
+          network_policy {
+            enabled = true
+          }
+
+          addons_config {
+            network_policy_config {
+              disabled = false
+            }
+          }
+
+          maintenance_policy {
+            recurring_window {
+              start_time = "2026-01-01T03:00:00Z"
+              end_time   = "2026-01-01T07:00:00Z"
+              recurrence = "FREQ=WEEKLY;BYDAY=SA,SU"
+            }
+          }
+        }
+
+        resource "google_container_node_pool" "general" {
+          name     = "general"
+          cluster  = google_container_cluster.main.id
+          location = var.region
+
+          autoscaling {
+            min_node_count = 1
+            max_node_count = 3
+          }
+
+          management {
+            auto_repair  = true
+            auto_upgrade = true
+          }
+
+          node_config {
+            machine_type    = "e2-standard-4"
+            service_account = google_service_account.gke_nodes.email
+            oauth_scopes    = ["https://www.googleapis.com/auth/cloud-platform"]
+
+            workload_metadata_config {
+              mode = "GKE_METADATA"
+            }
+
+            shielded_instance_config {
+              enable_secure_boot          = true
+              enable_integrity_monitoring = true
+            }
+          }
+        }
+    starter:
+      kind: terraform
+      cloud: gcp
+      files:
+        versions.tf: |
+          terraform {
+            required_version = ">= 1.6"
+
+            required_providers {
+              google = {
+                source  = "hashicorp/google"
+                version = "~> 7.46"
+              }
+            }
+          }
+
+          provider "google" {
+            project        = var.project_id
+            region         = var.region
+            default_labels = local.common_labels
+          }
+        variables.tf: |
+          variable "project_id" {
+            description = "Google Cloud project ID that owns the resources."
+            type        = string
+          }
+
+          variable "region" {
+            description = "Region for regional resources."
+            type        = string
+            default     = "europe-west1"
+          }
+
+          variable "admin_cidr" {
+            description = "CIDR of the corporate network allowed to reach the control plane."
+            type        = string
+            default     = "203.0.113.0/24"
+          }
+        main.tf: |
+          locals {
+            common_labels = {
+              app         = "nimbo-learn"
+              environment = "dev"
+              owner       = "platform"
+            }
+          }
+
+          resource "google_compute_network" "gke" {
+            name                    = "gke-network"
+            auto_create_subnetworks = false
+          }
+
+          resource "google_compute_subnetwork" "gke" {
+            name                     = "gke-${var.region}"
+            network                  = google_compute_network.gke.id
+            region                   = var.region
+            ip_cidr_range            = "10.20.0.0/20"
+            private_ip_google_access = true
+
+            secondary_ip_range {
+              range_name    = "pods"
+              ip_cidr_range = "10.24.0.0/14"
+            }
+
+            secondary_ip_range {
+              range_name    = "services"
+              ip_cidr_range = "10.28.0.0/20"
+            }
+          }
+
+          resource "google_container_cluster" "main" {
+            name     = "apps"
+            location = var.region
+            network    = google_compute_network.gke.id
+            subnetwork = google_compute_subnetwork.gke.id
+
+            initial_node_count  = 3
+            deletion_protection = false
+
+            node_config {
+              machine_type = "e2-standard-4"
+            }
+          }
+    checks:
+    - id: validate
+      label: The configuration validates
+      type: validate
+    - id: vpc-native
+      label: The cluster is VPC-native with secondary ranges
+      type: has
+      has:
+        terraform:
+          type: google_container_cluster
+          where:
+            ip_allocation_policy.cluster_secondary_range_name:
+              exists: true
+            ip_allocation_policy.services_secondary_range_name:
+              exists: true
+    - id: private-nodes
+      label: Nodes are private
+      type: has
+      has:
+        terraform:
+          type: google_container_cluster
+          where:
+            private_cluster_config.enable_private_nodes: true
+    - id: authorized-networks
+      label: Control-plane access is limited to authorized networks
+      type: has
+      has:
+        terraform:
+          type: google_container_cluster
+          where:
+            master_authorized_networks_config.cidr_blocks.cidr_block:
+              exists: true
+    - id: workload-identity
+      label: Workload Identity Federation is enabled
+      type: has
+      has:
+        terraform:
+          type: google_container_cluster
+          where:
+            workload_identity_config.workload_pool:
+              contains: svc.id.goog
+    - id: release-channel
+      label: The cluster follows a release channel
+      type: has
+      has:
+        terraform:
+          type: google_container_cluster
+          where:
+            release_channel.channel:
+              in:
+              - REGULAR
+              - STABLE
+    - id: no-default-pool
+      label: The default node pool is removed
+      type: has
+      has:
+        terraform:
+          type: google_container_cluster
+          where:
+            remove_default_node_pool: true
+    - id: node-sa
+      label: Nodes run as a dedicated service account
+      type: has
+      has:
+        terraform:
+          type: google_container_node_pool
+          where:
+            node_config.service_account:
+              ref: google_service_account
+    - id: metadata-server
+      label: Pods use the GKE metadata server
+      type: has
+      has:
+        terraform:
+          type: google_container_node_pool
+          where:
+            node_config.workload_metadata_config.mode: GKE_METADATA
+    - id: shielded
+      label: Shielded nodes with Secure Boot
+      type: has
+      has:
+        terraform:
+          type: google_container_node_pool
+          where:
+            node_config.shielded_instance_config.enable_secure_boot: true
+    - id: auto-upgrade
+      label: Node pools auto-repair and auto-upgrade
+      type: has
+      has:
+        terraform:
+          type: google_container_node_pool
+          where:
+            management.auto_repair: true
+            management.auto_upgrade: true
+            autoscaling.max_node_count:
+              exists: true
+    sources:
+    - title: Harden your cluster's security (GKE)
+      url: https://docs.cloud.google.com/kubernetes-engine/docs/how-to/hardening-your-cluster
+    - title: About network isolation in GKE
+      url: https://docs.cloud.google.com/kubernetes-engine/docs/concepts/network-isolation
+    - title: About Workload Identity Federation for GKE
+      url: https://docs.cloud.google.com/kubernetes-engine/docs/concepts/workload-identity
+    - title: About release channels (GKE)
+      url: https://docs.cloud.google.com/kubernetes-engine/docs/concepts/release-channels
+    - title: About service accounts in GKE
+      url: https://docs.cloud.google.com/kubernetes-engine/docs/how-to/service-accounts
+    - title: Autopilot overview (GKE)
+      url: https://docs.cloud.google.com/kubernetes-engine/docs/concepts/autopilot-overview
+    - title: Cloud NAT overview
+      url: https://docs.cloud.google.com/nat/docs/overview
+    - title: 'Terraform google provider: google_container_cluster'
+      url: https://registry.terraform.io/providers/hashicorp/google/latest/docs/resources/container_cluster
+    - title: 'Terraform google provider: google_container_node_pool'
+      url: https://registry.terraform.io/providers/hashicorp/google/latest/docs/resources/container_node_pool
+    solvableWithoutCode: false
+- op: upsert
+  kind: challenge
+  id: gcp-org-policy-guardrails
+  data:
+    provider: gcp
+    level: expert
+    title: Organization policy guardrails for a production folder
+    summary: 'Enforce preventive org policies on a folder: no SA keys, no public buckets, no VM external IPs, EU-only locations.'
+    minutes: 60
+    tags:
+    - organization-policy
+    - governance
+    - resource-hierarchy
+    - security
+    prerequisites:
+    - gcp-storage-private-bucket
+    - gcp-private-vm-cloud-nat
+    runtime: design
+    problem: |-
+      Your company is moving production workloads into a dedicated **`production` folder**. Previous challenges fixed individual resources; the security team now wants **preventive guardrails** so that no project under this folder can reintroduce the same risks, whoever writes the Terraform.
+
+      Using the Organization Policy Service on the folder, enforce: no downloadable service account keys, public access prevention and uniform bucket-level access on every bucket, no external IPs on VMs, and — for data residency — resources only in EU locations.
+    requirements:
+    - One `google_org_policy_policy` per constraint, with `parent` set to the `production` folder (policies inherit down the hierarchy).
+    - '`iam.managed.disableServiceAccountKeyCreation` is enforced.'
+    - '`storage.publicAccessPrevention` and `storage.uniformBucketLevelAccess` are enforced.'
+    - '`compute.vmExternalIpAccess` denies all values.'
+    - '`gcp.resourceLocations` allows only the `in:eu-locations` value group.'
+    hints:
+    - A policy's `name` is `<parent>/policies/<constraint>` — the constraint without the `constraints/` prefix, e.g. `${google_folder.production.name}/policies/storage.publicAccessPrevention`.
+    - Boolean constraints use `spec { rules { enforce = "TRUE" } }`; list constraints use `deny_all = "TRUE"` or `values { allowed_values = [...] }`.
+    - Value groups such as `in:eu-locations` cover every EU region and zone, including ones added later.
+    solution: |
+      The **Organization Policy Service** sets **constraints** on the resource hierarchy (organization → folders → projects). A policy set on a folder is **inherited** by every project below it, which makes folder-level policies a preventive guardrail that complements IAM: IAM says *who* can act, organization policies say *what* configurations are allowed. The enterprise foundations blueprint uses organization policy constraints as one of its core preventive controls.
+
+      - `iam.managed.disableServiceAccountKeyCreation` blocks service account key creation: workloads use attached service accounts or Workload Identity Federation instead of long-lived keys.
+      - `storage.publicAccessPrevention` and `storage.uniformBucketLevelAccess` make the bucket settings from the first challenge mandatory for every bucket.
+      - `compute.vmExternalIpAccess` (list constraint) with `deny_all` stops VMs from getting external IPv4 addresses; egress goes through Cloud NAT.
+      - `gcp.resourceLocations` with `in:eu-locations` restricts where location-based resources can be created.
+
+      ```hcl
+      resource "google_org_policy_policy" "no_sa_keys" {
+        name   = "${google_folder.production.name}/policies/iam.managed.disableServiceAccountKeyCreation"
+        parent = google_folder.production.name
+        spec {
+          rules {
+            enforce = "TRUE"
+          }
+        }
+      }
+
+      resource "google_org_policy_policy" "no_vm_external_ips" {
+        name   = "${google_folder.production.name}/policies/compute.vmExternalIpAccess"
+        parent = google_folder.production.name
+        spec {
+          rules {
+            deny_all = "TRUE"
+          }
+        }
+      }
+
+      resource "google_org_policy_policy" "eu_only" {
+        name   = "${google_folder.production.name}/policies/gcp.resourceLocations"
+        parent = google_folder.production.name
+        spec {
+          rules {
+            values {
+              allowed_values = ["in:eu-locations"]
+            }
+          }
+        }
+      }
+      ```
+
+      Roll out guardrails carefully: test them on a non-production folder first, since enforcing a constraint can block existing pipelines (for example, ones that still create service account keys).
+
+      **Without writing code in Nimbo**
+
+      The folder, the `parent` of each policy and the `spec` rules (enforce, deny all, allowed values) can be filled in the inspector. Each policy's `name`, though, is a string built from the folder created in the same workflow (`"${google_folder.production.name}/policies/<constraint>"`), so write those names in `main.tf`.
+    solutionFiles:
+      versions.tf: |
+        terraform {
+          required_version = ">= 1.6"
+
+          required_providers {
+            google = {
+              source  = "hashicorp/google"
+              version = "~> 7.46"
+            }
+          }
+        }
+
+        provider "google" {
+          project        = var.project_id
+          region         = var.region
+          default_labels = local.common_labels
+        }
+      variables.tf: |
+        variable "project_id" {
+          description = "Google Cloud project ID that owns the resources."
+          type        = string
+        }
+
+        variable "region" {
+          description = "Region for regional resources."
+          type        = string
+          default     = "europe-west1"
+        }
+
+        variable "org_id" {
+          description = "Numeric organization ID."
+          type        = string
+        }
+      main.tf: |
+        locals {
+          common_labels = {
+            app         = "nimbo-learn"
+            environment = "dev"
+            owner       = "platform"
+          }
+        }
+
+        resource "google_folder" "production" {
+          display_name = "production"
+          parent       = "organizations/${var.org_id}"
+        }
+
+        # No downloadable service account keys: use attached service accounts or Workload Identity Federation.
+        resource "google_org_policy_policy" "no_sa_keys" {
+          name   = "${google_folder.production.name}/policies/iam.managed.disableServiceAccountKeyCreation"
+          parent = google_folder.production.name
+
+          spec {
+            rules {
+              enforce = "TRUE"
+            }
+          }
+        }
+
+        resource "google_org_policy_policy" "public_access_prevention" {
+          name   = "${google_folder.production.name}/policies/storage.publicAccessPrevention"
+          parent = google_folder.production.name
+
+          spec {
+            rules {
+              enforce = "TRUE"
+            }
+          }
+        }
+
+        resource "google_org_policy_policy" "uniform_bucket_access" {
+          name   = "${google_folder.production.name}/policies/storage.uniformBucketLevelAccess"
+          parent = google_folder.production.name
+
+          spec {
+            rules {
+              enforce = "TRUE"
+            }
+          }
+        }
+
+        resource "google_org_policy_policy" "no_vm_external_ips" {
+          name   = "${google_folder.production.name}/policies/compute.vmExternalIpAccess"
+          parent = google_folder.production.name
+
+          spec {
+            rules {
+              deny_all = "TRUE"
+            }
+          }
+        }
+
+        # Data residency: resources only in EU locations.
+        resource "google_org_policy_policy" "eu_only" {
+          name   = "${google_folder.production.name}/policies/gcp.resourceLocations"
+          parent = google_folder.production.name
+
+          spec {
+            rules {
+              values {
+                allowed_values = ["in:eu-locations"]
+              }
+            }
+          }
+        }
+    starter:
+      kind: terraform
+      cloud: gcp
+      files:
+        versions.tf: |
+          terraform {
+            required_version = ">= 1.6"
+
+            required_providers {
+              google = {
+                source  = "hashicorp/google"
+                version = "~> 7.46"
+              }
+            }
+          }
+
+          provider "google" {
+            project        = var.project_id
+            region         = var.region
+            default_labels = local.common_labels
+          }
+        variables.tf: |
+          variable "project_id" {
+            description = "Google Cloud project ID that owns the resources."
+            type        = string
+          }
+
+          variable "region" {
+            description = "Region for regional resources."
+            type        = string
+            default     = "europe-west1"
+          }
+
+          variable "org_id" {
+            description = "Numeric organization ID."
+            type        = string
+          }
+        main.tf: |
+          locals {
+            common_labels = {
+              app         = "nimbo-learn"
+              environment = "dev"
+              owner       = "platform"
+            }
+          }
+
+          resource "google_folder" "production" {
+            display_name = "production"
+            parent       = "organizations/${var.org_id}"
+          }
+    checks:
+    - id: validate
+      label: The configuration validates
+      type: validate
+    - id: folder-scope
+      label: Policies are attached to the production folder
+      type: has
+      has:
+        terraform:
+          type: google_org_policy_policy
+          where:
+            parent:
+              ref: google_folder
+          count:
+            min: 5
+    - id: no-sa-keys
+      label: Service account key creation is disabled
+      type: has
+      has:
+        terraform:
+          type: google_org_policy_policy
+          where:
+            name:
+              contains: iam.managed.disableServiceAccountKeyCreation
+            spec.rules.enforce:
+              in:
+              - 'TRUE'
+              - true
+    - id: pap
+      label: Public access prevention is mandatory
+      type: has
+      has:
+        terraform:
+          type: google_org_policy_policy
+          where:
+            name:
+              contains: storage.publicAccessPrevention
+            spec.rules.enforce:
+              in:
+              - 'TRUE'
+              - true
+    - id: ubla
+      label: Uniform bucket-level access is mandatory
+      type: has
+      has:
+        terraform:
+          type: google_org_policy_policy
+          where:
+            name:
+              contains: storage.uniformBucketLevelAccess
+            spec.rules.enforce:
+              in:
+              - 'TRUE'
+              - true
+    - id: no-external-ip
+      label: VMs can't get external IPs
+      type: has
+      has:
+        terraform:
+          type: google_org_policy_policy
+          where:
+            name:
+              contains: compute.vmExternalIpAccess
+            spec.rules.deny_all:
+              in:
+              - 'TRUE'
+              - true
+    - id: eu-only
+      label: Resources are restricted to EU locations
+      type: has
+      has:
+        terraform:
+          type: google_org_policy_policy
+          where:
+            name:
+              contains: gcp.resourceLocations
+            spec.rules.values.allowed_values:
+              contains: in:eu-locations
+    sources:
+    - title: Introduction to the Organization Policy Service
+      url: https://docs.cloud.google.com/organization-policy/overview
+    - title: Organization policy constraints reference
+      url: https://docs.cloud.google.com/organization-policy/reference/org-policy-constraints
+    - title: Restrict resource locations
+      url: https://docs.cloud.google.com/organization-policy/restrict-locations
+    - title: Resource hierarchy
+      url: https://docs.cloud.google.com/resource-manager/docs/cloud-platform-resource-hierarchy
+    - title: Enterprise foundations blueprint
+      url: https://docs.cloud.google.com/architecture/blueprints/security-foundations
+    - title: Best practices for using service accounts securely
+      url: https://docs.cloud.google.com/iam/docs/best-practices-service-accounts
+    - title: 'Terraform google provider: google_org_policy_policy'
+      url: https://registry.terraform.io/providers/hashicorp/google/latest/docs/resources/org_policy_policy
+    solvableWithoutCode: false

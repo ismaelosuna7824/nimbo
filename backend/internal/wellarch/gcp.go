@@ -128,7 +128,7 @@ func gcpGuide() Guide {
 				p("Pin Terraform and provider versions",
 					"Pinned versions make plans reproducible.",
 					[]string{"Set required_version and google provider version constraints; pin module versions."},
-					"bp_required_version", "bp_provider_version", "bp_module_version_unpinned"),
+					"bp_required_version", "bp_provider_version", "bp_provider_local_compat", "bp_module_version_unpinned"),
 				p("Parameterise projects and regions; keep secrets in Secret Manager",
 					"Hard-coded values block reuse across environments; plaintext secrets leak through code, tfvars and state diffs.",
 					[]string{

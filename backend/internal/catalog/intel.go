@@ -45,7 +45,7 @@ func (c *Catalog) Types() []model.TypeInfo {
 					Type:  typ,
 					Cloud: p.cloud,
 					Label: s.label,
-					Local: c.supported(p.cloud, s.svc),
+					Local: c.local(p.cloud, typ, s.svc),
 				})
 			}
 		}

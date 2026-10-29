@@ -187,7 +187,7 @@ func awsGuide() Guide {
 				p("Pin Terraform, provider and module versions",
 					"Unpinned versions make plans non-reproducible.",
 					[]string{"Set required_version and required_providers versions; pin module version / ref."},
-					"bp_required_version", "bp_provider_version", "bp_module_version_unpinned"),
+					"bp_required_version", "bp_provider_version", "bp_provider_local_compat", "bp_module_version_unpinned"),
 				p("Parameterise instead of hard-coding",
 					"Hard-coded regions, accounts and AZs block reuse across environments.",
 					[]string{"Use variables with type and description, data.aws_caller_identity and data.aws_region."},

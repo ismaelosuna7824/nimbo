@@ -150,7 +150,7 @@ func startDaemon(home, addr string, legacyMigrated bool, logger *slog.Logger) (*
 	sb, err := sandbox.New(sandbox.Config{
 		Home: home, Events: hub, LegacyHomeMigrated: legacyMigrated,
 		Docker: userPrefs.Docker, Images: userPrefs.Images, TerraformImage: userPrefs.TerraformImage,
-		AWSRegion: userPrefs.DefaultAWSRegion,
+		AWSRegion: userPrefs.DefaultAWSRegion, Catalog: cat,
 	})
 	if err != nil {
 		return nil, err

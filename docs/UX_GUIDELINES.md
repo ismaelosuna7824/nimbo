@@ -17,7 +17,7 @@ Users should always know where they are and how to get anywhere in one click, an
 | --- | --- | --- |
 | **Rail** (left, every screen) | Places: Home, Learn, Connections, then the open workflows. Tools: Search (⌘K), theme, Settings (⌘,) | `features/nav/nav-rail.tsx` |
 | **Page header** | The page's title and its one primary action (New workflow, New connection) | Each page |
-| **Editor bar** | The workflow at a glance: name and save state; Guided/Pro, sandbox, Test, Deploy ▾, problems, workflow menu ⋯, inspector | `features/toolbar/top-bar.tsx` |
+| **Editor bar** | The workflow at a glance: name and save state; Guided/Pro, sandbox, Test, the last deploy's status, Deploy ▾, problems, workflow menu ⋯, inspector | `features/toolbar/top-bar.tsx` |
 | **Menus** | Everything else: Validate/Plan/runs/Destroy under Deploy ▾; import, export, monitoring, convert, close under ⋯ | Same file |
 | **⌘K palette** | Every action by name: a shortcut, never the only way | `features/command/command-palette.tsx` |
 

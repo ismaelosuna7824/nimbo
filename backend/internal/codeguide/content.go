@@ -289,7 +289,7 @@ var compute = map[string][]ComputeOption{
 	},
 	"oci": {
 		{ID: "functions", Name: "OCI Functions", Target: TargetFunction, TerraformTypes: []string{"oci_functions_application", "oci_functions_function"},
-			When: "Event-driven or bursty work behind OCI API Gateway; functions are container images built with the Fn FDK.", AvoidWhen: "Long-running work or steady high throughput.", Local: unverified},
+			When: "Event-driven or bursty work behind OCI API Gateway; functions are container images built with the Fn FDK.", AvoidWhen: "Long-running work or steady high throughput, or a need to run it locally in Nimbo (floci-oci doesn't serve the Functions API oracle/oci 9.3+ calls).", Local: exportOnly},
 		{ID: "container-instances", Name: "OCI Container Instances", Target: TargetContainer, TerraformTypes: []string{"oci_container_instances_container_instance"},
 			When: "A few containers without a cluster.", AvoidWhen: "Autoscaling fleets (use OKE) or a need to run it locally in Nimbo.", Local: exportOnly},
 		{ID: "oke", Name: "Oracle Container Engine for Kubernetes", Target: TargetContainer, TerraformTypes: []string{"oci_containerengine_cluster", "oci_containerengine_node_pool"},

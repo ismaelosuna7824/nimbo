@@ -141,7 +141,8 @@ func (b *builder) commit() {
 	b.pending = nil
 }
 
-// ensureProvider adds the required_providers entry and a provider block
+// ensureProvider adds the required_providers entry (version = the
+// recommended constraint, ProviderCompat) and a provider block
 // (region from a variable; AWS default_tags from local.common_tags). A fresh
 // terraform block also gets required_version. Floci endpoints are never
 // written here; the sandbox injects them at run time so exported code stays
@@ -161,8 +162,7 @@ func (b *builder) ensureProvider(name string) {
 	}
 	rp := ensureBlock(wf.Terraform, "required_providers")
 	if getAttr(&rp.Body, name) == nil {
-		major, _, _ := strings.Cut(p.info.Version, ".")
-		setAttr(&rp.Body, name, lit(map[string]string{"source": p.info.Source, "version": "~> " + major + ".0"}))
+		setAttr(&rp.Body, name, lit(map[string]string{"source": p.info.Source, "version": b.c.compat[name].Recommended}))
 	}
 	if p.cloud == "" || b.hasProvider(name) {
 		return

@@ -96,6 +96,9 @@ type structureView struct {
 	MaxNesting int      `json:"max_nesting"`
 	Backend    string   `json:"backend,omitempty"`
 	State      string   `json:"state"`
+	// Providers: constraint, locked release, the constraint Nimbo
+	// recommends and status ok | outdated | broken-locally.
+	Providers []model.ProviderVersion `json:"providers,omitempty"`
 }
 
 func layoutSetting(s string) string {
@@ -109,6 +112,7 @@ func viewStructure(s model.StructureSummary) *structureView {
 	v := &structureView{
 		Layout: s.Layout, LayoutSetting: layoutSetting(s.LayoutSetting), LayoutNote: s.LayoutNote, Service: s.Service, Environments: s.Environments, States: s.States,
 		ResourcesPerState: s.ResourcesPerState, RootResources: s.RootResources, MaxNesting: s.MaxNesting, Backend: s.Backend, State: s.State,
+		Providers: s.Providers,
 	}
 	for _, m := range s.Modules {
 		var line string
@@ -442,17 +446,19 @@ type runView struct {
 	// Destructive: a needs_confirmation deploy's deletes and replacements.
 	Destructive []model.DestructiveChange `json:"destructive,omitempty"`
 	// Drift: resources a succeeded deploy still changes.
-	Drift    []model.DriftChange `json:"drift,omitempty"`
-	Log      []string            `json:"log_tail,omitempty"`
-	Deployed *stateView          `json:"deployed,omitempty"`
-	Hint     string              `json:"hint,omitempty"`
+	Drift []model.DriftChange `json:"drift,omitempty"`
+	// Warnings: problems that didn't stop the run (provider versions).
+	Warnings []string   `json:"warnings,omitempty"`
+	Log      []string   `json:"log_tail,omitempty"`
+	Deployed *stateView `json:"deployed,omitempty"`
+	Hint     string     `json:"hint,omitempty"`
 }
 
 const logTail = 60
 
 func viewRun(r *model.Run) runView {
 	v := runView{ID: r.ID, Action: r.Action, Environment: r.Environment, Status: r.Status, ExitCode: r.ExitCode, Plan: r.Plan, Error: r.Error,
-		Destructive: r.Destructive, Drift: r.Drift}
+		Destructive: r.Destructive, Drift: r.Drift, Warnings: r.Warnings}
 	lines := r.Log
 	if len(lines) > logTail {
 		lines = lines[len(lines)-logTail:]
@@ -465,6 +471,8 @@ func viewRun(r *model.Run) runView {
 		v.Hint = fmt.Sprintf("Nothing was applied: this deploy would delete or replace %d deployed resource(s) (see destructive; their data in the sandbox is lost). Show the list to the user and ask; only after they agree call deploy again with confirm_destroy=true, which applies exactly this plan.", len(r.Destructive))
 	case len(r.Drift) > 0:
 		v.Hint = fmt.Sprintf("Deployed, but %d resource(s) still change right after the deploy (see drift), so every deploy would change them again: fix them with each item's hint.", len(r.Drift))
+	case len(r.Warnings) > 0:
+		v.Hint = "See warnings: a provider release the run selected is too old for, or known to break, resources on the local emulators. Set the version constraint each warning names (get_workflow structure.providers shows the recommended one), then run again."
 	}
 	return v
 }

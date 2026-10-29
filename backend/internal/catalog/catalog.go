@@ -31,6 +31,7 @@ type Catalog struct {
 	byName    map[string]*provider
 	cur       *curated
 	clouds    map[model.Cloud]*cloudServices
+	compat    map[string]*ProviderCompat // curated/provider_compat.json by provider name
 
 	summariesOnce sync.Once
 	summaries     []summary
@@ -137,6 +138,9 @@ func Load() (*Catalog, error) {
 		}
 		c.providers = append(c.providers, p)
 		c.byName[m.name] = p
+	}
+	if c.compat, err = loadCompat(c); err != nil {
+		return nil, err
 	}
 	return c, nil
 }

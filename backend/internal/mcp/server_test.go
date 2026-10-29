@@ -42,7 +42,7 @@ func sessionURL(t *testing.T) (*sdk.ClientSession, *events.Hub, string) {
 		t.Fatal(err)
 	}
 	hub := events.NewHub()
-	sb, err := sandbox.New(sandbox.Config{Home: home, Events: hub})
+	sb, err := sandbox.New(sandbox.Config{Home: home, Events: hub, Catalog: cat})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -142,6 +142,11 @@ func TestAgentBuildsWorkflowThroughTools(t *testing.T) {
 	// The bucket starter adds its encryption configuration and public access block.
 	if len(got.Nodes) != 4 || !slices.Contains(got.Edges, "aws_s3_bucket.uploads.id -> aws_sqs_queue.work.name") {
 		t.Fatalf("get_workflow nodes=%d edges=%v", len(got.Nodes), got.Edges)
+	}
+	// add_node wrote the recommended constraint, which the structure reports as ok.
+	if s := got.Structure; s == nil || len(s.Providers) != 1 || s.Providers[0].Name != "aws" || s.Providers[0].Constraint != s.Providers[0].Recommended ||
+		!strings.HasPrefix(s.Providers[0].Recommended, "~> 6.") || s.Providers[0].Status != "ok" || s.Providers[0].Locked != "" {
+		t.Fatalf("get_workflow structure providers = %+v", got.Structure)
 	}
 
 	tf := mustTool(t, cs, "get_terraform", map[string]any{"workflow": wf.ID}, nil)

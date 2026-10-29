@@ -19,14 +19,15 @@ var testCatalog = func() *catalog.Catalog {
 	return c
 }()
 
-// pinned is the boilerplate that keeps the version rules quiet.
+// pinned is the boilerplate that keeps the version rules quiet: the
+// constraints Nimbo writes (catalog.ProviderCompat Recommended).
 const pinned = `
 terraform {
   required_version = ">= 1.6"
   required_providers {
-    aws     = { source = "hashicorp/aws", version = "~> 6.0" }
-    azurerm = { source = "hashicorp/azurerm", version = "~> 4.0" }
-    google  = { source = "hashicorp/google", version = "~> 7.0" }
+    aws     = { source = "hashicorp/aws", version = "~> 6.69" }
+    azurerm = { source = "hashicorp/azurerm", version = "~> 4.81" }
+    google  = { source = "hashicorp/google", version = "~> 7.46" }
   }
 }
 `
@@ -195,6 +196,48 @@ resource "aws_sqs_queue" "q" {}`, 1},
 resource "aws_sqs_queue" "q" {}`, 1},
 			{"pinned", pinned + `resource "aws_sqs_queue" "q" {}`, 0},
 			{"builtin terraform_data", pinned + `resource "terraform_data" "x" {}`, 0},
+		},
+		"bp_provider_local_compat": {
+			{"recommended constraints", pinned + `resource "google_sql_database" "d" {}`, 0},
+			{"previous major", googleConstraint("~> 6.0") + `resource "google_storage_bucket" "b" {}`, 1},
+			{"allows a range that breaks a resource", googleConstraint("~> 7.0") + `resource "google_sql_database" "d" {}`, 1},
+			{"allows releases older than the local minimum", googleConstraint("~> 7.0") + `resource "google_storage_bucket" "b" {}`, 1},
+			{"forces a broken release", googleConstraint("= 7.20.0") + `resource "google_sql_database" "d" {}`, 1},
+			{"minimum at the verified release", googleConstraint(">= 7.26.0, < 8.0.0") + `resource "google_sql_database" "d" {}`, 0},
+			{"no constraint is bp_provider_version's", googleConstraint("") + `resource "google_storage_bucket" "b" {}`, 0},
+			{"unparseable constraint", googleConstraint("latest") + `resource "google_storage_bucket" "b" {}`, 0},
+			{"another namespace's provider", `terraform {
+  required_providers {
+    google = { source = "acme/google", version = "~> 1.0" }
+  }
+}
+resource "google_storage_bucket" "b" {}`, 0},
+			{"legacy string constraint", `terraform {
+  required_providers {
+    aws = "~> 5.0"
+  }
+}
+resource "aws_sqs_queue" "q" {}`, 1},
+			{"emulator gap of the catalog release is the run's", `terraform {
+  required_providers {
+    oci = { source = "oracle/oci", version = "~> 9.10" }
+  }
+}
+resource "oci_functions_application" "app" {}`, 0},
+			{"previous oci major", `terraform {
+  required_providers {
+    oci = { source = "oracle/oci", version = "~> 8.29" }
+  }
+}
+resource "oci_objectstorage_bucket" "b" {}`, 1},
+			{"one finding per provider", `terraform {
+  required_providers {
+    aws    = { source = "hashicorp/aws", version = "~> 5.0" }
+    google = { source = "hashicorp/google", version = "~> 6.0" }
+  }
+}
+resource "aws_sqs_queue" "q" {}
+resource "google_sql_database" "d" {}`, 2},
 		},
 		"bp_hardcoded_region": {
 			{"aws region literal", pinned + `resource "aws_dynamodb_table" "t" {

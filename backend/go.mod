@@ -24,6 +24,7 @@ require (
 	github.com/compose-spec/compose-go/v2 v2.16.2
 	github.com/go-logr/logr v1.4.3
 	github.com/go-sql-driver/mysql v1.10.1
+	github.com/hashicorp/go-version v1.9.0
 	github.com/hashicorp/hcl/v2 v2.25.0
 	github.com/jackc/pgx/v5 v5.11.0
 	github.com/moby/patternmatcher v0.6.1

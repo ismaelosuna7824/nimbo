@@ -128,7 +128,12 @@ inline in Terraform.
    a `hint` (JSON policy normalization → `jsonencode()` /
    `aws_iam_policy_document`; `timestamp()`/`uuid()` → a variable or
    `ignore_changes`; tags repeating provider `default_tags`; otherwise
-   `lifecycle { ignore_changes }`).
+   `lifecycle { ignore_changes }`). Any run may return `warnings`: provider
+   releases the lock file selected that are older than the oldest verified
+   on the local emulators or known to break some of its resources there
+   (each names the resources and the constraint to set); the agent updates
+   `required_providers` and runs again (the sandbox then upgrades its lock
+   file itself).
 7. `get_endpoints` → `try_endpoint` to show the user how to call what was
    deployed (URLs, queue URLs, snippets) and smoke test it.
 8. `list_load_targets` → `run_load_test` (start with `smoke`).
@@ -253,7 +258,13 @@ Rules the agents follow (and the `bp_*` rule that checks each):
 - **Versions.** `~>` pins in roots (`required_version`, providers;
   `bp_required_version`, `bp_provider_version`), `>=` minimums in modules;
   registry modules with `version`, git modules with `?ref=<tag>`
-  (`bp_module_version_unpinned`).
+  (`bp_module_version_unpinned`). Provider versions never come from memory:
+  keep what `add_node` writes or `structure.providers[].recommended` from
+  `get_workflow` (`~> <major>.<minor>` of the schema Nimbo embeds);
+  `bp_provider_local_compat` flags constraints that miss that major or allow
+  releases older than the oldest verified on the local emulators or known
+  to break the workflow's resources there (e.g. hashicorp/google < 7.26 and
+  Cloud SQL databases).
 - **Attachments.** Prefer standalone rule/attachment resources
   (`aws_vpc_security_group_ingress_rule`, `aws_iam_role_policy_attachment`)
   over inline blocks; mixing both styles is flagged (`bp_inline_sg_rules`,
@@ -271,8 +282,12 @@ Rules the agents follow (and the `bp_*` rule that checks each):
 `resources_per_state` (root + local modules, constant count/for_each
 expanded, feature-flagged blocks counted as absent), `root_resources`,
 `modules` (call → directory or source, kind, resources, depth),
-`max_nesting`, `backend` and where `state` lives
-(`GET /workflows/{id}/structure`).
+`max_nesting`, `backend`, where `state` lives and `providers` — per
+embedded provider `{name, constraint, locked, recommended, status}` with
+status `ok`, `outdated` (misses the schema's major, or allows/locks releases
+below the verified minimum or in a known-broken range) or `broken-locally`
+(the selected release breaks some of the workflow's resources on the local
+emulators) — (`GET /workflows/{id}/structure`).
 
 ## Safety: real services
 
@@ -830,7 +845,7 @@ Conventions).
 | `get_open_workflow` | — | The workflow open in the desktop app, like `get_workflow` (or a message when none is) |
 | `list_templates` | — | Starter templates (`id`, `name`, `description`, `kind`, `cloud`, `difficulty`, `tags`); edge patterns add `category: "edge-patterns"` and `pattern` (`reverse-proxy`, `api-gateway`, `load-balancer`), one of each per kind and cloud |
 | `create_workflow` | `name`, `description?`, `template?`, `kind?`, `mode?` | New workflow, optionally from a template; `kind: "docker"` (or a `docker-*` template) makes a docker-compose workflow; `mode` is the build mode: `architecture` (default: infrastructure plus smoke handlers that prove the wiring) or `full` (real application code; spec first with `spec_feature`) |
-| `get_workflow` | `workflow` | Compact workflow: nodes, edges, variables, outputs, environments, diagnostics, and `structure` (layout, states, resources per state, modules, nesting, backend) |
+| `get_workflow` | `workflow` | Compact workflow: nodes, edges, variables, outputs, environments, diagnostics, and `structure` (layout, states, resources per state, modules, nesting, backend, provider versions with status) |
 | `update_workflow` | `workflow`, `name?`, `description?`, `mode?` (`architecture`/`full`), `layout?` (`auto`/`single`/`environments`), `environment?` | Rename a workflow, change its description, build mode or export layout (only the given fields change; `description: ""` clears it); the Terraform is unchanged; returns the workflow with its `structure`. `environment` (docker and Kubernetes) switches the active environment (`""` = base; see Environments) |
 | `archive_workflow` / `unarchive_workflow` | `workflow` | Close a workflow (sandbox stopped keeping state, hidden, runs refused) or restore it |
 | `search_resources` | `query`, `cloud?`, `kind?`, `supported_only?`, `limit?` | Search the resource catalog |

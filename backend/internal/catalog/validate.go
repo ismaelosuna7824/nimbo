@@ -66,13 +66,18 @@ func (c *Catalog) Validate(wf *model.Workflow) []model.Diagnostic {
 			if svc == "" {
 				svc = n.Type
 			}
-			out = append(out, model.Diagnostic{
+			d := model.Diagnostic{
 				Severity: model.SeverityWarning,
 				Code:     CodeFlociUnsupported,
 				Message:  fmt.Sprintf("%s is not supported by the local Floci emulator (service %q)", n.Type, svc),
 				Detail:   "Sandbox deploys of this resource will likely fail. It still exports to valid Terraform for the real cloud.",
 				NodeID:   n.ID,
-			})
+			}
+			if is, ok := c.catalogGap(n.Type); ok {
+				d.Message = fmt.Sprintf("%s doesn't deploy on the local Floci emulator with the provider release Nimbo targets", n.Type)
+				d.Detail = is.Message + ". " + is.Fix + ". It still exports to valid Terraform for the real cloud."
+			}
+			out = append(out, d)
 		}
 	}
 	return out

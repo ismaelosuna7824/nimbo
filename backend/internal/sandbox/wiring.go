@@ -216,7 +216,8 @@ var gcpEndpoints = []hclAttr{
 // /v1/v1/...) and got 404: Cloud SQL instances and users, project IAM
 // members, google_project_service, GKE. These roots serve them; the
 // resources generated from the REST definitions on the same APIs then miss
-// the version (google_sql_database), see legacyGoogleWarning.
+// the version (google_sql_database): the catalog's provider version table
+// lists that range, and runs warn about it (providerWarnings).
 var gcpLegacyEndpoints = map[string]string{
 	"sql_custom_endpoint":              flociGCP + "/",
 	"resource_manager_custom_endpoint": flociGCP + "/",
@@ -270,33 +271,6 @@ func wiringVersionsChanged(before, after map[string]string) bool {
 		}
 	}
 	return false
-}
-
-// legacyGoogleWarning names the resources of wf that fail in the sandbox
-// because the lock file selected a google provider before 7.26 ("" when
-// none do).
-func legacyGoogleWarning(wf *model.Workflow, versions map[string]string) string {
-	var version string
-	for _, p := range []string{"google", "google-beta"} {
-		if legacyGoogle(versions[p]) {
-			version = "hashicorp/" + p + " " + versions[p]
-			break
-		}
-	}
-	if version == "" {
-		return ""
-	}
-	var failing []string
-	for _, n := range wf.Nodes {
-		if n.Kind == model.KindResource && n.Type == "google_sql_database" {
-			failing = append(failing, n.Type+"."+n.Name)
-		}
-	}
-	if len(failing) == 0 {
-		return ""
-	}
-	return fmt.Sprintf("Warning: %s predates 7.26: on the sandbox's local endpoints it requests Cloud SQL databases on a path the emulator doesn't serve, so creating %s fails locally (instances and users work). "+
-		"Require hashicorp/google >= 7.26 in required_providers (e.g. version = \"~> 7.26\") to deploy them in the sandbox.", version, strings.Join(failing, ", "))
 }
 
 // ociClients are the OCI SDK clients floci-oci implements.

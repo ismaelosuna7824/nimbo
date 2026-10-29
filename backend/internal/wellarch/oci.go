@@ -106,7 +106,7 @@ func ociGuide() Guide {
 				p("Pin Terraform and provider versions",
 					"Pinned versions make plans reproducible.",
 					[]string{"Set required_version and the oracle/oci provider version constraint."},
-					"bp_required_version", "bp_provider_version"),
+					"bp_required_version", "bp_provider_version", "bp_provider_local_compat"),
 				p("Use remote state",
 					"Shared state prevents conflicting applies.",
 					[]string{"Use an Object Storage-backed backend (s3-compatible or oci backend)."},

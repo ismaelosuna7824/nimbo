@@ -884,6 +884,9 @@ type Run struct {
 	// a plan describes that version only.
 	WorkflowVersion *time.Time `json:"workflowVersion,omitempty"`
 	Error           string     `json:"error,omitempty"`
+	// Warnings are problems the run found that didn't stop it, e.g. a
+	// provider release that is known to break resources locally.
+	Warnings []string `json:"warnings,omitempty"`
 	// Compose runs: the service the action was limited to ("" = all) and
 	// whether down also removed the named volumes (Kubernetes: the PVCs).
 	Service       string `json:"service,omitempty"`
@@ -1895,6 +1898,23 @@ type StructureSummary struct {
 	Backend string `json:"backend,omitempty"`
 	// State says where state lives once exported.
 	State string `json:"state"`
+	// Providers are the required providers Nimbo embeds a schema for, with
+	// their constraint, the locked release and how they fare locally.
+	Providers []ProviderVersion `json:"providers,omitempty"`
+}
+
+// ProviderVersion is one required provider's version situation.
+type ProviderVersion struct {
+	Name        string `json:"name"`                 // local name in required_providers
+	Constraint  string `json:"constraint,omitempty"` // "" = none
+	Locked      string `json:"locked,omitempty"`     // release in .terraform.lock.hcl ("" = not initialized)
+	Recommended string `json:"recommended"`          // the constraint Nimbo writes
+	// Status is "ok", "outdated" (misses the embedded schema's major,
+	// allows or locks releases older than the oldest verified locally or
+	// known to break some of the workflow's resources there) or
+	// "broken-locally" (the selected release is known to break some of the
+	// workflow's resources on the local emulators).
+	Status string `json:"status"`
 }
 
 // StructureModule is one module call of a StructureSummary.

@@ -6,6 +6,7 @@ import (
 	"slices"
 	"strings"
 
+	"github.com/ismaelosuna7824/nimbo/backend/internal/catalog"
 	"github.com/ismaelosuna7824/nimbo/backend/internal/model"
 )
 
@@ -245,10 +246,87 @@ func checkProviderVersion(p *pass) {
 		if msg == "" {
 			continue
 		}
+		fix := fmt.Sprintf("In terraform { required_providers { … } } set %s = { source = \"<namespace>/%s\", version = \"~> X.0\" } with the major version you tested.", name, name)
+		if pc, ok := p.cat.ProviderCompat(name); ok {
+			fix = fmt.Sprintf("In terraform { required_providers { … } } set %s = { source = %q, version = %q } (the constraint Nimbo writes).", name, pc.Source, pc.Recommended)
+		}
 		p.report(finding{
 			message: msg,
 			why:     "An unpinned provider upgrades to the newest release on the next init, and a new major version can change or remove resources.",
-			fix:     fmt.Sprintf("In terraform { required_providers { … } } set %s = { source = \"<namespace>/%s\", version = \"~> X.0\" } with the major version you tested.", name, name),
+			fix:     fix,
 		})
 	}
+}
+
+// checkProviderLocalCompat flags required_providers constraints that miss
+// the major of the schema Nimbo validates against, or allow releases older
+// than the oldest verified on the local emulators or known to break some of
+// the workflow's resources there (catalog.ProviderCompat). Emulator gaps
+// that the catalog release itself hits are left to the run warnings: no
+// constraint Nimbo recommends avoids them.
+func checkProviderLocalCompat(p *pass) {
+	types := catalog.ResourceTypes(p.wf)
+	for _, rp := range catalog.RequiredProviders(p.wf) {
+		if strings.TrimSpace(rp.Constraint) == "" {
+			continue // bp_provider_version
+		}
+		pc, ok := p.cat.CompatFor(rp)
+		if !ok {
+			continue
+		}
+		pc = pc.WithoutGaps()
+		cc := pc.CheckConstraint(rp.Constraint, types)
+		if cc.Invalid || cc.OK() {
+			continue
+		}
+		subject := fmt.Sprintf("%s version %q", pc.Source, rp.Constraint)
+		schema := fmt.Sprintf("Nimbo validates attributes and blocks against the %s %s schema", pc.Source, pc.Catalog)
+		var message string
+		var why []string
+		switch {
+		case cc.OtherMajor:
+			message = fmt.Sprintf("%s can't select a %d.x release, the major Nimbo's schema comes from (%s)", subject, pc.Major(), pc.Catalog)
+			if len(cc.Issues) > 0 {
+				message += fmt.Sprintf(", and allows releases known to break %s on the local emulators", issueServices(cc.Issues))
+			}
+			why = append(why, schema+": with another major, resources and attributes it accepts can be renamed, removed or missing, here and on the real cloud.")
+		case len(cc.Issues) > 0 && cc.Broken:
+			message = fmt.Sprintf("%s only allows releases known to break %s on the local emulators", subject, issueServices(cc.Issues))
+		case len(cc.Issues) > 0:
+			message = fmt.Sprintf("%s allows releases known to break %s on the local emulators", subject, issueServices(cc.Issues))
+		default:
+			message = fmt.Sprintf("%s allows releases older than %s, the oldest verified on the local emulators", subject, pc.LocalMinimum)
+		}
+		for _, is := range cc.Issues {
+			why = append(why, is.Message+" ("+is.Versions+").")
+		}
+		if cc.BelowMinimum && !cc.OtherMajor {
+			why = append(why, fmt.Sprintf("Releases before %s are not verified against the local emulators, and %s: an older release can lack attributes Nimbo accepts.", pc.LocalMinimum, schema))
+		}
+		why = append(why, "A lock file keeps whichever release init selected first, so an allowed old release stays until terraform init -upgrade (the sandbox upgrades its own copy when the lock no longer matches).")
+		fix := fmt.Sprintf("Set version = %q for %s in required_providers (the constraint Nimbo writes), then run terraform init -upgrade.", pc.Recommended, rp.Local)
+		for i := len(cc.Issues) - 1; i >= 0; i-- {
+			if f := cc.Issues[i].Fix; f != "" && !strings.Contains(fix, f) {
+				fix = f + ": " + strings.ToLower(fix[:1]) + fix[1:]
+			}
+		}
+		p.report(finding{message: message, why: strings.Join(why, " "), fix: fix})
+	}
+}
+
+// issueServices names what issues break: their resource types, or "every
+// resource of the provider".
+func issueServices(issues []catalog.CompatIssue) string {
+	var out []string
+	for _, is := range issues {
+		if len(is.Services) == 0 {
+			return "every resource of the provider"
+		}
+		for _, s := range is.Services {
+			if !slices.Contains(out, s) {
+				out = append(out, s)
+			}
+		}
+	}
+	return strings.Join(out, ", ")
 }

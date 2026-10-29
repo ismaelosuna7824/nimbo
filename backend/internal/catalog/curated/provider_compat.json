@@ -1,0 +1,43 @@
+{
+  "providers": [
+    {"name": "aws", "localMinimum": "5.100.0"},
+    {
+      "name": "azurerm",
+      "localMinimum": "4.9.0",
+      "issues": [
+        {
+          "versions": "< 4.9.0",
+          "services": ["azurerm_storage_account"],
+          "message": "hashicorp/azurerm before 4.9 has no features.storage.data_plane_available, so storage accounts reach for data-plane hosts the sandbox can't resolve: 4.x hangs creating them, 3.x fails retrieving their static website properties",
+          "fix": "Require hashicorp/azurerm 4.9 or newer"
+        }
+      ]
+    },
+    {
+      "name": "google",
+      "localMinimum": "7.26.0",
+      "issues": [
+        {
+          "versions": "< 7.26.0",
+          "services": ["google_sql_database"],
+          "message": "hashicorp/google before 7.26 keeps the API version in request paths built from http custom endpoints, so creating Cloud SQL databases fails on the local emulator (HTTP 400 \"uploadId is required\"); Nimbo points Cloud SQL instances and users, project IAM, Service Usage and GKE at emulator roots so those still work",
+          "fix": "Require hashicorp/google 7.26 or newer"
+        }
+      ]
+    },
+    {
+      "name": "oci",
+      "localMinimum": "8.29.0",
+      "issues": [
+        {
+          "versions": ">= 9.3.0",
+          "services": ["oci_functions_*"],
+          "message": "oracle/oci 9.3 and newer call the Functions API version 20260325, which floci-oci (0.5.0) doesn't serve: creating functions applications fails locally (404)",
+          "fix": "To deploy functions in the sandbox pin version = \"9.2.0\" (the newest release that calls Functions API 20181201; Nimbo validates against the newer schema, so attributes added later are unavailable), or deploy them on OCI only"
+        }
+      ]
+    },
+    {"name": "archive", "localMinimum": "2.0.0"},
+    {"name": "random", "localMinimum": "3.0.0"}
+  ]
+}

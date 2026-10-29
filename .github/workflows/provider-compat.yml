@@ -1,0 +1,158 @@
+# Weekly check that Terraform provider releases and Floci image updates don't
+# silently break local deploys. See docs/PROVIDER_COMPAT.md.
+name: Provider compat
+
+on:
+  schedule:
+    - cron: "0 6 * * 1" # Mondays 06:00 UTC
+  workflow_dispatch:
+    inputs:
+      providers:
+        description: "Comma-separated providers from the compat table (empty = all)"
+        required: false
+        default: ""
+      versions:
+        description: "Version selectors: minimum, major, latest, X.Y.Z or name@X.Y.Z"
+        required: false
+        default: "minimum,major,latest"
+
+concurrency:
+  group: provider-compat
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  discover:
+    name: Providers
+    runs-on: ubuntu-24.04
+    outputs:
+      providers: ${{ steps.list.outputs.providers }}
+    steps:
+      - uses: actions/checkout@v7
+      - id: list
+        env:
+          INPUT: ${{ inputs.providers }}
+        run: |
+          if [ -n "$INPUT" ]; then
+            providers=$(jq -cn --arg s "$INPUT" '$s | split(",") | map(gsub("^\\s+|\\s+$"; "")) | map(select(. != ""))')
+          else
+            providers=$(jq -c '[.providers[].name]' backend/internal/catalog/curated/provider_compat.json)
+          fi
+          echo "providers=$providers" >> "$GITHUB_OUTPUT"
+          echo "Providers: $providers"
+
+  matrix:
+    name: Matrix (${{ matrix.provider }})
+    needs: discover
+    runs-on: ubuntu-24.04
+    timeout-minutes: 180
+    strategy:
+      fail-fast: false
+      matrix:
+        provider: ${{ fromJSON(needs.discover.outputs.providers) }}
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: backend/go.mod
+          cache-dependency-path: backend/go.sum
+      # The sandbox pulls floci/*:latest, hashicorp/terraform:latest and
+      # alpine on first use: a fresh runner always tests the current images.
+      - name: Apply and re-plan on Floci
+        env:
+          NIMBO_COMPAT_PROVIDERS: ${{ matrix.provider }}
+          NIMBO_COMPAT_VERSIONS: ${{ inputs.versions || 'minimum,major,latest' }}
+          NIMBO_COMPAT_REPORT: ${{ runner.temp }}/report/compat-${{ matrix.provider }}.md
+        run: go test -tags compat -timeout 170m -run '^TestProviderCompat$' -v ./internal/sandbox/
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: compat-${{ matrix.provider }}
+          path: ${{ runner.temp }}/report/
+          if-no-files-found: ignore
+          retention-days: 30
+
+  majors:
+    name: Catalog vs registry
+    runs-on: ubuntu-24.04
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: backend/go.mod
+          cache-dependency-path: backend/go.sum
+      - name: Compare embedded schemas with the newest releases
+        env:
+          NIMBO_COMPAT_REPORT: ${{ runner.temp }}/report/majors.md
+        run: go test -tags compat -run '^TestProviderMajors$' -v ./internal/sandbox/
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: compat-majors
+          path: ${{ runner.temp }}/report/
+          if-no-files-found: ignore
+          retention-days: 30
+
+  report:
+    name: Report issue
+    needs: [discover, matrix, majors]
+    if: always() && needs.discover.result == 'success'
+    runs-on: ubuntu-24.04
+    permissions:
+      issues: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      LABEL: provider-compat
+      TITLE: "Provider compatibility: local deploys on Floci"
+      RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+      FAILED: ${{ needs.matrix.result != 'success' || needs.majors.result != 'success' }}
+    steps:
+      # Nothing to download when every job failed before testing; the issue
+      # body then points at the run log.
+      - uses: actions/download-artifact@v7
+        continue-on-error: true
+        with:
+          pattern: compat-*
+          path: reports
+          merge-multiple: true
+      - name: Open, update or close the provider-compat issue
+        run: |
+          {
+            if [ "$FAILED" = "true" ]; then
+              echo "The weekly provider compatibility run found problems: [run]($RUN_URL)."
+            else
+              echo "All providers pass on Floci: [run]($RUN_URL)."
+            fi
+            echo
+            echo "How to read and fix this: [docs/PROVIDER_COMPAT.md](${{ github.server_url }}/${{ github.repository }}/blob/${{ github.sha }}/docs/PROVIDER_COMPAT.md)."
+            echo
+            if [ -f reports/majors.md ]; then cat reports/majors.md; fi
+            for f in reports/compat-*.md; do [ -f "$f" ] && cat "$f"; done
+            if ! ls reports/*.md >/dev/null 2>&1; then
+              echo "No report was written (a job failed before testing); see the run log."
+            fi
+          } > body.md
+          cat body.md
+
+          issue=$(gh issue list --label "$LABEL" --state open --limit 1 --json number --jq '.[0].number // empty')
+          if [ "$FAILED" = "true" ]; then
+            gh label create "$LABEL" --color D93F0B --description "Terraform provider or Floci image breaks local deploys" --force
+            if [ -n "$issue" ]; then
+              gh issue edit "$issue" --body-file body.md
+              gh issue comment "$issue" --body "Still failing: [run]($RUN_URL). The issue body has the current matrix."
+            else
+              gh issue create --title "$TITLE" --label "$LABEL" --body-file body.md
+            fi
+          elif [ -n "$issue" ]; then
+            gh issue comment "$issue" --body-file body.md
+            gh issue close "$issue" --reason completed
+          fi

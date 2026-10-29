@@ -138,7 +138,7 @@ func (c *Catalog) toSummary(s summary) model.ResourceSummary {
 		Label:          s.label,
 		Icon:           s.icon,
 		Popular:        s.popular,
-		FlociSupported: c.supported(s.cloud, s.svc),
+		FlociSupported: c.local(s.cloud, s.typ, s.svc),
 	}
 }
 
@@ -198,7 +198,7 @@ func (c *Catalog) Search(q Query) []model.ResourceSummary {
 			score += 20
 		}
 		score += cloudBonus[s.cloud]
-		if q.SupportedOnly && !c.supported(s.cloud, s.svc) {
+		if q.SupportedOnly && !c.local(s.cloud, s.typ, s.svc) {
 			continue
 		}
 		hits = append(hits, hit{s, score})

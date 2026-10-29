@@ -61,7 +61,7 @@ func newEnvWith(t testing.TB, docker string, learnFS fs.FS) *testEnv {
 		}
 	}
 	hub := events.NewHub()
-	sb, err := sandbox.New(sandbox.Config{Home: home, Docker: docker, Events: hub})
+	sb, err := sandbox.New(sandbox.Config{Home: home, Docker: docker, Events: hub, Catalog: testCatalog})
 	if err != nil {
 		t.Fatal(err)
 	}

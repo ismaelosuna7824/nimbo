@@ -18,6 +18,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/ismaelosuna7824/nimbo/backend/internal/model"
@@ -271,30 +272,8 @@ func (m *Manager) runSteps(ctx context.Context, rs *runState, req RunRequest) er
 		m.logLine(rs, "system", "Environment variables: "+strings.Join(keys, ", "))
 	}
 
-	m.logLine(rs, "system", "$ terraform init")
-	// The shared plugin cache is not safe for concurrent writers.
-	pluginCacheMu.Lock()
-	code, err := m.terraform(ctx, rs, "init", env, userEnv, "init", "-input=false", "-no-color", "-upgrade=false")
-	pluginCacheMu.Unlock()
-	if err != nil {
+	if err := m.initWorkdir(ctx, rs, wf, work, versions, env, userEnv); err != nil {
 		return err
-	}
-	if code != 0 {
-		m.setExit(rs, code)
-		return fmt.Errorf("terraform init exited with code %d", code)
-	}
-	after := readLockVersions(work)
-	if wiringVersionsChanged(versions, after) {
-		// The wiring file set depends only on the workflow, so rewriting in
-		// place keeps the workdir manifest valid.
-		for name, content := range wiringFiles(wf, after) {
-			if err := writeFile(filepath.Join(work, name), content); err != nil {
-				return err
-			}
-		}
-	}
-	if warning := legacyGoogleWarning(wf, after); warning != "" {
-		m.logLine(rs, "system", warning)
 	}
 
 	var args []string
@@ -311,7 +290,7 @@ func (m *Manager) runSteps(ctx context.Context, rs *runState, req RunRequest) er
 		args = []string{"destroy", "-auto-approve", "-input=false", "-no-color"}
 	}
 	m.logLine(rs, "system", "$ terraform "+strings.Join(args, " "))
-	code, err = m.terraform(ctx, rs, string(req.Action), env, userEnv, args...)
+	code, err := m.terraform(ctx, rs, string(req.Action), env, userEnv, args...)
 	if err != nil {
 		return err
 	}
@@ -343,6 +322,79 @@ func (m *Manager) setExit(rs *runState, code int) {
 	m.mu.Unlock()
 }
 
+// initWorkdir runs terraform init in work (lock: the lock file's versions
+// before it), then rewrites the wiring when init selected other versions
+// and warns about provider releases that break resources locally. The lock
+// file stays in the workdir between runs (assets never bring one), so when
+// the constraints moved past it init upgrades the sandbox's copy.
+func (m *Manager) initWorkdir(ctx context.Context, rs *runState, wf *model.Workflow, work string, lock map[string]string, env, userEnv []string) error {
+	upgrade := false
+	if stale := staleLocks(wf, lock); len(stale) > 0 {
+		upgrade = true
+		m.logLine(rs, "system", "The lock file pins "+strings.Join(stale, ", ")+", outside the configuration's constraints: upgrading the sandbox's copy.")
+	}
+	code, mismatch, err := m.terraformInit(ctx, rs, env, userEnv, upgrade)
+	if err == nil && code != 0 && mismatch && !upgrade {
+		// A constraint the workflow doesn't show (a module's) moved past it.
+		m.logLine(rs, "system", "The lock file doesn't match the configured version constraints: upgrading the sandbox's copy.")
+		code, _, err = m.terraformInit(ctx, rs, env, userEnv, true)
+	}
+	if err != nil {
+		return err
+	}
+	if code != 0 {
+		m.setExit(rs, code)
+		return fmt.Errorf("terraform init exited with code %d", code)
+	}
+	after := readLockVersions(work)
+	if wiringVersionsChanged(lock, after) {
+		// The wiring file set depends only on the workflow, so rewriting in
+		// place keeps the workdir manifest valid.
+		for name, content := range wiringFiles(wf, after) {
+			if err := writeFile(filepath.Join(work, name), content); err != nil {
+				return err
+			}
+		}
+		// Same for the Azure overrides (their set depends only on the
+		// configuration, which is the workdir's now).
+		for name, content := range azureOverrideFiles(wf, nil, work, after["azurerm"]) {
+			if err := writeFile(filepath.Join(work, filepath.FromSlash(name)), content); err != nil {
+				return err
+			}
+		}
+	}
+	if warnings := providerWarnings(m.cfg.Catalog, wf, after); len(warnings) > 0 {
+		m.mu.Lock()
+		rs.run.Warnings = append(rs.run.Warnings, warnings...)
+		m.mu.Unlock()
+		for _, w := range warnings {
+			m.logLine(rs, "system", "Warning: "+w)
+		}
+	}
+	return nil
+}
+
+// terraformInit runs terraform init (with -upgrade when upgrade is set) and
+// reports whether it failed on a lock file entry outside the constraints.
+func (m *Manager) terraformInit(ctx context.Context, rs *runState, env, userEnv []string, upgrade bool) (code int, mismatch bool, err error) {
+	step, cmd := "init", "$ terraform init"
+	if upgrade {
+		step, cmd = "init-upgrade", "$ terraform init -upgrade"
+	}
+	m.logLine(rs, "system", cmd)
+	var seen atomic.Bool
+	// The shared plugin cache is not safe for concurrent writers.
+	pluginCacheMu.Lock()
+	code, err = m.terraformTo(ctx, rs, step, env, userEnv, func(stream, line string) {
+		if strings.Contains(line, lockMismatch) {
+			seen.Store(true)
+		}
+		m.logLine(rs, stream, line)
+	}, "init", "-input=false", "-no-color", "-upgrade="+strconv.FormatBool(upgrade))
+	pluginCacheMu.Unlock()
+	return code, seen.Load(), err
+}
+
 func readLockVersions(work string) map[string]string {
 	src, err := os.ReadFile(filepath.Join(work, ".terraform.lock.hcl"))
 	if err != nil {
@@ -352,7 +404,8 @@ func readLockVersions(work string) map[string]string {
 }
 
 // runFiles is the complete file set of a run: the exported Terraform, the
-// environment's variable values and the Floci wiring.
+// environment's variable values, the Floci wiring and the emulator
+// workarounds (azureOverrideFiles).
 func runFiles(req RunRequest, versions map[string]string) map[string][]byte {
 	files := make(map[string][]byte, len(req.Files)+3)
 	for name, content := range req.Files {
@@ -362,6 +415,9 @@ func runFiles(req RunRequest, versions map[string]string) map[string][]byte {
 		files[tfvarsFile] = b
 	}
 	for name, content := range wiringFiles(req.Workflow, versions) {
+		files[name] = content
+	}
+	for name, content := range azureOverrideFiles(req.Workflow, req.Files, req.AssetsDir, versions["azurerm"]) {
 		files[name] = content
 	}
 	return files

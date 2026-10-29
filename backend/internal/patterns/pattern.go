@@ -88,6 +88,8 @@ var notEmulated = map[string]bool{
 	"google_compute_url_map":                         true,
 	"google_cloud_tasks_queue":                       true,
 	"google_dataflow_job":                            true,
+	"oci_functions_application":                      true, // floci-oci serves Functions 20181201; oracle/oci >= 9.3 calls 20260325
+	"oci_functions_function":                         true,
 	"google_eventarc_trigger":                        true,
 	"google_firestore_database":                      true,
 	"google_monitoring_alert_policy":                 true,

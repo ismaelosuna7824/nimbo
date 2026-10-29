@@ -202,7 +202,7 @@
   {
     "id": "oci-api-gateway",
     "name": "API gateway (API Gateway + Functions)",
-    "description": "An OCI API Gateway deployment is the single entry for two Functions: an authorizer function checks every request's token, then /orders and /users go to their own function. Design and export only: Floci runs Functions but not API Gateway.",
+    "description": "An OCI API Gateway deployment is the single entry for two Functions: an authorizer function checks every request's token, then /orders and /users go to their own function. Design and export only: Floci does not emulate API Gateway, and its Functions API (20181201) is not the one oracle/oci 9.3 and newer call, so the functions don't deploy locally with the provider release Nimbo targets either.",
     "cloud": "oci",
     "difficulty": "advanced",
     "tags": ["edge", "api-gateway", "functions", "authorizer"],
