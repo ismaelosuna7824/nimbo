@@ -25,6 +25,7 @@ func gcpRecs(d *design) []rec {
 	gcpEncryption(d, &out)
 	gcpAutoscaling(d, &out)
 	gcpAlerts(d, &out)
+	gcpSmells(d, &out)
 	return out
 }
 
@@ -104,6 +105,7 @@ func gcpCloudArmor(d *design, out *[]rec) {
 	}
 	d.add(out, prioEdge, Recommendation{
 		ID:      "gcp_cloud_armor",
+		Pattern: "gateway-offloading",
 		Title:   "Protect the external backend services with a Cloud Armor policy",
 		Why:     "An external load balancer forwards every internet request to its backends. Cloud Armor blocks common exploits with the OWASP Core Rule Set (preconfigured WAF rules) and throttles clients per IP at Google's edge.",
 		Pillars: pillarsEdge,
@@ -216,8 +218,9 @@ resource %q %q {
 		parts = append(parts, "# Add a serverless NEG and backend service (or a URL map path) the same way for: "+strings.Join(addrs(nodes[1:]), ", "))
 	}
 	d.add(out, prioEdge, Recommendation{
-		ID:    "gcp_cloud_run_edge",
-		Title: "Serve the public Cloud Run services through an external Application Load Balancer with Cloud Armor",
+		ID:      "gcp_cloud_run_edge",
+		Pattern: "gateway-offloading",
+		Title:   "Serve the public Cloud Run services through an external Application Load Balancer with Cloud Armor",
 		Why: "A Cloud Run service invocable by allUsers on its run.app URL has no WAF or per-client rate limit in front. An external Application Load Balancer with a serverless NEG adds Cloud Armor, your domain and a managed certificate; " +
 			"setting ingress to internal-and-load-balancer closes the direct URL.",
 		Pillars: pillarsEdge,
@@ -298,6 +301,7 @@ resource %q %q {
 	}
 	d.add(out, prioSecrets, Recommendation{
 		ID:      "gcp_secret_manager",
+		Pattern: "external-configuration-store",
 		Title:   "Read credentials from Secret Manager, not literal environment values",
 		Why:     "A literal secret in the service definition is stored in Terraform state, the revision's configuration and anyone's console view. Secret Manager keeps it encrypted, versioned and audited; grant the service account roles/secretmanager.secretAccessor on that secret only.",
 		Pillars: pillarsSecret,
@@ -445,6 +449,7 @@ resource %q %q {
 	}
 	d.add(out, prioAsync, Recommendation{
 		ID:      "gcp_pubsub_dead_letter",
+		Pattern: "competing-consumers",
 		Title:   "Give each subscription a dead-letter topic",
 		Why:     "A message that always fails is redelivered until it expires, wasting consumer capacity, and then it is lost. A dead-letter topic keeps it after 5 attempts; the Pub/Sub service agent needs publisher on that topic and subscriber on the subscription.",
 		Pillars: pillarsAsync,

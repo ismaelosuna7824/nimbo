@@ -109,6 +109,7 @@ func dockerRecs(wf *model.Workflow) ([]rec, bool) {
 	dockerPrivateData(c, svcs, add)
 	dockerPersistence(svcs, free, add)
 	dockerRuntime(svcs, add)
+	dockerSmells(c, svcs, production, free, add)
 	if production && len(c.Environments) < 2 && len(svcs) > 0 {
 		dockerEnvironments(c, svcs, add)
 	}
@@ -199,6 +200,7 @@ services:
 `, waf, port.host, front, front, waf, yamlPort(port.ip, port.host, "8080"), front, port.container, front)
 	add(prioEdge+1, Recommendation{
 		ID:      "docker_waf_crs",
+		Pattern: "gateway-offloading",
 		Title:   "Filter attacks with the OWASP Core Rule Set in front of the entry point",
 		Why:     "A rate limit stops floods, not SQL injection, XSS or path traversal. ModSecurity with the OWASP Core Rule Set (the official owasp/modsecurity-crs nginx image) blocks the common attack classes before they reach the app; start at paranoia level 1 and tune false positives.",
 		Pillars: pillarsEdge,
@@ -258,8 +260,15 @@ func dockerProxy(entries []service, ports map[string][]publishedPort, proxies []
 			}
 		}
 	}
+	// One service behind the proxy offloads rate limiting and TLS; several
+	// get a single entry point that routes to them.
+	pattern := "gateway-offloading"
+	if len(entries) > 1 {
+		pattern = "api-gateway"
+	}
 	return Recommendation{
 		ID:      "docker_reverse_proxy",
+		Pattern: pattern,
 		Title:   "Put a rate-limiting reverse proxy in front of the published services",
 		Why:     why,
 		Pillars: pillarsEdge,
@@ -309,8 +318,9 @@ func dockerSecrets(svcs []service, add func(int, Recommendation)) {
 		fmt.Fprintf(&top, "  %s:\n    file: ./secrets/%s.txt\n", f, f)
 	}
 	add(prioSecrets, Recommendation{
-		ID:    "docker_secrets",
-		Title: "Pass credentials as compose secrets, not environment variables",
+		ID:      "docker_secrets",
+		Pattern: "external-configuration-store",
+		Title:   "Pass credentials as compose secrets, not environment variables",
 		Why: "Environment variables are visible to anyone who can run docker inspect, are copied into child processes and crash reports, and often end up committed. " +
 			"Compose secrets are mounted as files under /run/secrets; official images (postgres, mysql, mariadb) read <VAR>_FILE, other apps read the file. Keep ./secrets/ out of git.",
 		Pillars: pillarsSecret,
@@ -470,8 +480,9 @@ func dockerRuntime(svcs []service, add func(int, Recommendation)) {
 		fmt.Fprintf(&b, "  # Same for: %s\n", strings.Join(nodes[shown:], ", "))
 	}
 	add(prioRuntime, Recommendation{
-		ID:    "docker_limits_healthchecks",
-		Title: "Give each service memory and CPU limits and a health check",
+		ID:      "docker_limits_healthchecks",
+		Pattern: "health-endpoint-monitoring",
+		Title:   "Give each service memory and CPU limits and a health check",
 		Why: "Without limits one leaking or busy container starves the others and the host. Without a health check Docker only knows the process is alive, not that it serves: " +
 			"depends_on: condition: service_healthy and restarts can't react to a hung app.",
 		Pillars: []model.Pillar{model.PillarReliability, model.PillarPerformance},

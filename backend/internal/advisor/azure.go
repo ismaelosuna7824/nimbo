@@ -27,6 +27,7 @@ func azureRecs(d *design) []rec {
 	azureAutoscale(d, &out)
 	azureAlerts(d, &out)
 	azureTracing(d, &out)
+	azureSmells(d, &out)
 	return out
 }
 
@@ -88,8 +89,9 @@ func azureAPIM(d *design, out *[]rec) {
 		return
 	}
 	d.add(out, prioEdge, Recommendation{
-		ID:    "azure_apim_rate_limit",
-		Title: "Rate-limit the public API Management gateway per client",
+		ID:      "azure_apim_rate_limit",
+		Pattern: "rate-limiting",
+		Title:   "Rate-limit the public API Management gateway per client",
 		Why: "Without a rate-limit policy one client can exhaust the gateway's capacity and the backends behind it (OWASP API4:2023). A global rate-limit-by-key policy keyed on the client IP " +
 			"(or subscription) answers 429 before the backend sees the flood. The Consumption tier doesn't support rate-limit-by-key: use rate-limit per subscription at product or API scope there.",
 		Pillars: pillarsEdge,
@@ -179,6 +181,7 @@ func azureFrontDoorWAF(d *design, out *[]rec) {
 	}
 	d.add(out, prioEdge, Recommendation{
 		ID:      "azure_frontdoor_waf",
+		Pattern: "gateway-offloading",
 		Title:   "Attach a WAF policy with rate limiting to Azure Front Door",
 		Why:     "Front Door is the public entry point: a WAF policy in Prevention mode blocks common exploits (Microsoft default rule set) and a rate-limit rule stops a single client from flooding every origin behind it.",
 		Pillars: pillarsEdge,
@@ -253,6 +256,7 @@ resource %q %q {
 	}
 	d.add(out, prioEdge, Recommendation{
 		ID:      "azure_appgw_waf",
+		Pattern: "gateway-offloading",
 		Title:   "Attach a WAF policy with rate limiting to the Application Gateway",
 		Why:     "An Application Gateway without a WAF policy forwards SQL injection, XSS and floods to the backends. The policy adds the OWASP rule set in Prevention mode and a per-client-IP rate limit.",
 		Pillars: pillarsEdge,
@@ -353,8 +357,9 @@ resource "azurerm_cdn_frontdoor_route" %q {
 		parts = append(parts, fmt.Sprintf("# Add an origin group, origin and route the same way for: %s", strings.Join(addrs(nodes[1:]), ", ")))
 	}
 	d.add(out, prioEdge, Recommendation{
-		ID:    "azure_public_app_frontdoor",
-		Title: "Serve the public apps through Azure Front Door with a WAF policy",
+		ID:      "azure_public_app_frontdoor",
+		Pattern: "gateway-offloading",
+		Title:   "Serve the public apps through Azure Front Door with a WAF policy",
 		Why: "The apps answer the internet directly, so nothing filters exploits or rate-limits clients. Front Door Premium with a WAF policy does both at the edge and caches static content; " +
 			"then restrict the apps to Front Door (access restrictions on the AzureFrontDoor.Backend service tag with your profile's X-Azure-FDID header, or Private Link origins).",
 		Pillars: pillarsEdge,
@@ -432,6 +437,7 @@ resource "azurerm_key_vault_secret" %q {
 	}
 	d.add(out, prioSecrets, Recommendation{
 		ID:      "azure_key_vault_secrets",
+		Pattern: "external-configuration-store",
 		Title:   "Replace literal credentials with Microsoft Entra ID and Key Vault references",
 		Why:     "Credentials written in Terraform end up in state, plan output and the app's configuration. Entra ID authentication removes database passwords entirely; Key Vault references keep app secrets in the vault, read with the app's managed identity and audited.",
 		Pillars: pillarsSecret,
@@ -565,6 +571,7 @@ func azureServiceBusDLQ(d *design, out *[]rec) {
 	}
 	d.add(out, prioAsync, Recommendation{
 		ID:      "azure_servicebus_dead_letter",
+		Pattern: "competing-consumers",
 		Title:   "Dead-letter expired Service Bus messages",
 		Why:     "Messages that exceed max_delivery_count go to the dead-letter subqueue, but expired ones are silently dropped unless dead-lettering on expiration is on. Monitor the dead-letter count and replay from it.",
 		Pillars: pillarsAsync,

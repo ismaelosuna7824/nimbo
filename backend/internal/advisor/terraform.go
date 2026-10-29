@@ -16,12 +16,16 @@ import (
 type design struct {
 	wf  *model.Workflow
 	cat *catalog.Catalog
-	// byID are the resource nodes by ID.
+	// byID are the resource nodes by ID; all every node (data sources
+	// too).
 	byID map[string]*model.Node
+	all  map[string]*model.Node
 	// refBy are the IDs of the nodes that refer to a node (edge Source ->
-	// Targets); refs the nodes a node refers to.
+	// Targets); refs the nodes a node refers to; into the edges whose
+	// Target is a node.
 	refBy map[string][]string
 	refs  map[string][]string
+	into  map[string][]model.Edge
 	// public is set by the cloud recommenders when the design has a public
 	// entry point.
 	public bool
@@ -52,18 +56,41 @@ func (d *design) add(out *[]rec, priority int, r Recommendation) {
 }
 
 func newDesign(wf *model.Workflow, cat *catalog.Catalog) *design {
-	d := &design{wf: wf, cat: cat, byID: map[string]*model.Node{}, refBy: map[string][]string{}, refs: map[string][]string{}, taken: map[string]bool{}}
+	d := &design{wf: wf, cat: cat, byID: map[string]*model.Node{}, all: map[string]*model.Node{}, refBy: map[string][]string{}, refs: map[string][]string{},
+		into: map[string][]model.Edge{}, taken: map[string]bool{}}
 	for i := range wf.Nodes {
-		if n := &wf.Nodes[i]; n.Kind == model.KindResource {
+		n := &wf.Nodes[i]
+		d.all[n.ID] = n
+		if n.Kind == model.KindResource {
 			d.byID[n.ID] = n
 			d.taken[n.Type+"."+n.Name] = true
 		}
 	}
+	for _, v := range wf.Variables {
+		d.taken["variable."+v.Name] = true
+	}
 	for _, e := range wf.Edges {
 		d.refBy[e.Source] = append(d.refBy[e.Source], e.Target)
 		d.refs[e.Target] = append(d.refs[e.Target], e.Source)
+		d.into[e.Target] = append(d.into[e.Target], e)
 	}
 	return d
+}
+
+// referencedAt returns the nodes of types (any kind, data sources too) that
+// n refers to in the attribute or nested block at path ("policy",
+// "statement[0]").
+func (d *design) referencedAt(n *model.Node, at string, types ...string) []*model.Node {
+	var out []*model.Node
+	for _, e := range d.into[n.ID] {
+		if e.Attribute != at && !strings.HasPrefix(e.Attribute, at+".") && !strings.HasPrefix(e.Attribute, at+"[") {
+			continue
+		}
+		if m := d.all[e.Source]; m != nil && (len(types) == 0 || slices.Contains(types, m.Type)) && !slices.Contains(out, m) {
+			out = append(out, m)
+		}
+	}
+	return out
 }
 
 // ofType returns the resources of the given types in workflow order.

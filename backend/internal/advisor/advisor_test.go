@@ -17,6 +17,7 @@ import (
 	"github.com/ismaelosuna7824/nimbo/backend/internal/kube/kuberules"
 	"github.com/ismaelosuna7824/nimbo/backend/internal/lint"
 	"github.com/ismaelosuna7824/nimbo/backend/internal/model"
+	"github.com/ismaelosuna7824/nimbo/backend/internal/patterns"
 )
 
 var (
@@ -774,6 +775,10 @@ var allIDs = []string{
 	"terraform_environments",
 	"docker_reverse_proxy", "docker_waf_crs", "docker_secrets", "docker_private_data", "docker_data_volumes", "docker_limits_healthchecks", "docker_environments",
 	"k8s_ingress_rate_limit", "k8s_ingress_tls", "k8s_secrets", "k8s_network_policy", "k8s_persistent_data", "k8s_resources_probes", "k8s_hpa", "k8s_pdb", "k8s_environments",
+	// Design smells.
+	"aws_lambda_chain_queue", "aws_fan_out_topic", "aws_api_async_request_reply", "aws_valet_key_uploads", "aws_transactional_outbox",
+	"aws_database_per_service", "aws_cache_aside", "azure_database_per_service", "azure_cache_aside", "gcp_database_per_service", "gcp_cache_aside",
+	"docker_database_per_service", "docker_cache_aside", "k8s_database_per_service", "k8s_cache_aside", "k8s_single_entry_ingress",
 }
 
 // Validation codes a snippet may never produce; blocks that merge into an
@@ -810,6 +815,14 @@ func TestEveryRecommendation(t *testing.T) {
 				t.Errorf("%s: unknown rule code %s", r.ID, code)
 			}
 		}
+		if r.Pattern != "" {
+			if _, ok := patterns.Get(r.Pattern); !ok {
+				t.Errorf("%s: pattern %q is not in the patterns catalog", r.ID, r.Pattern)
+			}
+		}
+		if r.priority == prioDesign && r.Pattern == "" {
+			t.Errorf("%s: design smell without a pattern", r.ID)
+		}
 		for _, a := range r.Add {
 			if a.Type == "" || a.Purpose == "" {
 				t.Errorf("%s: incomplete addition %+v", r.ID, a)
@@ -824,14 +837,14 @@ func TestEveryRecommendation(t *testing.T) {
 			checkYAML(t, r)
 		}
 	}
-	for _, src := range terraformKitchenSinks {
+	for _, src := range slices.Concat(terraformKitchenSinks, terraformSmellDesigns) {
 		design := importHCL(t, "kitchen", src)
 		recs, _ := candidates(design, c)
 		for _, r := range recs {
 			check(t, design, r)
 		}
 	}
-	for _, wf := range localWorkflows() {
+	for _, wf := range slices.Concat(localWorkflows(), localSmellWorkflows()) {
 		recs, _ := candidates(wf, c)
 		for _, r := range recs {
 			check(t, wf, r)

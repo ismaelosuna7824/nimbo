@@ -3,19 +3,24 @@
 // reads the workflow model only (Terraform nodes, edges and attributes; the
 // saved compose and Kubernetes graphs) and returns companions such as a WAF
 // with a rate-based rule for a public API, backups for a data store or an
-// autoscaler with bounds for a compute tier.
+// autoscaler with bounds for a compute tier, and design smells such as a
+// function invoking another synchronously or several services sharing one
+// database, each with the cloud design pattern (patterns package ID) that
+// removes it.
 //
 // Every recommendation has a trigger in the design and disappears once the
 // design has its companion, so an agent can apply them in a loop. Guards
 // against over-engineering:
 //   - nothing is recommended without a trigger (no WAF without a public
-//     entry point, no PodDisruptionBudget for a single replica);
+//     entry point, no PodDisruptionBudget for a single replica, no
+//     database-per-service below three services);
 //   - production-scope items are only listed for designs that look
 //     production-intended: "prod", "production" or "prd" in the name,
 //     description, environments or tags, or (Terraform) a public entry
 //     point; docker and Kubernetes designs only by their names;
 //   - each recommendation covers every entry point of its kind once
-//     (Nodes), and at most maxRecommendations are returned, security first.
+//     (Nodes), and at most maxRecommendations are returned, security first
+//     and design smells after security and data protection.
 package advisor
 
 import (
@@ -59,6 +64,9 @@ type Recommendation struct {
 	Skip string `json:"skip,omitempty"`
 	// Rules are the Nimbo rule codes that check it once added.
 	Rules []string `json:"rules,omitempty"`
+	// Pattern is the cloud design pattern or architecture style it applies
+	// (a patterns package ID, "queue-based-load-leveling").
+	Pattern string `json:"pattern,omitempty"`
 	// Docs is the official documentation.
 	Docs string `json:"docs"`
 }
@@ -87,6 +95,7 @@ const (
 	prioNetwork     = 22 // network isolation inside a cluster
 	prioPrivate     = 25 // private placement of data stores
 	prioData        = 30 // backups, point-in-time recovery, persistence
+	prioDesign      = 35 // design smells: the architecture pattern that removes them
 	prioAsync       = 40 // dead-letter queues
 	prioRuntime     = 45 // limits, health checks, probes
 	prioEncryption  = 50

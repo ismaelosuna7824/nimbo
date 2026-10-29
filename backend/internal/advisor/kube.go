@@ -103,6 +103,7 @@ func kubeRecs(wf *model.Workflow) ([]rec, bool) {
 	kubeRuntime(g, add)
 	kubeHPA(g, add)
 	kubePDB(g, add)
+	kubeSmells(g, production, add)
 	if production && len(envs) < 2 && len(g.ofKind("Deployment", "StatefulSet", "DaemonSet")) > 0 {
 		kubeEnvironments(g, len(envs), add)
 	}
@@ -174,8 +175,9 @@ metadata:
 	}
 	if len(limited) > 0 {
 		add(prioEdge, Recommendation{
-			ID:    "k8s_ingress_rate_limit",
-			Title: "Rate-limit the Ingresses with a Traefik middleware",
+			ID:      "k8s_ingress_rate_limit",
+			Pattern: "rate-limiting",
+			Title:   "Rate-limit the Ingresses with a Traefik middleware",
 			Why: "An Ingress forwards every request to the Services behind it; nothing stops one client from flooding them. The local cluster (k3s) routes Ingresses through Traefik, so a RateLimit middleware " +
 				"referenced by the router.middlewares annotation limits each client IP (50 requests per second on average, bursts of 100). With ingress-nginx in production use its nginx.ingress.kubernetes.io/limit-rps annotation instead.",
 			Pillars: pillarsEdge,
@@ -193,6 +195,7 @@ metadata:
 	if len(tlsNodes) > 0 {
 		add(prioEdge+2, Recommendation{
 			ID:      "k8s_ingress_tls",
+			Pattern: "gateway-offloading",
 			Title:   "Serve the Ingress hosts over TLS",
 			Why:     "Without spec.tls the Ingress serves plain HTTP: credentials and cookies cross the network readable. A TLS section with a certificate Secret (cert-manager issues and renews it) turns HTTPS on.",
 			Pillars: []model.Pillar{model.PillarSecurity},
@@ -253,8 +256,9 @@ func kubeSecrets(g *kubeGraph, add func(int, Recommendation)) {
 		return
 	}
 	add(prioSecrets, Recommendation{
-		ID:    "k8s_secrets",
-		Title: "Keep credentials in Secrets, not in manifests or ConfigMaps",
+		ID:      "k8s_secrets",
+		Pattern: "external-configuration-store",
+		Title:   "Keep credentials in Secrets, not in manifests or ConfigMaps",
 		Why: "Literal credentials in a manifest or ConfigMap are committed to git and readable by anyone who can read the namespace's configuration. Secrets are a separate RBAC resource, can be encrypted at rest " +
 			"and are filled from outside the repository (kubectl, Sealed Secrets or External Secrets in production).",
 		Pillars: pillarsSecret,
@@ -450,8 +454,9 @@ func kubeRuntime(g *kubeGraph, add func(int, Recommendation)) {
 		docs[len(docs)-1] += "# Same for: " + strings.Join(nodes[3:], ", ") + "\n"
 	}
 	add(prioRuntime, Recommendation{
-		ID:    "k8s_resources_probes",
-		Title: "Give each container requests, a memory limit and a readiness probe",
+		ID:      "k8s_resources_probes",
+		Pattern: "health-endpoint-monitoring",
+		Title:   "Give each container requests, a memory limit and a readiness probe",
 		Why: "Without requests the scheduler packs pods blindly and the HPA has nothing to compute utilization from; without a memory limit one leak takes the node down. " +
 			"Without a readiness probe a Service sends traffic to pods that are still starting or stuck.",
 		Pillars: []model.Pillar{model.PillarReliability, model.PillarPerformance},

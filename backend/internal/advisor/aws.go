@@ -26,6 +26,7 @@ func awsRecs(d *design) []rec {
 	awsAlarms(d, &out)
 	awsLogRetention(d, &out)
 	awsTracing(d, &out)
+	awsSmells(d, &out)
 	return out
 }
 
@@ -175,8 +176,9 @@ func awsEdge(d *design, out *[]rec) {
 		}
 		add = append(add, Addition{Type: "aws_wafv2_web_acl_association", Purpose: "attaches the web ACL to each public REST API stage and load balancer"})
 		d.add(out, prioEdge, Recommendation{
-			ID:    "aws_public_api_waf",
-			Title: "Put an AWS WAF web ACL with rate limiting in front of the public entry points",
+			ID:      "aws_public_api_waf",
+			Pattern: "gateway-offloading",
+			Title:   "Put an AWS WAF web ACL with rate limiting in front of the public entry points",
 			Why: "Public REST APIs and application load balancers take every request from the internet. A web ACL blocks common exploits (AWS managed rule groups) " +
 				"and a rate-based rule stops a single client from flooding the API (OWASP API4:2023 unrestricted resource consumption), before your code and bill see the traffic.",
 			Pillars: pillarsEdge,
@@ -216,6 +218,7 @@ func awsEdge(d *design, out *[]rec) {
 		add = append(add, Addition{Type: "aws_cloudfront_distribution", Purpose: "web_acl_id: the web ACL filters requests at the edge"})
 		d.add(out, prioEdge, Recommendation{
 			ID:      "aws_cloudfront_waf",
+			Pattern: "gateway-offloading",
 			Title:   "Attach an AWS WAF web ACL with rate limiting to the CloudFront distributions",
 			Why:     "CloudFront is the public front door: a web ACL on it filters exploits and floods at the edge for every origin behind it (load balancers, APIs, buckets).",
 			Pillars: pillarsEdge,
@@ -277,8 +280,9 @@ func awsEdge(d *design, out *[]rec) {
 }`, d.unique("aws_cloudfront_distribution", label(api, "edge")), aclName, addr(api)))
 		}
 		d.add(out, prioEdge, Recommendation{
-			ID:    "aws_http_api_edge_waf",
-			Title: "Serve the public HTTP API through CloudFront with an AWS WAF web ACL",
+			ID:      "aws_http_api_edge_waf",
+			Pattern: "gateway-offloading",
+			Title:   "Serve the public HTTP API through CloudFront with an AWS WAF web ACL",
 			Why: "AWS WAF cannot be associated with API Gateway HTTP APIs (only REST APIs, load balancers, CloudFront and a few others). To filter exploits and rate-limit per client IP, " +
 				"put a CloudFront distribution with a web ACL in front, or use a REST API stage instead. Clients can still call the execute-api URL directly until you disable it (disable_execute_api_endpoint, with a custom domain).",
 			Pillars: pillarsEdge,
@@ -370,8 +374,9 @@ func awsThrottling(d *design, out *[]rec) {
 		adds = append(adds, add[k])
 	}
 	d.add(out, prioThrottle, Recommendation{
-		ID:    "aws_api_throttling",
-		Title: "Throttle the API Gateway stages and turn on access logs",
+		ID:      "aws_api_throttling",
+		Pattern: "rate-limiting",
+		Title:   "Throttle the API Gateway stages and turn on access logs",
 		Why: "Without stage throttling only the account-wide limit (10,000 requests per second by default) caps traffic: one client can exhaust it and the Lambda or container concurrency behind it. " +
 			"Access logs are how you find who caused a spike or an error.",
 		Pillars: []model.Pillar{model.PillarSecurity, model.PillarReliability, model.PillarOperations},
@@ -430,8 +435,9 @@ func awsSecrets(d *design, out *[]rec) {
 		return
 	}
 	d.add(out, prioSecrets, Recommendation{
-		ID:    "aws_secrets_manager",
-		Title: "Keep credentials in AWS Secrets Manager, not in the configuration",
+		ID:      "aws_secrets_manager",
+		Pattern: "external-configuration-store",
+		Title:   "Keep credentials in AWS Secrets Manager, not in the configuration",
 		Why: "Passwords written in Terraform end up in the state file, plan output and environment variables readable by anyone with read access to the function or state. " +
 			"Secrets Manager stores them encrypted, audits access and can rotate them.",
 		Pillars: pillarsSecret,
@@ -534,12 +540,11 @@ func awsDataProtection(d *design, out *[]rec) {
 	})
 }
 
-// awsDLQ recommends dead-letter queues for SQS queues that are not
-// dead-letter queues themselves.
-func awsDLQ(d *design, out *[]rec) {
-	queues := d.ofType("aws_sqs_queue")
+// awsDeadLetterQueues are the IDs of the SQS queues another queue's redrive
+// policy targets.
+func awsDeadLetterQueues(d *design) map[string]bool {
 	isDLQ := map[string]bool{}
-	for _, q := range queues {
+	for _, q := range d.ofType("aws_sqs_queue") {
 		for _, src := range d.referenced(q, "aws_sqs_queue") {
 			if strings.Contains(expr(&q.Body, "redrive_policy"), addr(src)) {
 				isDLQ[src.ID] = true
@@ -553,6 +558,14 @@ func awsDLQ(d *design, out *[]rec) {
 			}
 		}
 	}
+	return isDLQ
+}
+
+// awsDLQ recommends dead-letter queues for SQS queues that are not
+// dead-letter queues themselves.
+func awsDLQ(d *design, out *[]rec) {
+	queues := d.ofType("aws_sqs_queue")
+	isDLQ := awsDeadLetterQueues(d)
 	var nodes []*model.Node
 	var parts []string
 	for _, q := range queues {
@@ -580,6 +593,7 @@ func awsDLQ(d *design, out *[]rec) {
 	}
 	d.add(out, prioAsync, Recommendation{
 		ID:      "aws_sqs_dlq",
+		Pattern: "competing-consumers",
 		Title:   "Give each queue a dead-letter queue",
 		Why:     "A message that always fails (a poison message) is retried until it expires, blocking FIFO groups and burning consumer capacity; then it is lost. A dead-letter queue keeps it for inspection and replay.",
 		Pillars: pillarsAsync,
